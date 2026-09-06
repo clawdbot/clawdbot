@@ -1,7 +1,10 @@
 {
   "id": "nostr",
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "nostr-bus-state-json-to-plugin-state" },
+      { "id": "nostr-profile-state-json-to-plugin-state" }
+    ]
   },
   "name": "Nostr",
   "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",

@@ -19,7 +19,14 @@
   ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "codex-app-server-sidecars-to-plugin-state" },
+      {
+        "id": "codex-app-server-orphaned-session-bindings",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
   "doctorHealthChecks": true,
   "sessionRouteStateOwners": [

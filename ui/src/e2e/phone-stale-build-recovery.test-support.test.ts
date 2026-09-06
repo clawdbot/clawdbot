@@ -51,7 +51,7 @@ describe("phone stale-build proof cleanup", () => {
     const server = await startPhoneProofServer("phone-proof-build");
     expect(server.baseUrl).toBe("http://127.0.0.1:3210/");
     const allocatedBuildDir = requireBuildDir(buildDir);
-    await expect(access(allocatedBuildDir)).resolves.toBeUndefined();
+    await access(allocatedBuildDir);
 
     await server.close();
 

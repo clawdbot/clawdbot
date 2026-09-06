@@ -4795,6 +4795,68 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith("• Keeping the partial preview path");
   });
 
+  it.each(["partial", "block"] as const)(
+    "retracts and resumes Slack plans while retaining other %s progress",
+    async (mode) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      mockedSlackStreamingMode = mode;
+      mockedSlackDraftMode = mode === "block" ? "append" : "replace";
+      mockedDispatchSequence = [];
+      mockedReplyOptionEvents = [
+        { kind: "plan", phase: "update", steps: [{ step: "Inspect", status: "in_progress" }] },
+        { kind: "assistant_start" },
+        { kind: "plan", phase: "update", steps: [] },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            expect(draftStream.clear).toHaveBeenCalledTimes(1);
+            expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+          },
+        },
+        { kind: "plan", phase: "update", steps: [{ step: "Resume", status: "in_progress" }] },
+        { kind: "assistant_start" },
+        {
+          kind: "item",
+          itemId: "card-rejected",
+          itemKind: "tool",
+          name: "progress_card",
+          phase: "end",
+          status: "blocked",
+        },
+        { kind: "assistant_start" },
+        { kind: "item", itemId: "independent", progressText: "Independent work" },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            const text = draftUpdateTexts(draftStream).at(-1);
+            expect(text).toContain("Independent work");
+            expect(text).toContain("blocked");
+            expect(text).toContain("▸ Resume");
+          },
+        },
+        { kind: "assistant_start" },
+        { kind: "plan", phase: "update", steps: [] },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            const text = draftUpdateTexts(draftStream).at(-1);
+            expect(text).toContain("Independent work");
+            expect(text).toContain("blocked");
+            expect(text).not.toContain("Resume");
+            expect(draftStream.clear).toHaveBeenCalledTimes(1);
+          },
+        },
+      ];
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: { streaming: { mode, progress: { label: false } } },
+        }),
+      );
+    },
+  );
+
   it("preserves Slack reasoning previews outside status-final mode", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);

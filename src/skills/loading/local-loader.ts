@@ -21,6 +21,7 @@ export type LoadedLocalSkill = {
 };
 
 export type LocalSkillLoadDiagnostic = {
+  kind: "read" | "invalid";
   path: string;
   message: string;
 };
@@ -49,7 +50,11 @@ function readSkillFileSync(params: {
         opened.error instanceof Error
           ? opened.error.message
           : `failed to open skill file (${opened.reason})`;
-      params.onDiagnostic?.({ path: params.filePath, message });
+      params.onDiagnostic?.({
+        kind: opened.reason === "validation" ? "invalid" : "read",
+        path: params.filePath,
+        message,
+      });
     }
     return null;
   }
@@ -59,7 +64,11 @@ function readSkillFileSync(params: {
       : readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf8");
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to read skill file";
-    params.onDiagnostic?.({ path: params.filePath, message });
+    params.onDiagnostic?.({
+      kind: error instanceof RangeError ? "invalid" : "read",
+      path: params.filePath,
+      message,
+    });
     return null;
   } finally {
     fs.closeSync(opened.fd);
@@ -91,7 +100,7 @@ export function loadSingleSkillDirectory(params: {
     frontmatter = parseSkillFrontmatter(raw);
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
-    params.onDiagnostic?.({ path: skillFilePath, message });
+    params.onDiagnostic?.({ kind: "invalid", path: skillFilePath, message });
     return null;
   }
 
@@ -100,6 +109,7 @@ export function loadSingleSkillDirectory(params: {
   const description = frontmatter.description?.trim();
   if (!name || !description) {
     params.onDiagnostic?.({
+      kind: "invalid",
       path: skillFilePath,
       message: !name ? "name is required" : "description is required",
     });

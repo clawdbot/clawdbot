@@ -26,7 +26,10 @@ import {
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.types.js";
 import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
@@ -520,6 +523,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   makeTempDir: (prefix: string) => string;
   retireAfterTest: (retire: () => void) => void;
 }): Promise<void> {
+  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory"> = {};
   const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -606,6 +610,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
         {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+          inventoryOwner,
           isGenerationCurrent: () => current,
           isBuildCurrent: () => current,
         },
@@ -620,4 +625,19 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
   });
+  expect(
+    inventoryOwner.catalogInventory?.catalog.entries.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
+  expect(
+    inventoryOwner.catalogInventory?.catalog.routeVariants.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
+  expect(
+    inventoryOwner.catalogInventory?.catalog.staticEntries?.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
 }

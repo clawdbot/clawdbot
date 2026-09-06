@@ -73,7 +73,6 @@ describe("memory index", () => {
   it("does not prepare vector deletes after in-place reset drops a missing vector table", async () => {
     const cfg = createCfg({
       vectorEnabled: true,
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
     trackManager(manager);
@@ -91,9 +90,7 @@ describe("memory index", () => {
   });
 
   it("indexes memory files and searches", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
     try {
       await manager.sync({ reason: "test" });
@@ -706,11 +703,7 @@ describe("memory index", () => {
       .run("test", "keep-me", JSON.stringify({ value: "keep-me" }), 1);
     closeOpenClawAgentDatabasesForTest();
 
-    const manager = await getFreshManager(
-      createCfg({
-        hybrid: { enabled: false },
-      }),
-    );
+    const manager = await getFreshManager(createCfg({}));
     try {
       await manager.sync({ reason: "test", force: true });
       expect(manager.status().dbPath).toBe(agentDbPath);
@@ -1185,7 +1178,6 @@ describe("memory index", () => {
   it("does not full-reindex on search when existing metadata belongs to another provider", async () => {
     const oldCfg = createCfg({
       model: "old-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -1194,7 +1186,6 @@ describe("memory index", () => {
     const nextCfg = createCfg({
       provider: "gemini",
       model: "new-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const nextManager = await getFreshManager(nextCfg);
     try {
@@ -1253,7 +1244,6 @@ describe("memory index", () => {
         model: providerFixture.identityAlias.canonicalModel,
         cacheEnabled: true,
         vectorEnabled: false,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       });
       const indexedManager = await getFreshManager(indexedCfg);
       await indexedManager.sync({ reason: "test", force: true });
@@ -1268,7 +1258,6 @@ describe("memory index", () => {
         model: configuredModel,
         cacheEnabled: true,
         vectorEnabled: false,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       });
       const statusManager = await getFreshManager(nextCfg, "status");
       try {
@@ -1299,7 +1288,6 @@ describe("memory index", () => {
     const oldCfg = createCfg({
       provider: "ollama",
       model: "ollama-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -1315,7 +1303,6 @@ describe("memory index", () => {
         },
       },
       model: "ollama-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const statusManager = await getFreshManager(aliasCfg, "status");
     try {
@@ -1333,7 +1320,6 @@ describe("memory index", () => {
     const indexCfg = createCfg({
       provider: "gemini",
       model: "gemini-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const indexManager = await getFreshManager(indexCfg);
     await indexManager.sync({ reason: "test", force: true });
@@ -1345,7 +1331,6 @@ describe("memory index", () => {
     const statusCfg = createCfg({
       provider: "gemini",
       model: "",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const statusManager = await getFreshManager(statusCfg, "status");
     try {
@@ -1359,9 +1344,7 @@ describe("memory index", () => {
   });
 
   it("rebuilds missing metadata with existing chunks before search", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     await fs.writeFile(
       path.join(fixture.paths.memory, "2026-01-13.md"),
       "# Log\nBeta memory line.",
@@ -1406,7 +1389,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       vectorEnabled: false,
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const initial = await getFreshManager(cfg);
     await initial.sync({ reason: "test", force: true });
@@ -1429,7 +1411,6 @@ describe("memory index", () => {
   it("does not search stale provider rows after embeddings become unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -1453,7 +1434,6 @@ describe("memory index", () => {
   it("does not rebuild missing semantic metadata when embeddings are unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const oldManager = await getFreshManager(oldCfg);
     await oldManager.sync({ reason: "test", force: true });
@@ -2211,9 +2191,7 @@ describe("memory index", () => {
   });
 
   it("closes embedding providers when memory index managers close", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
 
     await manager.probeEmbeddingAvailability();
@@ -2226,9 +2204,7 @@ describe("memory index", () => {
   });
 
   it("waits for pending sync before closing embedding providers", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
     await manager.probeEmbeddingAvailability();
     let resolveSync: () => void = () => {};
@@ -2261,9 +2237,7 @@ describe("memory index", () => {
     providerFixture.providerInitGate = new Promise<void>((resolve) => {
       releaseProviderInit = resolve;
     });
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
     let releaseSync: () => void = () => {};
     const syncStarted = new Promise<void>((resolve) => {

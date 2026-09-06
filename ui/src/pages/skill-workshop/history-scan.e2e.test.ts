@@ -25,6 +25,7 @@ let server: ControlUiE2eServer | null = null;
 
 const emptyProposals = {
   schema: "openclaw.skill-workshop.proposals-manifest.v1",
+  installedSkills: [],
   updatedAt: "2026-07-13T08:00:00.000Z",
   proposals: [],
 };
@@ -86,6 +87,7 @@ describeBrowser("Skill Workshop history scan browser flow", () => {
         },
       });
       await page.goto(`${server.baseUrl}skills/workshop`);
+      await page.locator("#skill-workshop-mode-tab-suggestions").click();
 
       const findIdeas = page.getByRole("button", { name: "Find skill ideas" });
       await expect.poll(() => findIdeas.isVisible()).toBe(true);

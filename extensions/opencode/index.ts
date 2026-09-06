@@ -1,4 +1,5 @@
 // Opencode plugin entrypoint registers its OpenClaw integration.
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
@@ -24,7 +25,7 @@ import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
-type OpencodeZenCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
+type OpencodeZenCatalogAuth = { apiKey?: string; discoveryApiKey?: string; profileId?: string };
 
 function resolveOpencodeZenCatalogAuth(
   resolveProviderApiKey: (providerId: string) => OpencodeZenCatalogAuth,
@@ -139,12 +140,16 @@ export default defineSingleProviderPluginEntry({
             provider: buildStaticOpencodeZenProviderConfig(auth.apiKey),
           };
         }
-        return {
-          provider: await buildOpencodeZenLiveProviderConfig({
-            apiKey: auth.apiKey ?? auth.discoveryApiKey,
-            discoveryApiKey: auth.discoveryApiKey,
+        return await runLiveProviderCatalog({
+          providerId: PROVIDER_ID,
+          profileId: auth.profileId,
+          run: async () => ({
+            provider: await buildOpencodeZenLiveProviderConfig({
+              apiKey: auth.apiKey ?? auth.discoveryApiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           }),
-        };
+        });
       },
       staticRun: async () => ({ provider: buildStaticOpencodeZenProviderConfig() }),
     },

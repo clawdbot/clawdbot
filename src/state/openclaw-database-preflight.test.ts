@@ -758,4 +758,57 @@ describe("OpenClaw database schema preflight", () => {
       ],
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps partial configured-store inventory when one candidate lookup is denied",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-configured-candidate-lookup-");
+      const visibleDir = tempDirs.make("openclaw-configured-visible-");
+      const deniedDir = tempDirs.make("openclaw-configured-denied-");
+      const visiblePath = path.join(visibleDir, "newer.sqlite");
+      const deniedPath = path.join(deniedDir, "owned.sqlite");
+      const absentPath = path.join(visibleDir, "absent.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      for (const databasePath of [visiblePath, deniedPath]) {
+        const database = new DatabaseSync(databasePath);
+        database.exec(
+          `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + (databasePath === visiblePath ? 1 : 0)};`,
+        );
+        database.close();
+      }
+
+      fs.chmodSync(deniedDir, 0o000);
+      let result: Awaited<ReturnType<typeof preflightOpenClawDatabaseSchemas>>;
+      try {
+        result = await preflightOpenClawDatabaseSchemas({
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          supportedVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION,
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+          configuredAgentDatabaseCandidatePaths: [visiblePath, deniedPath, absentPath],
+        });
+      } finally {
+        fs.chmodSync(deniedDir, 0o700);
+      }
+
+      expect(result).toEqual({
+        incompatible: [
+          {
+            kind: "agent",
+            path: visiblePath,
+            foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+            supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+        ],
+        indeterminate: [
+          {
+            kind: "agent",
+            path: deniedPath,
+            reason: expect.stringMatching(/EACCES|permission denied/iu),
+          },
+        ],
+      });
+    },
+  );
 });

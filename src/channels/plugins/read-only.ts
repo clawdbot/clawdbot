@@ -19,6 +19,7 @@ import {
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
+import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
 import {
   channelPluginIdBelongsToManifest,
   resolveSetupChannelRegistration,
@@ -27,7 +28,10 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
+import {
+  getCachedPluginModuleLoader,
+  preparePluginModule,
+} from "../../plugins/plugin-module-loader-cache.js";
 import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -348,13 +352,25 @@ export { resolveReadOnlyChannelCommandDefaults };
 function loadSetupChannelPluginFromManifestRecord(params: {
   record: PluginManifestRecord;
   channelId: string;
+  env: NodeJS.ProcessEnv;
 }): { plugin?: ChannelPlugin; failure?: ReadOnlyChannelPluginLoadFailure } {
   if (!params.record.setupSource || !params.record.channels.includes(params.channelId)) {
     return {};
   }
   try {
-    const moduleLoader = getCachedPluginModuleLoader({
+    const { modulePath } = preparePluginModule({
       modulePath: params.record.setupSource,
+      boundaryRoot: params.record.rootDir,
+      boundaryLabel: "plugin root",
+      surfaceLabel: `channel setup entry ${params.record.id}`,
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+        origin: params.record.origin,
+        rootDir: params.record.rootDir,
+        env: params.env,
+      }),
+    });
+    const moduleLoader = getCachedPluginModuleLoader({
+      modulePath,
       rootDir: params.record.rootDir,
       importerUrl: import.meta.url,
       preferBuiltDist: true,
@@ -362,7 +378,7 @@ function loadSetupChannelPluginFromManifestRecord(params: {
       tryNative: true,
       cacheScopeKey: "read-only-setup-entry",
     });
-    const registration = resolveSetupChannelRegistration(moduleLoader(params.record.setupSource));
+    const registration = resolveSetupChannelRegistration(moduleLoader(modulePath));
     if (registration.loadError) {
       return {
         failure: {
@@ -686,6 +702,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
           loadSetupChannelPluginFromManifestRecord({
             record,
             channelId,
+            env,
           }),
         );
       loadFailures.push(
@@ -747,6 +764,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
         const setupResult = loadSetupChannelPluginFromManifestRecord({
           record,
           channelId: firstChannelId,
+          env,
         });
         const failure = setupResult.failure;
         if (failure) {

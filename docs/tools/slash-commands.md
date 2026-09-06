@@ -42,6 +42,7 @@ command handling is enabled for the surface.
       including code indentation. Only the recognized directive, its arguments,
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
+      Added prompt context is not scanned for text commands or stripped as directives.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement.
       `/exec security=... ask=...` is the exception: these options apply only
@@ -465,9 +466,10 @@ updates persist across restarts.
 `/mcp` stores config in OpenClaw config, not embedded-agent project settings.
 `/mcp show` redacts credential-bearing fields, recognized credential flag
 values, and known secret-shaped arguments. When run from a group, the
-configuration is sent to the owner privately; if no private owner route is
-available, the command fails closed and asks the owner to retry from a direct
-chat.
+configuration is routed privately to the owner. The group notice distinguishes
+confirmed, pending, and suppressed delivery. An unconfirmed send stays pending
+without trying another private recipient. If no private owner route is available,
+the command asks the owner to retry from a direct chat.
 
 ## `/debug`: runtime-only overrides
 

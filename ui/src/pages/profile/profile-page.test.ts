@@ -9,10 +9,11 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
+import { createConnectedContext } from "./profile-page.test-support.ts";
 import { ProfilePage } from "./profile-page.ts";
 
 const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
@@ -86,86 +87,6 @@ function createContext(
     agents: { subscribe, ensureList: vi.fn(async () => null) },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext<RouteId>;
-}
-
-function createConnectedContext(
-  request: GatewayBrowserClient["request"],
-  selfUser: AuthenticatedUser | null = null,
-) {
-  let snapshot: ApplicationGatewaySnapshot = {
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-    selfUser,
-  };
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const subscribe = () => () => undefined;
-  const context = {
-    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      connection: {
-        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-        token: "",
-        bootstrapToken: "",
-        password: "",
-      },
-      subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
-        if (!snapshot.selfUser) {
-          return;
-        }
-        snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
-        for (const listener of listeners) {
-          listener(snapshot);
-        }
-      },
-    },
-    agents: {
-      state: { agentsList: null },
-      ensureList: async () => null,
-      subscribe,
-    },
-    agentIdentity: {
-      get: () => null,
-      ensure: async () => undefined,
-      subscribe,
-    },
-    config: {
-      current: {
-        assistantIdentity: {
-          name: "OpenClaw",
-          avatar: null,
-          avatarSource: null,
-          avatarStatus: null,
-          avatarReason: null,
-        },
-      },
-      subscribe,
-    },
-    basePath: "",
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext<RouteId>;
-  return {
-    context,
-    emitConnected(connected: boolean) {
-      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
 }
 
 function stubProfileAvatarProcessing() {
@@ -295,6 +216,53 @@ it.each([
     expect(harness.context.navigate).toHaveBeenCalledWith("usage");
   },
 );
+
+it("shows the authenticated user in the profile hero when the default agent differs", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    githubIdentity: null,
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    email: profile.emails[0],
+    name: profile.displayName ?? undefined,
+  });
+  (harness.context.agents as unknown as { state: unknown }).state = {
+    agentsList: {
+      defaultId: "clipper",
+      agents: [{ id: "clipper", name: "Clipper" }],
+    },
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada"),
+  );
+
+  expect(page.querySelector(".profile-hero__handle")?.textContent).toContain("ada@example.test");
+  expect(page.querySelector(".profile-hero")?.textContent).not.toContain("Clipper");
+
+  harness.context.gateway.updateSelfUser?.({ name: "Ada Lovelace" });
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace"),
+  );
+});
 
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {
   const profile: UserProfile = {
@@ -574,6 +542,7 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   const harness = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
   harness.context.gateway.connection.token = "profile-token";
+  setAvatarGatewayOrigin(harness.context.gateway.connection.gatewayUrl, ["profile-token"]);
   const agentsState = harness.context.agents.state as unknown as {
     agentsList: {
       defaultId: string;
@@ -595,7 +564,8 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   const page = mountProfilePage(harness.context);
 
   await waitForFast(() => {
-    expect(fetchMock).toHaveBeenCalledWith("/avatar/main", {
+    expect(fetchMock).toHaveBeenCalledWith(new URL("/avatar/main", window.location.origin).href, {
+      credentials: "include",
       headers: { Authorization: "Bearer profile-token" },
       signal: expect.any(AbortSignal),
     });
@@ -605,7 +575,8 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   });
 
   page.remove();
-  await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar"));
+  setAvatarGatewayOrigin(null);
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar");
 });
 
 it("retries the identity bootstrap when users.self returns no profile", async () => {

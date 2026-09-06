@@ -95,8 +95,15 @@ must declare their own development dependencies rather than rely on hoisting.
 
 ## Local commit hook
 
-The normal `pnpm install` setup automatically enables the repository's pre-commit
-formatting hook. Its optional content guard reads a private UTF-8 file selected by
+The normal `pnpm install` setup enables the repository's pre-commit formatting hook
+when `core.hooksPath` is unset. Existing hook selections, including an explicitly
+empty value, are preserved. Git scopes initialization to the current checkout.
+With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
+otherwise Git reports a warning and installation continues without changing hook
+settings. The repository owner can enable per-worktree configuration following
+[Git's configuration guidance](https://git-scm.com/docs/git-worktree#_configuration_file).
+
+The hook's optional content guard reads a private UTF-8 file selected by
 the native Git setting `hooks.blockedLiteralsFile`. Keep one literal per nonempty
 line in a file outside the checkout, such as
 `~/.config/openclaw/blocked-literals.txt`, then configure this checkout:

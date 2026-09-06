@@ -14,6 +14,7 @@ export type DockerE2eLane = {
   estimateSeconds?: number;
   live: boolean;
   name: string;
+  needsPackage?: boolean;
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
@@ -114,6 +115,7 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     live: options.live === true,
     noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
+    ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
     retryPatterns: options.retryPatterns ?? [],
@@ -392,8 +394,10 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   npmLane(
     "docker-package-install",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:package-install",
     {
+      e2eImageKind: false,
+      needsPackage: true,
       stateScenario: "empty",
       timeoutMs: 20 * 60 * 1000,
       weight: 3,

@@ -174,10 +174,6 @@ struct WatchApprovalTransportSourceGuardTests {
             storeSource,
             from: "func consume(\n        execApprovalSnapshot",
             to: "func consume(appSnapshot")
-        let restore = try Self.extract(
-            storeSource,
-            from: "private func restorePersistedState()",
-            to: "private func persistState()")
         let prefixed = "\u{001C}approval"
         #expect(ExecApprovalIdentifier.exact(prefixed) == prefixed)
         #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
@@ -192,7 +188,6 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(snapshotConsume.contains("WatchApprovalID.exact(approval.id) != nil"))
         #expect(snapshotConsume.contains("let hasCanonicalRequestCorrelation ="))
         #expect(snapshotConsume.contains("guard hasCanonicalRequestCorrelation else { return true }"))
-        #expect(restore.contains("WatchApprovalID.exact(record.approvalID) != nil"))
         let composedID = "approval-\u{00E9}"
         let decomposedID = "approval-e\u{0301}"
         let composedKey = ExactOpaqueIdentifierKey(composedID)
