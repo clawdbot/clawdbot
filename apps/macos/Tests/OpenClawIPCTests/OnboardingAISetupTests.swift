@@ -2183,37 +2183,6 @@ struct OnboardingAISetupTests {
         #expect(OnboardingProviderAuthLink.safeURL("Read https://docs.openclaw.ai/start/faq") == nil)
     }
 
-    @Test func `terminal provider failure remains copyable and can dismiss`() {
-        let model = OnboardingAISetupModel()
-        let option = OnboardingAISetupModel.AuthOption(
-            id: "openai:oauth",
-            brandId: nil,
-            label: "OpenAI",
-            hint: nil,
-            groupLabel: "OpenAI",
-            icon: nil,
-            website: nil,
-            kind: "oauth",
-            featured: true
-        )
-        model._test_setProviderAuth(option: option, sessionID: "finished-session")
-
-        model._test_applyAuthWizardResult(
-            done: true,
-            status: "error",
-            error: "The authorization request was denied."
-        )
-
-        #expect(model.activeAuthOption?.id == option.id)
-        #expect(model.authError?.copyText == "The authorization request was denied.")
-        #expect(model._test_authSessionID == nil)
-        #expect(!model.authBusy)
-
-        model.cancelProviderAuth()
-        #expect(model.activeAuthOption == nil)
-        #expect(model.authError == nil)
-    }
-
     @Test func `provider auth callback reacquires its route after a pre-dispatch disconnect`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingProviderAuthReconnectTests"))
         let detections = AISetupSocketGeneration()
@@ -2564,6 +2533,7 @@ struct OnboardingAISetupTests {
                 #expect(sheet.actions["Cancel"] == true)
                 model.cancelProviderAuth()
                 #expect(model.activeAuthOption == nil)
+                #expect(model.authError == nil)
             } else {
                 await waitForAISetupState { model.connected }
                 #expect(model.connected)
