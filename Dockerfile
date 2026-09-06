@@ -350,7 +350,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       # chown the parent .cache dir, not just ms-playwright: mkdir -p creates
-      # /home/node/.cache as root:root, and the gateway (USER node) needs to create
+      # /home/node/.cache as root:root, and the node-owned gateway needs to create
       # /home/node/.cache/openclaw-<uid> at runtime. Mirrors the #85968 .config fix.
       chown -R node:node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
       stat -c '%U:%G %a' "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" | grep -qx 'node:node 755'; \
