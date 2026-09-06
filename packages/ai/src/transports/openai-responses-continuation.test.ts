@@ -436,6 +436,45 @@ describe("OpenAI Responses continuation", () => {
     next?.release();
   });
 
+  it("does not let a commit-time serialization callback resurrect or clobber a replacement claim", () => {
+    // estimateRetainedBytes JSON.stringifies the committed request/response --
+    // a caller-supplied toJSON can run reentrant cleanup and claim a
+    // replacement between commit's initial ownership check and its actual
+    // map writes (eviction/set), unlike the sibling "keeps preparation
+    // exclusive..." test above which covers the same concern on the claim
+    // path via resolveResponsesContinuationRequest's own JSON.stringify.
+    const stale = claim({});
+    let replacement: ReturnType<typeof claim>;
+    const staleEffectiveRequest = {
+      ...continuationState().lastRequest,
+      metadata: {
+        value: {
+          toJSON() {
+            cleanupSessionResources("session-1");
+            replacement = claim({ request: nextRequest() });
+            return "opaque";
+          },
+        },
+      },
+    };
+    stale?.commit(staleEffectiveRequest, {
+      id: "resp_stale",
+      output: continuationState().lastResponseItems,
+    });
+
+    expect(replacement).toBeDefined();
+    replacement?.commit(continuationState().lastRequest, {
+      id: "resp_replacement",
+      output: continuationState().lastResponseItems,
+    });
+
+    // The stale commit must not have overwritten the replacement's own ready
+    // entry with its own (now ownerless) state.
+    const next = claim({ request: nextRequest() });
+    expect(next?.request.previous_response_id).toBe("resp_replacement");
+    next?.release();
+  });
+
   it("expires completed continuation state after the bounded idle TTL", () => {
     vi.useFakeTimers();
     const first = claim({});

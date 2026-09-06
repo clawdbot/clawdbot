@@ -333,6 +333,17 @@ export function claimOpenAIResponsesHttpContinuation(
           lastResponseItems: response.output,
         };
         const retainedBytes = estimateRetainedBytes(state);
+        // estimateRetainedBytes JSON.stringifies caller-supplied request/response
+        // content, which can invoke an attacker- or caller-controlled toJSON or
+        // getter synchronously -- exactly like the same concern already covered
+        // above in the claim path (see "keeps preparation exclusive..." test).
+        // That callback could reentrantly release this claim (session cleanup)
+        // and let a fresh claim/commit land at this key before this call resumes.
+        // Re-check ownership before touching the map again so a stale commit
+        // can never overwrite or evict entries a newer, legitimate claim owns.
+        if (httpContinuationEntries.get(key) !== claimed) {
+          return;
+        }
         if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
           // Evicting every other entry still wouldn't make this one fit --
           // skip caching it. The turn's actual response already completed
