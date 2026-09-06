@@ -180,6 +180,8 @@ describe("translation provider privacy and fallback", () => {
           const request = new Request(input, init);
           const payload = await request.json();
           assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
+          assert.ok(JSON.stringify(payload.input).includes("VoiceGestureLabel(onHold: startDictate)"), "native owner excerpt must reach the serialized provider request");
+          assert.ok(JSON.stringify(payload.input).includes("unnumbered printf"), "native formatting must retain source argument roles");
           const item = { id: "message", type: "message", role: "assistant", content: [] };
           const text = JSON.stringify({ connect: "Connecter" });
           const events = [
@@ -193,7 +195,7 @@ describe("translation provider privacy and fallback", () => {
           return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
         };
         const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
-        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "apps/android/wear/src/main/res/values/strings.xml" }], "fr");
+        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "apps/android/wear/src/main/res/values/strings.xml", sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], "fr");
         assert.equal(result.get("connect"), "Connecter");
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
@@ -235,12 +237,13 @@ describe("translation provider privacy and fallback", () => {
   });
 
   it("includes native owner context in the translation batch budget", async () => {
-    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "200");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "500");
     llm.completeSimple.mockResolvedValue(response());
     const contextualEntries = entries.slice(0, 2).map((entry) => ({
       id: entry.id,
       source: entry.source,
       sourcePath: "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
+      sourceContext: "Button(enabled = !runPending) ".repeat(6),
     }));
 
     expect((await translateNativeEntries(contextualEntries, "fr")).size).toBe(2);
