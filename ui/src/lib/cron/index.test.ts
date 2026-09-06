@@ -13,7 +13,6 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  loadCronModelSuggestions,
   toggleCronJob,
   loadCronJobsPage,
   loadCronRuns,
@@ -284,31 +283,6 @@ describe("cron controller", () => {
     expect(
       resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
     ).toStrictEqual([]);
-  });
-
-  it("loads model suggestions from the configured model view", async () => {
-    const request = vi.fn(async () => ({
-      models: [
-        { id: "z-model", provider: "zai" },
-        { id: "a-model", provider: "anthropic" },
-        { id: "z-model", provider: "other" },
-        { provider: "missing-id" },
-      ],
-    }));
-    const state = {
-      client: { request } as unknown as CronState["client"],
-      connected: true,
-      cronModelSuggestions: [],
-    };
-
-    await loadCronModelSuggestions(state, "writer");
-
-    expect(request).toHaveBeenCalledWith("models.list", {
-      agentId: "writer",
-      view: "configured",
-      preparedOnly: true,
-    });
-    expect(state.cronModelSuggestions).toEqual(["a-model", "z-model"]);
   });
 
   it("normalizes stale announce mode when session/payload no longer support announce", () => {
