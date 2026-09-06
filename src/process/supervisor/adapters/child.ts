@@ -85,10 +85,6 @@ type WorkerChildAdapter = ChildAdapter & {
 
 const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 
-function isServiceManagedRuntime(): boolean {
-  return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
-}
-
 type ChildAdapterInput = ProcessAdapterConstruction & {
   /** Retain a local tree owner independently of Gateway service markers. */
   ownProcessTree?: true;
@@ -152,7 +148,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   if (
     process.platform !== "win32" &&
     params.ownedWorker === undefined &&
-    (params.ownProcessTree === true || isServiceManagedRuntime())
+    (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
@@ -173,9 +169,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
 
   // A detached POSIX child is still a descendant in the service cgroup/job, but
   // owns a process group that can be killed without touching the node host.
-  const useDetached =
-    process.platform !== "win32" &&
-    (params.ownedWorker !== undefined || !isServiceManagedRuntime());
+  const useDetached = process.platform !== "win32";
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
   using secretDelivery = prepareSecretInputStdio(stdio, params.secretInput);

@@ -511,7 +511,7 @@ unix("does not reclaim a legacy process when its creation identity is unknown", 
     child.once("exit", resolve);
   });
   const db = new DatabaseSync(options.databasePath);
-  const readStart = pidIdentity.readFileLockProcessStartTime;
+  const readStart = pidIdentity.getFileLockProcessStartTime;
   try {
     const identity = store.processIdentity(child.pid);
     db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
@@ -524,7 +524,7 @@ unix("does not reclaim a legacy process when its creation identity is unknown", 
       db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
     const before = rows();
     const probe = vi
-      .spyOn(pidIdentity, "readFileLockProcessStartTime")
+      .spyOn(pidIdentity, "getFileLockProcessStartTime")
       .mockImplementation((pid, ...args) => (pid === child.pid ? null : readStart(pid, ...args)));
     try {
       expect(() => store.acquire(to, "fresh-owner", { kind: "update" })).toThrow("incompatible");

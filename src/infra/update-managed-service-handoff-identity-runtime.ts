@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { isPidDefinitelyDead, readFileLockProcessStartTime } from "../shared/pid-alive.ts";
+import { isPidDefinitelyDead, getFileLockProcessStartTime } from "../shared/pid-alive.ts";
 import {
   isManagedHandoffBoot,
   type HandoffBootIdentity,
@@ -16,7 +16,7 @@ export function createHandoffProcessIdentity(serviceManagerEnv: Record<string, s
     if (!isPidAlive(pid)) {
       return null;
     }
-    const start = readFileLockProcessStartTime(
+    const start = getFileLockProcessStartTime(
       pid,
       { ...serviceManagerEnv, LC_ALL: "C", TZ: "UTC" },
       1000,

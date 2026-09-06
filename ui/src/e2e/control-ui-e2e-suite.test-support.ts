@@ -444,9 +444,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             throwControlUiCleanupErrors(errors);
             assertControlUiForkActive();
             await resources?.release?.();
-          })().catch((error: unknown) => {
-            throw retireFork(error, resources?.retainedState);
-          });
+          })();
           return joinCleanup(
             teardown,
             "suite teardown",

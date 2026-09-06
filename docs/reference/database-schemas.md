@@ -330,6 +330,29 @@ admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
+Session reclamation keeps its deletion transaction on a worker connection.
+Archive publication and cascading deletion remain atomic. Before COMMIT, the
+worker publishes its authorization request in shared memory and waits for the
+parent's current owner check. Synchronous writers service that request at the shared
+SQLite transaction boundary between short lock-admission attempts, in the reclamation
+owner's captured async context. This includes session entries, delivery records, and
+first-use board and Goal schema transactions. Registration uses the open connection's
+native database location, so other connections and reopened handles share admission.
+Only admission is retried; transaction callbacks and mutations are never replayed.
+The original lock-admission deadline is retained. After granting approval,
+the parent synchronously joins transaction settlement before allowing owner retirement;
+that mandatory join cannot be abandoned at the append deadline.
+
+Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
+incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
+the number of WAL frames copied. Before pruning retained archives, disk-budget
+enforcement drains the initially observed free pages in units of at most 512,
+yields between units, and reacquires the database owner after each yield. It
+preserves physical checkpointing before measuring pressure, so unreclaimed pages
+do not cause unnecessary archive deletion. Full logical deletion with resumable
+physical cleanup remains a separate design; existing deletion visibility and rollback
+semantics are unchanged.
+
 ### Preserve the data and concurrency contracts
 
 An adapter must make these contracts explicit and verify them against a real
@@ -543,7 +566,7 @@ The shared cache targets 64 handles, but live borrows, synchronous transactions,
 
 Concurrent runs normally share the cached writer for an agent database on the main thread. Workers and diagnostics can open additional connections to the same file; the connection count is operation-dependent. Canonical agent connections set SQLite's busy timeout before use. A timeout cannot resolve a worker holding a write transaction while waiting for a blocked main thread: synchronous transcript appends do not join the asynchronous session write queue. Transaction callbacks must finish synchronously, and a competing writer must not depend on the main event loop to release its lock.
 
-Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Session reclamation currently has a separate worker write connection and post-commit truncating checkpoints and vacuum; it can contend with active transcript writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
+Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
 
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 

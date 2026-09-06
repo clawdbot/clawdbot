@@ -127,6 +127,8 @@ export type AgentCommandOpts = {
   toolsAllowIsDefault?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-authorized dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
   requireExplicitMessageTarget?: boolean;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -246,6 +248,7 @@ export type AgentCommandIngressOpts = Omit<
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"
   | "mainRestartRecoveryAttempt"
+  | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
   | "assertSourceCurrent"
@@ -267,6 +270,7 @@ export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
     | "mainRestartRecoveryOwnerLease"
     | "mainRestartRecoveryAdmitted"
     | "mainRestartRecoveryAttempt"
+    | "pinnedWidgetAuthoring"
     | "executionIdentityAdmission"
     | "operationalRunInstance"
     | "skillLibraryAuthoring"

@@ -269,9 +269,14 @@ describe("handleEmbeddedAssistantFailure", () => {
       action: "proceed",
       assistantProfileFailureReason: null,
       emptyErrorRetries: 0,
+      authRetryPending: false,
+      lastRetryFailoverReason: null,
     });
+    expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([]);
   });
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();

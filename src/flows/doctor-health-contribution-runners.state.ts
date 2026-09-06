@@ -110,6 +110,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
   const { note } = await import("../../packages/terminal-core/src/note.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
+    ...(ctx.configResult.retiredModelRefConfig
+      ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
+      : {}),
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length

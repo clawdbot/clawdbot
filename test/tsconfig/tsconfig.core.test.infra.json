@@ -6,7 +6,7 @@
   "include": [
     "../../src/infra/**/*.test.ts",
     "../../src/infra/**/*.test.tsx",
-    "../../src/shared/**/*.test.ts",
-    "../../src/shared/**/*.test.tsx"
+    "../../src/logging/**/*.test.ts",
+    "../../src/logging/**/*.test.tsx"
   ]
 }

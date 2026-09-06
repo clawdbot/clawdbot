@@ -7,23 +7,27 @@ export function pipeProcessOutput(
   reportError: (error: Error) => void,
 ): () => void {
   const cleanup = () => {
-    source.unpipe(destination);
     source.off("close", cleanup);
-    destination.off("close", onDestinationEnd);
-    destination.off("finish", onDestinationEnd);
+    destination.off("unpipe", onUnpipe);
     destination.off("error", onError);
+    source.unpipe(destination);
   };
-  const onDestinationEnd = () => {
+  const drain = () => {
     cleanup();
     source.resume();
   };
+  const onUnpipe = (stream: Readable) => {
+    if (stream === source) {
+      // Node's pipe error handler still needs our error listener after unpipe.
+      queueMicrotask(drain);
+    }
+  };
   const onError = (error: Error) => {
-    onDestinationEnd();
+    drain();
     reportError(error);
   };
   source.once("close", cleanup);
-  destination.once("close", onDestinationEnd);
-  destination.once("finish", onDestinationEnd);
+  destination.on("unpipe", onUnpipe);
   destination.on("error", onError);
   source.pipe(destination, { end: false });
   return cleanup;

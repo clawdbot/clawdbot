@@ -65,23 +65,6 @@ describe("isPidAlive", () => {
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
-  it("returns false for Linux zombies even when probing reports EPERM", async () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-    mockProcReads({
-      "/proc/42/status":
-        "Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t42\nPid:\t42\nThreads:\t1\n",
-    });
-
-    await withMockedPlatform("linux", async () => {
-      expect(isPidAlive(42)).toBe(false);
-    });
-
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
   it("returns false when process probing reports ESRCH", () => {
     const error = Object.assign(new Error("missing process"), { code: "ESRCH" });
     vi.spyOn(process, "kill").mockImplementation(() => {
@@ -90,17 +73,6 @@ describe("isPidAlive", () => {
 
     expect(isPidAlive(42)).toBe(false);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns false for zombie processes on Linux", async () => {
-    const zombiePid = process.pid;
-
-    mockProcReads({
-      [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\nThreads:\t1\n`,
-    });
-    await withMockedPlatform("linux", async () => {
-      expect(isPidAlive(zombiePid)).toBe(false);
-    });
   });
 
   it("treats unreadable linux proc status as non-zombie when kill succeeds", async () => {
@@ -116,21 +88,6 @@ describe("isPidAlive", () => {
     expect(readFileSyncSpy).toHaveBeenCalledWith("/proc/42/status", "utf8");
     expect(killSpy).toHaveBeenCalledWith(42, 0);
   });
-
-  it.each(["2", "", "0", "-1", "1.5", "unknown"])(
-    "keeps a zombie leader possibly alive without proof its other threads exited: %s",
-    async (threads) => {
-      vi.spyOn(process, "kill").mockReturnValue(true);
-      mockProcReads({
-        "/proc/42/status": `Name:\tworker\nState:\tZ (zombie)\n${threads ? `Threads:\t${threads}\n` : ""}`,
-      });
-
-      await withMockedPlatform("linux", async () => {
-        expect(isPidAlive(42)).toBe(true);
-        expect(isPidDefinitelyDead(42)).toBe(false);
-      });
-    },
-  );
 });
 
 describe("isPidDefinitelyDead", () => {
@@ -162,18 +119,6 @@ describe("isPidDefinitelyDead", () => {
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
-  it("returns true for zombie processes on Linux", async () => {
-    const zombiePid = process.pid;
-    vi.spyOn(process, "kill").mockImplementation(() => true);
-    mockProcReads({
-      [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\nThreads:\t1\n`,
-    });
-
-    await withMockedPlatform("linux", async () => {
-      expect(isPidDefinitelyDead(zombiePid)).toBe(true);
-    });
-  });
-
   it("returns false for live non-zombie processes", async () => {
     const livePid = process.pid;
     vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -185,6 +130,33 @@ describe("isPidDefinitelyDead", () => {
       expect(isPidDefinitelyDead(livePid)).toBe(false);
     });
   });
+});
+
+describe.each(["success", "EPERM"])("Linux process liveness (probe=%s)", (probe) => {
+  it.each([
+    { state: "S", threads: "1", dead: false },
+    { state: "Z", threads: "1", dead: true },
+    { state: "Z", threads: "2", dead: false },
+    { state: "Z", threads: "", dead: false },
+    ...["0", "-1", "1.5", "unknown"].map((threads) => ({ state: "Z", threads, dead: false })),
+  ])(
+    "requires exited threads (state=$state, threads=$threads)",
+    async ({ state, threads, dead }) => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        if (probe === "EPERM") {
+          throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+        }
+        return true;
+      });
+      mockProcReads({
+        "/proc/42/status": `Name:\tnode\nState:\t${state}\n${threads ? `Threads:\t${threads}\n` : ""}`,
+      });
+      await withMockedPlatform("linux", async () => {
+        expect(isPidAlive(42)).toBe(!dead);
+        expect(isPidDefinitelyDead(42)).toBe(dead && probe !== "EPERM");
+      });
+    },
+  );
 });
 
 describe("process start times", () => {
@@ -294,14 +266,11 @@ describe("process start times", () => {
       await withMockedPlatform(platform, async () => {
         // Each simulated platform needs a fresh module's process-lifetime state.
         vi.resetModules();
-        const {
-          getFileLockProcessStartTime: readIdentity,
-          readFileLockProcessStartTime: readManaged,
-        } = await import("./pid-alive.js");
-        expect(readManaged(process.pid, {}, 1000)).toBeNull();
+        const { getFileLockProcessStartTime: readIdentity } = await import("./pid-alive.js");
+        expect(readIdentity(process.pid, {}, 1000)).toBeNull();
         expect(readIdentity(process.pid)).toBe(identity);
-        expect(readManaged(process.pid, {}, 1000)).toBe(identity);
-        expect(readManaged(foreignPid, {}, 1000)).toBe(111);
+        expect(readIdentity(process.pid, {}, 1000)).toBe(identity);
+        expect(readIdentity(foreignPid, {}, 1000)).toBe(111);
         expect(readIdentity(foreignPid)).toBe(222);
         expect(readIdentity(process.pid)).toBe(identity);
         expect(probe).toHaveBeenCalledTimes(4);

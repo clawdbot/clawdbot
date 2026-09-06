@@ -150,6 +150,9 @@ export function collectPluginSchemaMetadataCore(
       id: record.id,
       name: record.name,
       description: record.description,
+      configSecretInputPaths: record.configContracts?.secretInputs?.paths.map(
+        (entry) => entry.path,
+      ),
       configUiHints: record.configUiHints,
       configSchema: record.configSchema,
       originRank: nextRank,

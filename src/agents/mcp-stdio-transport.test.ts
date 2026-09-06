@@ -137,6 +137,36 @@ describe("OpenClawStdioClientTransport", () => {
     expect(mkdir).not.toHaveBeenCalled();
   });
 
+  it.each(["close", "forceClose"] as const)(
+    "%s retires startup while its owned data directory is being prepared",
+    async (closeMethod) => {
+      const preparation = createDeferred<undefined>();
+      vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);
+      const transport = createTransport({ command: "node", prepareDataDir: "/owned-plugin-data" });
+      const onclose = vi.fn();
+      Object.assign(transport, { onclose });
+      const started = transport.start();
+      const rejectedStart = expect(started).rejects.toThrow("closed");
+      const closing = transport[closeMethod]();
+      try {
+        expect(spawnMock).not.toHaveBeenCalled();
+        preparation.resolve(undefined);
+        await rejectedStart;
+        await closing;
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(onclose).toHaveBeenCalledOnce();
+        await transport.close();
+        await transport.forceClose();
+        expect(onclose).toHaveBeenCalledOnce();
+        await expect(transport.start()).rejects.toThrow();
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        preparation.resolve(undefined);
+        await Promise.allSettled([started, closing]);
+      }
+    },
+  );
+
   it("joins one disposal across root exit, repeated close and forced escalation", async () => {
     const fixture = createChild();
     const transport = createTransport({ command: "node" });
@@ -157,6 +187,10 @@ describe("OpenClawStdioClientTransport", () => {
     await closing;
     expect(closeMock).toHaveBeenCalledOnce();
     expect(transport.pid).toBeNull();
+    expect(onclose).toHaveBeenCalledOnce();
+    const killsAtRetirement = fixture.child.kill.mock.calls.length;
+    await transport.forceClose();
+    expect(fixture.child.kill).toHaveBeenCalledTimes(killsAtRetirement);
     expect(onclose).toHaveBeenCalledOnce();
   });
 

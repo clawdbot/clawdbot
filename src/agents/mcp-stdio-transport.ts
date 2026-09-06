@@ -51,7 +51,7 @@ export class OpenClawStdioClientTransport implements Transport {
   async start(): Promise<void> {
     if (this.starting || this.closing) {
       throw new Error(
-        "OpenClawStdioClientTransport already started; Client.connect() starts transports automatically.",
+        "OpenClawStdioClientTransport already started or closed; Client.connect() starts transports automatically.",
       );
     }
     this.starting = this.startProcess();
@@ -69,6 +69,11 @@ export class OpenClawStdioClientTransport implements Transport {
           { cause: error },
         );
       }
+    }
+
+    // Directory preparation may finish after shutdown has retired this launch.
+    if (this.startupAbort.signal.aborted) {
+      throw new Error("MCP stdio transport is closed");
     }
 
     try {

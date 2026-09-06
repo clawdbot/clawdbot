@@ -9,7 +9,7 @@ import type {
   TelegramDispatchTurnConfig as TurnConfig,
   TelegramProgressStateSlice,
 } from "./bot-message-dispatch.types.js";
-import type { DraftLaneState } from "./lane-delivery.js";
+import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
 import {
   formatTelegramProgressLine,
   renderTelegramProgressDraftPreview,

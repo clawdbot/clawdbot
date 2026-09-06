@@ -107,14 +107,9 @@ export function getProcessStartTime(pid: number): number | null {
 }
 
 /** Read a cross-platform process identity for filesystem lock ownership. */
-export function getFileLockProcessStartTime(pid: number): number | null {
-  return readFileLockProcessStartTime(pid, process.env);
-}
-
-/** Managed callers retain their native environment and Windows query budget. */
-export function readFileLockProcessStartTime(
+export function getFileLockProcessStartTime(
   pid: number,
-  env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
   windowsTimeoutMs?: number,
 ): number | null {
   if (!isValidPid(pid)) {

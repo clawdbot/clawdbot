@@ -230,7 +230,12 @@ fs.rmSync(root, { recursive: true });
       child.stdout?.on("data", (data) => (stdout += String(data)));
       child.stderr?.on("data", (data) => (stderr += String(data)));
       const result = await completion;
-      expect(result, stdout + stderr).toEqual({ code: 0, signal: null });
+      // Simulated census faults do not revoke the outer process owner's actual join.
+      expect(result, stdout + stderr).toEqual({
+        code: 0,
+        signal: null,
+        groupJoined: process.platform !== "win32",
+      });
       expect(JSON.parse(stdout)).toMatchObject({ fault, accepted: fault === "ready" });
     },
     55_000,

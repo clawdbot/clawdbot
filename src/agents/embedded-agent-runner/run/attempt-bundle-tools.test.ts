@@ -42,6 +42,7 @@ vi.mock("../effective-tool-policy.js", () => ({
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
@@ -69,9 +70,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runtimePlan: {},
         sessionId: "session",
       },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
+      setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
@@ -82,7 +81,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         toolsEnabled: true,
         toolsRaw,
       },
-      sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
 
@@ -193,7 +191,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       config: input.attempt.config,
       manifestRegistry: registry,
     });
-    input.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
+    input.setup.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
     mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "chrome-dev__click" }, { name: "chrome-dev-2__click" }],
@@ -448,31 +446,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         throw new Error("bundle policy failed");
       });
 
-      const input = {
-        agentDir: "/tmp/agent",
-        attempt: {
-          config: {},
-          model: {},
-          modelId: "model",
-          provider: "provider",
-          runId: "run",
-          runtimePlan: {},
-          sessionId: "session",
-        },
-        effectiveWorkspace: "/tmp/workspace",
-        getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-        getProviderRuntimeHandle: () => undefined,
-        isRawModelRun: false,
-        preparedToolBase: {
-          cronCreatorToolAllowlist: [],
-          effectiveToolsAllow: undefined,
-          localModelLeanPreserveToolNames: [],
-          runtimeCapabilityProfile: undefined,
-          toolsEnabled: true,
-          toolsRaw: [],
-        },
-        sessionAgentId: "main",
-      } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
+      const input = createInput([], []);
 
       const finish = vi.fn(async (_outcome: "closed" | "uncertain") => {});
       await expect(

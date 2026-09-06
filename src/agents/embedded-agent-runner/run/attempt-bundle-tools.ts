@@ -17,7 +17,7 @@ import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js"
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
-import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
+import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   shouldCreateBundleLspRuntimeForAttempt,
@@ -26,18 +26,14 @@ import {
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 type PreparedToolBase = ReturnType<typeof prepareEmbeddedAttemptToolBase>;
 
 export async function prepareEmbeddedAttemptBundleTools(params: {
   agentDir: string;
   attempt: EmbeddedRunAttemptParams;
-  effectiveWorkspace: string;
-  getCurrentAttemptPluginMetadataSnapshot: AttemptSetup["getCurrentAttemptPluginMetadataSnapshot"];
-  getProviderRuntimeHandle: AttemptSetup["getProviderRuntimeHandle"];
+  setup: EmbeddedAttemptSetup;
   isRawModelRun: boolean;
   preparedToolBase: PreparedToolBase;
-  sessionAgentId: string;
 }) {
   const {
     cronCreatorToolAllowlist,
@@ -55,18 +51,18 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       tools,
       provider: params.attempt.provider,
       config: params.attempt.config,
-      workspaceDir: params.effectiveWorkspace,
+      workspaceDir: params.setup.effectiveWorkspace,
       env: process.env,
       modelId: params.attempt.modelId,
       modelApi: params.attempt.model.api,
       model: params.attempt.model,
-      runtimeHandle: params.getProviderRuntimeHandle(),
+      runtimeHandle: params.setup.getProviderRuntimeHandle(),
       onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
         logRuntimeToolSchemaQuarantine({
           diagnostics,
           tools: sourceTools,
           runId: params.attempt.runId,
-          agentId: params.sessionAgentId,
+          agentId: params.setup.sessionAgentId,
           sessionKey: params.attempt.sessionKey,
           sessionId: params.attempt.sessionId,
         }),
@@ -91,14 +87,14 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       );
     }
   }
-  const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
+  const bundleMetadataSnapshot = params.setup.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
   const bundleManifestRegistry =
     bundleMetadataSnapshot?.pluginIds === undefined
       ? bundleMetadataSnapshot?.manifestRegistry
       : undefined;
   const mcpConfig = {
-    workspaceDir: params.effectiveWorkspace,
+    workspaceDir: params.setup.effectiveWorkspace,
     cfg: params.attempt.config,
     manifestRegistry: bundleManifestRegistry,
     toolOverrides: params.attempt.toolOverrides,
@@ -141,7 +137,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
-        agentId: params.sessionAgentId,
+        agentId: params.setup.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -159,7 +155,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
-          workspaceDir: params.effectiveWorkspace,
+          workspaceDir: params.setup.effectiveWorkspace,
           cfg: params.attempt.config,
           manifestRegistry: bundleManifestRegistry,
           reservedToolNames: [
@@ -182,7 +178,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...allowedBundleMcpTools, ...allowedBundleLspTools],
       config: params.attempt.config,
-      workspaceDir: params.effectiveWorkspace,
+      workspaceDir: params.setup.effectiveWorkspace,
       metadataSnapshot: bundleMetadataSnapshot,
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
@@ -196,7 +192,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       const allowedAppTools = applyFinalEffectiveToolPolicy({
         bundledTools: runtimeAllowedAppTools,
         config: params.attempt.config,
-        workspaceDir: params.effectiveWorkspace,
+        workspaceDir: params.setup.effectiveWorkspace,
         metadataSnapshot: bundleMetadataSnapshot,
         conversationCapabilityProfile: runtimeCapabilityProfile,
         warn: (message) => log.warn(message),
@@ -212,7 +208,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           wrapToolWithAbortSignal(tool, params.preparedToolBase.toolAbortSignal),
         ),
         config: params.attempt.config,
-        agentId: params.sessionAgentId,
+        agentId: params.setup.sessionAgentId,
         preserveToolNames: localModelLeanPreserveToolNames,
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
@@ -236,7 +232,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         diagnostics: schemaProjection.diagnostics,
         tools: projectedTools,
         runId: params.attempt.runId,
-        agentId: params.sessionAgentId,
+        agentId: params.setup.sessionAgentId,
         sessionKey: params.attempt.sessionKey,
         sessionId: params.attempt.sessionId,
       });

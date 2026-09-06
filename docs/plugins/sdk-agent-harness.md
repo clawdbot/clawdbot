@@ -307,6 +307,10 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
+Each new isolated completion uses the configuration and agent/workspace directories
+of its admitted runtime generation. Explicit model, auth-profile, and runtime
+selections remain fixed while that generation is prepared.
+
 Host-authorized calls must use the supplied model and credential without substitution.
 Bundled host-authorized harnesses share one host-prepared completion helper that
 preserves the exact route, deadline, sampling options, and empty tool surface.

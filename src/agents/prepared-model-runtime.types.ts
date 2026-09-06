@@ -21,7 +21,7 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
-  /** Present for live generations, including when the resolved model set is empty. */
+  /** Captured static rows; cleared when catalog discovery expands the provider registry. */
   providerStaticModels?: readonly ProviderRuntimeModel[];
   inlineProviderModels: readonly InlineModelEntry[];
   configuredCatalogEntries: readonly ModelCatalogEntry[];
@@ -164,6 +164,13 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   fullCatalogConcurrencyLimit: number;
 }>;
 
+export type PreparedModelCatalogInventory = {
+  catalog: ModelCatalogSnapshot;
+  key: string;
+  pluginFingerprint: string;
+  discoveryOrigins: readonly { provider: string; profileId?: string }[];
+};
+
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
@@ -174,7 +181,7 @@ export type PreparedModelRuntimeOwner = {
   needsRefresh: boolean;
   catalogStale: boolean;
   /** Completed discovery facts; runtime capability projection belongs to each generation. */
-  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
+  catalogInventory?: PreparedModelCatalogInventory;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;

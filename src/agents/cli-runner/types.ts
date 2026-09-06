@@ -237,6 +237,8 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Trusted run-local capability to author pinned widgets without inline presentation. */
+  pinnedWidgetAuthoring?: boolean;
   currentChannelId?: string;
   chatId?: string;
   channelContext?: PluginHookChannelContext;

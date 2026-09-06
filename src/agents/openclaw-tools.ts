@@ -309,12 +309,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     allowlist: options?.runtimeToolAllowlist,
     denylist: explicitFactoryDenylist,
   });
-  // Scheduled turns with an explicit server-stamped tool cap have no originating
-  // renderer. Persistent session targets may still write their durable board;
-  // detached cron-run sessions stay gated because their board is not user-owned.
-  const scheduledPinnedWidgetOnly =
-    options?.gatewayCallerScheduled === true &&
-    scheduledWidgetExplicitlyAllowed &&
+  // Admitted Control UI recovery and explicitly capped scheduled turns can
+  // keep authoring their durable board without claiming an inline renderer.
+  const pinnedWidgetOnly =
+    (options?.pinnedWidgetAuthoring === true ||
+      (options?.gatewayCallerScheduled === true && scheduledWidgetExplicitlyAllowed)) &&
     !inlineWidgetClientAvailable &&
     !widgetPresentation.currentChannelPresenter &&
     Boolean(sessionKey) &&
@@ -432,7 +431,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentSessionKey: sessionKey,
             inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
             inlineClientAvailable: inlineWidgetClientAvailable,
-            pinnedOnly: scheduledPinnedWidgetOnly,
+            pinnedOnly: pinnedWidgetOnly,
             presenters: widgetPresentation.presenters,
             presenterContext: widgetPresentation.context,
           }),

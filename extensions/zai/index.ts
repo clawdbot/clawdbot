@@ -349,7 +349,7 @@ export default defineSingleProviderPluginEntry({
         endpoint: "cn",
       }),
     ],
-    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true },
+    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
     resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(

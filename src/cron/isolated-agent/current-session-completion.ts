@@ -24,7 +24,7 @@ import {
 } from "./delivery-dispatch-awareness.js";
 import { logCronDeliveryWarn } from "./delivery-dispatch-policy.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
-import { resolvedDeliveryTargetsExternalChannel } from "./delivery-target.js";
+import { requiresExternalCronDelivery } from "./delivery-target.js";
 
 type CurrentSessionCompletionResult =
   | { ok: false; reason: string }
@@ -114,12 +114,9 @@ export async function commitCurrentSessionCronCompletion(
   if (params.resolvedDelivery.ok) {
     return { ok: true, requiresExternalDelivery: true };
   }
-  // The completion is durably committed to the target conversation. When the
-  // failed resolution names an external channel route, that route still owed a
-  // send — report it as a delivery failure without failing the committed turn.
-  // With no external route (internal webchat/Control UI conversations, or a
-  // gateway with no channels configured), the commit IS the delivery.
-  if (resolvedDeliveryTargetsExternalChannel(params.resolvedDelivery)) {
+  // Committing the report cannot satisfy an explicit or remembered external
+  // destination; retain its error even when selection produced no channel.
+  if (requiresExternalCronDelivery(params.deliveryPlan, params.resolvedDelivery)) {
     return {
       ok: true,
       requiresExternalDelivery: false,
