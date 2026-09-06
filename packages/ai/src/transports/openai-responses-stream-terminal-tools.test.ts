@@ -259,6 +259,29 @@ describe("Responses terminal tool completion", () => {
     ).toEqual([{ slot: 0 }]);
   });
 
+  it("uses complete opening arguments when the done item carries none", async () => {
+    const result = await runFixture([
+      added(0, { arguments: JSON.stringify({ slot: 0 }) }),
+      { type: "response.output_item.done", output_index: 0, item: tool(0, { arguments: "" }) },
+      completed("resp_opening_arguments_done", [tool(0, { arguments: "" })]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
+  it("uses complete opening arguments when the terminal item carries none", async () => {
+    const result = await runFixture([
+      added(0, { arguments: JSON.stringify({ slot: 0 }) }),
+      completed("resp_opening_arguments_terminal", [tool(0, { arguments: "" })]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
   it("never completes active tools from an incomplete response", async () => {
     const result = await runFixture([
       added(0),

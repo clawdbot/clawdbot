@@ -87,7 +87,7 @@ export function resolveResponsesToolCallId(
 
 export function resolveCompletedResponsesToolCall(
   item: Extract<ResponseOutputItem, { type: "function_call" }>,
-  streamed?: { name?: string; arguments?: string },
+  streamed?: { name?: string; arguments?: string; argumentsStreamed?: boolean },
 ): Pick<ToolCall, "name" | "arguments"> {
   if (item.status && item.status !== "completed") {
     throw new IncompleteToolCallError(
@@ -109,7 +109,10 @@ export function resolveCompletedResponsesToolCall(
   // terminal snapshot must decode to the same object. A buffer that is not yet
   // a complete JSON object is an incomplete stream the snapshot legitimately
   // repairs, but two complete disagreeing encodings have no authoritative side,
-  // so the call fails closed instead of authorizing a stale snapshot.
+  // so the call fails closed instead of authorizing a stale snapshot. A buffer
+  // seeded only by the opening item snapshot was never streamed: it still
+  // stands in when the completion carries no arguments, but the completion
+  // snapshot may replace it without a conflict.
   const streamedArguments = parseJsonObjectPreservingUnsafeIntegers(streamed?.arguments);
   if (streamedArguments && !item.arguments) {
     return { name, arguments: streamedArguments };
@@ -118,7 +121,11 @@ export function resolveCompletedResponsesToolCall(
     item.arguments,
     "Responses stream completed tool call with invalid JSON arguments",
   );
-  if (streamedArguments && !isDeepStrictEqual(streamedArguments, argumentsValue)) {
+  if (
+    streamedArguments &&
+    streamed?.argumentsStreamed &&
+    !isDeepStrictEqual(streamedArguments, argumentsValue)
+  ) {
     throw new Error("Responses stream completed tool call with conflicting arguments");
   }
   return { name, arguments: argumentsValue };

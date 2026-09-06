@@ -63,8 +63,8 @@ export async function processResponsesStream<TApi extends Api>(
     block: StreamingToolCallBlock;
     contentIndex: number;
     // Set once an argument delta or done event lands on this call. The opening
-    // item snapshot seeds partialJson too, so this is what separates a streamed
-    // encoding from a snapshot the terminal item may legitimately replace.
+    // item snapshot seeds partialJson too; only a streamed buffer may conflict
+    // with the completion snapshot, an opening snapshot merely backs it up.
     argumentsStreamed: boolean;
     // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
     previewSchedule: ToolArgumentPreviewSchedule;
@@ -288,10 +288,8 @@ export async function processResponsesStream<TApi extends Api>(
       }
       const validated = resolveCompletedResponsesToolCall(item, {
         name: state?.block.name,
-        arguments:
-          state?.argumentStreamReliable && state.argumentsStreamed
-            ? state.block.partialJson
-            : undefined,
+        arguments: state?.argumentStreamReliable ? state.block.partialJson : undefined,
+        argumentsStreamed: state?.argumentsStreamed,
       });
       if (state) {
         recovered.push(state);
@@ -668,10 +666,10 @@ export async function processResponsesStream<TApi extends Api>(
           }
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments:
-              streamingToolCall?.argumentStreamReliable && streamingToolCall.argumentsStreamed
-                ? streamingToolCall.block.partialJson
-                : undefined,
+            arguments: streamingToolCall?.argumentStreamReliable
+              ? streamingToolCall.block.partialJson
+              : undefined,
+            argumentsStreamed: streamingToolCall?.argumentsStreamed,
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
