@@ -8,9 +8,9 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { runAgentLoop, type AgentEvent, type AgentMessage } from "../plugin-sdk/agent-core.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-import { runAgentLoop, type AgentEvent, type AgentMessage } from "./runtime/index.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
 import {

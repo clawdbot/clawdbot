@@ -1,18 +1,12 @@
 /** Timeout wrapper for node-host operations using AbortSignal cancellation. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { toErrorObject } from "../infra/errors.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
-/**
- * AbortSignal-based timeout wrapper for node-host operations.
- *
- * The wrapper races work against an abort promise, clears timers/listeners on
- * completion, and preserves object-shaped abort reasons as Error properties.
- */
-/** Run work with an optional timeout and AbortSignal. */
+/** Run bounded work; dynamic labels identify the stage pending at the deadline. */
 export async function runAbortableTimeout<T>(
   work: (signal: AbortSignal | undefined, resetTimeout: () => void) => Promise<T>,
   timeoutMs?: number,
-  label?: string,
+  label?: string | (() => string),
 ): Promise<T> {
   const resolved = timeoutMs === undefined ? undefined : resolveTimerTimeoutMs(timeoutMs, 1);
   if (!resolved) {
@@ -20,40 +14,31 @@ export async function runAbortableTimeout<T>(
   }
 
   const abortCtrl = new AbortController();
-  const timeoutError = new Error(`${label ?? "request"} timed out`);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
   const resetTimeout = () => {
     if (settled || abortCtrl.signal.aborted) {
       return;
     }
-    if (timer) {
-      clearTimeout(timer);
-    }
-    timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const operation = typeof label === "function" ? label() : (label ?? "request");
+      abortCtrl.abort(new Error(`${operation} timed out`));
+    }, resolved);
     timer.unref?.();
   };
   resetTimeout();
 
-  let abortListener: (() => void) | undefined;
-  const abortPromise: Promise<never> = abortCtrl.signal.aborted
-    ? Promise.reject(toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"))
-    : new Promise((_, reject) => {
-        abortListener = () =>
-          reject(toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"));
-        abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
-      });
+  const aborted = createDeferredCore<never>();
+  const abortListener = () => aborted.reject(abortCtrl.signal.reason);
+  abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
 
   try {
-    return await Promise.race([work(abortCtrl.signal, resetTimeout), abortPromise]);
+    return await Promise.race([work(abortCtrl.signal, resetTimeout), aborted.promise]);
   } finally {
     settled = true;
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (abortListener) {
-      // Remove the listener even when work wins the race to avoid retaining closures.
-      abortCtrl.signal.removeEventListener("abort", abortListener);
-    }
+    clearTimeout(timer);
+    // Work may finish first; its signal must not retain the pending rejection.
+    abortCtrl.signal.removeEventListener("abort", abortListener);
   }
 }

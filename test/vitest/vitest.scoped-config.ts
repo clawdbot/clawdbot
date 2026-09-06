@@ -4,6 +4,7 @@ import { defineConfig, type ViteUserConfig } from "vitest/config";
 import {
   intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
   relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
@@ -46,7 +47,7 @@ function includePatternIsFullyExcluded(includePattern: string, excludePattern: s
   const exclude = normalizePathPattern(excludePattern);
   return (
     include === exclude ||
-    path.matchesGlob(include, exclude) ||
+    matchesVitestGlob(include, exclude) ||
     directoryPatternCoversInclude(exclude, include)
   );
 }

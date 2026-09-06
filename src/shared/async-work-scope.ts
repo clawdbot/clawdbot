@@ -42,12 +42,12 @@ export class AsyncWorkScope {
     return operation.promise;
   }
 
-  beginClose(): void {
+  beginClose(reason?: unknown): void {
     if (this.phase !== "open") {
       return;
     }
     this.phase = "closing";
-    this.controller.abort();
+    this.controller.abort(reason);
   }
 
   async drain(): Promise<void> {

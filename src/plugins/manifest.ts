@@ -51,6 +51,37 @@ function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
   return kinds.length === 0 ? undefined : kinds.length === 1 ? kinds[0] : kinds;
 }
 
+function parseDoctorStateMigrationDescriptors(
+  raw: unknown,
+): PluginManifestDoctorContract["stateMigrations"] {
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  return raw.flatMap((value) => {
+    if (!isRecord(value)) {
+      return [];
+    }
+    const id = normalizeOptionalString(value.id);
+    if (!id || seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    return [
+      {
+        id,
+        ...(value.doctorOnly === true ? { doctorOnly: true as const } : {}),
+        ...(value.phase === "after-session-repair"
+          ? { phase: "after-session-repair" as const }
+          : {}),
+      },
+    ];
+  });
+}
+
 function parseManifestBackupResources(
   raw: unknown,
 ): { ok: true; resources?: PluginManifestBackupResource[] } | { ok: false; error: string } {
@@ -188,17 +219,17 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
+  const stateMigrations = parseDoctorStateMigrationDescriptors(rawDoctorContract?.stateMigrations);
   const doctorContract = rawDoctorContract
-    ? (Object.fromEntries(
-        [
-          "configRepair",
-          "resolveSessionStoreAgentIds",
-          "sessionRouteStateOwners",
-          "stateMigrations",
-        ].flatMap((key) =>
-          typeof rawDoctorContract[key] === "boolean" ? [[key, rawDoctorContract[key]]] : [],
+    ? ({
+        ...Object.fromEntries(
+          ["configRepair", "resolveSessionStoreAgentIds", "sessionRouteStateOwners"].flatMap(
+            (key) =>
+              typeof rawDoctorContract[key] === "boolean" ? [[key, rawDoctorContract[key]]] : [],
+          ),
         ),
-      ) as PluginManifestDoctorContract)
+        ...(stateMigrations !== undefined ? { stateMigrations } : {}),
+      } as PluginManifestDoctorContract)
     : undefined;
   const manifestBeforeDashboard = {
     id,

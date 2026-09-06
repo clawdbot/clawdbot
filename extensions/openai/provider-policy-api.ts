@@ -1,4 +1,3 @@
-// Openai API module exposes the plugin public contract.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {

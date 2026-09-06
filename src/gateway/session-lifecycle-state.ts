@@ -74,6 +74,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "runtimeMs"
   | "abortedLastRun"
   | "restartRecoveryRuns"
+  | "restartRecoveryForceSafeTools"
   | "mainRestartRecovery"
   | "lifecycleRunId"
 >;
@@ -244,21 +245,24 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
   const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
-  const status = terminal
-    ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
-    : "running";
+  // Cancellation must preserve recovery even when the bulk shutdown marker failed.
+  // Use the normalized outcome so a prior hard timeout still owns the terminal state.
+  const interruptedForRestart =
+    terminal?.reason === "cancelled" && terminal.stopReason === "restart";
+  const status =
+    terminal && !interruptedForRestart
+      ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
+      : "running";
   return {
     updatedAt,
     status,
     lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
     startedAt,
-    endedAt,
-    runtimeMs: resolveRuntimeMs({
-      startedAt,
-      endedAt,
-      existingRuntimeMs: existing?.runtimeMs,
-    }),
-    abortedLastRun: status === "killed",
+    endedAt: interruptedForRestart ? undefined : endedAt,
+    runtimeMs: interruptedForRestart
+      ? undefined
+      : resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
+    abortedLastRun: interruptedForRestart || status === "killed",
   };
 }
 
@@ -273,6 +277,9 @@ function derivePersistedSessionLifecyclePatch(params: {
   const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
+    ...(snapshot.status === "running" && snapshot.abortedLastRun === true
+      ? { restartRecoveryForceSafeTools: true }
+      : {}),
   };
   const projection = projectMainSessionRecoveryLifecycle({
     currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -304,6 +311,7 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
 }): GatewaySessionLifecycleSnapshot {
   const {
     restartRecoveryRuns: _restartRecoveryRuns,
+    restartRecoveryForceSafeTools: _restartRecoveryForceSafeTools,
     lifecycleRunId: _lifecycleRunId,
     ...patch
   } = derivePersistedSessionLifecyclePatch(params);

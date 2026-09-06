@@ -44,6 +44,7 @@ import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner
 import {
   buildCliExecLogLine,
   createManagedRun,
+  createSuccessfulProcessExit,
   setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
@@ -1957,16 +1958,7 @@ describe("runCliAgent spawn path", () => {
           result: "Hello world",
         }) + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -2007,16 +1999,7 @@ describe("runCliAgent spawn path", () => {
           }),
         ].join("\n") + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -2064,16 +2047,7 @@ describe("runCliAgent spawn path", () => {
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({
       provider: "codex-cli",

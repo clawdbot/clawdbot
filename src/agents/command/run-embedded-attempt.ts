@@ -544,6 +544,7 @@ export async function runEmbeddedAgentAttempt(params: {
                 (runOptions.isFallbackRetry &&
                   attemptLifecycleState.currentTurnUserMessagePersisted),
               userTurnTranscriptRecorder,
+              assistantErrorTranscript: runOptions.assistantErrorTranscript,
               contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
               onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,

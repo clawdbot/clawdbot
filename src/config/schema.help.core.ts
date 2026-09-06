@@ -2,7 +2,7 @@
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
-import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
+import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   worktreeRoot:
@@ -86,7 +86,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   telemetry:
     "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
-  ...projectTelemetryFieldMetadata("help"),
+  ...TELEMETRY_FIELD_HELP,
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,

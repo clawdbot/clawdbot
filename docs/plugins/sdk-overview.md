@@ -592,6 +592,8 @@ turn runs; the Plugin SDK only constrains the target session, plugin-owned
 naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
 turn when the work itself needs durable multi-step Task Flow state.
 
+Session extension SDK and supported TypeBox imports share the host's modules.
+
 The contracts intentionally split authority:
 
 - External plugins can own session extensions, UI descriptors, commands, tool

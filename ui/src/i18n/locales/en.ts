@@ -752,6 +752,7 @@ export const en: TranslationMap & {
       binding: "Binding",
       useDefault: "Use default",
       any: "any",
+      unavailable: "Unavailable",
     },
     inventory: {
       title: "Paired devices",
@@ -4650,6 +4651,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
+      retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
       creatingWorktree: "Creating worktree…",
@@ -5503,6 +5505,8 @@ export const en: TranslationMap & {
         "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
     },
     pendingInputs: {
+      resuming:
+        "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
