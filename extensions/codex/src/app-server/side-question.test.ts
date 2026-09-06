@@ -3120,6 +3120,41 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(onToolResult).toHaveBeenCalledWith({ text: "Question for you:" });
   });
 
+  it("uses the provider fallback channel for side-question prompts", async () => {
+    const onToolResult = vi.fn();
+    let capturedQuestionPrompt:
+      | { send?: (payload: { text?: string }) => unknown; messageChannel?: string }
+      | undefined;
+    createOpenClawCodingToolsMock.mockImplementation((options) => {
+      capturedQuestionPrompt = (
+        options as {
+          questionPrompt?: {
+            send?: (payload: { text?: string }) => unknown;
+            messageChannel?: string;
+          };
+        }
+      ).questionPrompt;
+      return [
+        {
+          name: "ask_user",
+          description: "Ask the person a question",
+          parameters: { type: "object", properties: {}, additionalProperties: true },
+          execute: toolExecuteMock,
+        },
+      ];
+    });
+
+    await runSideQuestionWithManagedWebSearchCall(
+      sideParams({ messageProvider: "telegram", opts: { onToolResult } }),
+      { preserveToolFactory: true, toolName: "ask_user", toolArguments: { header: "Choice" } },
+    );
+
+    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
+    await capturedQuestionPrompt?.send?.({ text: "Question for you:" });
+    expect(onToolResult).toHaveBeenCalledWith({ text: "Question for you:" });
+  });
+
   it("bridges prepared restricted-profile tools into side threads", async () => {
     const preparedModelRuntime = {
       metadataSnapshot: {

@@ -285,6 +285,29 @@ describe("Codex app-server dynamic tool build", () => {
     expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
   });
 
+  it("uses the provider fallback channel for direct-dispatched question prompts", async () => {
+    const workspaceDir = path.join(tempDir, "provider-question-prompt-workspace");
+    const params = createParams(
+      path.join(tempDir, "provider-question-prompt-session.jsonl"),
+      workspaceDir,
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageProvider = "telegram";
+    const onToolResult = vi.fn();
+    params.onToolResult = onToolResult;
+    let capturedQuestionPrompt: OpenClawCodingToolsOptionsForTest["questionPrompt"];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedQuestionPrompt = options?.questionPrompt;
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(capturedQuestionPrompt?.send).toBe(onToolResult);
+    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
+  });
+
   it("binds a resolver-backed constructed tool surface exactly once", async () => {
     const workspaceDir = path.join(tempDir, "resolver-bound-workspace");
     const params = createParams(path.join(tempDir, "resolver-bound-session.jsonl"), workspaceDir);
