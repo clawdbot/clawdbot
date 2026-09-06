@@ -8,13 +8,9 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
+import { readExecApprovalAllowlistRequirements } from "./exec-approval-rules.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
-
-type ExecApprovalAllowlistRequirement = {
-  readonly key: string;
-  readonly pattern: string;
-  readonly argPattern?: string;
-};
+import { isChannelDenyRule } from "./shape-helpers.js";
 
 export function isPolicyValueAtLeastAsStrict(
   metadata: PolicyRuleMetadata,
@@ -262,11 +258,7 @@ function policyStringList(
     return undefined;
   }
   if (metadata.policyPath.join(".") === "execApprovals.agents.allowlist.expected") {
-    const entries = value.map(execApprovalAllowlistRequirement);
-    if (!entries.every((entry): entry is ExecApprovalAllowlistRequirement => entry !== undefined)) {
-      return undefined;
-    }
-    return entries.map((entry) => entry.key);
+    return readExecApprovalAllowlistRequirements(value, [])?.map((entry) => entry.key);
   }
   if (!value.every((entry) => typeof entry === "string")) {
     return undefined;
@@ -310,64 +302,4 @@ function policyString(value: unknown, metadata: PolicyRuleMetadata): string | un
   }
   const trimmed = value.trim();
   return metadata.caseSensitive === true ? trimmed : trimmed.toLowerCase();
-}
-
-function execApprovalAllowlistRequirement(
-  value: unknown,
-): ExecApprovalAllowlistRequirement | undefined {
-  if (typeof value === "string") {
-    const pattern = value.trim();
-    return pattern === "" ? undefined : execApprovalAllowlistRequirementFromParts(pattern);
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const keys = Object.keys(value);
-  if (keys.some((key) => key !== "argPattern" && key !== "pattern")) {
-    return undefined;
-  }
-  const pattern = typeof value.pattern === "string" ? value.pattern.trim() : "";
-  if (pattern === "") {
-    return undefined;
-  }
-  const argPattern = typeof value.argPattern === "string" ? value.argPattern.trim() : undefined;
-  if (value.argPattern !== undefined && argPattern === undefined) {
-    return undefined;
-  }
-  return execApprovalAllowlistRequirementFromParts(
-    pattern,
-    argPattern === "" ? undefined : argPattern,
-  );
-}
-
-function execApprovalAllowlistRequirementFromParts(
-  pattern: string,
-  argPattern?: string,
-): ExecApprovalAllowlistRequirement {
-  return {
-    key: execApprovalAllowlistRequirementKey(pattern, argPattern),
-    pattern,
-    ...(argPattern === undefined ? {} : { argPattern }),
-  };
-}
-
-function execApprovalAllowlistRequirementKey(
-  pattern: string,
-  argPattern: string | undefined,
-): string {
-  return `${pattern}\0${argPattern ?? ""}`;
-}
-
-function isChannelDenyRule(value: unknown): value is {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-} {
-  return (
-    isRecord(value) &&
-    (value.id === undefined || typeof value.id === "string") &&
-    (value.reason === undefined || typeof value.reason === "string") &&
-    isRecord(value.when) &&
-    typeof value.when.provider === "string"
-  );
 }

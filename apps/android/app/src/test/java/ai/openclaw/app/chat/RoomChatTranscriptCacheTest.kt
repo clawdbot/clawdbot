@@ -1,6 +1,13 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Room
+import ai.openclaw.app.ui.chat.latestChatMessageUsage
+import androidx.room3.Room
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -9,13 +16,27 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.util.concurrent.Executor
 
 @RunWith(RobolectricTestRunner::class)
+@OptIn(ExperimentalCoroutinesApi::class)
 class RoomChatTranscriptCacheTest {
+  private var deferNextDatabaseOperation = false
+  private var deferredDatabaseOperation: Runnable? = null
   private val database: GatewayCacheDatabase =
     Room
       .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
-      .build()
+      .allowMainThreadQueries()
+      .setQueryCoroutineContext(
+        Executor { operation ->
+          if (deferNextDatabaseOperation) {
+            deferNextDatabaseOperation = false
+            deferredDatabaseOperation = operation
+          } else {
+            operation.run()
+          }
+        }.asCoroutineDispatcher(),
+      ).build()
   private val store = RoomChatTranscriptCache(database = database)
 
   @After
@@ -63,6 +84,207 @@ class RoomChatTranscriptCacheTest {
     agentId: String = "main",
   ): List<ChatSessionEntry> = store.loadSessions(gatewayId, agentId)
 
+  private fun CoroutineScope.cachedController(
+    healthStarted: CompletableDeferred<Unit>? = null,
+    releaseHealth: CompletableDeferred<Unit>? = null,
+  ): ChatController {
+    var historyRequests = 0
+    var healthRequests = 0
+    return createChatController(
+      transcriptCache = store,
+      cacheScope = { ChatCacheScope("gateway-a", 1) },
+    ) { method, _ ->
+      when (method) {
+        "chat.history" -> {
+          val text = if (++historyRequests == 1) "history A" else "history B"
+          historyResponse("session-1", listOf(ReplayHistoryMessage("assistant", text, historyRequests.toLong())))
+        }
+
+        "health" -> {
+          if (++healthRequests == 1) {
+            healthStarted?.complete(Unit)
+            releaseHealth?.await()
+          }
+          "{}"
+        }
+
+        "sessions.list" -> {
+          """{"sessions":[{"key":"main"},{"key":"other"}]}"""
+        }
+
+        else -> {
+          "{}"
+        }
+      }
+    }
+  }
+
+  @Test
+  fun toolOnlyAssistantKeepsUnknownUsageAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"session-1","sessionInfo":{"key":"main"},"messages":[{"role":"assistant","content":"older","usage":{"output":123}},{"role":"assistant","provider":"openai","model":"gpt-5.2","content":[{"type":"toolCall","id":"read-1","name":"read","arguments":{}}],"__openclaw":{"id":"entry-2"}}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(2, controller.messages.value.size)
+      assertTrue(
+        controller.messages.value
+          .last()
+          .content
+          .isEmpty(),
+      )
+      assertEquals(
+        "entry-2",
+        controller.messages.value
+          .last()
+          .entryId,
+      )
+      assertEquals(null, latestChatMessageUsage(controller.messages.value))
+
+      val offline = createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      offline.load("main")
+      advanceUntilIdle()
+      assertTrue(offline.messagesFromCache.value)
+      assertEquals(null, latestChatMessageUsage(offline.messages.value))
+      assertEquals(2, offline.messages.value.size)
+    }
+
+  @Test
+  fun canonicalSessionInfoKeepsRequestedAliasTranscriptReachable() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"alias-session","sessionInfo":{"key":"agent:main:review-alias"},"messages":[{"role":"assistant","content":"alias transcript"}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("review-alias", "main")
+      advanceUntilIdle()
+      assertEquals(
+        "alias transcript",
+        controller.messages.value
+          .single()
+          .content
+          .single()
+          .text,
+      )
+      assertEquals(listOf("alias transcript"), loadTranscript(sessionKey = "review-alias").map { it.content.single().text })
+      assertEquals(listOf("review-alias"), loadSessions().map { it.key })
+      assertTrue(loadTranscript(sessionKey = "agent:main:review-alias").isEmpty())
+    }
+
+  @Test
+  fun fullHistoryUsageClearSurvivesOfflineReopenWithoutAListResponse() =
+    runTest {
+      saveSessions(listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L, outputTokens = 840L)))
+      saveTranscript(listOf(message("before", role = "assistant")))
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> {
+              """{"sessionId":"session-1","messages":[{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}],"sessionInfo":{"key":"main","totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}}"""
+            }
+
+            "sessions.list" -> {
+              error("list unavailable")
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        null,
+        controller.sessions.value
+          .single()
+          .outputTokens,
+      )
+
+      val reopened =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      reopened.load("main")
+      advanceUntilIdle()
+      assertTrue(reopened.messagesFromCache.value)
+      assertEquals(
+        "compaction",
+        reopened.messages.value
+          .single()
+          .transcriptMarker
+          ?.kind,
+      )
+      assertEquals(
+        null,
+        reopened.sessions.value
+          .single()
+          .outputTokens,
+      )
+    }
+
+  @Test
+  fun oldHistoryPostPublicationHealthWaitCannotOverwriteNewerCachedTranscript() =
+    runTest {
+      val healthStarted = CompletableDeferred<Unit>()
+      val releaseHealth = CompletableDeferred<Unit>()
+      val controller = cachedController(healthStarted, releaseHealth)
+      controller.onDisconnected("Reconnecting")
+      controller.onGatewayConnected()
+      runCurrent()
+      assertTrue(healthStarted.isCompleted)
+      assertEquals(listOf("history A"), controller.messages.value.map { it.content.single().text })
+
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", "newer-run", seq = 1))
+      runCurrent()
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("history B"), loadTranscript().map { it.content.single().text })
+
+      releaseHealth.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("history B"), loadTranscript().map { it.content.single().text })
+    }
+
+  @Test
+  fun queuedTranscriptWriteSurvivesSwitchToADifferentSession() =
+    runTest {
+      val controller = cachedController()
+      // Hold the session-list Room operation while it owns the cache mutation queue.
+      // Later reads can proceed, but transcript writes must wait across the session switch.
+      deferNextDatabaseOperation = true
+      controller.refreshSessions()
+      runCurrent()
+      val releaseSessionWrite = requireNotNull(deferredDatabaseOperation)
+
+      controller.load("main")
+      runCurrent()
+      assertEquals(listOf("history A"), controller.messages.value.map { it.content.single().text })
+      assertTrue(loadTranscript().isEmpty())
+
+      controller.switchSession("other")
+      runCurrent()
+      assertEquals("other", controller.sessionKey.value)
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertTrue(loadTranscript(sessionKey = "other").isEmpty())
+
+      releaseSessionWrite.run()
+      advanceUntilIdle()
+
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("history A"), loadTranscript().map { it.content.single().text })
+      assertEquals(listOf("history B"), loadTranscript(sessionKey = "other").map { it.content.single().text })
+    }
+
   @Test
   fun transcriptRoundTripKeepsTextAndManagedReferencesWithoutBinaryParts() =
     runTest {
@@ -78,7 +300,8 @@ class RoomChatTranscriptCacheTest {
       saveTranscript(
         messages =
           listOf(
-            message("hello", role = "user", timestampMs = 10, idempotencyKey = "run-1:user", extraParts = listOf(imagePart)),
+            message("hello", role = "user", timestampMs = 10, idempotencyKey = "run-1:user", extraParts = listOf(imagePart))
+              .copy(senderLabel = "Alex (Slack)"),
             // Inline binary-only messages remain disposable and are skipped entirely.
             ChatMessage(id = "img", role = "user", content = listOf(imagePart), timestampMs = 11),
             ChatMessage(id = "managed", role = "assistant", content = listOf(managedImage), timestampMs = 11),
@@ -94,10 +317,11 @@ class RoomChatTranscriptCacheTest {
       assertEquals(listOf("user", "assistant", "assistant"), loaded.map { it.role })
       assertEquals(listOf(10L, 11L, 12L), loaded.map { it.timestampMs })
       assertEquals(listOf("run-1:user", null, null), loaded.map { it.idempotencyKey })
+      assertEquals(listOf("Alex (Slack)", null, null), loaded.map { it.senderLabel })
     }
 
   @Test
-  fun transcriptRoundTripKeepsManagedAudioAndVideoMetadata() =
+  fun transcriptRoundTripKeepsManagedAudioVideoAndDocumentMetadata() =
     runTest {
       val audio =
         ChatMessageContent(
@@ -118,17 +342,64 @@ class RoomChatTranscriptCacheTest {
           width = 1920,
           height = 1080,
         )
+      val userDocument =
+        ChatMessageContent(
+          type = "file",
+          mimeType = "application/pdf",
+          fileName = "proposal.pdf",
+          artifactId = "artifact_managed_media_55555555-5555-4555-8555-555555555555",
+          url = "/api/chat/media/outgoing/main/55555555-5555-4555-8555-555555555555/full",
+          sizeBytes = 4_096,
+        )
+      val assistantDocument =
+        ChatMessageContent(
+          type = "file",
+          mimeType = "text/plain",
+          fileName = "summary.txt",
+          url = "https://files.example/summary.txt",
+          sizeBytes = 48,
+        )
+      val mixedText = ChatMessageContent(type = "text", text = "See attached.")
       saveTranscript(
         messages =
           listOf(
             ChatMessage(id = "audio", role = "assistant", content = listOf(audio), timestampMs = 10),
             ChatMessage(id = "video", role = "assistant", content = listOf(video), timestampMs = 11),
+            ChatMessage(
+              id = "user-document",
+              role = "user",
+              content = listOf(userDocument),
+              timestampMs = 12,
+              idempotencyKey = "run-document:user",
+              entryId = "live-user-entry",
+              senderLabel = "Alex (Slack)",
+            ),
+            ChatMessage(id = "assistant-document", role = "assistant", content = listOf(assistantDocument), timestampMs = 13),
+            ChatMessage(id = "user-mixed", role = "user", content = listOf(mixedText, userDocument), timestampMs = 14),
+            ChatMessage(id = "assistant-mixed", role = "assistant", content = listOf(mixedText, assistantDocument), timestampMs = 15),
           ),
       )
 
       val loaded = loadTranscript()
 
-      assertEquals(listOf(audio, video), loaded.map { it.content.single() })
+      assertEquals(
+        listOf(
+          listOf(audio),
+          listOf(video),
+          listOf(userDocument),
+          listOf(assistantDocument),
+          listOf(mixedText, userDocument),
+          listOf(mixedText, assistantDocument),
+        ),
+        loaded.map { it.content },
+      )
+      assertEquals(listOf("assistant", "assistant", "user", "assistant", "user", "assistant"), loaded.map { it.role })
+      assertEquals("Alex (Slack)", loaded[2].senderLabel)
+      assertEquals("run-document:user", loaded[2].idempotencyKey)
+      assertTrue(loaded.all { it.entryId == null && it.content.all { part -> part.base64 == null } })
+      assertTrue(loadTranscript(gatewayId = "gateway-b").isEmpty())
+      assertTrue(loadTranscript(agentId = "other").isEmpty())
+      assertTrue(loadTranscript(sessionKey = "other").isEmpty())
     }
 
   @Test
@@ -169,37 +440,95 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun transcriptRoundTripKeepsObservedAssistantUsage() =
+    runTest {
+      val usage = ChatMessageUsage(input = 12_000, output = 300, cacheRead = 438_400)
+      val cost = ChatMessageCost(input = 0.003, output = 0.018, cacheRead = 0.0015, total = 0.0225)
+      saveTranscript(
+        messages =
+          listOf(
+            message("Usage-backed reply").copy(
+              role = "assistant",
+              provider = "openai",
+              model = "gpt-5.2",
+              usage = usage,
+              cost = cost,
+            ),
+            message("Delivery copy").copy(
+              role = "assistant",
+              deliveryMirror = ChatDeliveryMirror(kind = "channel-final"),
+              usage = ChatMessageUsage(input = 0, output = 0),
+            ),
+            message("discarded display text").copy(
+              role = "assistant",
+              content = emptyList(),
+              provider = "anthropic",
+              model = "claude-opus-4-1",
+              usage = ChatMessageUsage(input = 7_500, output = 450),
+              cost = ChatMessageCost(total = 0.031),
+            ),
+            message("Synthetic fallback").copy(role = "assistant", isSyntheticDisplay = true),
+          ),
+      )
+
+      val loaded = loadTranscript()
+
+      assertEquals("openai", loaded[0].provider)
+      assertEquals("gpt-5.2", loaded[0].model)
+      assertEquals(usage, loaded[0].usage)
+      assertEquals(cost, loaded[0].cost)
+      assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
+      assertTrue(loaded[2].content.isEmpty())
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
+      assertEquals(ChatMessageCost(total = 0.031), loaded[2].cost)
+      assertTrue(loaded[3].isSyntheticDisplay)
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), latestChatMessageUsage(loaded))
+    }
+
+  @Test
   fun legacyTranscriptRowsRemainReadable() =
     runTest {
-      database.dao().insertMessages(
+      val encoded =
         listOf(
+          """["legacy one","legacy two"]""",
+          """[{"type":"text","text":"structured legacy"}]""",
+          """{"content":[],"provenance":{"kind":"internal_system","sourceTool":"restart-sentinel"},"__openclaw":{"kind":"compaction","id":"checkpoint-1","tokensBefore":42500.0,"tokensAfter":2000.0}}""",
+          """{"content":[],"provenance":{"kind":"internal_system"},"__openclaw":{"kind":"compaction"}}""",
+        )
+      database.dao().insertMessages(
+        encoded.mapIndexed { index, payload ->
           CachedMessageEntity(
             gatewayId = "gateway-a",
             agentId = "main",
             sessionKey = "main",
-            rowOrder = 0,
+            rowOrder = index,
             role = "assistant",
-            textPartsJson = """["legacy one","legacy two"]""",
-            timestampMs = 10,
+            textPartsJson = payload,
+            timestampMs = 10L + index,
             idempotencyKey = null,
-          ),
-          CachedMessageEntity(
-            gatewayId = "gateway-a",
-            agentId = "main",
-            sessionKey = "main",
-            rowOrder = 1,
-            role = "assistant",
-            textPartsJson = """[{"type":"text","text":"structured legacy"}]""",
-            timestampMs = 11,
-            idempotencyKey = null,
-          ),
-        ),
+          )
+        },
       )
 
       val loaded = loadTranscript()
 
       assertEquals(listOf("legacy one", "legacy two"), loaded[0].content.map { it.text })
       assertEquals(listOf("structured legacy"), loaded[1].content.map { it.text })
+      assertTrue(loaded.all { it.senderLabel == null })
+      assertEquals(ChatMessageProvenance("internal_system", "restart-sentinel"), loaded[2].provenance)
+      assertEquals(ChatTranscriptMarker("compaction", "checkpoint-1", 42_500.0, 2_000.0), loaded[2].transcriptMarker)
+      assertEquals(ChatMessageProvenance("internal_system"), loaded[3].provenance)
+      assertEquals(ChatTranscriptMarker("compaction"), loaded[3].transcriptMarker)
+
+      saveTranscript(messages = loaded)
+      assertEquals(
+        encoded.drop(2),
+        database
+          .dao()
+          .messages("gateway-a", "main", "main")
+          .drop(2)
+          .map { it.textPartsJson },
+      )
     }
 
   @Test
@@ -273,7 +602,7 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
-  fun sessionRoundTripKeepsRunMetadata() =
+  fun sessionRoundTripKeepsRunMetadataAndColor() =
     runTest {
       saveSessions(
         sessions =
@@ -282,6 +611,7 @@ class RoomChatTranscriptCacheTest {
               key = "main",
               updatedAtMs = 20L,
               status = "done",
+              color = "cyan",
               startedAt = 1_000L,
               endedAt = 5_000L,
               runtimeMs = 4_000L,
@@ -298,6 +628,12 @@ class RoomChatTranscriptCacheTest {
       assertEquals(4_000L, loaded.runtimeMs)
       assertEquals(485L, loaded.outputTokens)
       assertTrue(loaded.hasRunMetadata)
+      assertEquals("cyan", loaded.color)
+
+      saveTranscript(messages = listOf(message("new reply")))
+      assertEquals("cyan", loadSessions().single().color)
+      saveSessions(listOf(loaded.copy(color = null, hasColorMetadata = true)))
+      assertEquals(null, loadSessions().single().color)
     }
 
   @Test

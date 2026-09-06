@@ -13,6 +13,8 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { appendBoundedTail } from "../lib/bounded-output-tail.mjs";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
@@ -23,6 +25,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import { fixtureCapabilityConsentArgs } from "./lib/package-compat.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
 
 type JsonRecord = Record<string, unknown>;
@@ -460,20 +463,6 @@ function readJson(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-export function appendBoundedOutput(
-  buffer: CapturedOutput,
-  chunk: string | Uint8Array,
-  maxChars = resolveKitchenSinkRpcConfig().outputCaptureChars,
-) {
-  const text = String(chunk);
-  const combined = `${buffer.text}${text}`;
-  const overflowChars = Math.max(0, combined.length - maxChars);
-  return {
-    text: overflowChars > 0 ? combined.slice(overflowChars) : combined,
-    truncatedChars: buffer.truncatedChars + overflowChars,
-  };
-}
-
 function formatCapturedOutput(label: string, buffer: CapturedOutput) {
   return buffer.truncatedChars > 0
     ? `[${label} truncated ${buffer.truncatedChars} chars]\n${buffer.text}`
@@ -581,10 +570,10 @@ export function runCommand(
       forceKillTimer.unref();
     }, resolvedTimeoutMs);
     child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
+      stdout = appendBoundedTail(stdout, chunk, outputCaptureChars);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk, outputCaptureChars);
+      stderr = appendBoundedTail(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -885,8 +874,8 @@ function createGatewayClientRequestError(requestError: unknown): GatewayRequestE
   const candidate = asRecord(requestError);
   if (
     candidate.type !== "gateway_request_error" ||
-    !isNonEmptyString(candidate.code) ||
-    !isNonEmptyString(candidate.message) ||
+    !hasNonEmptyString(candidate.code) ||
+    !hasNonEmptyString(candidate.message) ||
     typeof candidate.retryable !== "boolean" ||
     (candidate.retryAfterMs !== undefined &&
       (typeof candidate.retryAfterMs !== "number" ||
@@ -1154,7 +1143,7 @@ export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
   return fs.existsSync(distDir)
     ? fs
         .readdirSync(distDir)
-        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/u.test(name))
         .toSorted((left, right) => left.localeCompare(right))
     : [];
 }
@@ -1216,7 +1205,7 @@ function isRetryableTransientNetworkError(error: unknown, seen = new Set<unknown
   const message =
     candidate instanceof Error ? candidate.message : typeof candidate === "string" ? candidate : "";
   const code = asRecord(candidate).code;
-  const text = `${String(code ?? "")} ${message}`;
+  const text = `${typeof code === "string" ? code : ""} ${message}`;
   if (
     /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/iu.test(text) ||
     /\b(?:fetch failed|socket hang up|connection reset)\b/iu.test(text)
@@ -1710,7 +1699,7 @@ export function extractPluginCommandNames(payload: unknown) {
     }
   }
   return names
-    .filter(isNonEmptyString)
+    .filter(hasNonEmptyString)
     .map((name) => name.replace(/^\//u, ""))
     .filter((name, index, all) => all.indexOf(name) === index)
     .toSorted((left, right) => left.localeCompare(right));
@@ -1744,7 +1733,7 @@ export function assertExpectedKitchenSinkToolEntries(
   options: { requirePluginProvenance?: boolean } = {},
 ) {
   const { requirePluginProvenance = false } = options;
-  const ids = entries.map((entry) => asRecord(entry).id).filter(isNonEmptyString);
+  const ids = entries.map((entry) => asRecord(entry).id).filter(hasNonEmptyString);
   assertIncludesAll(ids, EXPECTED_TOOLS, label);
   if (requirePluginProvenance) {
     const wrongProvenance = entries
@@ -1772,7 +1761,7 @@ export function assertChannelAccountRunning(payload: unknown) {
   const accounts = Array.isArray(channelAccounts[CHANNEL_ID]) ? channelAccounts[CHANNEL_ID] : [];
   const account = accounts.find((entry) => asRecord(entry).accountId === CHANNEL_ACCOUNT_ID);
   if (!account) {
-    const accountIds = accounts.map((entry) => asRecord(entry).accountId).filter(isNonEmptyString);
+    const accountIds = accounts.map((entry) => asRecord(entry).accountId).filter(hasNonEmptyString);
     throw new Error(
       `Kitchen Sink channel account ${CHANNEL_ACCOUNT_ID} was not reported. Available account ids: ${boundedJsonPreview(
         accountIds,
@@ -1801,12 +1790,12 @@ export function assertTtsProviderCoverage(payload: unknown, surface: "providers"
       `tts.${surface} returned invalid provider list: ${boundedJsonPreview(payload)}`,
     );
   }
-  const ids = entries.map((entry) => asRecord(entry).id).filter(isNonEmptyString);
+  const ids = entries.map((entry) => asRecord(entry).id).filter(hasNonEmptyString);
   assertIncludesAny(ids, EXPECTED_SPEECH_PROVIDERS, `tts.${surface}`);
   const configuredEntry = entries.find((entry) => {
     const provider = asRecord(entry);
     return (
-      isNonEmptyString(provider.id) &&
+      hasNonEmptyString(provider.id) &&
       EXPECTED_SPEECH_PROVIDERS.includes(provider.id) &&
       provider.configured === true
     );
@@ -1979,7 +1968,7 @@ export async function assertOperatorRpcDenied(
   } catch (error) {
     const candidate = asRecord(error);
     const gatewayCode = candidate.gatewayCode;
-    const message = String(candidate.message ?? "");
+    const message = typeof candidate.message === "string" ? candidate.message : "";
     if (gatewayCode === "INVALID_REQUEST" && message.includes("unauthorized role: operator")) {
       return;
     }
@@ -1990,7 +1979,7 @@ export async function assertOperatorRpcDenied(
 
 export function assertCreatedKitchenSinkSession(payload: unknown, expectedKey = SESSION_KEY) {
   const created = assertObjectPayload(payload, "sessions.create");
-  if (created.ok !== true || created.key !== expectedKey || !isNonEmptyString(created.sessionId)) {
+  if (created.ok !== true || created.key !== expectedKey || !hasNonEmptyString(created.sessionId)) {
     throw new Error(
       `sessions.create did not return the requested Kitchen Sink session: ${boundedJsonPreview(
         payload,
@@ -2076,11 +2065,11 @@ export function assertGatewayHealthPayload(payload: unknown) {
     [Number.isFinite(health.durationMs), "numeric durationMs"],
     [isRecord(health.channels), "channels object"],
     [Array.isArray(health.channelOrder), "channelOrder array"],
-    [isNonEmptyString(health.defaultAgentId), "defaultAgentId"],
+    [hasNonEmptyString(health.defaultAgentId), "defaultAgentId"],
     [Array.isArray(health.agents), "agents array"],
     [
       isRecord(sessions) &&
-        isNonEmptyString(sessions.path) &&
+        hasNonEmptyString(sessions.path) &&
         Number.isFinite(sessions.count) &&
         Array.isArray(sessions.recent),
       "sessions summary",
@@ -2099,7 +2088,7 @@ export function assertGatewayStatusPayload(payload: unknown) {
   const problems = failedPayloadChecks([
     [
       isRecord(heartbeat) &&
-        isNonEmptyString(heartbeat.defaultAgentId) &&
+        hasNonEmptyString(heartbeat.defaultAgentId) &&
         Array.isArray(heartbeat.agents),
       "heartbeat summary",
     ],
@@ -2730,10 +2719,6 @@ function tailText(text: string) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 async function main() {
   const config = resolveKitchenSinkRpcConfig();
   let runner = resolveOpenClawRunner();
@@ -2757,12 +2742,27 @@ async function main() {
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
-      ...commandResourceOptions,
-      requireResourceSample: true,
-      resourceLabel: "plugins install",
-      timeoutMs: config.installTimeoutMs,
-    });
+    const installHelp = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
+    if (installHelp.stdoutTruncatedChars > 0) {
+      throw new Error("Plugin fixture help probe output was truncated");
+    }
+    await runOpenClaw(
+      runner,
+      [
+        "plugins",
+        "install",
+        PLUGIN_SPEC,
+        "--force",
+        ...fixtureCapabilityConsentArgs(installHelp.stdout),
+      ],
+      env,
+      {
+        ...commandResourceOptions,
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        timeoutMs: config.installTimeoutMs,
+      },
+    );
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);

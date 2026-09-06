@@ -1,6 +1,7 @@
 import { asOptionalRecord, stableStringify } from "@openclaw/normalization-core";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseRetryAfterErrorSeconds } from "../internal/retry-after.js";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
 const MAX_ERROR_BODY_LENGTH = 4000;
@@ -127,7 +128,13 @@ export function projectProviderError(
     } catch {
       // Package projection is independently safe when embedding-host strengthening fails.
     }
-    return buildProjection(snapshot, signal);
+    const projection = buildProjection(snapshot, signal);
+    const retryAfterSeconds = parseRetryAfterErrorSeconds(localSnapshot);
+    if (retryAfterSeconds !== undefined) {
+      const suffix = `; Retry-After: ${retryAfterSeconds} seconds`;
+      projection.errorMessage = `${truncateUtf16Safe(projection.errorMessage, 4096 - suffix.length)}${suffix}`;
+    }
+    return projection;
   } catch {
     return {
       stopReason: signal?.aborted ? "aborted" : "error",

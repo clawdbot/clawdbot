@@ -229,12 +229,13 @@ translation.
 
 ### Provider selection order
 
-OpenClaw tries providers in this order:
+For `image_generate`, OpenClaw tries providers in this order:
 
-1. **`model` parameter** from the tool call (if the agent specifies one).
+1. **`model` parameter** from the tool call. When set, only this model is tried.
 2. **`agents.defaults.mediaModels.image.primary`** from config.
 3. **`agents.defaults.mediaModels.image.fallbacks`** in order.
-4. **Auto-detection** - auth-backed provider defaults only:
+4. **Auto-detection** - only when neither a primary nor fallback model is
+   configured, using configured provider defaults:
    - current default provider first;
    - remaining registered image-generation providers in provider-id order.
 
@@ -247,10 +248,10 @@ from each attempt.
     A per-call `model` override tries only that provider/model and does
     not continue to configured primary/fallback or auto-detected providers.
   </Accordion>
-  <Accordion title="Auto-detection is auth-aware">
-    A provider default only enters the candidate list when OpenClaw can
-    actually authenticate that provider. Automatic fallback across authenticated
-    providers is always enabled; a per-call `model` remains authoritative.
+  <Accordion title="Auto-detection uses configured providers">
+    Auto-detection considers provider defaults whose readiness or auth checks pass.
+    Explicit image model configuration limits fallback to the configured list;
+    OpenClaw does not append auto-detected providers.
   </Accordion>
   <Accordion title="Timeouts">
     Set `agents.defaults.mediaModels.image.timeoutMs` for slow image
@@ -399,8 +400,10 @@ and ComfyUI support 1.
   </Accordion>
   <Accordion title="OpenRouter image models">
     OpenRouter image generation uses the same `OPENROUTER_API_KEY` and
-    routes through OpenRouter's chat completions image API. Select
-    OpenRouter image models with the `openrouter/` prefix:
+    routes canonical requests through OpenRouter's dedicated `/api/v1/images`
+    endpoint. Configured custom OpenRouter base URLs retain the existing
+    chat-completions image route for proxy compatibility. Select OpenRouter
+    image models with the `openrouter/` prefix:
 
     ```json5
     {

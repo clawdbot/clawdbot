@@ -30,15 +30,16 @@ explicitly:
 example `ollama-5080`), as long as that entry sets `api` to `"ollama"` or
 another provider id with a memory embedding adapter.
 
-For local embeddings with no API key, install the official llama.cpp provider
-plugin and set `provider: "local"`:
+For local embeddings with no API key, install and configure the official
+llama.cpp provider, then set `provider: "local"`:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-Source checkouts still need native build approval: `pnpm approve-builds`, then
-`pnpm rebuild node-llama-cpp`.
+Choose llama.cpp once in interactive setup. OpenClaw installs a verified
+`llama-server`, downloads the embedding GGUF, and writes its managed service
+configuration.
 
 Some OpenAI-compatible embedding endpoints require asymmetric `input_type`
 labels, such as `"query"` for searches and `"document"`/`"passage"` for indexed
@@ -53,7 +54,7 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | DeepInfra         | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`       |
 | Gemini            | `gemini`            | Yes           | Supports image/audio indexing     |
 | GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
-| Local             | `local`             | No            | GGUF model, ~0.6 GB auto-download |
+| Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
 | Mistral           | `mistral`           | Yes           |                                   |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
@@ -106,6 +107,11 @@ MMR then reorders the scored hybrid candidate set to reduce redundant
 snippets. It does not change scores, threshold eligibility, or make another
 provider call.
 
+Search preserves keyword matches when every ranked result falls below the
+configured minimum score. Hybrid search can also fill remaining result slots
+with keyword-only matches. These rules also apply in project sessions;
+semantic-only matches still need to meet the configured minimum score.
+
 ## Deterministic trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
@@ -124,7 +130,8 @@ tools or Active Memory escalation, but are never injected automatically.
 and search with keywords only. Leaving `provider` unset or set to `"auto"`
 falls back to keyword-only ranking when embedding setup or a request fails, as
 does `provider: "local"` (the GGUF/llama.cpp provider). Creation-time fallback
-still indexes text for keyword search, and `memory_search` includes the
+still indexes text for keyword search, including manual and background indexing
+before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
@@ -144,8 +151,14 @@ Two deterministic ranking passes are enabled by default for hybrid search.
 
 Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
-original weight. `MEMORY.md` and other non-dated files under `memory/` are
-evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
+original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
+remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
+at any depth, including session-memory notes and nested dreaming reports.
+
+Session transcript hits use the source activity timestamp captured during
+indexing. Retained transcript archives use their indexed file modification
+time. Individual message timestamps remain provenance metadata and do not
+determine the source's recency weight.
 
 ### MMR (diversity)
 
@@ -164,7 +177,7 @@ run the hybrid MMR pass.
 
 ## Multimodal memory
 
-With `gemini-embedding-2-preview`, you can index images and audio alongside
+With `gemini-embedding-2`, you can index images and audio alongside
 Markdown. This only applies to files under `memory.search.extraPaths`; default
 memory roots (`MEMORY.md`, `memory/*.md`) stay Markdown-only. Search queries
 remain text, but they match against visual and audio content. See
@@ -181,13 +194,22 @@ Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
-Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
-current session, sessions it spawned, and same-agent group sessions watched
-through ambient group awareness. With `session.dmScope: "main"`, a multi-user
-DM setup shares that main session, so users routed there can recall content
-from its watched groups. Use a per-peer `dmScope` for DM isolation, or set
-visibility to `"self"` to opt out of ambient watched-session reads. Other
-unrelated same-agent sessions still require `"agent"` visibility.
+Use `corpus: "memory"` to search only memory notes. Results containing no session
+transcripts do not load session history or perform session-visibility lookups.
+
+Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
+`memory_search` still searches the selected agent's indexed corpus; use
+[`sessions_search`](/concepts/session-search) for transcript search across agents
+on the Gateway. Visible transcripts can include other users' conversations.
+Cross-agent session access is on by default and governed by
+`tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+(requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`) or use `allow`
+to restrict agent pairs. A per-peer `session.dmScope`
+separates DM context but does not restrict transcript access through session
+tools. Choose explicit `"agent"` for same-agent recall, `"tree"` for current plus
+spawned scope (with an agent-wide exception for main), or `"self"` for strict
+current-session recall. Sandbox spawned-only clamps and
+incognito exclusions still apply.
 
 ## Troubleshooting
 
@@ -198,8 +220,8 @@ unrelated same-agent sessions still require `"agent"` visibility.
 `openclaw memory status --deep`.
 
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
-provider-owned batch deadlines. Check provider health and rerun
-`openclaw memory index --force`.
+provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
+the managed server endpoints before rebuilding the index.
 
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.

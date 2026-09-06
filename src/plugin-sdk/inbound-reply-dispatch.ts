@@ -4,6 +4,7 @@
  */
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
+import { mapReplyDispatchCounts } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import {
   deliverInboundReplyWithMessageSendContextCore,
@@ -23,6 +24,30 @@ type ReplyOptionsWithoutModelSelected = Omit<
   "onModelSelected"
 >;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
+
+function withLegacyDispatchCounts(
+  dispatch: DispatchReplyWithBufferedBlockDispatcher,
+): DispatchReplyWithBufferedBlockDispatcher {
+  // @deprecated Remove this receipt-to-count projection with the shim in the next Plugin SDK major.
+  return async (params) => {
+    const result = await dispatch(params);
+    const receipt = result.settledReceipt;
+    if (!receipt) {
+      return result;
+    }
+    const counts = mapReplyDispatchCounts(receipt.counts, (entry) => entry.delivered);
+    const failedCounts = mapReplyDispatchCounts(
+      receipt.counts,
+      (entry) => entry.failedBeforeSend + entry.failedAfterSend,
+    );
+    return {
+      ...result,
+      queuedFinal: counts.final > 0,
+      counts,
+      ...(Object.values(failedCounts).some((count) => count > 0) ? { failedCounts } : {}),
+    };
+  };
+}
 
 function buildInboundReplyDispatchBase(params: {
   cfg: OpenClawConfig;
@@ -49,8 +74,9 @@ function buildInboundReplyDispatchBase(params: {
     storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
+    dispatchReplyWithBufferedBlockDispatcher: withLegacyDispatchCounts(
       params.core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    ),
   };
 }
 

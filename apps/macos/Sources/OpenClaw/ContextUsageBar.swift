@@ -3,7 +3,6 @@ import SwiftUI
 struct ContextUsageBar: View {
     let usedTokens: Int
     let contextTokens: Int
-    var width: CGFloat?
     var height: CGFloat = 6
 
     private static let okGreen: NSColor = .init(name: nil) { appearance in
@@ -44,19 +43,11 @@ struct ContextUsageBar: View {
     }
 
     var body: some View {
-        let fraction = self.clampedFractionUsed
-        Group {
-            if let width = self.width, width > 0 {
-                self.barBody(width: width, fraction: fraction)
-                    .frame(width: width, height: self.height)
-            } else {
-                GeometryReader { proxy in
-                    self.barBody(width: proxy.size.width, fraction: fraction)
-                        .frame(width: proxy.size.width, height: self.height)
-                }
-                .frame(height: self.height)
-            }
+        GeometryReader { proxy in
+            self.barBody(width: proxy.size.width, fraction: self.clampedFractionUsed)
+                .frame(width: proxy.size.width, height: self.height)
         }
+        .frame(height: self.height)
         .accessibilityLabel("Context usage")
         .accessibilityValue(self.accessibilityValue)
     }

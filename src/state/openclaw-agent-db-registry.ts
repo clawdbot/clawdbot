@@ -10,10 +10,20 @@ import {
 } from "./agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "./openclaw-agent-db-registry-listing.js";
+import {
+  invalidateOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidationsForAgent,
+} from "./openclaw-agent-db-validation-cache.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
 
-export { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry-listing.js";
+export {
+  inspectOpenClawRegisteredAgentDatabases,
+  listOpenClawRegisteredAgentDatabases,
+  readOpenClawAgentDatabaseRegistryToken,
+} from "./openclaw-agent-db-registry-listing.js";
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
@@ -502,10 +512,11 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
   // resolves `link/..` from the link target. Anchor relative input without rewriting tokens.
   const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
   try {
-    const stat = statSync(lexicalPath, { bigint: true });
+    const realPath = realpathSync.native(lexicalPath);
+    const stat = statSync(realPath, { bigint: true });
     return {
       lexicalPath,
-      realPath: realpathSync.native(lexicalPath),
+      realPath,
       device: stat.dev,
       inode: stat.ino,
     };
@@ -516,8 +527,8 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
     // Preserve symlink/alias identity before the leaf exists without lexically
     // collapsing unresolved components such as `missing/../live.sqlite`.
     const dangling = resolveDanglingSymlinkTargetPath(lexicalPath);
-    const parentStat = statSync(dangling.existingPath, { bigint: true });
     const parentRealPath = realpathSync.native(dangling.existingPath);
+    const parentStat = statSync(parentRealPath, { bigint: true });
     return {
       lexicalPath,
       parentDevice: parentStat.dev,
@@ -615,7 +626,8 @@ export function registerOpenClawAgentDatabase(params: {
   const lastSeenAt = Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
-      assertAgentDeletionPathFence(database.db, deletionFence);
+      assertAgentDeletionPathFence(database, deletionFence);
+      const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,
@@ -623,7 +635,7 @@ export function registerOpenClawAgentDatabase(params: {
           .insertInto("agent_databases")
           .values({
             agent_id: params.agentId,
-            path: params.path,
+            path: storedPath,
             schema_version: params.schemaVersion ?? OPENCLAW_AGENT_SCHEMA_VERSION,
             last_seen_at: lastSeenAt,
             size_bytes: sizeBytes,
@@ -639,6 +651,7 @@ export function registerOpenClawAgentDatabase(params: {
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidation(params.path);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
@@ -682,16 +695,40 @@ export function unregisterOpenClawAgentDatabase(params: {
 }): void {
   runOpenClawStateWriteTransaction(
     (database) => {
+      const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
+      const matchingPaths = [...new Set([storedPath, params.path, path.resolve(params.path)])];
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,
         db
           .deleteFrom("agent_databases")
           .where("agent_id", "=", params.agentId)
-          .where("path", "=", params.path),
+          .where("path", "in", matchingPaths),
       );
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidation(params.path);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+}
+
+/** Remove every durable database registration owned by a deleted agent. */
+export function unregisterOpenClawAgentDatabases(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  database?: OpenClawStateDatabase;
+}): void {
+  const options = {
+    env: params.env,
+    ...(params.database ? { database: params.database, path: params.database.path } : {}),
+  };
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId),
+    );
+  }, options);
+  invalidateOpenClawAgentDatabaseValidationsForAgent(params.agentId);
+  invalidateRegisteredAgentDatabasesMemo(options);
 }

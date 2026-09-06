@@ -11,8 +11,8 @@ import {
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
   resolveChannelMessageSourceReplyDeliveryMode,
+  resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveTranscriptBackedChannelFinalText } from "openclaw/plugin-sdk/channel-outbound";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -39,10 +39,7 @@ import {
   createDiscordMessageReplyRuntime,
   formatDiscordReasoningQuote,
 } from "./message-handler.process-reply-runtime.js";
-import {
-  createDiscordMessageActiveThreadRoute,
-  finalizeDiscordAdoptedThreadProgressReceipt,
-} from "./message-handler.process-thread-route.js";
+import { createDiscordMessageActiveThreadRoute } from "./message-handler.process-thread-route.js";
 import { completeDiscordSessionConflict } from "./message-handler.retry.js";
 import {
   deliverDiscordReply,
@@ -55,10 +52,6 @@ import { resolveDiscordWebhookId } from "./sender-identity.js";
 const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
 } as APIAllowedMentions;
-
-function isProcessAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
 
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
@@ -73,6 +66,13 @@ type DiscordMessageProcessObserver = {
   onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
+};
+
+type DiscordProviderDeliveryInfo = {
+  kind: ReplyDispatchKind;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  onPlatformSendDispatch: () => Promise<void>;
+  assertPlatformSendAuthorized: () => void;
 };
 
 export async function processDiscordMessage(
@@ -106,7 +106,7 @@ async function processDiscordMessageInner(
     turnAdoptionLifecycle,
     preparedMedia: mediaList,
   } = ctx;
-  if (isProcessAborted(abortSignal)) {
+  if (abortSignal?.aborted) {
     return;
   }
   const text = messageText;
@@ -220,25 +220,25 @@ async function processDiscordMessageInner(
   let userFacingFinalDelivered = false;
   let userFacingFinalDeliveryFailed = false;
   let pendingToolWarningFinal:
-    | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
+    | { payload: ReplyPayload; info: DiscordProviderDeliveryInfo }
     | undefined;
-  const markUserFacingFinalDelivered = () => {
-    userFacingFinalDelivered = true;
-    userFacingFinalDeliveryFailed = false;
-    pendingToolWarningFinal = undefined;
-    draftPreview.markFinalReplyDelivered();
-    observer?.onFinalReplyDelivered?.();
+  const markFinalReplyDelivered = (isError = false) => {
+    draftPreview.markFinalReplyDelivered(isError);
+    if (!isError) {
+      userFacingFinalDelivered = true;
+      userFacingFinalDeliveryFailed = false;
+      pendingToolWarningFinal = undefined;
+      observer?.onFinalReplyDelivered?.();
+    }
   };
-  // Set when a progress draft collapses: the receipt appends to the final
-  // answer text and the draft message deletes once that answer delivered.
-  let progressReceiptLine: string | undefined;
+  // Set when a progress draft collapses: the draft message deletes once the
+  // final answer has actually delivered.
   let clearProgressDraftAfterFinalDelivery = false;
   const resetDeliveryState = () => {
     finalReplyStartNotified = false;
     userFacingFinalDelivered = false;
     userFacingFinalDeliveryFailed = false;
     pendingToolWarningFinal = undefined;
-    progressReceiptLine = undefined;
     clearProgressDraftAfterFinalDelivery = false;
   };
   const progress = createDiscordMessageProgressRuntime({
@@ -251,7 +251,7 @@ async function processDiscordMessageInner(
   });
   let replyLifecycleStarted = false;
   const onDiscordReplyStart = async () => {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       return;
     }
     replyLifecycleStarted = true;
@@ -268,16 +268,13 @@ async function processDiscordMessageInner(
 
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
-    info: {
-      kind: ReplyDispatchKind;
-      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-    },
+    info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
       allowProgressBlock?: boolean;
     },
   ) => {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       // Surface so operators don't chase missing replies when an abort
       // drops a model-produced text payload.
       logVerbose(
@@ -329,6 +326,8 @@ async function processDiscordMessageInner(
         mediaLocalRoots,
         kind: "block",
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+        onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -398,11 +397,9 @@ async function processDiscordMessageInner(
       draftPreview.hasProgressDraftToCollapse;
     if (shouldCollapseProgressDraft && draftStream) {
       await draftPreview.flush();
-      // The activity receipt rides on the final answer and the working draft
-      // deletes after that answer lands, so busy channels keep no orphaned
-      // tool log above the reply. Error finals skip both and keep the draft
-      // as the visible record of the failed turn.
-      progressReceiptLine = progress.buildProgressSummaryLine();
+      // The working draft deletes once the final answer lands, so busy channels
+      // keep no orphaned tool log above the reply. Error finals skip this and
+      // keep the draft as the visible record of the failed turn.
       clearProgressDraftAfterFinalDelivery = true;
       // Fall through to the generic fresh send below for the final itself.
     }
@@ -428,7 +425,7 @@ async function processDiscordMessageInner(
             return undefined;
           },
           editFinal: async (previewMessageId, edit) => {
-            if (isProcessAborted(abortSignal)) {
+            if (abortSignal?.aborted) {
               throw new Error("process aborted");
             }
             notifyFinalReplyStart();
@@ -439,7 +436,7 @@ async function processDiscordMessageInner(
             });
           },
           onPreviewFinalized: () => {
-            markUserFacingFinalDelivered();
+            markFinalReplyDelivered();
             draftPreview.markPreviewFinalized();
             replyReference.markSent();
           },
@@ -450,7 +447,7 @@ async function processDiscordMessageInner(
           },
         }),
         deliverNormally: async () => {
-          if (isProcessAborted(abortSignal)) {
+          if (abortSignal?.aborted) {
             return false;
           }
           const fallbackPayload =
@@ -486,11 +483,13 @@ async function processDiscordMessageInner(
             allowedMentions,
             kind: info.kind,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+            onPlatformSendDispatch: info.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
           });
           return deliveryResult.visibleReplySent;
         },
         onNormalDelivered: () => {
-          markUserFacingFinalDelivered();
+          markFinalReplyDelivered();
           replyReference.markSent();
         },
       });
@@ -498,7 +497,7 @@ async function processDiscordMessageInner(
         return { visibleReplySent: true };
       }
     }
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       // Mirror the entry-point abort log so a mid-deliver abort (after
       // the preview path bowed out) does not silently drop the reply.
       logVerbose(
@@ -516,19 +515,9 @@ async function processDiscordMessageInner(
     if (isFinal) {
       notifyFinalReplyStart();
     }
-    const receiptLine =
-      isFinal && deliverablePayload.isError !== true ? progressReceiptLine : undefined;
-    const payloadForDelivery = receiptLine
-      ? {
-          ...deliverablePayload,
-          text: deliverablePayload.text?.trim()
-            ? `${deliverablePayload.text.trimEnd()}\n${receiptLine}`
-            : receiptLine,
-        }
-      : deliverablePayload;
     const result = await deliverDiscordReply({
       cfg,
-      replies: [payloadForDelivery],
+      replies: [deliverablePayload],
       target: deliverTarget,
       token,
       accountId,
@@ -545,21 +534,20 @@ async function processDiscordMessageInner(
       mediaLocalRoots,
       kind: info.kind,
       bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
     });
     if (!result.visibleReplySent) {
       return result;
     }
     replyReference.markSent();
-    if (isFinal && deliverablePayload.isError !== true) {
-      if (receiptLine) {
-        progressReceiptLine = undefined;
-        // Commit only after Discord accepted the receipt-bearing final. A
-        // failed send leaves the same receipt available to the queued retry.
-        draftPreview.markProgressDraftCollapsed();
-      }
-      markUserFacingFinalDelivered();
-      if (clearProgressDraftAfterFinalDelivery) {
+    if (isFinal) {
+      markFinalReplyDelivered(deliverablePayload.isError === true);
+      if (deliverablePayload.isError !== true && clearProgressDraftAfterFinalDelivery) {
         clearProgressDraftAfterFinalDelivery = false;
+        // Commit only after Discord accepted the final. A failed send leaves
+        // the draft intact as the visible record for the queued retry.
+        draftPreview.markProgressDraftCollapsed();
         // Delete the working draft only after the final landed so a failed
         // send never erases the only visible record of the turn.
         await draftStream?.discardPending();
@@ -583,15 +571,15 @@ async function processDiscordMessageInner(
       ),
     );
   };
-  let dispatchResult: {
-    queuedFinal: boolean;
-    counts: Record<ReplyDispatchKind, number>;
-    failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
-  } | null = null;
+  type DispatchResult = Extract<
+    Awaited<ReturnType<typeof dispatchChannelInboundTurn>>,
+    { dispatched: true }
+  >["dispatchResult"];
+  let dispatchResult: DispatchResult | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
-    if (!pendingToolWarningFinal || userFacingFinalDelivered || isProcessAborted(abortSignal)) {
+    if (!pendingToolWarningFinal || userFacingFinalDelivered || abortSignal?.aborted) {
       return undefined;
     }
     const pending = pendingToolWarningFinal;
@@ -607,7 +595,7 @@ async function processDiscordMessageInner(
     }
   };
   try {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
@@ -678,35 +666,46 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchResult = preparedResult.dispatchResult;
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
     if (activeThreadRoute.threadReplyDelivered && !userFacingFinalDelivered) {
       draftPreview.markFinalReplyStarted();
-      await finalizeDiscordAdoptedThreadProgressReceipt(
-        draftPreview.hasProgressDraftToCollapse,
-        progress.buildProgressSummaryLine(),
-        (receiptLine) => draftPreview.finalizeProgressReceipt(receiptLine),
-        (receiptText) =>
-          deliverDiscordPayload(
-            { text: receiptText },
-            { kind: "block" },
-            { allowProgressBlock: true },
-          ),
-        (error) =>
-          logVerbose(`discord: failed to finalize adopted thread progress (${String(error)})`),
-      );
-      markUserFacingFinalDelivered();
+      if (draftPreview.hasProgressDraftToCollapse) {
+        try {
+          // The model already replied inside the thread, so a draft that cannot
+          // seal leaves the thread with visible output either way.
+          await draftPreview.finalizeProgressDraft();
+        } catch (error) {
+          logVerbose(`discord: failed to finalize adopted thread progress (${String(error)})`);
+        }
+      }
+      markFinalReplyDelivered();
     }
   } catch (err) {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
     dispatchError = true;
-    if (await completeDiscordSessionConflict(err, deliverDiscordPayload, onDiscordDeliveryError)) {
-      // The visible terminal notice owns this event, so replay can commit.
+    const conflictOutcome = await completeDiscordSessionConflict(
+      err,
+      sourceReplyDeliveryMode,
+      (payload, info) =>
+        deliverDiscordPayload(payload, {
+          ...info,
+          onPlatformSendDispatch: () => Promise.resolve(),
+          assertPlatformSendAuthorized: () => undefined,
+        }),
+      onDiscordDeliveryError,
+    );
+    if (conflictOutcome) {
+      runtime.error(
+        `discord: reply session init conflict exhausted; terminal notice ${conflictOutcome} ` +
+          `(sourceReplyDeliveryMode=${sourceReplyDeliveryMode}, message=${message.id}, session=${persistedSessionKey})`,
+      );
+      // Both a delivered notice and recorded policy suppression consume the event.
       return;
     }
     throw err;
@@ -715,7 +714,9 @@ async function processDiscordMessageInner(
     endDeliveryCorrelation();
     await draftPreview.cleanup();
     dispatchError ||= readAgentRunTerminalOutcome(dispatchResult) === "failed";
-    const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
+    const finalReceipt = dispatchResult?.settledReceipt?.counts.final;
+    const finalDeliveryFailed =
+      (finalReceipt?.failedBeforeSend ?? 0) + (finalReceipt?.failedAfterSend ?? 0) > 0;
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }
   if (dispatchAborted) {
@@ -727,7 +728,7 @@ async function processDiscordMessageInner(
     return;
   }
   if (shouldLogVerbose()) {
-    const finalCount = finalDispatchResult.counts.final;
+    const finalCount = finalDispatchResult.settledReceipt?.counts.final.delivered ?? 0;
     logVerbose(
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );

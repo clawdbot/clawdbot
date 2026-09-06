@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,5 +46,24 @@ describe("loadPromptTemplates", () => {
       description: "----",
       content,
     });
+  });
+
+  it("keeps case-variant Windows user prompt paths in user scope", async () => {
+    const root = tempDirs.make("openclaw-prompt-templates-");
+    const promptDir = join(root, "agent", "prompts");
+    await mkdir(promptDir, { recursive: true });
+    await writeFile(join(promptDir, "user.md"), "User prompt\n", "utf-8");
+
+    expect(
+      withMockedWindowsPlatform(
+        () =>
+          loadPromptTemplates({
+            cwd: root,
+            agentDir: join(root, "AGENT"),
+            promptPaths: [promptDir],
+            includeDefaults: false,
+          })[0]?.sourceInfo.scope,
+      ),
+    ).toBe("user");
   });
 });

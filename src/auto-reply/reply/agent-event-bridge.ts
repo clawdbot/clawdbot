@@ -1,6 +1,6 @@
 // Generic agent-event bridge machinery shared by the CLI runner's per-stream
 // delivery bridges (assistant, reasoning, commentary, plan).
-import { type AgentEventPayload, onAgentEvent } from "../../infra/agent-events.js";
+import { type AgentEventPayload, onAgentEventForRun } from "../../infra/agent-events.js";
 
 export type AgentEventDeliveryStartOrder = {
   schedule: (deliver: () => Promise<unknown>) => Promise<void>;
@@ -45,7 +45,7 @@ export function createAgentEventBridge<T>(params: {
   }
   let unsubscribed = false;
   let delivery: Promise<unknown> = Promise.resolve();
-  const rawUnsubscribe = onAgentEvent((evt) => {
+  const rawUnsubscribe = onAgentEventForRun(params.runId, (evt) => {
     if (evt.runId !== params.runId) {
       return;
     }

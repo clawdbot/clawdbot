@@ -1,17 +1,30 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   reduceSessionProjection,
   type SessionProjectionEvent,
-  type SessionProjectionGatewayRunEvent,
-  type SessionProjectionRunTransition,
+  type SessionProjectionRun,
   type SessionProjectionScope,
   type SessionProjectionState,
 } from "./session-projection.js";
+
+export type SessionProjectionGatewayRunEvent = {
+  state?: unknown;
+  yielded?: unknown;
+  seq?: unknown;
+} & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
+
+export type SessionProjectionRunTransition = {
+  projection: SessionProjectionState;
+  previousRun: SessionProjectionRun | undefined;
+  currentRun: SessionProjectionRun | undefined;
+};
 
 function readNonemptyString(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
 }
 
-export function reduceSessionProjectionRunEventImpl(
+/** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
+export function reduceSessionProjectionRunEvent(
   projection: SessionProjectionState,
   event: SessionProjectionGatewayRunEvent,
   scope: SessionProjectionScope = {},
@@ -25,13 +38,15 @@ export function reduceSessionProjectionRunEventImpl(
     return null;
   }
   const message = event.message;
-  const messageStopReason =
-    message !== null && typeof message === "object" && !Array.isArray(message)
-      ? readNonemptyString((message as Record<string, unknown>).stopReason)
-      : null;
+  const messageStopReason = isRecord(message) ? readNonemptyString(message.stopReason) : null;
   const stopReason = readNonemptyString(event.stopReason) ?? messageStopReason;
   const errorKind = readNonemptyString(event.errorKind);
-  const base = { runId, ...(message === undefined ? {} : { message }), scope };
+  const base = {
+    runId,
+    seq: typeof event.seq === "number" ? event.seq : undefined,
+    ...(message === undefined ? {} : { message }),
+    scope,
+  };
   const action: SessionProjectionEvent =
     event.state === "delta"
       ? { type: "runDelta", ...base }

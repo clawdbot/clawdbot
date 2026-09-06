@@ -6,3 +6,5 @@ export {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../infra/format-time/format-datetime.js";
+export { formatDurationCompact } from "../infra/format-time/format-duration.js";
+export { withTimeout } from "../infra/fs-safe.js";

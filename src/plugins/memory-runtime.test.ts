@@ -1,11 +1,22 @@
 /** Covers non-activating memory registry handles and requesting-agent workspace ownership. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
-import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
+import type {
+  LegacyMemoryReadResult,
+  MemoryProviderStatus,
+  MemoryReadResult,
+  MemorySearchResult,
+} from "../memory-host-sdk/host/types.js";
+import type {
+  MemoryPluginRuntime,
+  RegisteredMemorySearchManager,
+} from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
+type ClassifyWorkspaceMemoryPaths = NonNullable<
+  MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]
+>;
 
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
@@ -30,6 +41,7 @@ vi.mock("./memory-state.js", async (importOriginal) => {
 
 import {
   authorizeActiveMemorySearchHits,
+  classifyActiveMemoryWorkspacePaths,
   closeActiveMemorySearchManagerCore,
   closeActiveMemorySearchManagersCore,
   getActiveMemorySearchManagerCore,
@@ -41,6 +53,9 @@ import { hasMemoryRuntime } from "./memory-state.js";
 function createRuntime() {
   return {
     authorizeSearchHits: vi.fn<AuthorizeSearchHits>(async ({ hits }) => hits),
+    classifyWorkspaceMemoryPaths: vi.fn<ClassifyWorkspaceMemoryPaths>(async ({ relativePaths }) =>
+      relativePaths.map((relativePath) => ({ relativePath, originClass: "agent" as const })),
+    ),
     getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
     resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
     closeMemorySearchManager: vi.fn(async () => {}),
@@ -227,6 +242,163 @@ describe("memory runtime handles", () => {
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
+  it("preserves statusless reads as successful while preserving manager lifecycle", async () => {
+    const canonicalEmpty = {
+      status: "ok",
+      text: "",
+      path: "memory/canonical-empty.md",
+    } as const satisfies MemoryReadResult;
+    const canonicalMissing = {
+      status: "not_found",
+      text: "",
+      path: "memory/canonical-missing.md",
+    } as const satisfies MemoryReadResult;
+
+    class RegisteredReadManager implements RegisteredMemorySearchManager {
+      #closed = false;
+      #readCalls = 0;
+
+      async search(): Promise<MemorySearchResult[]> {
+        return [];
+      }
+
+      async readFile({
+        relPath,
+      }: {
+        relPath: string;
+      }): Promise<LegacyMemoryReadResult | MemoryReadResult> {
+        this.#readCalls += 1;
+        switch (relPath) {
+          case "memory/legacy-bare-empty.md":
+            return { text: "", path: relPath };
+          case "memory/legacy-ranged-empty.md":
+            return { text: "", path: relPath, from: 1, lines: 0 };
+          case "memory/legacy-nonempty.md":
+            return { text: "legacy", path: relPath };
+          case canonicalEmpty.path:
+            return canonicalEmpty;
+          case canonicalMissing.path:
+            return canonicalMissing;
+          default:
+            throw new Error(`unexpected read path: ${relPath}`);
+        }
+      }
+
+      status(): MemoryProviderStatus {
+        return { backend: "builtin", provider: "builtin" };
+      }
+
+      async probeEmbeddingAvailability() {
+        return { ok: true };
+      }
+
+      async probeVectorAvailability() {
+        return true;
+      }
+
+      async close() {
+        this.#closed = true;
+      }
+
+      isClosed() {
+        return this.#closed;
+      }
+
+      readCalls() {
+        return this.#readCalls;
+      }
+    }
+    const manager = new RegisteredReadManager();
+    const runtime = {
+      ...createRuntime(),
+      getMemorySearchManager: vi.fn(async () => ({
+        manager,
+      })),
+    } satisfies MemoryPluginRuntime;
+    mocks.getMemoryRuntime.mockReturnValue(runtime);
+
+    const first = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    const second = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+
+    expect(second.manager).toBe(first.manager);
+    expect(Reflect.get(second.manager ?? {}, "readFile")).toBe(
+      Reflect.get(first.manager ?? {}, "readFile"),
+    );
+    await expect(
+      first.manager?.readFile({ relPath: "memory/legacy-bare-empty.md" }),
+    ).resolves.toEqual({
+      status: "ok",
+      text: "",
+      path: "memory/legacy-bare-empty.md",
+    });
+    await expect(
+      first.manager?.readFile({ relPath: "memory/legacy-ranged-empty.md" }),
+    ).resolves.toEqual({
+      status: "ok",
+      text: "",
+      path: "memory/legacy-ranged-empty.md",
+      from: 1,
+      lines: 0,
+    });
+    await expect(
+      first.manager?.readFile({ relPath: "memory/legacy-nonempty.md" }),
+    ).resolves.toEqual({
+      status: "ok",
+      text: "legacy",
+      path: "memory/legacy-nonempty.md",
+    });
+    await expect(first.manager?.readFile({ relPath: canonicalEmpty.path })).resolves.toBe(
+      canonicalEmpty,
+    );
+    await expect(first.manager?.readFile({ relPath: canonicalMissing.path })).resolves.toBe(
+      canonicalMissing,
+    );
+    await first.manager?.close?.();
+    expect(manager.isClosed()).toBe(true);
+    expect(manager.readCalls()).toBe(5);
+  });
+
+  it("supports frozen registered managers without violating proxy invariants", async () => {
+    let closed = false;
+    let probed = false;
+    const manager = Object.freeze({
+      search: async () => [],
+      readFile: async ({ relPath }: { relPath: string }) => ({
+        text: "frozen",
+        path: relPath,
+      }),
+      status: () => ({ backend: "builtin" as const, provider: probed ? "ready" : "frozen" }),
+      probeEmbeddingAvailability: async () => {
+        probed = true;
+        return { ok: true };
+      },
+      probeVectorAvailability: async () => true,
+      close: async () => {
+        closed = true;
+      },
+    }) satisfies RegisteredMemorySearchManager;
+    const runtime = {
+      ...createRuntime(),
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+    } satisfies MemoryPluginRuntime;
+    mocks.getMemoryRuntime.mockReturnValue(runtime);
+
+    const acquired = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+
+    await expect(acquired.manager?.search("frozen manager")).resolves.toEqual([]);
+    expect(acquired.manager?.status()).toEqual({ backend: "builtin", provider: "frozen" });
+    await expect(acquired.manager?.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(acquired.manager?.status()).toEqual({ backend: "builtin", provider: "ready" });
+    await expect(acquired.manager?.probeVectorAvailability()).resolves.toBe(true);
+    await expect(acquired.manager?.readFile({ relPath: "memory/frozen.md" })).resolves.toEqual({
+      status: "ok",
+      text: "frozen",
+      path: "memory/frozen.md",
+    });
+    await acquired.manager?.close?.();
+    expect(closed).toBe(true);
+  });
+
   it("authorizes raw hits inside the selected plugin runtime scope", async () => {
     const { registry, runtime } = createRegistry();
     runtime.authorizeSearchHits.mockImplementationOnce(async ({ hits }) => {
@@ -262,6 +434,52 @@ describe("memory runtime handles", () => {
         hits,
       }),
     ).resolves.toEqual([hits[0]]);
+  });
+
+  it("classifies workspace paths inside the selected plugin runtime scope", async () => {
+    const { registry, runtime } = createRegistry();
+    runtime.classifyWorkspaceMemoryPaths.mockImplementationOnce(async ({ relativePaths }) => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+      return relativePaths.map((relativePath) => ({
+        relativePath,
+        originClass: relativePath === "MEMORY.md" ? "untrusted" : "owner",
+      }));
+    });
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    await expect(
+      classifyActiveMemoryWorkspacePaths({
+        cfg: memoryConfig,
+        agentId: "main",
+        workspaceDir: "/workspace/main",
+        relativePaths: ["MEMORY.md", "USER.md"],
+      }),
+    ).resolves.toEqual({
+      status: "classified",
+      classifications: [
+        { relativePath: "MEMORY.md", originClass: "untrusted" },
+        { relativePath: "USER.md", originClass: "owner" },
+      ],
+    });
+  });
+
+  it("distinguishes a selected runtime without workspace provenance support", async () => {
+    const runtimeWithoutClassifier = {
+      getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+      resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
+    } satisfies MemoryPluginRuntime;
+    mocks.loadPluginRegistryHandle.mockReturnValue(
+      createRegistry(runtimeWithoutClassifier).registry,
+    );
+
+    await expect(
+      classifyActiveMemoryWorkspacePaths({
+        cfg: memoryConfig,
+        agentId: "main",
+        workspaceDir: "/workspace/main",
+        relativePaths: ["MEMORY.md", "USER.md"],
+      }),
+    ).resolves.toEqual({ status: "unsupported" });
   });
 
   it("fails closed on session hits when a memory runtime has no authorizer", async () => {

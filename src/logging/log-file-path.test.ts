@@ -118,5 +118,6 @@ describe("profile rolling log families", () => {
     expect(isLegacyRollingLogFilePath("openclaw-2026-07-22.log")).toBe(true);
     expect(isLegacyRollingLogFilePath("openclaw-YYYY-MM-DD.log")).toBe(true);
     expect(isLegacyRollingLogFilePath("openclaw-dev-2026-07-22.log")).toBe(false);
+    expect(isLegacyRollingLogFilePath("openclaw-configured.log")).toBe(false);
   });
 });

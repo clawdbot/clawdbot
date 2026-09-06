@@ -24,7 +24,7 @@ export type McpLoopbackToolCallStart = Pick<McpLoopbackToolCallResult, "toolName
 
 type McpLoopbackToolCallCapture = {
   generation: number;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
   onRequestFinish?: () => void;
@@ -88,7 +88,7 @@ function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCa
 /** Start loopback tool-call result capture for one serialized CLI invocation. */
 export function beginMcpLoopbackToolCallCapture(params: {
   captureKey: string;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
   onRequestFinish?: () => void;
@@ -124,15 +124,20 @@ export function beginMcpLoopbackToolCallCapture(params: {
 /** Resolve yield state bound to the request's admitted CLI capture generation. */
 export function resolveMcpLoopbackYieldContext(
   captureHandle: McpLoopbackRequestCaptureHandle | undefined,
-): { cacheKey: string; onYield: (message: string) => Promise<void> } | undefined {
+):
+  | {
+      cacheKey: string;
+      onYield: (message: string, acknowledgment?: string) => Promise<void>;
+    }
+  | undefined {
   const capture = captureHandle?.capture;
   if (!capture?.onYield) {
     return undefined;
   }
   return {
     cacheKey: String(capture.generation),
-    onYield: async (message: string) => {
-      await capture.onYield?.(message);
+    onYield: async (message: string, acknowledgment?: string) => {
+      await capture.onYield?.(message, acknowledgment);
     },
   };
 }
@@ -352,7 +357,7 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
   return true;
 }
 
-/** Clear an unfinished invocation capture. Attempt keys are unique per CLI execution. */
+/** Clear observers for this capture key. Grant admission is fenced separately. */
 export function clearMcpLoopbackToolCallCapture(captureKey: string): void {
   deleteMcpLoopbackToolCallCapture(captureKey.trim());
 }

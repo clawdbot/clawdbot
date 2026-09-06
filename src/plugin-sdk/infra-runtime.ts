@@ -4,6 +4,7 @@
  * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export * from "./delivery-queue-runtime.js";
 
 export * from "../infra/backoff.js";
@@ -29,7 +30,6 @@ export {
   stringifyNonErrorCause,
   toErrorObject,
 } from "../infra/errors.js";
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 
 /** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */
 export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
@@ -250,7 +250,22 @@ export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
 export * from "../infra/outbound/identity.js";
 export * from "../infra/outbound/sanitize-text.js";
-export * from "../infra/parse-finite-number.js";
+export {
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  nonNegativeSecondsToSafeMilliseconds,
+  parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "@openclaw/normalization-core/number-coercion";
 export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";

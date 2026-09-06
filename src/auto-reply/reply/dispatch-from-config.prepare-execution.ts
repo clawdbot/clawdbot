@@ -12,8 +12,13 @@ import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
+import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
-import { hasAskUserPayload, hasExecApprovalPayload } from "./dispatch-from-config.payloads.js";
+import {
+  hasAskUserPayload,
+  hasExecApprovalPayload,
+  hasExecApprovalUnavailablePayload,
+} from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
@@ -25,7 +30,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const {
     cfg,
     ctx,
-    dispatcher,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
     markProgress,
@@ -94,7 +98,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     acceptedReplyPayload: false,
     blockCount: 0,
     channelTransformSuppressed: false,
-    hasPendingDirectBlockReplyDelivery: false,
+    pendingDirectBlockReplyDelivery: Promise.resolve(),
     progressCallbackStartTail: Promise.resolve(),
   };
   const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
@@ -121,7 +125,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (shouldSendToolSummaries()) {
       return payload;
     }
-    if (hasExecApprovalPayload(payload)) {
+    if (hasExecApprovalPayload(payload) || hasExecApprovalUnavailablePayload(payload)) {
       return payload;
     }
     if (hasAskUserPayload(payload)) {
@@ -147,39 +151,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const shouldSuppressProgressDelivery = () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !state.shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const hasVisibleRegularVerboseToolProgress = () =>
-    shouldEmitVerboseProgress() &&
-    !state.shouldEmitFullVerboseProgress() &&
-    shouldSendVerboseProgressMessages() &&
-    ctx.InboundEventKind !== "room_event" &&
-    !shouldSuppressProgressDelivery();
-  let observedVisibleToolErrorProgress = false;
-  const markVisibleToolErrorProgress = () => {
-    if (hasVisibleRegularVerboseToolProgress()) {
-      observedVisibleToolErrorProgress = true;
-    }
-  };
-  const hasFailedProgressStatus = (payload: {
-    phase?: string;
-    status?: string;
-    exitCode?: number | null;
-  }) =>
-    payload.phase === "error" ||
-    payload.status === "failed" ||
-    payload.status === "error" ||
-    (typeof payload.exitCode === "number" && payload.exitCode !== 0);
-  const shouldSuppressToolErrorWarnings = () => {
-    if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
-      return params.replyOptions.suppressToolErrorWarnings;
-    }
-    if (!shouldEmitVerboseProgress()) {
-      return false;
-    }
-    return observedVisibleToolErrorProgress ? true : undefined;
-  };
-  const suppressToolErrorWarnings =
-    params.replyOptions?.suppressToolErrorWarnings ??
-    (observedVisibleToolErrorProgress ? true : undefined);
   const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
   const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
   const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -193,16 +164,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     options?.requiresToolSummaryVisibility === true &&
     (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
       options.allowWhenToolSummariesHidden === true);
-  const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
-    if (!progressState.hasPendingDirectBlockReplyDelivery) {
-      return;
-    }
-    // Direct block replies are queued asynchronously so lightweight replies do
-    // not wait for dispatcher idle. Flush only before later tool/progress
-    // callbacks and final completion where external ordering is visible.
-    progressState.hasPendingDirectBlockReplyDelivery = false;
-    await waitForReplyDispatcherIdle(dispatcher, abortSignal);
-  };
+  const waitForPendingDirectBlockReplyDelivery = (abortSignal?: AbortSignal) =>
+    waitForReplyDispatcherIdle(
+      { waitForIdle: () => progressState.pendingDirectBlockReplyDelivery },
+      abortSignal,
+    );
   const shouldForwardProgressCallback = (options?: {
     allowWhenToolSummariesHidden?: boolean;
     forwardWhenSourceDeliverySuppressed?: boolean;
@@ -304,7 +270,19 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   // Snapshot verbose progress visibility for this run: commentary
   // classification in the CLI runners is wired once at run start, so a
   // mid-run verbose toggle cannot move inter-tool commentary between lanes.
-  const deliverStandaloneCommentaryProgress = shouldEmitVerboseProgress();
+  const standaloneCommentaryProgressVisible = shouldEmitVerboseProgress();
+  const resolveVerboseProgressVisibility = () =>
+    standaloneCommentaryProgressVisible &&
+    shouldSendVerboseProgressMessages() &&
+    !shouldSuppressProgressDelivery();
+  const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
+    resolveTurnCommentaryProgressOwner({
+      commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
+      options: params.replyOptions,
+      resolveVerboseProgressVisibility,
+    });
+  const deliverStandaloneCommentaryProgress =
+    standaloneCommentaryProgressVisible && !draftOwnsCommentaryProgress;
   const itemEventForwardingOptions = {
     forwardWhenSourceDeliverySuppressed: true,
     requiresToolSummaryVisibility: true,
@@ -328,11 +306,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
           preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
             ? noteCommentaryProgress(payload)
             : undefined,
-        onVisible: (payload) => {
-          if (hasFailedProgressStatus(payload)) {
-            markVisibleToolErrorProgress();
-          }
-        },
       })
     : undefined;
   const canCaptureCliPreambleEvents =
@@ -359,15 +332,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         return await forwardItemEvent?.(payload);
       }
     : undefined;
-  // Let draft-rendering channels yield their ephemeral commentary lines while
-  // the durable verbose commentary lane is delivering the same content.
-  params.replyOptions?.onVerboseProgressVisibility?.(
-    () =>
-      deliverStandaloneCommentaryProgress &&
-      shouldSendVerboseProgressMessages() &&
-      !shouldSuppressProgressDelivery(),
-  );
-
   const replyResolver =
     params.replyResolver ??
     (
@@ -388,10 +352,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     resolveToolDeliveryPayload,
     typing,
     shouldSuppressProgressDelivery,
-    markVisibleToolErrorProgress,
-    hasFailedProgressStatus,
-    shouldSuppressToolErrorWarnings,
-    suppressToolErrorWarnings,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,
@@ -403,6 +363,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     deliverStandaloneCommentaryProgress,
     canForwardSuppressedSourceItemEvents,
     onItemEvent,
+    commentaryPayloadsEnabled,
     replyResolver,
     replyConfig,
     progressState,

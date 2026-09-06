@@ -19,18 +19,28 @@ function deriveExecShortName(fullPath: string): string {
 }
 
 /** Builds the model-facing exec tool description for the current platform/config. */
-export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
+export function describeExecTool(params?: {
+  agentId?: string;
+  hasCronTool?: boolean;
+  hasProcessTool?: boolean;
+}): string {
+  const continuation =
+    params?.hasProcessTool === false
+      ? ["Run shell and wait for completion."]
+      : [
+          "Run shell now; background continuation supported.",
+          "Use yieldMs/background, then process for logs/status/input/intervention.",
+          "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
+        ];
   const base = [
-    "Run shell now; background continuation supported.",
-    "Use yieldMs/background, then process for logs/status/input/intervention.",
-    "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
-    params?.hasCronTool ? "No sleep/delay loops for reminders/follow-ups; use cron." : undefined,
+    ...continuation,
+    params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
   ]
     .filter(Boolean)
     .join(" ");
   if (process.platform !== "win32") {
-    return base;
+    return `${base} Quote arguments containing shell metacharacters, including URL query strings with \`?\` or \`&\`.`;
   }
   const lines: string[] = [base];
   lines.push(
@@ -73,7 +83,7 @@ export function describeProcessTool(params?: { hasCronTool?: boolean }): string 
     "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill.",
     "poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention.",
     params?.hasCronTool
-      ? "No polling as timer/reminder; scheduled follow-up uses cron."
+      ? "No polling as timer/reminder; scheduled follow-up uses automations."
       : undefined,
   ]
     .filter(Boolean)

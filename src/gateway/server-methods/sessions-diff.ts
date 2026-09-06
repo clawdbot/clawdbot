@@ -8,16 +8,22 @@ import {
   type SessionsDiffParams,
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
+import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export { parseNameStatusZ, parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff.js";
 
-export async function loadSessionDiff(params: SessionsDiffParams): Promise<SessionsDiffResult> {
+export async function loadSessionDiff(
+  params: SessionsDiffParams,
+  context?: GatewayRequestContext,
+): Promise<SessionsDiffResult> {
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
   ): SessionsDiffResult => ({
@@ -27,23 +33,36 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
-    params.sessionKey,
-    {
-      agentId: params.agentId,
-    },
-  );
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const { cfg, agentId: loadedAgentId, entry, storePath, canonicalKey } = loaded;
   // Same session scoping as sessions.files.*: an unknown session must not fall
   // back to some agent workspace and surface another checkout's diff.
   if (!entry?.sessionId || !storePath) {
     return empty("unknown_session");
   }
   const agentId = normalizeAgentId(
-    parseAgentSessionKey(canonicalKey)?.agentId ??
+    loadedAgentId ??
+      parseAgentSessionKey(canonicalKey)?.agentId ??
       params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId ??
-      resolveDefaultAgentId(cfg),
+      parseAgentSessionKey(params.sessionKey)?.agentId,
   );
+  const repository = resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
+  if (repository) {
+    if (repository.kind === "stored") {
+      return await loadRepositoryArtifactDiff(repository, params);
+    }
+    if (!repository.repository.baseCommit) {
+      throw new Error("The cloud repository is still preparing its base revision.");
+    }
+    const result = await repository.inspect("diff", {
+      scope: params.scope ?? "all",
+      commit: params.commit,
+      baseCommit: repository.repository.baseCommit,
+    });
+    // Remote paths are not Gateway-local checkout or native editor destinations.
+    delete result.root;
+    return result;
+  }
   // spawnedCwd first, matching pushed Control UI session PR state: the diff must
   // describe the same checkout whose branch the PR chips report.
   const cwd =
@@ -76,7 +95,7 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
 }
 
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
-  "sessions.diff": async ({ params, respond }) => {
+  "sessions.diff": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsDiffParams, "sessions.diff", respond)) {
       return;
     }
@@ -92,6 +111,24 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, await loadSessionDiff(params));
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      params.sessionKey,
+      params.agentId,
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    respond(
+      true,
+      await loadSessionDiff(
+        {
+          ...params,
+          ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+        },
+        context,
+      ),
+    );
   },
 };

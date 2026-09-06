@@ -1,5 +1,6 @@
 // Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
 // assistant media routes, pairing helpers, and session-generation metadata.
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -10,13 +11,12 @@ import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
+import * as configIo from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  approveDevicePairing,
-  ensureDeviceToken,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -27,9 +27,11 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  createAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiPluginFrameGrantAck,
@@ -62,7 +64,7 @@ type FileHandleRead = (
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
-const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
+const runFfprobeMock = vi.hoisted(() => vi.fn(async () => "{}"));
 const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
 const resolvePlaybackTranscodeMock = vi.hoisted(() =>
   vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
@@ -70,19 +72,14 @@ const resolvePlaybackTranscodeMock = vi.hoisted(() =>
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
-vi.mock("../media/media-probe.js", () => ({
-  probePlaybackMediaFileDescriptor: probeMediaFileDescriptorMock,
+vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/ffmpeg-exec.js")>()),
+  runFfprobe: runFfprobeMock,
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as {
-    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
-    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
-  };
-  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
-    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
   );
   return {
     ...actual,
@@ -95,7 +92,6 @@ const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
-const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createAuthRateLimiterSpy() {
@@ -121,9 +117,12 @@ function createAuthRateLimiterSpy() {
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
-  probeMediaFileDescriptorMock.mockReset();
-  probeMediaFileDescriptorMock.mockResolvedValue({});
-  resolvePlaybackModeForSourceMock.mockClear();
+  runFfprobeMock.mockReset();
+  runFfprobeMock.mockResolvedValue("{}");
+  resolvePlaybackModeForSourceMock.mockReset();
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
+  );
   resolvePlaybackTranscodeMock.mockReset();
   resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });
@@ -170,10 +169,12 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatarReason?: string | null;
       assistantAgentId?: string;
       devGitBranch?: string;
-      localMediaPreviewRoots?: string[];
+      environment?: { label: string; color: string };
       seamColor?: string;
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
+      automaticallyFetchFavicons: boolean;
+      communityInvite: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -206,15 +207,33 @@ describe("handleControlUiHttpRequest", () => {
     rootPath: string;
     basePath?: string;
     rootKind?: "resolved" | "bundled";
+    retainedAssets?: ControlUiAssetRetention;
     headers?: IncomingMessage["headers"];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method, headers: params.headers ?? {} } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+        headersDistinct: Object.fromEntries(
+          Object.entries(params.headers ?? {}).map(([name, value]) => [
+            name,
+            Array.isArray(value) ? value : [String(value)],
+          ]),
+        ),
+      } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
+        root:
+          params.rootKind === "bundled"
+            ? {
+                kind: "bundled",
+                path: params.rootPath,
+                ...(params.retainedAssets ? { retainedAssets: params.retainedAssets } : {}),
+              }
+            : { kind: "resolved", path: params.rootPath },
       },
     );
     return { res, end, setHeader, handled };
@@ -227,6 +246,7 @@ describe("handleControlUiHttpRequest", () => {
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
     rateLimiter?: AuthRateLimiter;
+    remoteAddress?: string;
     trustedProxies?: string[];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
@@ -238,7 +258,7 @@ describe("handleControlUiHttpRequest", () => {
         url,
         method: "GET",
         headers: params.headers ?? {},
-        socket: { remoteAddress: "127.0.0.1" },
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
       } as IncomingMessage,
       res,
       {
@@ -334,6 +354,7 @@ describe("handleControlUiHttpRequest", () => {
     return {
       host: "gateway.example.com",
       "x-forwarded-user": "nick@example.com",
+      "x-forwarded-for": "203.0.113.10",
       "x-forwarded-proto": "https",
       ...extraHeaders,
     };
@@ -529,7 +550,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -563,7 +584,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -584,11 +605,15 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
-        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
-          root: { kind: "resolved", path: tmp },
-          config: { gateway: { terminal: { enabled: true } } },
-          terminalEnabled: false,
-        });
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: true } } },
+            terminalEnabled: false,
+          },
+        );
         const csp = setHeader.mock.calls.findLast(
           (call) => call[0] === "Content-Security-Policy",
         )?.[1];
@@ -631,222 +656,87 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it.each(["GET", "HEAD"] as const)(
-    "revalidates assistant media ETags before ranges for %s",
-    async (method) => {
+  it.each(["atomic replacement", "in-place rewrite"] as const)(
+    "serves changed assistant media after a same-size %s preserves its modification time",
+    async (mutation) => {
       await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-conditional-",
+        prefix: "ui-media-mutable-",
         fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const filePath = path.join(tmpRoot, "sample.bin");
+          const original = Buffer.from("original media bytes");
+          const replacement = Buffer.from("replaced media bytes");
+          const modified = new Date("2025-01-01T00:00:00.000Z");
+          await fs.writeFile(filePath, original);
+          await fs.utimes(filePath, modified, modified);
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`;
           const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-          expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
-
-          const conditional = await runAssistantMediaRequest({
-            url,
-            method,
-            auth,
-            headers: {
-              "if-none-match": `W/${String(etag)}`,
-              range: "bytes=0-3",
-              "if-range": '"stale"',
-            },
-          });
-
-          expect(conditional.handled).toBe(true);
-          expect(conditional.res.statusCode).toBe(304);
-          expect(conditional.setHeader).toHaveBeenCalledWith("ETag", etag);
-          expect(conditional.setHeader).not.toHaveBeenCalledWith(
-            "Content-Length",
-            expect.anything(),
+          const headers = { authorization: "Bearer test-token" };
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth, headers });
+          const etag = String(
+            initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1] ??
+              '"cached-version"',
           );
-          expect(conditional.end).toHaveBeenCalledWith();
+          const lastModified = modified.toUTCString();
+          const replacementPath =
+            mutation === "atomic replacement" ? path.join(tmpRoot, "next.bin") : filePath;
+          await fs.writeFile(replacementPath, replacement);
+          await fs.utimes(replacementPath, modified, modified);
+          if (replacementPath !== filePath) {
+            await fs.rename(replacementPath, filePath);
+          }
+          const stat = await fs.stat(filePath);
+          expect(stat.size).toBe(original.length);
+          expect(stat.mtimeMs).toBe(modified.getTime());
+          expect(await fs.readFile(filePath)).toEqual(replacement);
+
+          for (const method of ["GET", "HEAD"] as const) {
+            for (const condition of [
+              { "if-none-match": etag },
+              { "if-modified-since": lastModified },
+              { range: "bytes=0-3", "if-range": etag },
+              { range: "bytes=0-3", "if-range": lastModified },
+            ]) {
+              const current = await runAssistantMediaRequest({
+                url,
+                method,
+                auth,
+                headers: { ...headers, ...condition },
+              });
+              expect
+                .soft(current.res.statusCode, `${method} ${JSON.stringify(condition)}`)
+                .toBe(200);
+              expect.soft(current.setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
+              expect
+                .soft(current.setHeader)
+                .not.toHaveBeenCalledWith("Last-Modified", expect.anything());
+            }
+          }
+          const ranged = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { ...headers, range: "bytes=0-3" },
+          });
+          expect(ranged.res.statusCode).toBe(206);
+          expect(ranged.setHeader).toHaveBeenCalledWith(
+            "Content-Range",
+            `bytes 0-3/${replacement.length}`,
+          );
+          for (const method of ["GET", "HEAD"] as const) {
+            const exists = await runAssistantMediaRequest({
+              url,
+              method,
+              auth,
+              headers: { ...headers, "if-none-match": "*", range: "bytes=0-3" },
+            });
+            expect(exists.res.statusCode).toBe(304);
+            expect(exists.end).toHaveBeenCalledWith();
+            expect(exists.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+          }
         },
       });
     },
   );
-
-  it.each(["GET", "HEAD"] as const)(
-    "revalidates assistant media with If-Modified-Since before ranges for %s",
-    async (method) => {
-      await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-modified-since-",
-        fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          const lastModified = initial.setHeader.mock.calls.find(
-            ([name]) => name === "Last-Modified",
-          )?.[1];
-          expect(lastModified).toEqual(expect.any(String));
-
-          const unchanged = await runAssistantMediaRequest({
-            url,
-            method,
-            auth,
-            headers: {
-              "if-modified-since": String(lastModified),
-              range: "bytes=0-3",
-              "if-range": '"stale"',
-            },
-          });
-
-          expect(unchanged.res.statusCode).toBe(304);
-          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-          expect(unchanged.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
-          expect(unchanged.end).toHaveBeenCalledWith();
-        },
-      });
-    },
-  );
-
-  it.each(["GET", "HEAD"] as const)(
-    "ignores duplicate assistant-media dates discarded by normalized Node headers for %s",
-    async (method) => {
-      await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-duplicate-modified-since-",
-        fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          const lastModified = String(
-            initial.setHeader.mock.calls.find(([name]) => name === "Last-Modified")?.[1],
-          );
-
-          const duplicate = await runAssistantMediaRequest({
-            url,
-            method,
-            auth,
-            headers: { "if-modified-since": lastModified },
-            distinctHeaders: {
-              "if-modified-since": [lastModified, "not-an-http-date"],
-            },
-          });
-
-          expect(duplicate.res.statusCode).toBe(200);
-          expect(duplicate.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-        },
-      });
-    },
-  );
-
-  it("resumes assistant media only for an exact If-Range HTTP-date", async () => {
-    await withAllowedAssistantMediaRoot({
-      prefix: "ui-media-if-range-date-",
-      fn: async (tmpRoot) => {
-        const filePath = path.join(tmpRoot, "photo.png");
-        const body = Buffer.from("assistant-media-bytes");
-        const modified = new Date("2025-07-08T18:40:00.789Z");
-        await fs.writeFile(filePath, body);
-        await fs.utimes(filePath, modified, modified);
-        const lastModified = (await fs.stat(filePath)).mtime.toUTCString();
-        const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-        const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-
-        const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-        expect(initial.res.statusCode).toBe(200);
-        expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-
-        const partial = await runAssistantMediaRequest({
-          url,
-          method: "GET",
-          auth,
-          headers: { range: "bytes=0-8", "if-range": lastModified },
-        });
-        expect(partial.res.statusCode).toBe(206);
-        expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-        expect(partial.setHeader).toHaveBeenCalledWith(
-          "Content-Range",
-          `bytes 0-8/${body.byteLength}`,
-        );
-
-        const future = await runAssistantMediaRequest({
-          url,
-          method: "GET",
-          auth,
-          headers: {
-            range: "bytes=0-8",
-            "if-range": new Date(Date.parse(lastModified) + 1000).toUTCString(),
-          },
-        });
-        expect(future.res.statusCode).toBe(200);
-        expect(future.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-      },
-    });
-  });
-
-  it("bounds future-dated assistant media validators across conditional response plans", async () => {
-    const nowMs = Math.floor(Date.now() / 1000) * 1000;
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
-    try {
-      await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-future-mtime-",
-        fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          const body = Buffer.from("future-assistant-media");
-          const future = new Date(nowMs + 60_000);
-          await fs.writeFile(filePath, body);
-          await fs.utimes(filePath, future, future);
-          const futureLastModified = (await fs.stat(filePath)).mtime.toUTCString();
-          const expectedLastModified = new Date(nowMs).toUTCString();
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          expect(initial.res.statusCode).toBe(200);
-          expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
-          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-
-          const partial = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { range: "bytes=0-5", "if-range": expectedLastModified },
-          });
-          expect(partial.res.statusCode).toBe(206);
-          expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
-
-          const futureRange = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { range: "bytes=0-5", "if-range": futureLastModified },
-          });
-          expect(futureRange.res.statusCode).toBe(200);
-
-          const unchanged = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { "if-none-match": String(etag) },
-          });
-          expect(unchanged.res.statusCode).toBe(304);
-          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
-
-          const unsatisfiable = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { range: `bytes=${body.byteLength}-` },
-          });
-          expect(unsatisfiable.res.statusCode).toBe(416);
-          expect(unsatisfiable.setHeader).toHaveBeenCalledWith(
-            "Last-Modified",
-            expectedLastModified,
-          );
-        },
-      });
-    } finally {
-      dateNow.mockRestore();
-    }
-  });
 
   it("returns 202 while assistant playback media is preparing", async () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
@@ -1142,7 +1032,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("reports assistant audio size, type, and probed duration metadata", async () => {
-    probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
+    runFfprobeMock.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2.345" } }));
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-audio-meta-",
       fn: async (tmpRoot) => {
@@ -1164,7 +1054,9 @@ describe("handleControlUiHttpRequest", () => {
           sizeBytes: contents.byteLength,
           durationMs: 2345,
         });
-        expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
+        expect(runFfprobeMock).toHaveBeenCalledWith(expect.any(Array), {
+          stdinFileDescriptor: expect.any(Number),
+        });
       },
     });
   });
@@ -1323,6 +1215,8 @@ describe("handleControlUiHttpRequest", () => {
       available: false,
       code: "outside-allowed-folders",
       reason: "Outside allowed folders",
+      retryable: false,
+      canAllow: true,
     });
   });
 
@@ -1484,9 +1378,11 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
-          root: { kind: "resolved", path: tmp },
-        });
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
         const cspCalls = setHeader.mock.calls.filter(
           (call) => call[0] === "Content-Security-Policy",
         );
@@ -1504,20 +1400,56 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [
+                  {
+                    id: "main",
+                    identity: { name: "</script><script>alert(1)//", avatar: "evil.png" },
+                  },
+                ],
+              },
             },
           },
         );
         expect(handled).toBe(true);
         expect(end).toHaveBeenCalledWith(
-          html.replace("<html", '<html data-openclaw-terminal-enabled="true"'),
+          html.replace(
+            "<html",
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true"',
+          ),
         );
+      },
+    });
+  });
+
+  it("exposes only the environment identity on public HTML while bootstrap stays authenticated", async () => {
+    await withControlUiRoot({
+      indexHtml: "<html><head></head><body>Hello</body></html>\n",
+      fn: async (tmp) => {
+        const config: OpenClawConfig = {
+          gateway: { controlUi: { environment: { label: "edge & team", color: "amber" } } },
+        };
+        const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
+        const documentResponse = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: {} } as IncomingMessage,
+          documentResponse.res,
+          { root: { kind: "resolved", path: tmp }, config, auth },
+        );
+
+        expect(documentResponse.res.statusCode).toBe(200);
+        expect(responseBody(documentResponse.end)).toContain(
+          'data-openclaw-environment="{&quot;label&quot;:&quot;edge &amp; team&quot;,&quot;color&quot;:&quot;amber&quot;}"',
+        );
+
+        const bootstrapResponse = await runBootstrapConfigRequest({ rootPath: tmp, config, auth });
+        expect(bootstrapResponse.res.statusCode).toBe(401);
       },
     });
   });
@@ -1530,7 +1462,11 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/openclaw/chat", method: "GET" } as IncomingMessage,
+          {
+            url: "/openclaw/chat",
+            method: "GET",
+            headers: { host: "gateway.example.test" },
+          } as IncomingMessage,
           res,
           {
             basePath: "/openclaw",
@@ -1549,36 +1485,69 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     {
-      name: "root-mounted nested routes",
-      requestPath: "/settings/approvals",
+      name: "root-mounted focus routes",
+      requestPath: "/focus/dashboard/roboclaw/session-ref",
       basePath: undefined,
-      expectedPrefix: "",
+      expectedResourceBasePath: "",
     },
     {
-      name: "base-mounted nested routes",
+      name: "base-mounted focus routes",
+      requestPath: "/openclaw/focus/desktop/control",
+      basePath: "/openclaw",
+      expectedResourceBasePath: "/openclaw",
+    },
+    {
+      name: "root-mounted ordinary deep routes",
+      requestPath: "/settings/approvals",
+      basePath: undefined,
+      expectedResourceBasePath: "",
+    },
+    {
+      name: "root-mounted application namespace routes",
+      requestPath: "/__openclaw__/new",
+      basePath: undefined,
+      expectedResourceBasePath: "",
+    },
+    {
+      name: "base-mounted ordinary deep routes",
       requestPath: "/openclaw/settings/approvals",
       basePath: "/openclaw",
-      expectedPrefix: "/openclaw",
+      expectedResourceBasePath: "/openclaw",
     },
   ])(
-    "anchors Vite-relative public asset hrefs for $name",
-    async ({ requestPath, basePath, expectedPrefix }) => {
-      const assets = [
+    "anchors Vite-relative asset references for $name",
+    async ({ requestPath, basePath, expectedResourceBasePath }) => {
+      const emittedAssets = [
+        ["index.js", "index-js\n", "application/javascript; charset=utf-8"],
+        ["runtime.js", "runtime-js\n", "application/javascript; charset=utf-8"],
+        ["index.css", "index-css\n", "text/css; charset=utf-8"],
+      ] as const;
+      const publicAssets = [
         "favicon.svg",
         "favicon-32.png",
         "apple-touch-icon.png",
         "manifest.webmanifest",
       ];
-      const html = `<html><head>${assets
+      const html = `<html><head>${publicAssets
         .map((asset) => `<link href="./${asset}" />`)
-        .join("")}</head><body></body></html>\n`;
+        .join(
+          "",
+        )}<link rel="modulepreload" href="./assets/runtime.js" /><link rel="stylesheet" href="./assets/index.css" /></head><body><script type="module" src="./assets/index.js"></script></body></html>\n`;
 
       await withControlUiRoot({
         indexHtml: html,
         fn: async (tmp) => {
+          await fs.mkdir(path.join(tmp, "assets"));
+          for (const [asset, content] of emittedAssets) {
+            await fs.writeFile(path.join(tmp, "assets", asset), content);
+          }
           const { res, end } = makeMockHttpResponse();
           const handled = await handleControlUiHttpRequest(
-            { url: requestPath, method: "GET" } as IncomingMessage,
+            {
+              url: requestPath,
+              method: "GET",
+              headers: { host: "gateway.example.test" },
+            } as IncomingMessage,
             res,
             {
               ...(basePath ? { basePath } : {}),
@@ -1588,53 +1557,121 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled).toBe(true);
           const body = String(end.mock.calls[0]?.[0] ?? "");
-          for (const asset of assets) {
-            expect(body).toContain(`href="${expectedPrefix}/${asset}"`);
+          expect(body).toContain(
+            `data-openclaw-control-ui-base-path="${expectedResourceBasePath}"`,
+          );
+          for (const asset of publicAssets) {
+            expect(body).toContain(`href="${expectedResourceBasePath}/${asset}"`);
             expect(body).not.toContain(`href="./${asset}"`);
+          }
+          expect(body).toContain(`src="${expectedResourceBasePath}/assets/index.js"`);
+          expect(body).toContain(`href="${expectedResourceBasePath}/assets/runtime.js"`);
+          expect(body).toContain(`href="${expectedResourceBasePath}/assets/index.css"`);
+          expect(body).not.toContain('="./assets/');
+          expect(body).not.toContain(`${requestPath}/assets/`);
+
+          const emittedAssetUrls = Array.from(
+            body.matchAll(/(?:src|href)="([^" ]*\/assets\/[^" ]+)"/g),
+          ).flatMap((match) => (match[1] ? [match[1]] : []));
+          expect(new Set(emittedAssetUrls)).toEqual(
+            new Set(emittedAssets.map(([asset]) => `${expectedResourceBasePath}/assets/${asset}`)),
+          );
+          for (const url of emittedAssetUrls) {
+            const emittedAsset = emittedAssets.find(([asset]) => url.endsWith(`/${asset}`));
+            expect(emittedAsset).toBeDefined();
+            const [, content, contentType] = emittedAsset!;
+            const response = await runControlUiRequest({
+              url,
+              method: "GET",
+              rootPath: tmp,
+              basePath,
+            });
+            expect(response.handled).toBe(true);
+            expect(responseBody(response.end)).toBe(content);
+            expect(response.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
           }
         },
       });
     },
   );
 
-  it("serves bootstrap config JSON", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: {
-              agents: {
-                defaults: { workspace: tmp },
-                list: [{ id: "roboclaw", default: true, workspace: tmp }],
+  it.each([undefined, true, false])(
+    "serves bootstrap config JSON with cliAgents=%s",
+    async (enabled) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                agents: {
+                  defaults: { workspace: tmp },
+                  list: [
+                    {
+                      id: "roboclaw",
+                      default: true,
+                      workspace: tmp,
+                      identity: {
+                        name: "</script><script>alert(1)//",
+                        avatar: "</script>.png",
+                      },
+                    },
+                  ],
+                },
+                ui: { seamColor: "#1A2b3C" },
+                gateway: {
+                  ...(enabled === undefined ? {} : { cliAgents: { enabled } }),
+                  controlUi: { environment: { label: "edge", color: "amber" } },
+                },
               },
-              ui: {
-                seamColor: "#1A2b3C",
-                assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
-              },
-              gateway: { cliAgents: { enabled: true } },
             },
-          },
-        );
-        expect(handled).toBe(true);
-        const parsed = parseBootstrapPayload(end);
-        expect(parsed.basePath).toBe("");
-        expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-        expect(parsed.assistantAvatar).toBe("A");
-        expect(parsed.assistantAvatarStatus).toBe("none");
-        expect(parsed.assistantAvatarReason).toBe("missing");
-        expect(parsed.assistantAgentId).toBe("roboclaw");
-        expect(parsed.seamColor).toBe("#1A2b3C");
-        expect(parsed.terminalEnabled).toBe(true);
-        expect(parsed.cliAgentsEnabled).toBe(true);
-        expect(parsed.devGitBranch).toBeUndefined();
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
-      },
-    });
-  });
+          );
+          expect(handled).toBe(true);
+          const parsed = parseBootstrapPayload(end);
+          expect(parsed.basePath).toBe("");
+          expect(parsed.assistantName).toBe("</script><script>alert(1)//");
+          expect(parsed.assistantAvatar).toBe("A");
+          expect(parsed.assistantAvatarStatus).toBe("none");
+          expect(parsed.assistantAvatarReason).toBe("missing");
+          expect(parsed.assistantAgentId).toBe("roboclaw");
+          expect(parsed.seamColor).toBe("#1A2b3C");
+          expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
+          expect(parsed.terminalEnabled).toBe(true);
+          expect(parsed.cliAgentsEnabled).toBe(enabled !== false);
+          expect(parsed.automaticallyFetchFavicons).toBe(true);
+          expect(parsed.communityInvite).toBe(true);
+          expect(parsed.devGitBranch).toBeUndefined();
+        },
+      });
+    },
+  );
+
+  it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
+    "projects an explicit %s opt-out into bootstrap config",
+    async (key) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                gateway: { controlUi: { [key]: false } },
+              },
+            },
+          );
+
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end)[key]).toBe(false);
+        },
+      });
+    },
+  );
 
   it("omits the assistant agent id without a config snapshot", async () => {
     await withControlUiRoot({
@@ -1672,7 +1709,7 @@ describe("handleControlUiHttpRequest", () => {
     }
   });
 
-  it("inlines a workspace-local assistant avatar in bootstrap config (#97602)", async () => {
+  it("routes a workspace-local assistant avatar separately from bootstrap config", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
@@ -1693,7 +1730,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(parseBootstrapPayload(end)).toMatchObject({
-          assistantAvatar: REAL_PNG_DATA_URL,
+          assistantAvatar: expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/),
           assistantAvatarSource: "avatar.png",
           assistantAvatarStatus: "local",
         });
@@ -1701,41 +1738,67 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("round-trips a maximum-size local avatar through bootstrap and UI normalization", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const avatar = Buffer.alloc(AVATAR_MAX_BYTES);
-        const expected = `data:image/svg+xml;base64,${avatar.toString("base64")}`;
-        expect(expected).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
-        await fs.writeFile(path.join(tmp, "avatar.svg"), avatar);
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: createAvatarConfig(tmp, "avatar.svg"),
-          },
-        );
+  it.each(["", "/openclaw"])(
+    "keeps a maximum-size local avatar out of bootstrap at %s",
+    async (basePath) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const avatar = Buffer.concat([
+            REAL_PNG,
+            Buffer.alloc(AVATAR_MAX_BYTES - REAL_PNG.length),
+          ]);
+          await fs.writeFile(path.join(tmp, "avatar.png"), avatar);
+          const config = createAvatarConfig(tmp, "avatar.png");
+          const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
+          const headers = { authorization: "Bearer test-token" };
+          const request = { rootPath: tmp, basePath, auth, headers, config };
+          const { res, end } = await runBootstrapConfigRequest(request);
+          expect(res.statusCode).toBe(200);
+          const parsed = parseBootstrapPayload(end);
+          expect(responseBody(end).length).toBeLessThan(4096);
+          expect(parsed.assistantAvatar).toMatch(
+            new RegExp(`^${basePath}/avatar/main\\?v=[a-f0-9]+$`),
+          );
+          expect(normalizeAssistantIdentity({ avatar: parsed.assistantAvatar }).avatar).toBe(
+            parsed.assistantAvatar,
+          );
+          const denied = await runAvatarRequest({
+            url: parsed.assistantAvatar,
+            method: "GET",
+            basePath,
+            config,
+            auth,
+          });
+          expect(denied.res.statusCode).toBe(401);
+          const image = await runAvatarRequest({
+            url: parsed.assistantAvatar,
+            method: "GET",
+            basePath,
+            config,
+            auth,
+            headers,
+          });
+          expect(image.res.statusCode).toBe(200);
+          const imageBytes = image.end.mock.calls[0]?.[0];
+          expect(Buffer.isBuffer(imageBytes)).toBe(true);
+          expect(imageBytes?.length).toBeLessThan(4096);
+          const unchanged = await runBootstrapConfigRequest(request);
+          expect(parseBootstrapPayload(unchanged.end).assistantAvatar).toBe(parsed.assistantAvatar);
+          const replacementPath = path.join(tmp, "replacement.png");
+          const previousStat = await fs.stat(path.join(tmp, "avatar.png"));
+          await fs.writeFile(replacementPath, avatar);
+          await fs.utimes(replacementPath, previousStat.atime, previousStat.mtime);
+          await fs.rename(replacementPath, path.join(tmp, "avatar.png"));
+          const replaced = await runBootstrapConfigRequest(request);
+          expect(parseBootstrapPayload(replaced.end).assistantAvatar).not.toBe(
+            parsed.assistantAvatar,
+          );
+        },
+      });
+    },
+  );
 
-        expect(handled).toBe(true);
-        const parsed = parseBootstrapPayload(end);
-        expect(parsed.assistantAvatar).toBe(expected);
-        expect(
-          normalizeAssistantIdentity({
-            agentId: parsed.assistantAgentId,
-            name: parsed.assistantName,
-            avatar: parsed.assistantAvatar,
-            avatarSource: parsed.assistantAvatarSource,
-            avatarStatus: parsed.assistantAvatarStatus,
-            avatarReason: parsed.assistantAvatarReason,
-          }).avatar,
-        ).toBe(expected);
-      },
-    });
-  });
-
-  it("preserves an exact-cap IDENTITY.md data URL in bootstrap", async () => {
+  it("keeps an exact-cap IDENTITY.md data URL out of bootstrap", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const dataUrl = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
@@ -1753,7 +1816,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(parseBootstrapPayload(end)).toMatchObject({
-          assistantAvatar: dataUrl,
+          assistantAvatar: expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/),
           assistantAvatarStatus: "data",
         });
       },
@@ -1845,68 +1908,42 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("bounds a bootstrap avatar that grows after its descriptor is pinned", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const avatarPath = path.join(tmp, "avatar.png");
-        await fs.writeFile(avatarPath, REAL_PNG);
-        const fstatSync = growAvatarAfterPinnedOpen(avatarPath);
-        try {
-          const { res, end } = makeMockHttpResponse();
-          const handled = await handleControlUiHttpRequest(
-            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: createAvatarConfig(tmp, "avatar.png"),
-            },
-          );
-
-          expect(handled).toBe(true);
-          expect(parseBootstrapPayload(end)).toMatchObject({
-            assistantAvatar: "A",
-            assistantAvatarSource: "avatar.png",
-            assistantAvatarStatus: "none",
-            assistantAvatarReason: "unreadable",
-          });
-        } finally {
-          fstatSync.mockRestore();
-        }
-      },
-    });
-  });
-
-  it("does not read assistant avatar bytes for bootstrap HEAD", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
-        const readSync = vi.spyOn(fsSync, "readSync");
-        try {
-          const { res, end } = makeMockHttpResponse();
-          const handled = await handleControlUiHttpRequest(
-            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "HEAD" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: {
-                agents: {
-                  defaults: { workspace: tmp },
-                  list: [{ id: "main", workspace: tmp, identity: { avatar: "avatar.png" } }],
+  it.each(["GET", "HEAD"])(
+    "does not read assistant avatar bytes for bootstrap %s",
+    async (method) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
+          const readSync = vi.spyOn(fsSync, "readSync");
+          try {
+            const { res, end } = makeMockHttpResponse();
+            const handled = await handleControlUiHttpRequest(
+              { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method } as IncomingMessage,
+              res,
+              {
+                root: { kind: "resolved", path: tmp },
+                config: {
+                  agents: {
+                    defaults: { workspace: tmp },
+                    list: [{ id: "main", workspace: tmp, identity: { avatar: "avatar.png" } }],
+                  },
                 },
               },
-            },
-          );
+            );
 
-          expect(handled).toBe(true);
-          expect(res.statusCode).toBe(200);
-          expect(end).toHaveBeenCalledWith();
-          expect(readSync).not.toHaveBeenCalled();
-        } finally {
-          readSync.mockRestore();
-        }
-      },
-    });
-  });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            if (method === "HEAD") {
+              expect(end).toHaveBeenCalledWith();
+            }
+            expect(readSync).not.toHaveBeenCalled();
+          } finally {
+            readSync.mockRestore();
+          }
+        },
+      });
+    },
+  );
   it("rejects bootstrap config requests without a valid auth token when auth is enabled", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1934,8 +1971,10 @@ describe("handleControlUiHttpRequest", () => {
             authorization: "Bearer test-token",
           },
           config: {
-            agents: { defaults: { workspace: tmp } },
-            ui: { assistant: { avatar: "avatar.png" } },
+            agents: {
+              defaults: { workspace: tmp },
+              list: [{ id: "main", identity: { avatar: "avatar.png" } }],
+            },
           },
           rateLimiter,
         });
@@ -1945,7 +1984,7 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed).toMatchObject({
           assistantAgentId: "main",
-          assistantAvatar: `data:image/png;base64,${Buffer.from("avatar-bytes\n").toString("base64")}`,
+          assistantAvatar: expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/),
           assistantAvatarStatus: "local",
         });
         expect(rateLimiter.reset).toHaveBeenCalledWith(
@@ -2339,10 +2378,43 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
             );
-            expect(rateLimiter.reset).toHaveBeenCalledWith(
+            expect(rateLimiter.reset).not.toHaveBeenCalledWith(
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );
+          },
+        });
+      },
+    });
+  });
+
+  it("rejects paired device-token bootstrap when team roles cannot bind a durable person", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            vi.spyOn(configIo, "getRuntimeConfig").mockReturnValue({
+              gateway: {
+                roles: {
+                  default: "guest",
+                  definitions: {
+                    guest: {
+                      sessions: { others: "view" },
+                      agents: ["guest"],
+                      scopes: ["operator.read"],
+                    },
+                  },
+                },
+              },
+            });
+            const { res, handled } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+            });
+
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(401);
           },
         });
       },
@@ -2385,7 +2457,7 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
             );
-            expect(rateLimiter.reset).toHaveBeenCalledWith(
+            expect(rateLimiter.reset).not.toHaveBeenCalledWith(
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );
@@ -2393,6 +2465,41 @@ describe("handleControlUiHttpRequest", () => {
         });
       },
     });
+  });
+
+  it("rejects unattributable proxy ingress before bootstrap device-token fallback", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+
+    try {
+      await withPairedOperatorDeviceToken({
+        fn: async (operatorToken) => {
+          await withControlUiRoot({
+            fn: async (tmp) => {
+              const sendBootstrap = async (token: string) =>
+                await runBootstrapConfigRequest({
+                  rootPath: tmp,
+                  auth: { mode: "token", token: "shared", allowTailscale: false },
+                  headers: {
+                    authorization: `Bearer ${token}`,
+                    forwarded: "for=203.0.113.10",
+                  },
+                  rateLimiter,
+                });
+
+              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(403);
+              expect((await sendBootstrap("wrong-one")).res.statusCode).toBe(403);
+            },
+          });
+        },
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
   });
 
   it("selects higher-scope frame tabs using paired device-token scopes", async () => {
@@ -2452,8 +2559,10 @@ describe("handleControlUiHttpRequest", () => {
             basePath: "/openclaw",
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2465,7 +2574,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarStatus).toBe("none");
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });
@@ -2484,8 +2592,10 @@ describe("handleControlUiHttpRequest", () => {
             basePath: "/__openclaw__",
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2518,8 +2628,10 @@ describe("handleControlUiHttpRequest", () => {
             // No basePath: simulates the default deployment from the issue report.
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2568,8 +2680,10 @@ describe("handleControlUiHttpRequest", () => {
             // and served the single-underscore endpoint.
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2604,8 +2718,10 @@ describe("handleControlUiHttpRequest", () => {
             basePath: "/openclaw",
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+              },
             },
           },
         );
@@ -2999,6 +3115,60 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each(["/", "/settings", "/assets/actual.txt"])(
+    "serves a pinned small file in one asynchronous filesystem operation at %s",
+    async (url) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+          const requestScope = new AsyncLocalStorage<boolean>();
+          let filesystemOperations = 0;
+          const hook = createHook({
+            init(_id, type) {
+              if (type === "FSREQCALLBACK" && requestScope.getStore()) {
+                filesystemOperations += 1;
+              }
+            },
+          }).enable();
+          try {
+            const { res, end, handled } = await requestScope.run(true, () =>
+              runControlUiRequest({ url, method: "GET", rootPath: tmp }),
+            );
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(responseBody(end)).toContain(url.startsWith("/assets/") ? "inside-ok" : "<html");
+            // Safe open already captured stat; a second queued metadata read adds
+            // another event-loop wait before these bytes can reach the browser.
+            expect(filesystemOperations).toBe(1);
+          } finally {
+            hook.disable();
+          }
+        },
+      });
+    },
+  );
+
+  it("bounds a static response by the size captured with its pinned descriptor", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "actual.txt", "original");
+        const fstat = fsSync.fstatSync;
+        vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+          const stat = fstat(fd);
+          fsSync.appendFileSync(filePath, "-appended-after-open");
+          return stat;
+        });
+        const { res, end } = await runControlUiRequest({
+          url: "/assets/actual.txt",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(responseBody(end)).toBe("original");
+      },
+    });
+  });
+
   it("serves static assets without synchronous file reads", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -3113,6 +3283,42 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves a missing bundled asset from an exact retained generation", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const retainedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-retained-"));
+        try {
+          const source = "console.log('retained');\n".repeat(200);
+          const { filePath } = await writeAssetFile(retainedRoot, "panel-OldBuild.js", source);
+          await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+          const retainedAssets = {
+            prepare: vi.fn(async () => {}),
+            resolveAsset: vi.fn(() => ({
+              filePath,
+              rootPath: retainedRoot,
+              rootRealPath: fsSync.realpathSync(retainedRoot),
+            })),
+          } satisfies ControlUiAssetRetention;
+
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/panel-OldBuild.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            retainedAssets,
+            headers: { "accept-encoding": "br, identity;q=0" },
+          });
+
+          expect(retainedAssets.resolveAsset).toHaveBeenCalledWith("assets/panel-OldBuild.js");
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+          expect(brotliDecompressSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+        } finally {
+          await fs.rm(retainedRoot, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
   it("accepts RFC qvalue boundary forms", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -3214,6 +3420,7 @@ describe("handleControlUiHttpRequest", () => {
                 headers: { "accept-encoding": "br, identity;q=0" },
               } as IncomingMessage,
               sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
+              contentPath: filePath,
               precompressed: true,
               openPrecompressedFile: () => {
                 throw openError;
@@ -3248,6 +3455,115 @@ describe("handleControlUiHttpRequest", () => {
         expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
         expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
         expect(responseBody(end)).toBe(source);
+      },
+    });
+  });
+
+  it("serves theme fonts with the woff2 content type and a validator", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const stat = await fs.stat(fontPath);
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Type", "font/woff2");
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(setHeader).toHaveBeenCalledWith(
+          "Last-Modified",
+          new Date(stat.mtimeMs).toUTCString(),
+        );
+        expect(responseBody(end)).toBe("wOF2-mock-bytes");
+      },
+    });
+  });
+
+  it("answers conditional revalidation with 304 instead of a re-download", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const stat = await fs.stat(fontPath);
+
+        const fresh = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "if-modified-since": new Date(stat.mtimeMs).toUTCString() },
+        });
+        expect(fresh.res.statusCode).toBe(304);
+        expect(fresh.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(fresh.setHeader).toHaveBeenCalledWith(
+          "Last-Modified",
+          new Date(stat.mtimeMs).toUTCString(),
+        );
+        expect(firstEndCallLength(fresh.end)).toBe(0);
+
+        const stale = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "if-modified-since": new Date(stat.mtimeMs - 5_000).toUTCString() },
+        });
+        expect(stale.res.statusCode).toBe(200);
+        expect(responseBody(stale.end)).toBe("wOF2-mock-bytes");
+      },
+    });
+  });
+
+  it("clamps future filesystem mtimes so validators cannot postdate the response", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const future = new Date(Date.now() + 60 * 60 * 1000);
+        await fs.utimes(fontPath, future, future);
+
+        const { res, setHeader } = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(res.statusCode).toBe(200);
+        const lastModified = setHeader.mock.calls.find(([name]) => name === "Last-Modified")?.[1];
+        expect(typeof lastModified).toBe("string");
+        const emitted = Date.parse(lastModified as string);
+        // A future validator would 304 later replacements; it must never
+        // postdate the response, only trail it by clock/floor slack.
+        expect(emitted).toBeLessThanOrEqual(Date.now());
+        expect(emitted).toBeLessThan(future.getTime());
+      },
+    });
+  });
+
+  it("returns 404 for missing font files instead of the SPA index", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/fonts/missing.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+        expectNotFoundResponse({ handled, res, end });
       },
     });
   });
@@ -3346,7 +3662,7 @@ describe("handleControlUiHttpRequest", () => {
           expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
           expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
           expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-terminal-enabled="true">',
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
           );
           expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
             end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -3430,28 +3746,38 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     {
-      name: "root-mounted",
+      name: "root-mounted approval",
       basePath: undefined,
       url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "configured-base-path",
+      name: "configured-base-path approval",
       basePath: "/openclaw",
       url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "asset-like-id",
+      name: "asset-like approval id",
       basePath: undefined,
       url: "/approve/plugin%3Arequest.json",
     },
     {
-      name: "configured-base-asset-like-id",
+      name: "configured-base asset-like approval id",
       basePath: "/openclaw",
       url: "/openclaw/approve/plugin%3Arequest.js",
     },
-  ])("serves $name approval deep links through the SPA fallback", async ({ basePath, url }) => {
+    {
+      name: "root-mounted focus path",
+      basePath: undefined,
+      url: "/focus/dashboard/roboclaw/session.json",
+    },
+    {
+      name: "configured-base focus path",
+      basePath: "/openclaw",
+      url: "/openclaw/focus/desktop/control/session/agent%3Amain%3Amain",
+    },
+  ])("serves $name through the standalone document", async ({ basePath, url }) => {
     await withControlUiRoot({
-      indexHtml: "<html><body>approval-spa</body></html>\n",
+      indexHtml: "<html><body>standalone-spa</body></html>\n",
       fn: async (tmp) => {
         for (const method of ["GET", "HEAD"] as const) {
           const { res, end, handled } = await runControlUiRequest({
@@ -3466,7 +3792,7 @@ describe("handleControlUiHttpRequest", () => {
           if (method === "HEAD") {
             expect(firstEndCallLength(end)).toBe(0);
           } else {
-            expect(responseBody(end)).toContain("approval-spa");
+            expect(responseBody(end)).toContain("standalone-spa");
             if (basePath) {
               expect(responseBody(end)).toContain('data-openclaw-control-ui-base-path="/openclaw"');
             }
@@ -3478,21 +3804,31 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     {
-      name: "root-mounted",
+      name: "root-mounted approval",
       basePath: undefined,
       url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "configured-base-path",
+      name: "configured-base-path approval",
       basePath: "/openclaw",
       url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "asset-like-id",
+      name: "asset-like approval id",
       basePath: undefined,
       url: "/approve/plugin%3Arequest.json",
     },
-  ])("declines POST to $name approval deep links at the UI module", async ({ basePath, url }) => {
+    {
+      name: "root-mounted focus path",
+      basePath: undefined,
+      url: "/focus/terminal",
+    },
+    {
+      name: "configured-base focus path",
+      basePath: "/openclaw",
+      url: "/openclaw/focus/desktop",
+    },
+  ])("declines POST to $name at the UI module", async ({ basePath, url }) => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { handled, end } = await runControlUiRequest({
@@ -3502,9 +3838,8 @@ describe("handleControlUiHttpRequest", () => {
           basePath,
         });
 
-        // The UI module only serves reads; the gateway's approval-document
-        // stage (server-http.ts) owns the terminal 404 for write methods, so
-        // these requests never reach plugin HTTP handlers in production.
+        // The UI module serves reads only. The gateway router decides whether a
+        // write is reserved approval traffic or an unclaimed focus fallback.
         expect(handled).toBe(false);
         expect(end).not.toHaveBeenCalled();
       },

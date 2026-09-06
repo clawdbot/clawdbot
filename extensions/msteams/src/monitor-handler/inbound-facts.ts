@@ -57,8 +57,8 @@ export async function prepareMSTeamsDebounceEntry(params: {
   turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
 }): Promise<MSTeamsDebounceEntry> {
   const activity = params.context.activity;
-  const attachments = Array.isArray(activity.attachments)
-    ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
+  const attachments: MSTeamsAttachmentLike[] = Array.isArray(activity.attachments)
+    ? activity.attachments
     : [];
   const rawText = activity.text?.trim() ?? "";
   const htmlText = extractTextFromHtmlAttachments(attachments);

@@ -2,6 +2,6 @@
 import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs";
 
 await runTsxCliShim(import.meta.url, {
-  implementation: "./run-vitest.mts",
+  implementation: "./run-vitest-child.mts",
   failureTool: "test",
 });

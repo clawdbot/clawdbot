@@ -204,7 +204,6 @@ describe("browser doctor readiness", () => {
       {
         noteFn,
         platform: "darwin",
-        homeDir: "/__openclaw_browser_doctor_missing_home__",
         resolveChromeExecutable: () => null,
       },
     );
@@ -213,7 +212,7 @@ describe("browser doctor readiness", () => {
     expect(chromeNote).toContain("brave://inspect/#remote-debugging");
     const importNote = requireNoteTextContaining(noteFn, "System browser profile cookie import");
     expect(importNote).toContain("enabled");
-    expect(importNote).toContain("Importable Chrome-family profile cookie databases found: 0");
+    expect(importNote).toContain("System browser profile discovery skipped");
   });
 
   it("warns when detected Chrome is too old for Chrome MCP", async () => {

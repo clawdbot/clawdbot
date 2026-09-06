@@ -65,6 +65,8 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const linkedTask = findTaskByRunIdForOwner({
     runId: run.runId,
     callerOwnerKey: requesterKey,
+    callerAgentId: params.agentId,
+    config: params.cfg,
   });
   const taskText = sanitizeTaskStatusText(run.task) || "n/a";
   const progressText = sanitizeTaskStatusText(linkedTask?.progressSummary);

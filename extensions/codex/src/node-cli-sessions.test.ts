@@ -5,18 +5,32 @@ import path from "node:path";
 import process from "node:process";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import manifest from "../openclaw.plugin.json" with { type: "json" };
 import {
   createCodexCliSessionNodeHostCommands,
+  createCodexCliSessionNodeInvokePolicies,
   listCodexCliSessionsOnNode,
 } from "./node-cli-sessions.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
+
+type RunCommandBuffered =
+  (typeof import("openclaw/plugin-sdk/process-runtime"))["runCommandBuffered"];
+const processRuntimeMocks = vi.hoisted(() => ({
+  runCommandBuffered: vi.fn<RunCommandBuffered>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandBuffered: processRuntimeMocks.runCommandBuffered,
+}));
 
 let tempDir: string;
 let previousCodexHome: string | undefined;
 
 describe("codex cli node sessions", () => {
   beforeEach(async () => {
+    processRuntimeMocks.runCommandBuffered.mockReset();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-cli-sessions-"));
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = tempDir;
@@ -29,6 +43,7 @@ describe("codex cli node sessions", () => {
       process.env.CODEX_HOME = previousCodexHome;
     }
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -75,6 +90,99 @@ describe("codex cli node sessions", () => {
         messageCount: 2,
       },
     ]);
+  });
+
+  it("keeps authorized resume execution available while native discovery is disabled", async () => {
+    processRuntimeMocks.runCommandBuffered.mockImplementation(async (argv) => {
+      const outputFlag = argv.indexOf("--output-last-message");
+      const outputPath = argv[outputFlag + 1];
+      if (outputFlag < 0 || !outputPath) {
+        throw new Error("missing Codex output path");
+      }
+      await fs.writeFile(outputPath, "final answer\n", "utf8");
+      return {
+        stdout: Buffer.from("diagnostic"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    const { createPluginRegistry, createPluginRecord, createPluginRuntimeMock } =
+      await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const config = {
+      plugins: {
+        entries: { codex: { enabled: true, config: { sessionCatalog: { enabled: false } } } },
+      },
+    };
+    const registry = createPluginRegistry({
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: manifest.id,
+      source: path.join(tempDir, "index.js"),
+      nativeSessionCatalog: manifest.setup.nativeSessionCatalog,
+    });
+    registry.registry.plugins.push(record);
+    const api = registry.createApi(record, { config });
+    for (const nodeCommand of createCodexCliSessionNodeHostCommands()) {
+      api.registerNodeHostCommand(nodeCommand);
+    }
+    for (const policy of createCodexCliSessionNodeInvokePolicies()) {
+      api.registerNodeInvokePolicy(policy);
+    }
+    const commands = registry.registry.nodeHostCommands.map((entry) => entry.command);
+    const list = commands.find((entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND);
+    const command = commands.find((entry) => entry.command === "codex.cli.session.resume");
+    if (!list || !command) {
+      throw new Error("Codex node commands did not register");
+    }
+    await expect(list.handle()).rejects.toThrow("discovery is disabled");
+    expect(command.dangerous).toBe(true);
+    expect(
+      registry.registry.nodeInvokePolicies.find((entry) =>
+        entry.policy.commands.includes(command.command),
+      )?.policy.dangerous,
+    ).toBe(true);
+    const raw = await command.handle(
+      JSON.stringify({
+        sessionId: "session-123",
+        prompt: "continue this task",
+        cwd: tempDir,
+        timeoutMs: 12_345,
+      }),
+    );
+
+    expect(JSON.parse(raw ?? "{}")).toEqual({
+      ok: true,
+      sessionId: "session-123",
+      text: "final answer",
+    });
+    const [argv, options] = processRuntimeMocks.runCommandBuffered.mock.calls[0] ?? [];
+    const execIndex = argv?.indexOf("exec") ?? -1;
+    expect(argv?.slice(execIndex, execIndex + 7)).toEqual([
+      "exec",
+      "resume",
+      "--skip-git-repo-check",
+      "--output-last-message",
+      expect.any(String),
+      "session-123",
+      "-",
+    ]);
+    expect(options).toMatchObject({
+      cwd: tempDir,
+      input: "continue this task",
+      killGraceMs: 2_000,
+      killProcessTree: false,
+      terminateOnOutputError: true,
+      timeoutMs: 12_345,
+    });
   });
 
   it("ignores Date-invalid Codex history timestamps", async () => {

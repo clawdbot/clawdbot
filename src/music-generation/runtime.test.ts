@@ -545,4 +545,51 @@ describe("music-generation runtime", () => {
     expect(result.metadata.requestedDurationSeconds).toBe(45);
     expect(result.metadata.normalizedDurationSeconds).toBe(30);
   });
+
+  it.each([
+    { edit: { enabled: false }, count: 1 },
+    { edit: { enabled: true, maxInputImages: 1 }, count: 2 },
+    { edit: { enabled: true }, count: 11 },
+  ])("skips incompatible reference-image fallback candidates", async ({ edit, count }) => {
+    let incompatibleProviderCalled = false;
+    const inputImages = Array.from({ length: count }, () => ({
+      buffer: Buffer.from("reference"),
+      mimeType: "image/png",
+    }));
+    providers = [
+      {
+        id: "fal",
+        defaultModel: "prompt-only",
+        capabilities: { edit },
+        async generateMusic() {
+          incompatibleProviderCalled = true;
+          return { tracks: [{ buffer: Buffer.from("incorrect"), mimeType: "audio/mpeg" }] };
+        },
+      },
+      {
+        id: "google",
+        defaultModel: "lyria",
+        capabilities: { edit: { enabled: true, maxInputImages: 14 } },
+        async generateMusic() {
+          return { tracks: [{ buffer: Buffer.from("correct"), mimeType: "audio/mpeg" }] };
+        },
+      },
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "fal/prompt-only", fallbacks: ["google/lyria"] },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "score the cover art",
+      inputImages,
+    });
+
+    expect(incompatibleProviderCalled).toBe(false);
+    expect(result.provider).toBe("google");
+    expect(result.attempts).toHaveLength(1);
+  });
 });

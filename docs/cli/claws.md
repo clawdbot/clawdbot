@@ -21,6 +21,10 @@ Enable the command surface explicitly:
 export OPENCLAW_EXPERIMENTAL_CLAWS=1
 ```
 
+For human-readable `claws add`, OpenClaw prints the experimental warning before
+changing state. JSON mode keeps stdout machine-readable and identifies the
+contract with `"stability": "experimental"`.
+
 The current CLI reads a local package directory, `CLAW.md`, or grouped JSON manifest.
 Publishing, searching, and installing whole Claws through ClawHub are a
 separate registry track and are not part of this command surface yet.
@@ -79,8 +83,7 @@ conflict.
 schemaVersion: 1
 agent:
   tools:
-    profile: coding
-    alsoAllow: [cron]
+    allow: [read, write, cron]
     deny: [exec]
     fs:
       workspaceOnly: true
@@ -101,11 +104,18 @@ Grouped JSON discovers the same conventional profile rather than embedding a
 second copy of the OpenClaw settings. The remaining schema fragments on this
 page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
 
-The OpenClaw package profile may select any built-in tool profile registered by
-the running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
-`tools.fs.workspaceOnly: true`. A Claw cannot set that field to `false` and
-weaken host filesystem confinement. `tools.allow` remains available as an
-explicit allowlist but cannot be combined with `alsoAllow`. A Claw may also set
+The OpenClaw package profile may use an explicit `tools.allow` list or select
+any built-in tool profile registered by the running OpenClaw version. The
+`coding` and `messaging` profiles include the dynamic `bundle-mcp` selector, so
+a Claw that selects either profile must also provide a bounded `tools.allow`
+intersection. Name any MCP grants as concrete generated tool names such as
+`github__list_issues`; the package cannot freeze `bundle-mcp` itself.
+
+Profiles can otherwise be refined with `alsoAllow`, `deny`, and
+`tools.fs.workspaceOnly: true`. `tools.allow` cannot be combined with
+`alsoAllow`; use a standalone allowlist, as above, when the package needs tools
+outside its selected profile. A Claw cannot set `workspaceOnly` to `false` and
+weaken host filesystem confinement. A Claw may also set
 `memory.search.enabled`, choose the portable `memory` and `sessions` sources,
 and opt into cross-conversation memory with `rememberAcrossConversations`.
 Declaring the `sessions` source requires that opt-in.
@@ -233,7 +243,9 @@ Cron jobs declare scheduled work for the new agent:
 ```
 
 Claws use the existing Gateway scheduler and bind created jobs to the new
-agent. Preview, provenance, status, and removal cover those jobs without
+agent. Before creating jobs during add or update, Claws wait for the target
+agent to appear in the Gateway's applied configuration. Preview, provenance,
+status, and removal cover those jobs without
 changing the behavior of ordinary cron commands. Removal rereads the live job
 through the Gateway and preserves it when its owned definition changed after
 planning.
@@ -408,12 +420,41 @@ openclaw claws remove incident-triage \
 ```
 
 The default removes eligible managed state and releases referenced state.
+Eligible Claw-owned schedules appear once as removal actions. The serving
+Gateway also identifies this agent's config-owned heartbeat and Skill Workshop
+monitors, including disabled monitors, as removal actions. Ordinary schedules,
+imported heartbeat tasks, uncorroborated monitors, and jobs in another scheduler store
+remain blockers.
 Modified files and resources with another current owner are retained or
 blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
 them. Globally installed plugins are retained while this Claw's reference is
 released. Removal reports which retained requirements Claw add introduced; use
 the ordinary plugin lifecycle separately when you intend to uninstall a
 process-wide plugin.
+
+Directories containing another agent's registered database are retained, even
+when that database is closed. If removal reports that an agent database is
+still open, stop the command or restart the Gateway holding it before retrying.
+Preview works offline. Persisted monitor rows remain blockers until the serving
+Gateway can verify their ownership. Actual removal requires a running Gateway
+with administrator access to the same config, state database, and scheduler
+store, even when no scheduled rows remain. The Gateway requests cancellation of consented scheduled work and waits
+for its running code to finish before local cleanup. Removing a job row or
+receiving its cancellation outcome does not establish that its code has stopped.
+After config removal, cleanup also waits for the Gateway to apply that change
+and remove the monitors. A database-lease refusal leaves the agent config,
+execution approvals, and creation history unchanged.
+
+If cancellation, drainage, or config convergence cannot finish, removal reports
+`partial` with `monitor_cleanup_failed` and keeps its deletion fence and cleanup
+record. Local files remain intact. Resolve the reported failure, preview again,
+and retry removal. The fence prevents new runs and agent recreation until cleanup
+finishes; restarting the Gateway does not discard an incomplete removal.
+
+If session cleanup or transcript archive export fails after the agent is removed
+from config, removal reports `partial` with `session_cleanup_failed` and retains
+its cleanup record. Correct the reported error, preview removal again, and retry
+to finish cleanup before recreating the agent.
 
 To remove unchanged Claw-introduced references that have no other current
 owner, include `--remove-unused` in both preview and apply. To select exact
@@ -462,6 +503,10 @@ credentials, sessions, and unowned local state are excluded.
 
 | Command                             | Purpose                                             |
 | ----------------------------------- | --------------------------------------------------- |
+| `claws create [path]`               | Create a minimal local Claw project.                |
+| `claws validate [path]`             | Validate project inputs and package contents.       |
+| `claws dev [path]`                  | Build and preview locally without mutation.         |
+| `claws build [path] --out <tgz>`    | Build a deterministic package artifact.             |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
 | `claws add <source>`                | Preview or create one new agent and workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
@@ -471,10 +516,16 @@ credentials, sessions, and unowned local state are excluded.
 
 Use `--json` for experimental machine-readable output.
 
+Successful commands exit `0`. Validation errors, blocked plans, missing
+targets, and both `failed` and `partial` mutation results exit `1`. Inspect the
+JSON `status` and `error.code` fields to distinguish a failure that made no
+change from a partial result that requires `claws status`, `openclaw doctor`,
+and a new preview before retrying.
+
 ## See also
 
 - [Agents](/cli/agents)
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)
 - [Cron jobs](/automation/cron-jobs)
-- [MCP configuration](/gateway/configuration-reference#mcp)
+- [MCP configuration](/gateway/config-extensions#mcp)

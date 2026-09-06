@@ -1,4 +1,6 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -10,13 +12,41 @@ const suite = createControlUiE2eSuite({
 });
 
 const expectUploadSurface = process.env.OPENCLAW_TERMINAL_UPLOAD_EXPECT_PRESENT !== "0";
-const screenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_SCREENSHOT?.trim();
-const progressScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_PROGRESS_SCREENSHOT?.trim();
-const errorScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_ERROR_SCREENSHOT?.trim();
-const videoDir = process.env.OPENCLAW_TERMINAL_UPLOAD_VIDEO_DIR?.trim();
+const requestedScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_SCREENSHOT?.trim();
+const requestedProgressScreenshotPath =
+  process.env.OPENCLAW_TERMINAL_UPLOAD_PROGRESS_SCREENSHOT?.trim();
+const requestedErrorScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_ERROR_SCREENSHOT?.trim();
+const requestedVideoDir = process.env.OPENCLAW_TERMINAL_UPLOAD_VIDEO_DIR?.trim();
 
 suite.define(() => {
   it("uploads picked and dropped files, then pastes staged paths without Enter", async () => {
+    // Independent requested parents stay independent; captures under one parent share this attempt.
+    const directories = new Map<string, string>();
+    const directoryFor = (parent: string) => {
+      const resolved = path.resolve(parent);
+      let directory = directories.get(resolved);
+      if (!directory) {
+        directory = createControlUiE2eArtifactDir("terminal-upload", resolved);
+        directories.set(resolved, directory);
+      }
+      return directory;
+    };
+    const screenshotFor = (requested: string | undefined, stage: string) => {
+      if (!requested) {
+        return undefined;
+      }
+      const output = path.join(
+        directoryFor(path.dirname(requested)),
+        stage,
+        path.basename(requested),
+      );
+      console.info(`[control-ui-e2e] screenshot: ${output}`);
+      return output;
+    };
+    const screenshotPath = screenshotFor(requestedScreenshotPath, "initial");
+    const progressScreenshotPath = screenshotFor(requestedProgressScreenshotPath, "progress");
+    const errorScreenshotPath = screenshotFor(requestedErrorScreenshotPath, "error");
+    const videoDir = requestedVideoDir ? directoryFor(requestedVideoDir) : undefined;
     await suite.withPage(
       {
         serviceWorkers: "block",
@@ -54,7 +84,7 @@ suite.define(() => {
           terminalEnabled: true,
         });
 
-        await page.goto(`${suite.server.baseUrl}?view=terminal`);
+        await page.goto(`${suite.server.baseUrl}focus/terminal`);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("terminal.open");

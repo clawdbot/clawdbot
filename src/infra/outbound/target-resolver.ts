@@ -1,7 +1,6 @@
 // Target resolver combines plugin id heuristics, cached directory searches,
 // live fallback lookups, and normalized fallback targets.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelDirectoryEntry,
@@ -11,8 +10,10 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
+import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 import {
   ambiguousTargetError,
+  missingTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
 } from "./target-errors.js";
@@ -29,9 +30,6 @@ import {
 
 /** Directory-backed destination kind used by outbound target resolution. */
 type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
-
-/** Strategy for resolving multiple matching directory entries. */
-type ResolveAmbiguousMode = "error" | "best" | "first";
 
 /** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
 export type ResolvedMessagingTarget = {
@@ -63,7 +61,6 @@ export async function resolveChannelTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
-  resolveAmbiguous?: ResolveAmbiguousMode;
   unknownTargetMode?: "error" | "normalized";
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
@@ -100,6 +97,12 @@ function normalizeQuery(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+// Message CLI actions run against a scoped registry handle without process-root
+// activation, so bare getChannelPlugin cannot see installed channel plugins there.
+function resolveTargetChannelPlugin(channel: ChannelId) {
+  return getRuntimeVisibleChannelPlugin(channel);
+}
+
 function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
   const providerPrefixes = [channel, plugin?.id, ...(plugin?.messaging?.targetPrefixes ?? [])]
     .map((prefix) => prefix?.trim().toLowerCase() ?? "")
@@ -126,7 +129,7 @@ export function formatTargetDisplay(params: {
   display?: string;
   kind?: ChannelDirectoryEntryKind;
 }): string {
-  const plugin = getChannelPlugin(params.channel);
+  const plugin = resolveTargetChannelPlugin(params.channel);
   if (plugin?.messaging?.formatTargetDisplay) {
     return plugin.messaging.formatTargetDisplay({
       target: params.target,
@@ -189,7 +192,9 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
-  const inferredChatType = (plugin ?? getChannelPlugin(channel))?.messaging?.inferTargetChatType?.({
+  const inferredChatType = (
+    plugin ?? resolveTargetChannelPlugin(channel)
+  )?.messaging?.inferTargetChatType?.({
     to: raw,
   });
   if (inferredChatType === "direct") {
@@ -289,7 +294,7 @@ async function listDirectoryEntries(params: {
   source: "cache" | "live";
   plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
-  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const directory = plugin?.directory;
   if (!directory) {
     return [];
@@ -392,25 +397,6 @@ function buildNormalizedResolveResult(params: {
   };
 }
 
-function pickAmbiguousMatch(
-  entries: ChannelDirectoryEntry[],
-  mode: ResolveAmbiguousMode,
-): ChannelDirectoryEntry | null {
-  if (entries.length === 0) {
-    return null;
-  }
-  if (mode === "first") {
-    return entries[0] ?? null;
-  }
-  const ranked = entries.map((entry) => ({
-    entry,
-    rank: typeof entry.rank === "number" ? entry.rank : 0,
-  }));
-  const bestRank = Math.max(...ranked.map((item) => item.rank));
-  const best = ranked.find((item) => item.rank === bestRank)?.entry;
-  return best ?? entries[0] ?? null;
-}
-
 /** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
 async function resolveMessagingTarget(params: {
   cfg: OpenClawConfig;
@@ -419,15 +405,21 @@ async function resolveMessagingTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
-  resolveAmbiguous?: ResolveAmbiguousMode;
   unknownTargetMode?: "error" | "normalized";
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
-    return { ok: false, error: new Error("Target is required") };
+    const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
+    return {
+      ok: false,
+      error: missingTargetError(
+        plugin?.meta?.label ?? params.channel,
+        plugin?.messaging?.targetResolver?.hint,
+      ),
+    };
   }
-  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
@@ -499,23 +491,6 @@ async function resolveMessagingTarget(params: {
     };
   }
   if (match.kind === "ambiguous") {
-    const mode = params.resolveAmbiguous ?? "error";
-    if (mode !== "error") {
-      const best = pickAmbiguousMatch(match.entries, mode);
-      if (best) {
-        return {
-          ok: true,
-          target: {
-            to: normalizeDirectoryEntryId(params.channel, best, plugin),
-            kind,
-            display:
-              best.name ?? best.handle ?? stripTargetPrefixes(best.id, params.channel, plugin),
-            source: "directory",
-            resolutionSource: "directory",
-          },
-        };
-      }
-    }
     return {
       ok: false,
       error: ambiguousTargetError(providerLabel, raw, hint),

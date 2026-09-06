@@ -1,8 +1,8 @@
 import { css } from "lit";
 
 export const terminalPanelUploadStyles = css`
-  .tp-icon:disabled {
-    opacity: 0.35;
+  .rail-header__action:disabled {
+    opacity: var(--rail-header-action-disabled-opacity, 0.4);
     pointer-events: none;
   }
   .tp-file-input {

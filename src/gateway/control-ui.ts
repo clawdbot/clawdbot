@@ -11,23 +11,25 @@ import {
   type AgentAvatarResolution,
   resolvePublicAgentAvatarSource,
 } from "../agents/identity-avatar.js";
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import {
+  matchRootFileOpenFailure,
+  openRootFileSync,
+  readFileDescriptorBounded,
+} from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
-import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
-import { assertLocalMediaAllowed, getDefaultLocalRootsCore } from "../media/local-media-access.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import { probePlaybackMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
+import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
 import {
-  resolveMediaReferenceLocalPath,
-  resolveMediaReferenceLocalPathInfo,
-} from "../media/media-reference.js";
+  probePlaybackMediaFileDescriptor,
+  toMediaProbeResult,
+  type MediaProbeResult,
+} from "../media/media-probe.js";
+import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
 import {
   replacePlaybackFileExtension,
   resolvePlaybackModeForSource,
@@ -36,26 +38,39 @@ import {
 import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
+import { escapeHtml } from "../shared/html-escape.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
-import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
+import { gatewayAvatarImageRevision } from "./assistant-avatar-cache.js";
+import {
+  gatewayAssistantAvatarUrl,
+  openGatewayAssistantAvatar,
+  resolveGatewayAssistantAvatar,
+} from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
-  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
-  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  type AuthRateLimiter,
-} from "./auth-rate-limit.js";
+  resolveAssistantMediaPolicy,
+  type AssistantMediaSession,
+  type AssistantMediaReader,
+} from "./assistant-media-policy.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
-  authorizeHttpGatewayConnect,
-  type GatewayAuthResult,
-  type ResolvedGatewayAuth,
-} from "./auth.js";
-import {
+  buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_BUILD_ID_ATTRIBUTE,
+  CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
+  CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  isControlUiRootPublicAsset,
+  isControlUiVersionedPublicAsset,
+  parseControlUiResourcePath,
   type ControlUiBootstrapConfig,
+  type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -64,20 +79,23 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
-import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
+import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
-  buildControlUiAvatarUrl,
-  CONTROL_UI_AVATAR_PREFIX,
-  normalizeControlUiBasePath,
-} from "./control-ui-shared.js";
+  classifyControlUiRequest,
+  isControlUiApprovalDocumentPath,
+  isControlUiFocusDocumentPath,
+} from "./control-ui-routing.js";
+import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
+  isControlUiFileUnmodified,
   isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   readAndCloseControlUiFile,
-  readAndCloseControlUiFileText,
   resolveControlUiHtmlEncoding,
   resolveOpenedControlUiRepresentation,
   respondControlUiNotAcceptable,
+  respondControlUiNotModified,
   respondHeadForControlUiFile,
   sendControlUiHtmlBody,
   serveControlUiAsset,
@@ -87,27 +105,23 @@ import {
   resolveByteResponse,
   writeByteHeaders,
 } from "./http-byte-range.js";
-import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
-  getBearerToken,
-  resolveHttpBrowserOriginPolicy,
-  resolveTrustedHttpOperatorScopes,
-  setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
-} from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { resolveRequestClientIp } from "./net.js";
-import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+  applyHttpImageContentSecurityPolicy,
+  sendHttpImageResponse,
+  startsWithSvgRootElement,
+} from "./http-image-response.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
-const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
-const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
+const loadAvatarThumbnail = createLazyRuntimeModule(
+  () => import("./assistant-avatar-thumbnail.runtime.js"),
+);
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -122,7 +136,13 @@ type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "bundled"; path: string; realPath?: string }
+  | {
+      kind: "bundled";
+      path: string;
+      realPath?: string;
+      retainedAssets?: ControlUiAssetRetention;
+      publicAssetBuildId?: string;
+    }
   | { kind: "resolved"; path: string; realPath?: string }
   | { kind: "invalid"; path: string }
   | { kind: "preparing" }
@@ -131,38 +151,27 @@ export type ControlUiRootState =
   | { kind: "missing" };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
-const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
-  "apple-touch-icon.png",
-  "favicon-32.png",
-  "favicon.ico",
-  "favicon.svg",
-  "manifest.webmanifest",
-  "sw.js",
-]);
-
-/** Anchors bundled public assets before deep-linked documents begin preloading. */
-function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+/** Anchors bundled assets before deep-linked documents begin preloading. */
+function rewriteControlUiIndexHtmlAssetHrefs(
+  html: string,
+  basePath: string,
+  buildId?: string,
+): string {
   const normalized = normalizeControlUiBasePath(basePath);
-  let next = html;
+  let next = html
+    .replaceAll('src="./assets/', `src="${normalized}/assets/`)
+    .replaceAll('href="./assets/', `href="${normalized}/assets/`);
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const assetHref = `href="${normalized}/${asset}"`;
+    const version =
+      buildId && isControlUiVersionedPublicAsset(asset) ? `?v=${encodeURIComponent(buildId)}` : "";
+    const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}${version}"`;
     // Vite's portable ./ base emits relative hrefs, which the browser starts
     // resolving against a nested route before the UI can correct them.
     next = next.replaceAll(`href="./${asset}"`, assetHref);
-    if (normalized) {
-      next = next.replaceAll(`href="/${asset}"`, assetHref);
-    }
+    next = next.replaceAll(`href="/${asset}"`, assetHref);
+    next = next.replaceAll(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   return next;
-}
-
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("'", "&#39;");
 }
 
 type ControlUiAvatarMeta = {
@@ -229,7 +238,7 @@ function respondControlUiAssetsUnavailable(
   respondPlainText(res, 503, message);
 }
 
-function isValidAgentId(agentId: string): boolean {
+function isValidAgentPathSegment(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
 
@@ -238,7 +247,7 @@ function normalizeAssistantMediaSource(source: string): string | null {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.startsWith("file://")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       return safeFileURLToPath(trimmed);
     } catch {
@@ -249,225 +258,6 @@ function normalizeAssistantMediaSource(source: string): string | null {
     return resolveUserPath(trimmed);
   }
   return trimmed;
-}
-
-function resolveAssistantMediaRoutePath(basePath?: string): string {
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
-}
-
-function resolveAssistantMediaAuthToken(req: IncomingMessage): string | undefined {
-  const bearer = getBearerToken(req);
-  if (bearer) {
-    return bearer;
-  }
-  const urlRaw = req.url;
-  if (!urlRaw) {
-    return undefined;
-  }
-  try {
-    const url = new URL(urlRaw, "http://localhost");
-    const token = url.searchParams.get("token")?.trim();
-    return token || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveControlUiReadAuthToken(
-  req: IncomingMessage,
-  opts?: { allowQueryToken?: boolean },
-): string | undefined {
-  const bearer = getBearerToken(req);
-  if (bearer) {
-    return bearer;
-  }
-  if (!opts?.allowQueryToken) {
-    return undefined;
-  }
-  return resolveAssistantMediaAuthToken(req);
-}
-
-async function authorizeControlUiReadRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  opts?: {
-    auth?: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-    allowQueryToken?: boolean;
-    requiredOperatorMethod?: string;
-    onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
-  },
-): Promise<boolean> {
-  if (!opts?.auth) {
-    opts?.onPluginFrameGrants?.([]);
-    return true;
-  }
-
-  const token = resolveControlUiReadAuthToken(req, {
-    allowQueryToken: opts.allowQueryToken,
-  });
-  const clientIp =
-    resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
-    req.socket?.remoteAddress;
-  const supportsDeviceTokenFallback =
-    Boolean(token) && opts.auth.mode !== "trusted-proxy" && opts.auth.mode !== "none";
-  const sharedSecretRateCheck = supportsDeviceTokenFallback
-    ? opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET)
-    : undefined;
-
-  // A device token must not pay the shared-secret brute-force penalty.
-  // Defer lockout and penalties until every credential class has failed.
-  const authResult: GatewayAuthResult =
-    sharedSecretRateCheck && !sharedSecretRateCheck.allowed
-      ? {
-          ok: false,
-          reason: "rate_limited",
-          rateLimited: true,
-          retryAfterMs: sharedSecretRateCheck.retryAfterMs,
-        }
-      : await authorizeHttpGatewayConnect({
-          auth: opts.auth,
-          connectAuth: token ? { token, password: token } : null,
-          req,
-          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
-          trustedProxies: opts.trustedProxies,
-          allowRealIpFallback: opts.allowRealIpFallback,
-          rateLimiter: supportsDeviceTokenFallback
-            ? undefined
-            : token
-              ? opts.rateLimiter
-              : undefined,
-          clientIp,
-          rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-        });
-  const sharedSecretMismatch =
-    authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch";
-  if (
-    authResult.ok &&
-    supportsDeviceTokenFallback &&
-    (authResult.method === "token" || authResult.method === "password")
-  ) {
-    opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-  }
-  const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
-    opts.auth,
-    opts.trustedProxies,
-  );
-  let resolvedAuthResult = authResult;
-  let verifiedDeviceScopes: string[] | undefined;
-  let deviceTokenValidationFailed = false;
-  if (!resolvedAuthResult.ok && token && supportsDeviceTokenFallback) {
-    const deviceRateCheck = opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-    if (deviceRateCheck && !deviceRateCheck.allowed) {
-      resolvedAuthResult = {
-        ok: false,
-        reason: "rate_limited",
-        rateLimited: true,
-        retryAfterMs: deviceRateCheck.retryAfterMs,
-      };
-    } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, sharedAuthGeneration);
-      const deviceScopes = deviceTokenOk
-        ? await resolveControlUiDeviceReadTokenScopes(token)
-        : null;
-      if (deviceScopes) {
-        verifiedDeviceScopes = deviceScopes;
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-        resolvedAuthResult = { ok: true, method: "device-token" };
-      } else {
-        deviceTokenValidationFailed = true;
-      }
-    }
-  }
-  if (!resolvedAuthResult.ok) {
-    if (supportsDeviceTokenFallback && sharedSecretMismatch) {
-      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-    }
-    if (deviceTokenValidationFailed) {
-      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-    }
-    sendGatewayAuthFailure(res, resolvedAuthResult);
-    return false;
-  }
-
-  const authMethod = resolvedAuthResult.method;
-  const trustDeclaredOperatorScopes = authMethod === "trusted-proxy" || authMethod === "tailscale";
-  if (opts.onPluginFrameGrants) {
-    opts.onPluginFrameGrants(
-      setPluginAuthCookie(
-        req,
-        res,
-        authMethod,
-        trustDeclaredOperatorScopes,
-        sharedAuthGeneration,
-        verifiedDeviceScopes,
-      ),
-    );
-  }
-  if (!trustDeclaredOperatorScopes) {
-    return true;
-  }
-
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req, {
-    trustDeclaredOperatorScopes,
-  });
-  const scopeAuth = authorizeOperatorScopesForMethod(
-    opts.requiredOperatorMethod ?? "assistant.media.get",
-    requestedScopes,
-  );
-  if (!scopeAuth.allowed) {
-    sendJson(res, 403, buildMissingScopeForbiddenBody(scopeAuth.missingScope));
-    return false;
-  }
-
-  return true;
-}
-
-async function authorizeControlUiDeviceReadToken(
-  token: string,
-  requiredSharedGatewaySessionGeneration: string | undefined,
-): Promise<boolean> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (!operatorToken || operatorToken.revokedAtMs) {
-      continue;
-    }
-    if (!verifyPairingToken(token, operatorToken.token)) {
-      continue;
-    }
-    const verified = await verifyDeviceToken({
-      deviceId: device.deviceId,
-      token,
-      role: CONTROL_UI_OPERATOR_ROLE,
-      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
-      requiredSharedGatewaySessionGeneration,
-    });
-    if (verified.ok) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function resolveControlUiDeviceReadTokenScopes(token: string): Promise<string[] | null> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorBearer = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (
-      operatorBearer &&
-      !operatorBearer.revokedAtMs &&
-      verifyPairingToken(token, operatorBearer.token)
-    ) {
-      return operatorBearer.scopes;
-    }
-  }
-  return null;
 }
 
 type AssistantMediaAvailability =
@@ -483,6 +273,10 @@ type AssistantMediaTicketPayload = {
   scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
   source: string;
   exp: number;
+  session?: AssistantMediaSession;
+  reader: AssistantMediaReader;
+  agentId?: string;
+  file?: { realPath: string; dev: string; ino: string };
 };
 
 function signAssistantMediaTicketPayload(encodedPayload: string): string {
@@ -491,7 +285,10 @@ function signAssistantMediaTicketPayload(encodedPayload: string): string {
     .digest("base64url");
 }
 
-function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
+function createAssistantMediaTicket(
+  payloadFields: Omit<AssistantMediaTicketPayload, "scope" | "exp">,
+  nowMs = Date.now(),
+) {
   const now = asDateTimestampMs(nowMs);
   if (now === undefined) {
     return {};
@@ -502,7 +299,7 @@ function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
   }
   const payload: AssistantMediaTicketPayload = {
     scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
-    source,
+    ...payloadFields,
     exp,
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
@@ -513,36 +310,49 @@ function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
   };
 }
 
-function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+function verifyAssistantMediaTicket(
+  ticket: string | null,
+  source: string,
+  agentId: string | undefined,
+  nowMs = Date.now(),
+): AssistantMediaTicketPayload | undefined {
   const now = asDateTimestampMs(nowMs);
   if (now === undefined) {
-    return false;
+    return undefined;
   }
   const parts = ticket?.split(".");
   if (!parts || parts.length !== 3 || parts[0] !== "v1") {
-    return false;
+    return undefined;
   }
   const [, encodedPayload, sig] = parts;
   if (!encodedPayload || !sig) {
-    return false;
+    return undefined;
   }
   const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
   if (!safeEqualSecret(sig, expectedSig)) {
-    return false;
+    return undefined;
   }
   try {
     const payload = JSON.parse(
       Buffer.from(encodedPayload, "base64url").toString("utf8"),
     ) as Partial<AssistantMediaTicketPayload>;
-    return (
+    const valid =
       payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
       payload.source === source &&
+      payload.agentId === agentId &&
+      typeof payload.reader?.authMethod === "string" &&
+      Array.isArray(payload.reader.operatorScopes) &&
+      (payload.file === undefined ||
+        (typeof payload.file?.realPath === "string" &&
+          typeof payload.file.dev === "string" &&
+          typeof payload.file.ino === "string")) &&
       typeof payload.exp === "number" &&
       Number.isFinite(payload.exp) &&
-      payload.exp >= now
-    );
+      payload.exp >= now;
+    // SAFETY: This process alone mints payloads; their signature and requested scope are verified above.
+    return valid ? (payload as AssistantMediaTicketPayload) : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -568,6 +378,8 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
   if (err instanceof Error && "code" in err) {
     const errorCode = (err as { code?: unknown }).code;
     switch (typeof errorCode === "string" ? errorCode : "") {
+      case "unsupported-media-type":
+        return { available: false, code: "unsupported-media-type", reason: "Not an image" };
       case "path-not-allowed":
         return {
           available: false,
@@ -591,44 +403,92 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
   return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
 }
 
+type AssistantMediaPolicy = NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>;
+type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
+
+function sameAssistantMediaFile(actual: AssistantMediaFile, expected: AssistantMediaFile) {
+  return (
+    actual.realPath === expected.realPath &&
+    actual.dev === expected.dev &&
+    actual.ino === expected.ino
+  );
+}
+
+async function openAssistantMedia(
+  source: string,
+  policy: AssistantMediaPolicy,
+  allowance: true | AssistantMediaFile | undefined,
+) {
+  const reference = await resolveMediaReferenceLocalPathInfo(source);
+  if (policy.remote && reference.kind === "local") {
+    throw new LocalMediaAccessError("invalid-path", "File is on another computer");
+  }
+  let outsideRoots = false;
+  try {
+    await assertLocalMediaAllowed(reference.path, policy.localRoots);
+  } catch (error) {
+    if (!(error instanceof LocalMediaAccessError) || error.code !== "path-not-allowed") {
+      throw error;
+    }
+    outsideRoots = true;
+    if (policy.workspaceOnly && !allowance) {
+      throw error;
+    }
+  }
+  const opened = await openLocalFileSafely({ filePath: reference.path });
+  try {
+    let file: AssistantMediaFile | undefined;
+    if (outsideRoots && allowance) {
+      const identity = await opened.handle.stat({ bigint: true });
+      const candidate = {
+        realPath: opened.realPath,
+        dev: identity.dev.toString(),
+        ino: identity.ino.toString(),
+      };
+      if (allowance === true || sameAssistantMediaFile(candidate, allowance)) {
+        file = candidate;
+      } else if (policy.workspaceOnly) {
+        // Replacing an allowed image loses the grant; offer the same explicit choice again.
+        throw new LocalMediaAccessError("path-not-allowed", "Outside allowed folders");
+      }
+    }
+    // Validate the descriptor target too: a symlink may change between containment and open.
+    if (!outsideRoots) {
+      await assertLocalMediaAllowed(opened.realPath, policy.localRoots);
+    }
+    const sniffBuffer = Buffer.alloc(Math.min(opened.stat.size, 8192));
+    const bytesRead = sniffBuffer.length
+      ? await readFileWindowFully(opened.handle, sniffBuffer, 0)
+      : 0;
+    const buffer = sniffBuffer.subarray(0, bytesRead);
+    const mimeType = startsWithSvgRootElement(buffer.toString("utf8"))
+      ? "image/svg+xml"
+      : await detectMime({ buffer, ...(outsideRoots ? {} : { filePath: reference.path }) });
+    // Host-wide reads authorize actual image bytes, never a filename's extension.
+    if (outsideRoots && kindFromMime(mimeType) !== "image") {
+      throw new LocalMediaAccessError("unsupported-media-type", "Not an image");
+    }
+    return { opened, reference, mimeType, outsideRoots, file };
+  } catch (error) {
+    await opened.handle.close().catch(() => {});
+    throw error;
+  }
+}
+
 async function resolveAssistantMediaAvailability(
   source: string,
-  localRoots: readonly string[],
-): Promise<AssistantMediaAvailability> {
+  policy: AssistantMediaPolicy,
+  allowance: true | AssistantMediaFile | undefined,
+  agentId: string | undefined,
+): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
-    const localPath = await resolveMediaReferenceLocalPath(source);
-    await assertLocalMediaAllowed(localPath, localRoots);
-    const opened = await openLocalFileSafely({ filePath: localPath });
+    const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
     try {
-      const sizeBytes = opened.stat.size;
-      let mimeType: string | undefined;
-      try {
-        const sniffLength = Math.min(sizeBytes, 8192);
-        const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
-        const bytesRead = sniffBuffer
-          ? await readFileWindowFully(opened.handle, sniffBuffer, 0)
-          : 0;
-        mimeType =
-          (await detectMime({
-            buffer: sniffBuffer?.subarray(0, bytesRead),
-            filePath: localPath,
-          })) ?? undefined;
-      } catch {
-        // Availability is authoritative; optional metadata remains best-effort.
-      }
       const mediaKind = kindFromMime(mimeType);
       const playbackProbe =
         mediaKind === "audio" || mediaKind === "video"
           ? await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind)
           : null;
-      const probe: MediaProbeResult = playbackProbe
-        ? {
-            ...(playbackProbe.durationMs ? { durationMs: playbackProbe.durationMs } : {}),
-            ...(playbackProbe.width && playbackProbe.height
-              ? { width: playbackProbe.width, height: playbackProbe.height }
-              : {}),
-          }
-        : {};
       const playback =
         mimeType && (mediaKind === "audio" || mediaKind === "video")
           ? await resolvePlaybackModeForSource({
@@ -643,14 +503,21 @@ async function resolveAssistantMediaAvailability(
         available: true,
         ...(mimeType ? { mimeType } : {}),
         ...(playback ? { playback } : {}),
-        sizeBytes,
-        ...probe,
+        sizeBytes: opened.stat.size,
+        ...toMediaProbeResult(playbackProbe),
+        ...createAssistantMediaTicket({
+          source,
+          agentId,
+          session: policy.session,
+          reader: policy.reader,
+          ...(file ? { file } : {}),
+        }),
       };
     } finally {
       await opened.handle.close().catch(() => {});
     }
-  } catch (err) {
-    return classifyAssistantMediaError(err);
+  } catch (error) {
+    return classifyAssistantMediaError(error);
   }
 }
 
@@ -668,46 +535,109 @@ export async function handleControlUiAssistantMediaRequest(
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
-  if (!urlRaw || !isReadHttpMethod(req.method)) {
+  if (!urlRaw) {
     return false;
   }
   const url = new URL(urlRaw, "http://localhost");
   if (url.pathname !== resolveAssistantMediaRoutePath(opts?.basePath)) {
     return false;
   }
-
+  const isMetaRequest = url.searchParams.get("meta") === "1";
+  const explicitAllow =
+    req.method === "POST" && isMetaRequest && url.searchParams.get("allow") === "1";
+  if (!isReadHttpMethod(req.method) && !explicitAllow) {
+    return false;
+  }
   applyControlUiSecurityHeaders(res);
   const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
   if (!source) {
     respondControlUiNotFound(res);
     return true;
   }
-  const isMetaRequest = url.searchParams.get("meta") === "1";
-  const hasValidMediaTicket =
-    !isMetaRequest && verifyAssistantMediaTicket(url.searchParams.get("mediaTicket"), source);
-  if (
-    !hasValidMediaTicket &&
-    !(await authorizeControlUiReadRequest(req, res, {
-      auth: opts?.auth,
-      trustedProxies: opts?.trustedProxies,
-      allowRealIpFallback: opts?.allowRealIpFallback,
-      rateLimiter: opts?.rateLimiter,
-      allowQueryToken: true,
-    }))
-  ) {
+  const sessionKey = url.searchParams.get("sessionKey")?.trim() || undefined;
+  const agentId = sessionKey ? url.searchParams.get("agentId")?.trim() || undefined : opts?.agentId;
+  const ticket = verifyAssistantMediaTicket(url.searchParams.get("mediaTicket"), source, agentId);
+  const requestAuth =
+    isMetaRequest || !ticket
+      ? await authorizeControlUiReadRequestOrReply({
+          req,
+          res,
+          auth: opts?.auth,
+          trustedProxies: opts?.trustedProxies,
+          allowRealIpFallback: opts?.allowRealIpFallback,
+          rateLimiter: opts?.rateLimiter,
+          allowQueryToken: !explicitAllow,
+        })
+      : undefined;
+  if ((isMetaRequest || !ticket) && !requestAuth) {
     return true;
   }
-  const localRoots = opts?.config
-    ? getAgentScopedMediaLocalRoots(opts.config, opts.agentId)
-    : getDefaultLocalRootsCore();
-
+  const policyParams = { config: opts?.config ?? {}, sessionKey, agentId };
+  const policy = resolveAssistantMediaPolicy({
+    ...policyParams,
+    requestAuth: requestAuth ?? undefined,
+    reader: isMetaRequest ? undefined : ticket?.reader,
+  });
+  if (!policy) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  if (explicitAllow && !policy.canAllow) {
+    sendJson(res, 403, { error: "Allowing an outside image requires operator.admin" });
+    return true;
+  }
+  const sameSession =
+    ticket &&
+    ticket.session?.sessionKey === policy.session?.sessionKey &&
+    ticket.session?.agentId === policy.session?.agentId &&
+    ticket.session?.sessionId === policy.session?.sessionId;
+  if (!isMetaRequest && url.searchParams.has("mediaTicket") && (!ticket || !sameSession)) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  const allowance = explicitAllow
+    ? true
+    : ticket?.file && sameSession && policy.canAllow
+      ? ticket.file
+      : undefined;
+  const assertCurrentPolicy = () => {
+    // Reapply durable profile, role, and session owners after every async preparation.
+    // A global access epoch changes on ordinary session activity, so it cannot revoke tickets.
+    const current = resolveAssistantMediaPolicy({ ...policyParams, reader: policy.reader });
+    if (
+      !current ||
+      current.session?.sessionKey !== policy.session?.sessionKey ||
+      current.session?.agentId !== policy.session?.agentId ||
+      current.session?.sessionId !== policy.session?.sessionId ||
+      current.remote !== policy.remote ||
+      current.workspaceOnly !== policy.workspaceOnly ||
+      current.localRoots.length !== policy.localRoots.length ||
+      current.localRoots.some((root, index) => root !== policy.localRoots[index]) ||
+      (allowance && policy.workspaceOnly && !current.canAllow)
+    ) {
+      throw new FsSafeError("path-mismatch", "Media access changed");
+    }
+    return current;
+  };
   if (isMetaRequest) {
-    const availability = await resolveAssistantMediaAvailability(source, localRoots);
+    const availability = await resolveAssistantMediaAvailability(
+      source,
+      policy,
+      allowance,
+      agentId,
+    );
+    let current;
+    try {
+      current = assertCurrentPolicy();
+    } catch {
+      respondControlUiNotFound(res);
+      return true;
+    }
     sendJson(
       res,
       200,
-      availability.available
-        ? { ...availability, ...createAssistantMediaTicket(source) }
+      !availability.available && availability.code === "outside-allowed-folders"
+        ? { ...availability, retryable: false, ...(current.canAllow ? { canAllow: true } : {}) }
         : availability,
     );
     return true;
@@ -715,19 +645,12 @@ export async function handleControlUiAssistantMediaRequest(
 
   let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
-    const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
+    const media = await openAssistantMedia(source, policy, allowance);
+    const resolvedReference = media.reference;
     const localPath = resolvedReference.path;
-    await assertLocalMediaAllowed(localPath, localRoots);
-    let opened = await openLocalFileSafely({ filePath: localPath });
+    let opened = media.opened;
     byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
-    const sniffLength = Math.min(opened.stat.size, 8192);
-    const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
-    const bytesRead =
-      sniffBuffer && sniffLength > 0 ? await readFileWindowFully(opened.handle, sniffBuffer, 0) : 0;
-    const mime = await detectMime({
-      buffer: sniffBuffer?.subarray(0, bytesRead),
-      filePath: localPath,
-    });
+    const mime = media.mimeType;
     let contentType = mime ?? "application/octet-stream";
     let filename =
       resolvedReference.kind === "inbound"
@@ -746,6 +669,7 @@ export async function handleControlUiAssistantMediaRequest(
       });
       if (playback.kind === "preparing") {
         await byteStream.close();
+        assertCurrentPolicy();
         sendJson(res, 202, { status: "preparing" });
         return true;
       }
@@ -762,6 +686,10 @@ export async function handleControlUiAssistantMediaRequest(
         }
       }
     }
+    assertCurrentPolicy();
+    if (media.outsideRoots && mediaKind === "image") {
+      applyHttpImageContentSecurityPolicy(res);
+    }
     res.setHeader("Content-Type", contentType);
     res.setHeader(
       "Content-Disposition",
@@ -769,7 +697,8 @@ export async function handleControlUiAssistantMediaRequest(
     );
     res.setHeader("Cache-Control", "no-cache");
     const byteResponse = resolveByteResponse({
-      file: opened.stat,
+      // Allowed paths are mutable; matching size and mtime cannot prove unchanged bytes.
+      file: { size: opened.stat.size },
       method: req.method,
       request: req,
     });
@@ -806,23 +735,22 @@ export async function handleControlUiAvatarRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts.basePath);
   const pathname = url.pathname;
-  const pathWithBase = basePath
-    ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
-    : `${CONTROL_UI_AVATAR_PREFIX}/`;
-  if (!pathname.startsWith(pathWithBase)) {
+  const parsed = parseControlUiResourcePath("agentAvatar", pathname, basePath);
+  if (!parsed.matched) {
     return false;
   }
 
   applyControlUiSecurityHeaders(res);
-  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
-  const agentId = agentIdParts[0] ?? "";
-  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
+  const agentId = parsed.value;
+  if (!agentId || !isValidAgentPathSegment(agentId)) {
     respondControlUiNotFound(res);
     return true;
   }
 
   if (
-    !(await authorizeControlUiReadRequest(req, res, {
+    !(await authorizeControlUiReadRequestOrReply({
+      req,
+      res,
       auth: opts.auth,
       trustedProxies: opts.trustedProxies,
       allowRealIpFallback: opts.allowRealIpFallback,
@@ -834,54 +762,72 @@ export async function handleControlUiAvatarRequest(
 
   const identity = resolveAssistantIdentity({ cfg: opts.config, agentId });
   const projection = openGatewayAssistantAvatar({ cfg: opts.config, identity });
-  const resolved = projection.resolution;
-
-  if (url.searchParams.get("meta") === "1") {
-    try {
+  try {
+    const resolved = projection.resolution;
+    if (url.searchParams.get("meta") === "1") {
       const meta = controlUiAvatarResolutionMeta(resolved);
       const avatarUrl =
-        resolved?.kind === "local"
-          ? buildControlUiAvatarUrl(basePath, agentId)
-          : resolved?.kind === "remote" || resolved?.kind === "data"
-            ? resolved.url
-            : null;
+        gatewayAssistantAvatarUrl(projection, basePath, agentId) ??
+        (resolved?.kind === "remote" ? resolved.url : null);
       sendJson(res, 200, {
         avatarUrl,
         avatarSource: meta.avatarSource,
         avatarStatus: meta.avatarStatus,
         avatarReason: meta.avatarReason,
       } satisfies ControlUiAvatarMeta);
-    } finally {
-      if (projection.openedFile) {
-        fs.closeSync(projection.openedFile.fd);
-      }
-    }
-    return true;
-  }
-
-  if (resolved?.kind !== "local" || !projection.openedFile) {
-    respondControlUiNotFound(res);
-    return true;
-  }
-
-  try {
-    res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
-    res.setHeader("Cache-Control", "no-cache");
-    if (req.method === "HEAD") {
-      res.statusCode = 200;
-      // The pinned descriptor exposes GET's exact byte count without reading the avatar.
-      res.setHeader("Content-Length", String(projection.openedFile.stat.size));
-      res.end();
       return true;
     }
-    const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
-    res.end(body);
-    return true;
-  } catch {
-    respondControlUiNotFound(res);
-    return true;
+
+    if (url.searchParams.has("v") && (projection.openedFile || resolved?.kind === "data")) {
+      const source = projection.openedFile
+        ? { file: projection.openedFile }
+        : { dataUrl: identity.avatar };
+      try {
+        const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
+        // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
+        res.setHeader("vary", "Authorization, Cookie");
+        sendHttpImageResponse({
+          req,
+          res,
+          image,
+          filename: "avatar",
+          cacheControl:
+            url.searchParams.get("v") === gatewayAvatarImageRevision(source)
+              ? "private, max-age=31536000, immutable"
+              : "private, no-cache",
+        });
+      } catch {
+        respondControlUiNotFound(res);
+      }
+      return true;
+    }
+
+    if (resolved?.kind !== "local" || !projection.openedFile) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+
+    try {
+      res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
+      res.setHeader("Cache-Control", "no-cache");
+      if (req.method === "HEAD") {
+        res.statusCode = 200;
+        // The pinned descriptor exposes GET's exact byte count without reading the avatar.
+        res.setHeader("Content-Length", String(projection.openedFile.stat.size));
+        res.end();
+        return true;
+      }
+      const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
+      res.end(body);
+      return true;
+    } catch {
+      respondControlUiNotFound(res);
+      return true;
+    }
   } finally {
-    fs.closeSync(projection.openedFile.fd);
+    if (projection.openedFile) {
+      fs.closeSync(projection.openedFile.fd);
+    }
   }
 }
 
@@ -891,24 +837,42 @@ async function serveResolvedIndexHtml(
   body: string,
   basePath?: string,
   allowWasm?: boolean,
+  environment?: ControlUiEnvironment,
+  buildId?: string,
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
-  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, normalizedBasePath);
-  const basePathAttribute = normalizedBasePath
-    ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
+  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath, buildId);
+  // An empty base path is authoritative for Gateway resources even when the
+  // router infers a namespace. Always emit it so resources stay root-mounted.
+  const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtml(normalizedBasePath)}"`;
+  const environmentAttributes = environment
+    ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
     : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
-  const prepared = withBasePath.replace(
-    /<html\b/i,
-    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+  // The lifecycle owns bundled identity. Strip the build stamp for custom roots,
+  // whose files may change independently and must keep revalidating.
+  const buildAttribute = buildId
+    ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${escapeHtml(buildId)}"`
+    : "";
+  const prepared = withBasePath.replace(/<html\b[^>]*>/i, (tag) =>
+    tag
+      .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
+      .replace(
+        /<html\b/i,
+        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
+      ),
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the
   // terminal's WASM relaxation is applied to the page that loads ghostty-web.
   res.setHeader(
     "Content-Security-Policy",
-    buildControlUiCspHeader({ inlineScriptHashes: hashes, allowWasm }),
+    buildControlUiCspHeader({
+      inlineScriptHashes: hashes,
+      allowWasm,
+      portalHost: req.headers.host,
+    }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
@@ -925,7 +889,7 @@ function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
   rejectHardlinks: boolean,
-): { path: string; fd: number; size: number } | null {
+): { path: string; fd: number; size: number; mtimeMs: number } | null {
   const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
@@ -945,7 +909,7 @@ function resolveSafeControlUiFile(
       fallback: () => null,
     });
   }
-  return { path: opened.path, fd: opened.fd, size: opened.stat.size };
+  return { path: opened.path, fd: opened.fd, size: opened.stat.size, mtimeMs: opened.stat.mtimeMs };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -1064,10 +1028,17 @@ export async function handleControlUiHttpRequest(
 
   applyControlUiSecurityHeaders(res);
 
+  if (isControlUiSharePath(pathname, basePath) && pathname !== `${basePath}/share/card.png`) {
+    serveControlUiShareDocument(req, res, url, basePath, resolveGatewayPublicOrigin(opts?.config));
+    return true;
+  }
+
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
     if (
-      !(await authorizeControlUiReadRequest(req, res, {
+      !(await authorizeControlUiReadRequestOrReply({
+        req,
+        res,
         auth: opts?.auth,
         trustedProxies: opts?.trustedProxies,
         allowRealIpFallback: opts?.allowRealIpFallback,
@@ -1094,7 +1065,11 @@ export async function handleControlUiHttpRequest(
     const assistantAgentId = resolvedIdentity?.agentId;
     const avatarProjection =
       config && resolvedIdentity
-        ? resolveGatewayAssistantAvatar({ cfg: config, identity: resolvedIdentity })
+        ? resolveGatewayAssistantAvatar({
+            cfg: config,
+            identity: resolvedIdentity,
+            httpBasePath: basePath,
+          })
         : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {
@@ -1106,8 +1081,11 @@ export async function handleControlUiHttpRequest(
       assistantAvatarReason: avatarMeta.avatarReason,
       ...(assistantAgentId ? { assistantAgentId } : {}),
       serverVersion: resolveRuntimeServiceVersion(process.env),
+      serverBuildId:
+        config?.gateway?.controlUi?.root === undefined
+          ? (resolveRuntimeServiceBuildId() ?? undefined)
+          : undefined,
       devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
-      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, assistantAgentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"
           ? "trusted"
@@ -1115,9 +1093,13 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
+      automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
       seamColor: config?.ui?.seamColor,
+      environment: config?.gateway?.controlUi?.environment,
+      communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
       terminalEnabled,
-      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
+      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
+      pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
         path: grantPath,
@@ -1172,14 +1154,19 @@ export async function handleControlUiHttpRequest(
 
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
-  const approvalDocument = isControlUiApprovalDocumentPath({ basePath, pathname });
+  const standaloneDocument =
+    isControlUiApprovalDocumentPath({ basePath, pathname }) ||
+    isControlUiFocusDocumentPath({ basePath, pathname });
   const rel = (() => {
+    if (uiPath === "/share/card.png") {
+      return "social-card.png";
+    }
     if (uiPath === ROOT_PREFIX) {
       return "";
     }
     if (uiPath.startsWith(CONTROL_UI_NAMESPACE_PREFIX)) {
       const namespacedRel = uiPath.slice(CONTROL_UI_NAMESPACE_PREFIX.length);
-      if (CONTROL_UI_ROOT_PUBLIC_ASSETS.has(namespacedRel)) {
+      if (isControlUiRootPublicAsset(namespacedRel)) {
         return namespacedRel;
       }
     }
@@ -1189,12 +1176,19 @@ export async function handleControlUiHttpRequest(
     }
     return uiPath.slice(1);
   })();
-  const requested = approvalDocument
+  const requested = standaloneDocument
     ? "index.html"
     : rel && !rel.endsWith("/")
       ? rel
       : `${rel}index.html`;
-  const fileRel = requested || "index.html";
+  let fileRel: string;
+  try {
+    // Decode the artifact name once, after route ownership and before path validation.
+    fileRel = decodeURIComponent(requested);
+  } catch {
+    respondControlUiNotFound(res);
+    return true;
+  }
   if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);
     return true;
@@ -1218,78 +1212,94 @@ export async function handleControlUiHttpRequest(
   const rejectHardlinks = !isBundledRoot;
   // Vite fingerprints every file emitted under the bundled assets directory.
   // Configured roots remain revalidated because their naming is not our contract.
-  const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
-  if (safeFile) {
-    if (path.basename(safeFile.path) === "index.html") {
-      if (req.method === "HEAD") {
-        try {
-          const encoding = resolveControlUiHtmlEncoding(req);
-          if (encoding === "not-acceptable") {
-            respondControlUiNotAcceptable(res);
-            return true;
-          }
-          respondHeadForControlUiFile(res, safeFile.path, {
-            encoding: encoding === "identity" ? undefined : encoding,
-          });
-          return true;
-        } finally {
-          fs.closeSync(safeFile.fd);
-        }
-      }
-      const body = await readAndCloseControlUiFileText(safeFile.fd);
-      await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
-      return true;
+  const fingerprintedAsset = isBundledRoot && fileRel.startsWith("assets/");
+  const publicAssetBuildId = isBundledRoot ? rootState.publicAssetBuildId : undefined;
+  const immutableAsset =
+    fingerprintedAsset ||
+    Boolean(
+      publicAssetBuildId &&
+      url.searchParams.get("v") === publicAssetBuildId &&
+      isControlUiVersionedPublicAsset(fileRel),
+    );
+  let servingRootReal = rootReal;
+  let rejectRepresentationHardlinks = rejectHardlinks;
+  let safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
+  if (!safeFile && fingerprintedAsset && rootState.kind === "bundled") {
+    const retained = rootState.retainedAssets?.resolveAsset(fileRel);
+    if (retained) {
+      servingRootReal = retained.rootRealPath;
+      rejectRepresentationHardlinks = true;
+      safeFile = resolveSafeControlUiFile(retained.rootRealPath, retained.filePath, true);
     }
+  }
+  // An index alias still owns document preparation when its physical target has
+  // another name. Preserve existing aliases that resolve to a canonical index too.
+  if (
+    safeFile &&
+    path.basename(fileRel) !== "index.html" &&
+    path.basename(safeFile.path) !== "index.html"
+  ) {
+    // Future filesystem clocks must not make later replacements look unmodified;
+    // clamp to response origination as in resolveByteResponse.
+    const originatedAtMs = Date.now();
+    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, originatedAtMs) / 1_000) * 1_000;
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
-      precompressed: immutableAsset,
+      contentPath: fileRel,
+      precompressed: fingerprintedAsset,
       openPrecompressedFile: (compressedPath) =>
-        resolveSafeControlUiFile(rootReal, compressedPath, false),
+        resolveSafeControlUiFile(servingRootReal, compressedPath, rejectRepresentationHardlinks),
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);
       return true;
     }
+    // Negotiation failures precede preconditions; release the selected representation on 304.
+    if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
+      fs.closeSync(representation.bodyFile.fd);
+      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
+      return true;
+    }
     if (req.method === "HEAD") {
       try {
-        respondHeadForControlUiFile(res, representation.contentPath, {
+        respondHeadForControlUiFile(res, fileRel, {
           immutable: immutableAsset,
           encoding: representation.encoding,
           contentLength: representation.bodyFile.size,
+          lastModifiedMs,
         });
         return true;
       } finally {
         fs.closeSync(representation.bodyFile.fd);
       }
     }
-    const body = await readAndCloseControlUiFile(representation.bodyFile.fd);
-    await serveControlUiAsset(res, representation.contentPath, body, {
+    const body = await readAndCloseControlUiFile(representation.bodyFile);
+    await serveControlUiAsset(res, fileRel, body, {
       immutable: immutableAsset,
       encoding: representation.encoding,
+      lastModifiedMs,
     });
     return true;
   }
 
-  // If the requested path looks like a static asset (known extension), return
-  // 404 rather than falling through to the SPA index.html fallback.  We check
-  // against the same extension set used by the static response helper so
-  // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
-  // client-side router fallback.
-  if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
-    respondControlUiNotFound(res);
-    return true;
+  if (!safeFile) {
+    // Missing assets stay 404; dotted routes can still use the SPA document.
+    if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    if (!route.spaFallback) {
+      return false;
+    }
+    const indexPath = path.resolve(root, "index.html");
+    if (filePath !== indexPath) {
+      safeFile = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
+    }
   }
 
-  if (!route.spaFallback) {
-    return false;
-  }
-
-  // SPA fallback (client-side router): serve index.html for unknown paths.
-  const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
-  if (safeIndex) {
+  // Direct documents and SPA fallbacks share rewriting, CSP, encoding and fd ownership.
+  if (safeFile) {
     if (req.method === "HEAD") {
       try {
         const encoding = resolveControlUiHtmlEncoding(req);
@@ -1297,16 +1307,24 @@ export async function handleControlUiHttpRequest(
           respondControlUiNotAcceptable(res);
           return true;
         }
-        respondHeadForControlUiFile(res, safeIndex.path, {
+        respondHeadForControlUiFile(res, "index.html", {
           encoding: encoding === "identity" ? undefined : encoding,
         });
         return true;
       } finally {
-        fs.closeSync(safeIndex.fd);
+        fs.closeSync(safeFile.fd);
       }
     }
-    const body = await readAndCloseControlUiFileText(safeIndex.fd);
-    await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
+    const body = (await readAndCloseControlUiFile(safeFile)).toString("utf8");
+    await serveResolvedIndexHtml(
+      req,
+      res,
+      body,
+      basePath,
+      terminalEnabled,
+      opts?.config?.gateway?.controlUi?.environment,
+      publicAssetBuildId,
+    );
     return true;
   }
 

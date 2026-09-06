@@ -5,9 +5,11 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
-  enablePluginInConfig,
+  readProviderJsonResponse,
+  redactProviderResponseErrorText,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   readPositiveIntegerParam,
   readResponseText,
   readStringParam,
@@ -22,7 +24,7 @@ import {
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
@@ -36,10 +38,11 @@ import {
 
 const OLLAMA_HOSTED_WEB_SEARCH_PATH = "/api/web_search";
 const OLLAMA_LOCAL_WEB_SEARCH_PROXY_PATH = "/api/experimental/web_search";
-const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 const DEFAULT_OLLAMA_WEB_SEARCH_COUNT = 5;
 const DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS = 15_000;
 const OLLAMA_WEB_SEARCH_SNIPPET_MAX_CHARS = 300;
+const OLLAMA_CLOUD_WEB_SEARCH_AUTH_ERROR =
+  "Hosted Ollama Web Search requires an API key. Set OLLAMA_API_KEY or configure models.providers.ollama.apiKey.";
 
 type OllamaWebSearchResult = {
   title?: string;
@@ -219,7 +222,11 @@ async function runOllamaWebSearch(params: {
 
     try {
       if (response.status === 401) {
-        throw new Error("Ollama web search authentication failed. Run `ollama signin`.");
+        throw new Error(
+          isOllamaCloudBaseUrl(attempt.baseUrl)
+            ? OLLAMA_CLOUD_WEB_SEARCH_AUTH_ERROR
+            : "Ollama web search authentication failed. Run `ollama signin`.",
+        );
       }
       if (response.status === 403) {
         throw new Error(
@@ -228,8 +235,10 @@ async function runOllamaWebSearch(params: {
       }
       if (!response.ok) {
         const detail = await readResponseText(response, { maxBytes: 64_000 });
-        const message =
-          `Ollama web search failed (${response.status}): ${detail.text || ""}`.trim();
+        const detailText = redactProviderResponseErrorText(detail.text, headers, {
+          sourceTruncated: detail.truncated,
+        });
+        const message = `Ollama web search failed (${response.status}): ${detailText}`.trim();
         if (response.status === 404) {
           lastError = new Error(message);
           continue;
@@ -240,11 +249,7 @@ async function runOllamaWebSearch(params: {
       params.signal?.throwIfAborted();
       break;
     } catch (error) {
-      if (error instanceof Error) {
-        lastError = error;
-      } else {
-        lastError = new Error(String(error));
-      }
+      lastError = error instanceof Error ? error : new Error(String(error));
       throw lastError;
     } finally {
       // The 401/403 branches throw before the stream is touched, leaving release
@@ -298,14 +303,20 @@ async function warnOllamaWebSearchPrereqs(params: {
   };
 }): Promise<OpenClawConfig> {
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
+  if (isOllamaCloudBaseUrl(baseUrl)) {
+    if (
+      !resolveConfiguredOllamaWebSearchApiKey(params.config) &&
+      !resolveEnvOllamaWebSearchApiKey()
+    ) {
+      await params.prompter.note(OLLAMA_CLOUD_WEB_SEARCH_AUTH_ERROR, "Ollama Web Search");
+    }
+    return params.config;
+  }
+
   const { reachable } = await fetchOllamaModels(baseUrl);
   if (!reachable) {
     await params.prompter.note(
-      [
-        "Ollama Web Search requires Ollama to be running.",
-        `Expected host: ${baseUrl}`,
-        "Start Ollama before using this provider.",
-      ].join("\n"),
+      `Ollama Web Search requires Ollama to be running.\nExpected host: ${baseUrl}\nStart Ollama before using this provider.`,
       "Ollama Web Search",
     );
     return params.config;
@@ -315,10 +326,7 @@ async function warnOllamaWebSearchPrereqs(params: {
   const auth = await checkOllamaCloudAuth(baseUrl);
   if (!auth.signedIn) {
     await params.prompter.note(
-      [
-        "Ollama Web Search requires `ollama signin`.",
-        ...(auth.signinUrl ? [auth.signinUrl] : ["Run `ollama signin`."]),
-      ].join("\n"),
+      `Ollama Web Search requires \`ollama signin\`.\n${auth.signinUrl ?? "Run `ollama signin`."}`,
       "Ollama Web Search",
     );
   }
@@ -326,27 +334,12 @@ async function warnOllamaWebSearchPrereqs(params: {
   return params.config;
 }
 
-export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
+export function createOllamaWebSearchProvider(): Pick<
+  WebSearchProviderPlugin,
+  "runSetup" | "createTool"
+> {
   return {
-    id: "ollama",
-    label: "Ollama Web Search",
-    hint: "Local Ollama host · requires ollama signin",
-    onboardingScopes: ["text-inference"],
-    requiresCredential: false,
-    envVars: [],
-    placeholder: "(run ollama signin)",
-    signupUrl: "https://ollama.com/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 110,
-    credentialPath: "",
-    getCredentialValue: () => undefined,
-    setCredentialValue: () => {},
-    applySelectionConfig: (config) => enablePluginInConfig(config, "ollama").config,
-    runSetup: async (ctx) =>
-      await warnOllamaWebSearchPrereqs({
-        config: ctx.config,
-        prompter: ctx.prompter,
-      }),
+    runSetup: async (ctx) => await warnOllamaWebSearchPrereqs(ctx),
     createTool: (ctx) => ({
       description: OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
       parameters: OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,

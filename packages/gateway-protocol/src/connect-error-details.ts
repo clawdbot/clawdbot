@@ -4,19 +4,11 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
-import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
-
-function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = value
-    .map((entry) => normalizeOptionalProtocolString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  // Pairing details omit absent lists. Emitting empty arrays makes clients think
-  // the gateway intentionally supplied scope/role context when it did not.
-  return values.length > 0 ? values : undefined;
-}
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  isProtocolRecord,
+  normalizeOptionalProtocolString,
+} from "./protocol-value-normalization.js";
 
 /** Structured connect-error codes carried in gateway error `details.code`. */
 export const ConnectErrorDetailCodes = {
@@ -36,6 +28,10 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_PROXY_MISSING: "AUTH_TAILSCALE_PROXY_MISSING",
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
+  AUTH_IDENTITY_HEADER_REQUIRED: "AUTH_IDENTITY_HEADER_REQUIRED",
+  AUTH_VERIFIED_USER_REQUIRED: "AUTH_VERIFIED_USER_REQUIRED",
+  AUTHENTICATED_PROFILE_UNAVAILABLE: "AUTHENTICATED_PROFILE_UNAVAILABLE",
+  CONTROL_UI_BUILD_MISMATCH: "CONTROL_UI_BUILD_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
   CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
@@ -162,6 +158,9 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
+  if (reason?.startsWith("trusted_proxy_missing_header_")) {
+    return ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED;
+  }
   switch (reason) {
     case "token_missing":
       return ConnectErrorDetailCodes.AUTH_TOKEN_MISSING;
@@ -222,25 +221,40 @@ export function resolveDeviceAuthConnectErrorDetailCode(
 
 /** Reads a non-empty detail code from an untrusted error details payload. */
 export function readConnectErrorDetailCode(details: unknown): string | null {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return null;
   }
-  const code = (details as { code?: unknown }).code;
+  const code = details.code;
   return typeof code === "string" && code.trim().length > 0 ? code.trim() : null;
+}
+
+/** Read the exact target artifact from an untrusted reload-required rejection. */
+export function readControlUiBuildMismatchId(details: unknown): string | null {
+  const code = readConnectErrorDetailCode(details);
+  if (
+    code !== ConnectErrorDetailCodes.PROTOCOL_MISMATCH &&
+    code !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH
+  ) {
+    return null;
+  }
+  const raw = details as { gatewayBuildId?: unknown; reloadRequired?: unknown };
+  const gatewayBuildId = normalizeOptionalProtocolString(raw.gatewayBuildId);
+  if (!gatewayBuildId || gatewayBuildId.length > 96 || raw.reloadRequired !== true) {
+    return null;
+  }
+  return gatewayBuildId;
 }
 
 /** Extracts normalized retry advice from untrusted connect-error details. */
 export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return {};
   }
-  const raw = details as {
-    canRetryWithDeviceToken?: unknown;
-    recommendedNextStep?: unknown;
-  };
   const canRetryWithDeviceToken =
-    typeof raw.canRetryWithDeviceToken === "boolean" ? raw.canRetryWithDeviceToken : undefined;
-  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
+    typeof details.canRetryWithDeviceToken === "boolean"
+      ? details.canRetryWithDeviceToken
+      : undefined;
+  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
@@ -265,23 +279,9 @@ export function normalizePairingConnectRequestId(value: unknown): string | undef
   return normalized && PAIRING_CONNECT_REQUEST_ID_PATTERN.test(normalized) ? normalized : undefined;
 }
 
-function normalizeStringArray(value: unknown): string[] | undefined {
-  return normalizeOptionalConnectDetailStringList(value);
-}
-
-function createPairingConnectErrorDetails(params: {
-  reason?: ConnectPairingRequiredReason;
-  requestId?: string;
-  remediationHint?: string;
-  recommendedNextStep?: ConnectRecoveryNextStep;
-  retryable?: boolean;
-  pauseReconnect?: boolean;
-  deviceId?: string;
-  requestedRole?: string;
-  requestedScopes?: string[];
-  approvedRoles?: string[];
-  approvedScopes?: string[];
-}): PairingConnectErrorDetails {
+function createPairingConnectErrorDetails(
+  params: Omit<PairingConnectErrorDetails, "code">,
+): PairingConnectErrorDetails {
   return {
     code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
     ...(params.reason ? { reason: params.reason } : {}),
@@ -334,28 +334,20 @@ export function buildPairingConnectRecoveryTitle(
 }
 
 /** Builds sanitized structured details for a pairing-required connect failure. */
-export function buildPairingConnectErrorDetails(params: {
-  reason: ConnectPairingRequiredReason | undefined;
-  requestId?: string;
-  remediationHint?: string;
-  recommendedNextStep?: ConnectRecoveryNextStep;
-  retryable?: boolean;
-  pauseReconnect?: boolean;
-  deviceId?: string;
-  requestedRole?: string;
-  requestedScopes?: string[];
-  approvedRoles?: string[];
-  approvedScopes?: string[];
-}): PairingConnectErrorDetails {
+export function buildPairingConnectErrorDetails(
+  params: Omit<PairingConnectErrorDetails, "code" | "reason"> & {
+    reason: ConnectPairingRequiredReason | undefined;
+  },
+): PairingConnectErrorDetails {
   const requestId = normalizePairingConnectRequestId(params.requestId);
   const remediationHint =
     normalizeOptionalProtocolString(params.remediationHint) ??
     buildPairingConnectRemediationHint(params.reason);
   const deviceId = normalizeOptionalProtocolString(params.deviceId);
   const requestedRole = normalizeOptionalProtocolString(params.requestedRole);
-  const requestedScopes = normalizeStringArray(params.requestedScopes);
-  const approvedRoles = normalizeStringArray(params.approvedRoles);
-  const approvedScopes = normalizeStringArray(params.approvedScopes);
+  const requestedScopes = normalizeOptionalTrimmedStringList(params.requestedScopes);
+  const approvedRoles = normalizeOptionalTrimmedStringList(params.approvedRoles);
+  const approvedScopes = normalizeOptionalTrimmedStringList(params.approvedScopes);
   return createPairingConnectErrorDetails({
     reason: params.reason,
     requestId,
@@ -388,45 +380,33 @@ export function readPairingConnectErrorDetails(
   if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return null;
   }
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return null;
   }
-  const raw = details as {
-    reason?: unknown;
-    requestId?: unknown;
-    remediationHint?: unknown;
-    recommendedNextStep?: unknown;
-    retryable?: unknown;
-    pauseReconnect?: unknown;
-    deviceId?: unknown;
-    requestedRole?: unknown;
-    requestedScopes?: unknown;
-    approvedRoles?: unknown;
-    approvedScopes?: unknown;
-  };
-  const reason = normalizePairingConnectReason(raw.reason);
-  const requestId = normalizePairingConnectRequestId(raw.requestId);
+  const reason = normalizePairingConnectReason(details.reason);
+  const requestId = normalizePairingConnectRequestId(details.requestId);
   const remediationHint =
-    normalizeOptionalProtocolString(raw.remediationHint) ??
+    normalizeOptionalProtocolString(details.remediationHint) ??
     buildPairingConnectRemediationHint(reason);
-  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
+  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
     ? (normalizedNextStep as ConnectRecoveryNextStep)
     : undefined;
-  const deviceId = normalizeOptionalProtocolString(raw.deviceId);
-  const requestedRole = normalizeOptionalProtocolString(raw.requestedRole);
-  const requestedScopes = normalizeStringArray(raw.requestedScopes);
-  const approvedRoles = normalizeStringArray(raw.approvedRoles);
-  const approvedScopes = normalizeStringArray(raw.approvedScopes);
+  const deviceId = normalizeOptionalProtocolString(details.deviceId);
+  const requestedRole = normalizeOptionalProtocolString(details.requestedRole);
+  const requestedScopes = normalizeOptionalTrimmedStringList(details.requestedScopes);
+  const approvedRoles = normalizeOptionalTrimmedStringList(details.approvedRoles);
+  const approvedScopes = normalizeOptionalTrimmedStringList(details.approvedScopes);
   return createPairingConnectErrorDetails({
     reason,
     requestId,
     remediationHint,
     recommendedNextStep,
-    retryable: typeof raw.retryable === "boolean" ? raw.retryable : undefined,
-    pauseReconnect: typeof raw.pauseReconnect === "boolean" ? raw.pauseReconnect : undefined,
+    retryable: typeof details.retryable === "boolean" ? details.retryable : undefined,
+    pauseReconnect:
+      typeof details.pauseReconnect === "boolean" ? details.pauseReconnect : undefined,
     deviceId,
     requestedRole,
     requestedScopes,
@@ -482,7 +462,35 @@ const SCOPE_MISMATCH_REMEDIATION =
   "`openclaw devices approve --latest`, approve the printed request, then reconnect.";
 const RATE_LIMITED_REMEDIATION =
   "Wait for the temporary authentication lockout to expire, then retry.";
+const IDENTITY_PROXY_REMEDIATION =
+  "An identity-aware proxy rejected the WebSocket upgrade. Configure gateway.remote.edgeAuth for the configured Gateway origin, then reconnect. See https://docs.openclaw.ai/gateway/remote#gateway-behind-an-identity-aware-proxy.";
+const CLOUDFLARE_ACCESS_REMEDIATION =
+  "Cloudflare Access detected: configure its token header or service-token headers in gateway.remote.edgeAuth.";
+const IDENTITY_PROXY_HTTP_STATUSES = new Set([301, 302, 303, 307, 308, 401, 403]);
 const GATEWAY_CLOSED_MESSAGE_PATTERN = /\bgateway closed \(\d+\):/i;
+
+function readIdentityProxyRejection(details: unknown): { cloudflareAccess: boolean } | null {
+  if (!isProtocolRecord(details)) {
+    return null;
+  }
+  if (
+    details.reason !== "websocket-upgrade-rejected" ||
+    typeof details.httpStatus !== "number" ||
+    !IDENTITY_PROXY_HTTP_STATUSES.has(details.httpStatus)
+  ) {
+    return null;
+  }
+  const location = normalizeOptionalProtocolString(details.location);
+  if (!location) {
+    return { cloudflareAccess: false };
+  }
+  try {
+    const hostname = new URL(location).hostname.toLowerCase().replace(/\.+$/u, "");
+    return { cloudflareAccess: hostname.endsWith(".cloudflareaccess.com") };
+  } catch {
+    return { cloudflareAccess: false };
+  }
+}
 
 /** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
 export function classifyGatewayConnectFailure(input: {
@@ -509,6 +517,16 @@ export function classifyGatewayConnectFailure(input: {
           ? formatConnectPairingRequiredMessage(input.details)
           : (userMessage ?? "device pairing required"),
       remediation: PAIRING_APPROVAL_REMEDIATION,
+    };
+  }
+  const identityProxy = readIdentityProxyRejection(input.details);
+  if (identityProxy) {
+    return {
+      kind: "identity-proxy" as const,
+      userMessage: userMessage ?? "identity-aware proxy rejected websocket upgrade",
+      remediation: identityProxy.cloudflareAccess
+        ? `${IDENTITY_PROXY_REMEDIATION}\n${CLOUDFLARE_ACCESS_REMEDIATION}`
+        : IDENTITY_PROXY_REMEDIATION,
     };
   }
   const deviceIdentityRequired =

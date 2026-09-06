@@ -3,8 +3,9 @@
 @import "./styles/layout.css";
 @import "./styles/layout.mobile.css";
 @import "./styles/components.css";
+@import "./styles/chat/progress-card.css";
 @import "./styles/approval-boot.css";
-@import "./styles/settings.css";
+@import "./styles/settings-controls.css";
 
 /* Contract read by stale-chunk-reload.ts to detect a failed entry stylesheet load.
  * Removing it leaves a fully unstyled page undetected. */

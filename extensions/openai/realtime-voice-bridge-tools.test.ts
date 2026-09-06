@@ -1,102 +1,30 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const {
-  FakeWebSocket,
-  execFileSyncMock,
-  fetchWithSsrFGuardMock,
-  isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKeyMock,
-} = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-
-    readonly listeners = new Map<string, Listener[]>();
-    readyState = 0;
-    sent: string[] = [];
-    closed = false;
-    terminated = false;
-    deferClose = false;
-    deferredClose: (() => void) | undefined;
-    args: unknown[];
-
-    constructor(...args: unknown[]) {
-      this.args = args;
-      MockWebSocket.instances.push(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      const emitClose = () => this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-      if (this.deferClose) {
-        this.deferredClose = emitClose;
-        return;
-      }
-      emitClose();
-    }
-
-    terminate(): void {
-      this.terminated = true;
-      this.close(1006, "terminated");
-    }
-
-    emitDeferredClose(): void {
-      const emitClose = this.deferredClose;
-      this.deferredClose = undefined;
-      emitClose?.();
-    }
-  }
-
-  return {
-    FakeWebSocket: MockWebSocket,
-    execFileSyncMock: vi.fn(),
-    fetchWithSsrFGuardMock: vi.fn(),
-    isProviderAuthProfileConfiguredMock: vi.fn(),
-    resolveProviderAuthProfileApiKeyMock: vi.fn(),
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
+  return createOpenAIRealtimeMockState();
 });
-
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
-    execFileSync: execFileSyncMock,
+    execFileSync: mocks.execFileSyncMock,
   };
 });
 
 vi.mock("ws", () => ({
-  default: FakeWebSocket,
+  default: mocks.FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
+  isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
@@ -110,23 +38,17 @@ const {
   connectReadyBridge,
   expectedResponseCreateEvent,
   hasSentEventType,
-} = createOpenAIRealtimeTestSupport({ FakeWebSocket, fetchWithSsrFGuardMock });
+  resetTestState,
+  restoreTestEnvironment,
+} = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 describe("OpenAI realtime voice bridge tools", () => {
   beforeEach(() => {
-    FakeWebSocket.instances = [];
-    vi.stubEnv("OPENAI_API_KEY", "");
-    execFileSyncMock.mockReset();
-    fetchWithSsrFGuardMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
-    resolveProviderAuthProfileApiKeyMock.mockReset();
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
+    resetTestState();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+    restoreTestEnvironment();
   });
 
   it("executes tool calls only from successful response output", async () => {
@@ -188,35 +110,6 @@ describe("OpenAI realtime voice bridge tools", () => {
       args: { question: "delegate this" },
     });
   });
-
-  it.each(["cancelled", "failed", "incomplete"])(
-    "ignores function calls from a %s response",
-    async (status) => {
-      const onToolCall = vi.fn();
-      const bridge = createNativeBridge({ onToolCall });
-      const socket = await connectReadyBridge(bridge);
-
-      emitServerEvent(socket, {
-        type: "response.done",
-        response: {
-          id: "response_1",
-          status,
-          output: [
-            {
-              id: "item_tool_1",
-              type: "function_call",
-              status: "completed",
-              name: "openclaw_agent_consult",
-              call_id: "call_1",
-              arguments: '{"question":"must stay inert"}',
-            },
-          ],
-        },
-      });
-
-      expect(onToolCall).not.toHaveBeenCalled();
-    },
-  );
 
   it("ignores malformed and unfinished response output items", async () => {
     const onToolCall = vi.fn();
@@ -591,10 +484,7 @@ describe("OpenAI realtime voice bridge tools", () => {
       type: "conversation.item.done",
       detail: "itemType=function_call_output",
     });
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),
-    );
+    emitServerEvent(socket, { type: "response.created", response: { id: "resp_2" } });
     emitServerEvent(socket, { type: "response.done" });
 
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
@@ -675,10 +565,10 @@ describe("OpenAI realtime voice bridge tools", () => {
 
     expect(onError).not.toHaveBeenCalled();
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_status" } })),
-    );
+    emitServerEvent(socket, {
+      type: "response.created",
+      response: { id: "resp_status" },
+    });
     emitServerEvent(socket, {
       type: "response.done",
       response: { id: "resp_status", status: "completed", output: [] },

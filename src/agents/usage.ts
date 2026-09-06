@@ -8,12 +8,19 @@ import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
+type PromptTokenDetails = {
+  cached_tokens?: number;
+  cache_write_tokens?: number;
+  cache_creation_input_tokens?: number;
+};
+
 /** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
   input?: number;
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheWrite1h?: number;
   contextUsage?: ContextUsage;
   total?: number;
   // Common alternates across providers/SDKs.
@@ -34,9 +41,12 @@ export type UsageLike = {
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
   // OpenAI Responses reports cached prompt reuse here.
-  input_tokens_details?: { cached_tokens?: number };
+  input_tokens_details?: PromptTokenDetails;
   // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
-  prompt_tokens_details?: { cached_tokens?: number };
+  prompt_tokens_details?: PromptTokenDetails;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  cached?: number;
   // Some agents/logs emit alternate naming.
   totalTokens?: number;
   total_tokens?: number;
@@ -53,23 +63,17 @@ export type UsageLike = {
   cost?: Partial<Usage["cost"]>;
 };
 
-type CliUsageAliases = {
-  cached_input_tokens?: number;
-  cache_write_input_tokens?: number;
-  cached?: number;
-  input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-};
-
 /** Normalized token counts used by runtime accounting. */
 export type NormalizedUsage = {
   input?: number;
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheWrite1h?: number;
   contextUsage?: ContextUsage;
   reasoningTokens?: number;
   total?: number;
+  cost?: Pick<Usage["cost"], "total" | "totalOrigin">;
 };
 
 /** OpenAI chat-completions compatible usage shape. */
@@ -134,6 +138,20 @@ export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is Normal
   );
 }
 
+/** Aggregate billing may be known even when token/context counters are unavailable. */
+export function hasBillableUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
+  return usage?.cost !== undefined || hasNonzeroUsage(usage);
+}
+
+/** Empty transport snapshots synthesize $0; only a billed zero is an observed model cost. */
+export function hasObservedModelUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
+  return (
+    (usage?.cost !== undefined &&
+      (usage.cost.total > 0 || usage.cost.totalOrigin === "provider-billed")) ||
+    hasNonzeroUsage(usage)
+  );
+}
+
 const normalizeTokenCount = (value: unknown): number | undefined => {
   const numeric = asFiniteNumber(value);
   if (numeric === undefined) {
@@ -150,14 +168,12 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   if (!raw) {
     return undefined;
   }
-  const cli = raw as UsageLike & CliUsageAliases;
-
   const cacheRead = normalizeTokenCount(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
-      cli.cached_input_tokens ??
-      cli.cached ??
+      raw.cached_input_tokens ??
+      raw.cached ??
       raw.cached_tokens ??
       raw.input_tokens_details?.cached_tokens ??
       raw.prompt_tokens_details?.cached_tokens,
@@ -166,10 +182,12 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.cacheWrite ??
       raw.cache_write ??
       raw.cache_creation_input_tokens ??
-      cli.cache_write_input_tokens ??
-      cli.input_tokens_details?.cache_write_tokens ??
-      cli.prompt_tokens_details?.cache_write_tokens,
+      raw.cache_write_input_tokens ??
+      raw.input_tokens_details?.cache_write_tokens ??
+      raw.prompt_tokens_details?.cache_write_tokens ??
+      raw.prompt_tokens_details?.cache_creation_input_tokens,
   );
+  const cacheWrite1h = normalizeTokenCount(raw.cacheWrite1h);
 
   const directInput = asFiniteNumber(raw.input);
   const rawInputValue =
@@ -182,15 +200,16 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.timings?.prompt_n;
 
   const cliCacheReadIncludedInInput =
-    cli.cached_input_tokens !== undefined || cli.cached !== undefined;
+    raw.cached_input_tokens !== undefined || raw.cached !== undefined;
   const openAiCacheReadIncludedInInput =
     raw.cached_tokens !== undefined ||
     raw.input_tokens_details?.cached_tokens !== undefined ||
     raw.prompt_tokens_details?.cached_tokens !== undefined;
   const cacheWriteIncludedInInput =
-    cli.cache_write_input_tokens !== undefined ||
-    cli.input_tokens_details?.cache_write_tokens !== undefined ||
-    cli.prompt_tokens_details?.cache_write_tokens !== undefined;
+    raw.cache_write_input_tokens !== undefined ||
+    raw.input_tokens_details?.cache_write_tokens !== undefined ||
+    raw.prompt_tokens_details?.cache_write_tokens !== undefined ||
+    raw.prompt_tokens_details?.cache_creation_input_tokens !== undefined;
 
   // Some providers (shared model runtime OpenAI-format) pre-subtract cached_tokens from
   // prompt/input totals upstream, while OpenAI-style prompt/input aliases
@@ -244,6 +263,16 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.output_tokens_details?.thinking_tokens,
   );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const costTotal = asFiniteNumber(raw.cost?.total);
+  const cost: NormalizedUsage["cost"] =
+    costTotal !== undefined && costTotal >= 0
+      ? {
+          total: costTotal,
+          ...(raw.cost?.totalOrigin === "provider-billed"
+            ? { totalOrigin: "provider-billed" }
+            : {}),
+        }
+      : undefined;
 
   if (
     input === undefined &&
@@ -252,7 +281,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     cacheWrite === undefined &&
     contextUsage === undefined &&
     reasoningTokens === undefined &&
-    total === undefined
+    total === undefined &&
+    cost === undefined
   ) {
     return undefined;
   }
@@ -262,6 +292,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     output,
     cacheRead,
     cacheWrite,
+    ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+    ...(cost ? { cost } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,

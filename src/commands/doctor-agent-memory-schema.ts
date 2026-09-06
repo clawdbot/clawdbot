@@ -7,7 +7,9 @@ import {
   closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
   migrateOpenClawAgentDatabaseForMaintenance,
+  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { shortenHomePath } from "../utils.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
@@ -80,9 +82,10 @@ function inspectAgentMemoryRecallMetadataMigration(
 }
 
 /** Move the unreleased inline metadata shape into rollback-safe additive tables. */
-function repairDoctorAgentMemorySchemas(
-  options: { env?: NodeJS.ProcessEnv } = {},
-): DoctorAgentMemorySchemaReport {
+async function repairDoctorAgentMemorySchemas(
+  options: { env?: NodeJS.ProcessEnv },
+  maintenance: OpenClawStateLeaseContext,
+): Promise<DoctorAgentMemorySchemaReport> {
   const env = options.env ?? process.env;
   const repaired: DoctorAgentMemorySchemaRepair[] = [];
   const warnings: string[] = [];
@@ -100,6 +103,8 @@ function repairDoctorAgentMemorySchemas(
   }
 
   for (const entry of registered) {
+    // A lost lease must stop the pass before a later target can close a new owner's handle.
+    maintenance.assertOwned();
     try {
       const before = inspectAgentMemoryRecallMetadataMigration(entry.path);
       if (!before || (before.columns.length === 0 && !before.hasProvenanceTrigger)) {
@@ -108,10 +113,11 @@ function repairDoctorAgentMemorySchemas(
       // Doctor owns offline maintenance. Close any handle opened by an earlier
       // doctor contribution before the feature owner migrates the shared table.
       closeOpenClawAgentDatabaseByPath(entry.path);
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: entry.agentId,
-        pathname: entry.path,
-      });
+      await migrateOpenClawAgentDatabaseForMaintenance(
+        { agentId: entry.agentId, pathname: entry.path },
+        maintenance,
+      );
+      maintenance.assertOwned();
       const after = inspectAgentMemoryRecallMetadataMigration(entry.path);
       if (
         after === null ||
@@ -152,7 +158,10 @@ export async function noteDoctorAgentMemorySchemaHealth(
     report = await withDoctorSqliteMaintenanceLock({
       env: params.env,
       operation: "agent memory schema repair",
-      run: () => repairDoctorAgentMemorySchemas({ env: params.env }),
+      run: () =>
+        withAgentDatabaseMaintenanceLease({ env: params.env }, (maintenance) =>
+          repairDoctorAgentMemorySchemas({ env: params.env }, maintenance),
+        ),
     });
   } catch (error) {
     if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {

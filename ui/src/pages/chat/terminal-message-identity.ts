@@ -1,8 +1,15 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
-const liveTerminalRunIds = new WeakMap<object, string>();
+type LiveTerminalIdentity = {
+  runId: string;
+  afterBoundaryRunId?: string;
+  disposition?: "aborted" | "error" | "timeout";
+};
+
+const liveTerminalIdentities = new WeakMap<object, LiveTerminalIdentity>();
 const authoritativeTerminals = new WeakMap<object, AuthoritativeTerminal>();
 
 type AuthoritativeTerminal = {
@@ -16,17 +23,43 @@ type AuthoritativeTerminal = {
 export function rememberLiveTerminalRun(
   message: unknown,
   runId: string | null | undefined,
+  afterBoundaryRunId?: string,
+  disposition?: LiveTerminalIdentity["disposition"],
 ): unknown {
   if (runId && message && typeof message === "object") {
-    liveTerminalRunIds.set(message, runId);
+    liveTerminalIdentities.set(message, {
+      runId,
+      ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
+      ...(disposition ? { disposition } : {}),
+    });
   }
   return message;
 }
 
 export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
   return Boolean(
-    message && typeof message === "object" && liveTerminalRunIds.get(message) === runId,
+    message && typeof message === "object" && liveTerminalIdentities.get(message)?.runId === runId,
   );
+}
+
+export function readLiveTerminalRunId(message: unknown): string | null {
+  return message && typeof message === "object"
+    ? (liveTerminalIdentities.get(message)?.runId ?? null)
+    : null;
+}
+
+export function readLiveTerminalAfterBoundaryRunId(message: unknown): string | null {
+  return message && typeof message === "object"
+    ? (liveTerminalIdentities.get(message)?.afterBoundaryRunId ?? null)
+    : null;
+}
+
+export function readLiveTerminalDisposition(
+  message: unknown,
+): LiveTerminalIdentity["disposition"] | null {
+  return message && typeof message === "object"
+    ? (liveTerminalIdentities.get(message)?.disposition ?? null)
+    : null;
 }
 
 export function rememberAuthoritativeTerminal(options: {
@@ -91,4 +124,22 @@ export function reconcileAuthoritativeTerminalHistory<T>(options: {
 export function authoritativeHistoryAppliedForRun(host: object, runId: string): boolean {
   const terminal = authoritativeTerminals.get(host);
   return terminal?.runId === runId && terminal.historyApplied;
+}
+
+export function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
+  const candidate = asNullableRecord(message);
+  if (
+    !candidate ||
+    (typeof candidate.role === "string" &&
+      normalizeLowercaseStringOrEmpty(candidate.role) !== "assistant") ||
+    (!("content" in candidate) && typeof candidate.text !== "string")
+  ) {
+    return null;
+  }
+  const assistant =
+    typeof candidate.role === "string" ? candidate : { ...candidate, role: "assistant" };
+  // Canonicalize text-only finals before reducing so replay identity includes the reply.
+  return !Object.hasOwn(assistant, "content") && typeof assistant.text === "string"
+    ? { ...assistant, content: [{ type: "text", text: assistant.text }] }
+    : assistant;
 }

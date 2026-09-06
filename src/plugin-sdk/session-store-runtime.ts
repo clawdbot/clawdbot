@@ -8,6 +8,8 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
+import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
+import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -16,7 +18,6 @@ import {
   resolveSessionFilePathCore,
   resolveSessionStorePathCore,
 } from "../config/sessions/paths.js";
-export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
@@ -43,8 +44,8 @@ import type {
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  activeRecoveryFieldsForSameSession,
-  clearRecoveryStateForRotatedSessionPatch,
+  clearGenerationPrivateFieldsForRotatedSessionPatch,
+  generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
   projectPluginSessionStore,
@@ -53,6 +54,7 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 
 export {
   deliveryContextFromSession,
@@ -100,6 +102,8 @@ type SessionStoreEntryPatch = (
 ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 
 type PatchSessionEntryParams = SessionStoreReadParams & {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
@@ -148,17 +152,31 @@ type SessionLifecycleArtifactsCleanupResult = {
   removedEntries: number;
 };
 
-function preserveCoreRecoveryState(
+function preserveGenerationPrivateFields(
   persistedEntry: InternalSessionEntry,
   publicPatch: Partial<SessionEntry>,
 ): Partial<InternalSessionEntry> {
   const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
     ? publicPatch.sessionId
     : persistedEntry.sessionId;
-  const recoveryState = activeRecoveryFieldsForSameSession(persistedEntry, nextSessionId);
-  return recoveryState
-    ? { ...publicPatch, ...recoveryState }
-    : clearRecoveryStateForRotatedSessionPatch(persistedEntry, publicPatch);
+  const nextLifecycleRevision = Object.hasOwn(publicPatch, "lifecycleRevision")
+    ? publicPatch.lifecycleRevision
+    : persistedEntry.lifecycleRevision;
+  const privateFields = generationValidPrivateFieldsForSameSession(
+    persistedEntry,
+    nextSessionId,
+    nextLifecycleRevision,
+  );
+  return privateFields
+    ? {
+        ...publicPatch,
+        ...(!Object.hasOwn(publicPatch, "lifecycleRevision") &&
+        persistedEntry.lifecycleRevision !== undefined
+          ? { lifecycleRevision: persistedEntry.lifecycleRevision }
+          : {}),
+        ...privateFields,
+      }
+    : clearGenerationPrivateFieldsForRotatedSessionPatch(persistedEntry, publicPatch);
 }
 
 function resolveLegacySessionStoreTarget(storePath: string): {
@@ -374,6 +392,21 @@ export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | 
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
+/** Reads the current session binding of one canonical transport address. */
+export function getConversationSession(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  channel: string;
+  accountId: string;
+  kind: "channel" | "direct" | "group";
+  peerId: string;
+  threadId?: string;
+}): { sessionKey: string; sessionId: string } | undefined {
+  const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
+  return identity ? resolveCurrentConversationSession(params, identity.conversationRef) : undefined;
+}
+
 /**
  * Lists session entries for one agent. `readOnly` reads without joining the
  * agent database writable lifecycle (no create/register/migrate) — required
@@ -445,9 +478,10 @@ export async function patchSessionEntry(
       if (!patch) {
         return null;
       }
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
+      assertCommitAllowed: params.assertCommitAllowed,
       fallbackEntry: params.fallbackEntry
         ? projectPluginSessionEntry(params.fallbackEntry)
         : undefined,
@@ -490,7 +524,7 @@ export async function updateSessionStoreEntry(
         return null;
       }
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
       skipMaintenance: params.skipMaintenance,
@@ -508,7 +542,7 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
     toSessionAccessScope(params),
     (internalEntry) => {
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, publicEntry);
+      return preserveGenerationPrivateFields(persistedEntry, publicEntry);
     },
     { fallbackEntry: publicEntry, replaceEntry: true },
   );

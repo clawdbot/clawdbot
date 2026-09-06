@@ -4,7 +4,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
+import {
+  buildPluginSdkEntrySources,
+  pluginSdkEntrypoints,
+} from "../../../scripts/lib/plugin-sdk-entries.mts";
 import { createSyncSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
 import { resolveBundledPluginFile } from "./test-helpers/bundled-plugin-roots.js";
 

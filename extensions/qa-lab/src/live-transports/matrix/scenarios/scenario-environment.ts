@@ -5,11 +5,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { MatrixQaProvisionResult } from "../substrate/client.js";
-import type { MatrixQaRoomObserver } from "../substrate/client.js";
+import type { MatrixQaProvisionResult, MatrixQaRoomObserver } from "../substrate/client.js";
 import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import type { startMatrixQaHarness } from "../substrate/harness.runtime.js";
+import { createMatrixQaRoomObserver } from "../substrate/sync.js";
 import { runMatrixQaCanary } from "./scenario-runtime-room.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import type { MatrixQaCanaryArtifact } from "./scenario-types.js";
@@ -49,16 +49,6 @@ type MatrixQaConfigApplyStatus = {
   configRevisionHash?: string;
   hash?: string;
 };
-
-function resetMatrixQaScenarioObserverState(params: {
-  syncState: MatrixQaScenarioContext["syncState"];
-  syncStreams: NonNullable<MatrixQaScenarioContext["syncStreams"]>;
-}) {
-  delete params.syncState.driver;
-  delete params.syncState.observer;
-  delete params.syncStreams.driver;
-  delete params.syncStreams.observer;
-}
 
 function readMatrixConfigOverrides(
   config: Record<string, unknown>,
@@ -288,10 +278,21 @@ async function readMatrixAccountStatuses(
 }
 
 export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnvironmentParams) {
-  const syncState = {};
+  const syncState: MatrixQaScenarioContext["syncState"] = {};
   const syncStreams: Partial<Record<"driver" | "observer", MatrixQaRoomObserver>> = {};
   let canary: MatrixQaCanaryArtifact | undefined;
   let baselineConfig: OpenClawConfig | undefined;
+  const resetObserverState = () => {
+    for (const actorId of ["driver", "observer"] as const) {
+      delete syncState[actorId];
+      syncStreams[actorId] = createMatrixQaRoomObserver({
+        accessToken: params.provisioning.observationAccounts[actorId].accessToken,
+        baseUrl: params.harness.baseUrl,
+        observedEvents: params.observedEvents,
+      });
+    }
+  };
+  resetObserverState();
 
   const prepareFlow = async (input: FlowPreparationInput) => {
     const preparationDeadline =
@@ -369,7 +370,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     // Scenario actors must prime after each config/reload boundary. Reusing an
     // observer across channel restarts can retain an in-flight timeline cursor
     // and consume the next scenario's first preview before its predicate exists.
-    resetMatrixQaScenarioObserverState({ syncState, syncStreams });
+    resetObserverState();
 
     const scenarioContext = {
       baseUrl: params.harness.baseUrl,
@@ -469,7 +470,8 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         opts?: { replacePaths?: string[]; restartDelayMs?: number },
       ) => {
         await patchGatewayConfig({
-          deadlineMs: preparationDeadline,
+          // This callback runs during actions, after the preparation budget may expire.
+          deadlineMs: Date.now() + input.timeoutMs,
           gateway: input.gateway,
           patch,
           replacePaths: opts?.replacePaths,

@@ -261,8 +261,8 @@ function validateGoogleChatServiceAccountCredentials(
     throw new Error(`Google Chat credentials must use service_account auth, got "${type}" instead`);
   }
 
-  readRequiredTrimmedString(credentials, "client_email");
-  readRequiredTrimmedString(credentials, "private_key");
+  const clientEmail = readRequiredTrimmedString(credentials, "client_email");
+  const privateKey = readRequiredTrimmedString(credentials, "private_key");
 
   const universeDomain = readOptionalTrimmedString(credentials, "universe_domain");
   if (universeDomain && universeDomain !== GOOGLE_AUTH_UNIVERSE_DOMAIN) {
@@ -276,7 +276,11 @@ function validateGoogleChatServiceAccountCredentials(
   assertExactUrlField(credentials, "token_uri", GOOGLE_AUTH_TOKEN_URI);
   assertUrlPrefixField(credentials, "client_x509_cert_url", GOOGLE_CLIENT_CERTS_URL_PREFIX);
 
-  return credentials as unknown as GoogleChatServiceAccountCredentials;
+  return {
+    ...credentials,
+    client_email: clientEmail,
+    private_key: privateKey,
+  };
 }
 
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {
@@ -470,16 +474,13 @@ async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Arr
       }
       total += value.byteLength;
       if (total > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
-        try {
-          await reader.cancel("Google auth response exceeded buffer limit");
-        } catch {
-          // Ignore cancellation errors; the caller still releases the dispatcher.
-        }
         throw new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`);
       }
       chunks.push(value);
     }
   } finally {
+    // A capture tee can retain cancellation until the caller releases its request.
+    void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 

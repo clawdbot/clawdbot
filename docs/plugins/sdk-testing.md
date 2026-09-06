@@ -44,6 +44,7 @@ import { createRequestCaptureJsonFetch } from "openclaw/plugin-sdk/test-media-un
 import {
   bundledPluginRoot,
   createCliRuntimeCapture,
+  runDirectImportSmoke,
   typedCases,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
@@ -118,6 +119,8 @@ the focused test subpaths above.
 | `createProviderUsageFetch`                                                | Build provider usage fetch fixtures. Import from `plugin-sdk/test-env`                                                                      |
 | `useFrozenTime` / `useRealTime`                                           | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                       |
 | `createCliRuntimeCapture`                                                 | Capture CLI runtime output in tests. Import from `plugin-sdk/test-fixtures`                                                                 |
+| `findSourceImportBackedges`                                               | Asynchronously inspect repository-source static import closures for forbidden dependencies. Import from `plugin-sdk/test-fixtures`          |
+| `runDirectImportSmoke`                                                    | Run a plugin public-surface import in an isolated Node process. Import from `plugin-sdk/test-fixtures`                                      |
 | `importFreshModule`                                                       | Import an ESM module with a fresh query token to bypass module cache. Import from `plugin-sdk/test-fixtures`                                |
 | `bundledPluginRoot` / `bundledPluginFile`                                 | Resolve bundled plugin source or dist fixture paths. Import from `plugin-sdk/test-fixtures`                                                 |
 | `mockNodeBuiltinModule`                                                   | Install narrow Node builtin Vitest mocks. Import from `plugin-sdk/test-node-mocks`                                                          |
@@ -133,6 +136,18 @@ Bundled-plugin contract suites also use these SDK testing subpaths for
 test-only registry, manifest, public-artifact, and runtime fixture helpers.
 Core-only suites that depend on bundled OpenClaw inventory stay under
 `src/plugins/contracts` instead.
+
+For channel account-policy tests, `createAccountPolicyInheritanceCases()` from
+`openclaw/plugin-sdk/channel-test-helpers` returns four literal inheritance rows
+with fresh objects and arrays on each call, preserving omitted policy fields.
+Use it alongside `validateTestChannelConfig(channelId, channelConfig)`, which
+validates schema-parsed channel data through the host config boundary. Each
+plugin test still owns its schema parsing, account resolver, and assertions,
+including checks that omitted account policies remain absent.
+
+For complete zero-usage inputs, `createZeroUsageFixture()` from
+`openclaw/plugin-sdk/test-fixtures` returns fresh usage and nested cost objects
+without optional telemetry fields. Keep expected usage values explicit.
 
 ### Types
 

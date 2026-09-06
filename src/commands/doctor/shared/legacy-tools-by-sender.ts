@@ -1,9 +1,9 @@
 // Doctor scanner and repair for legacy untyped toolsBySender sender keys.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
 import { formatConfigKeyPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
-import { asObjectRecord } from "./object.js";
 
 type LegacyToolsBySenderKeyHit = {
   /** Path parts pointing to the containing toolsBySender object. */
@@ -27,12 +27,12 @@ function collectLegacyToolsBySenderKeyHits(
     }
     return;
   }
-  const record = asObjectRecord(value);
+  const record = asNullableRecord(value);
   if (!record) {
     return;
   }
 
-  const toolsBySender = asObjectRecord(record.toolsBySender);
+  const toolsBySender = asNullableRecord(record.toolsBySender);
   if (toolsBySender) {
     const path = [...pathParts, "toolsBySender"];
     const pathLabel = formatConfigKeyPath(path);
@@ -99,7 +99,7 @@ export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   let changed = false;
 
   for (const hit of hits) {
-    const toolsBySender = asObjectRecord(resolveConfigPathTarget(next, hit.toolsBySenderPath));
+    const toolsBySender = asNullableRecord(resolveConfigPathTarget(next, hit.toolsBySenderPath));
     if (!toolsBySender || !(hit.key in toolsBySender)) {
       continue;
     }

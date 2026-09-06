@@ -1,15 +1,20 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   collectModuleExportNames,
   collectRepositoryCollisions,
-  compareExportNameCollisionDebt,
   findAliasingReExports,
   findExportNameCollisions,
   isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+
+const guardScriptPath = fileURLToPath(
+  new URL("../../scripts/check-export-name-collisions.mts", import.meta.url),
+);
 
 describe("export name collision guard", () => {
   it.each([
@@ -138,11 +143,56 @@ describe("export name collision guard", () => {
           return runtime.runThing(...args);
         }
       `,
+      `
+        import { createLazyRuntimeMethodBinder as createBinder } from "./shared/lazy-runtime.js";
+        const bind = createBinder(loadRuntime);
+        export const runThing = bind((runtime) => runtime.runThing);
+      `,
+      `
+        import { createLazyRuntimeMethod } from "openclaw/plugin-sdk/lazy-runtime";
+        export const runThing = createLazyRuntimeMethod(loadRuntime, (runtime) => runtime.runThing);
+      `,
     ];
     for (const content of forwarders) {
-      expect([...collectModuleExportNames(content).definitions]).toEqual([]);
+      expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual(
+        [],
+      );
     }
   });
+
+  it.each([
+    ["different member", "runtime => runtime.otherThing"],
+    ["selector call", "runtime => runtime.runThing()"],
+    ["different receiver", "runtime => other.runThing"],
+    ["selector transformation", "runtime => (...args) => runtime.runThing(...args, fallback)"],
+    ["extra argument", "runtime => runtime.runThing, fallback"],
+    ["defaulted receiver", "(runtime = fallback) => runtime.runThing"],
+    ["rest receiver", "(...runtime) => runtime.runThing"],
+    ["selector block", "runtime => { prepare(); return runtime.runThing; }"],
+  ])("keeps lazy binders with %s as definitions", (_name, selector) => {
+    const content = `
+      import { createLazyRuntimeMethodBinder } from "./shared/lazy-runtime.js";
+      const bind = createLazyRuntimeMethodBinder(loadRuntime);
+      export const runThing = bind(${selector});
+    `;
+    expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual([
+      "runThing",
+    ]);
+  });
+
+  it.each(["./unrelated.js", "./shared/lazy-runtime.fake.js"])(
+    "keeps same-named factories from %s as definitions",
+    (specifier) => {
+      const content = `
+        import { createLazyRuntimeMethodBinder } from "${specifier}";
+        const bind = createLazyRuntimeMethodBinder(loadRuntime);
+        export const runThing = bind(runtime => runtime.runThing);
+      `;
+      expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual([
+        "runThing",
+      ]);
+    },
+  );
 
   it.each([
     {
@@ -217,61 +267,49 @@ describe("export name collision guard", () => {
     ).toEqual([]);
   });
 
-  it("marks collisions exposed by a Plugin SDK module", () => {
-    expect(
-      findExportNameCollisions([
-        { path: "src/one.ts", content: "export const publicCollision = 1;" },
-        { path: "src/two.ts", content: "export function publicCollision() {}" },
-        {
-          path: "src/plugin-sdk/public.ts",
-          content: 'export * from "./public-star.js";',
-        },
-        {
-          path: "src/plugin-sdk/public-star.ts",
-          content: 'export * from "../../packages/public.js";',
-        },
-        {
-          path: "packages/public.ts",
-          content: "export const publicCollision = true;",
-          includeDefinitions: false,
-        },
-      ]),
-    ).toEqual([
-      {
-        name: "publicCollision",
-        files: ["src/one.ts", "src/two.ts"],
-        sdk: true,
-      },
-    ]);
-  });
-});
+  it("marks repository collisions exposed through a package-backed Plugin SDK module", async () => {
+    await withTempDir("openclaw-export-collisions-sdk-", async (repoRoot) => {
+      await Promise.all([
+        fs.mkdir(path.join(repoRoot, "src/plugin-sdk"), { recursive: true }),
+        fs.mkdir(path.join(repoRoot, "packages"), { recursive: true }),
+      ]);
+      await Promise.all([
+        fs.writeFile(path.join(repoRoot, "src/one.ts"), "export const publicCollision = 1;\n"),
+        fs.writeFile(path.join(repoRoot, "src/two.ts"), "export function publicCollision() {}\n"),
+        fs.writeFile(
+          path.join(repoRoot, "src/plugin-sdk/public.ts"),
+          'export * from "./public-star.js";\n',
+        ),
+        fs.writeFile(
+          path.join(repoRoot, "src/plugin-sdk/public-star.ts"),
+          'export * from "../../packages/public.js";\n',
+        ),
+        fs.writeFile(
+          path.join(repoRoot, "packages/public.ts"),
+          "export const publicCollision = true;\n",
+        ),
+      ]);
 
-describe("export name collision debt baseline", () => {
-  it("separates new debt from baseline improvements", () => {
-    expect(
-      compareExportNameCollisionDebt(
-        [
-          { name: "added", files: ["src/a.ts", "src/b.ts"] },
-          { name: "expanded", files: ["src/a.ts", "src/b.ts", "src/c.ts"], sdk: true },
-        ],
-        [
-          { name: "expanded", files: ["src/a.ts", "src/b.ts"] },
-          { name: "removed", files: ["src/c.ts", "src/d.ts"] },
-        ],
-      ),
-    ).toEqual({
-      regressions: [
-        { current: { name: "added", files: ["src/a.ts", "src/b.ts"] } },
+      expect(await collectRepositoryCollisions(repoRoot)).toEqual([
         {
-          baseline: { name: "expanded", files: ["src/a.ts", "src/b.ts"] },
-          current: {
-            name: "expanded",
-            files: ["src/a.ts", "src/b.ts", "src/c.ts"],
-            sdk: true,
-          },
+          name: "publicCollision",
+          files: ["src/one.ts", "src/two.ts"],
+          sdk: true,
         },
-      ],
-      improvements: [{ baseline: { name: "removed", files: ["src/c.ts", "src/d.ts"] } }],
+      ]);
     });
+  });
+
+  it("rejects debt-baseline updates with the collision trailer", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", guardScriptPath, "--update-debt-baseline"],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(
+      "[check-export-name-collisions] FAILED (exit 2)",
+    );
   });
 });

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
+  compareSessionRowsByUpdatedAt,
   isSystemCreatedSessionRow,
   resolveSessionNavigation,
   visibleSessionMatches,
@@ -281,7 +282,7 @@ describe("resolveSessionNavigation", () => {
 describe("visibleSessionMatches", () => {
   const baseHost = {
     assistantAgentId: "work",
-    agentsList: { defaultId: "main", mainKey: "workspace" },
+    agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
     hello: null,
   };
   const routeGroups: Array<{
@@ -294,7 +295,7 @@ describe("visibleSessionMatches", () => {
       hostKeys: [
         "main",
         "workspace",
-        "agent:main:global",
+
         "agent:main:main",
         "agent:main:workspace",
       ],
@@ -302,27 +303,27 @@ describe("visibleSessionMatches", () => {
         { sessionKey: "global", agentId: "main" },
         { sessionKey: "main" },
         { sessionKey: "workspace" },
-        { sessionKey: "agent:main:global" },
+
         { sessionKey: "agent:main:main" },
         { sessionKey: "agent:main:workspace" },
       ],
     },
     {
       owner: "work",
-      hostKeys: ["global", "agent:work:global", "agent:work:main", "agent:work:workspace"],
+      hostKeys: ["global", "agent:work:main", "agent:work:workspace"],
       candidates: [
         { sessionKey: "global", agentId: "work" },
-        { sessionKey: "agent:work:global" },
+
         { sessionKey: "agent:work:main" },
         { sessionKey: "agent:work:workspace" },
       ],
     },
     {
       owner: "alpha",
-      hostKeys: ["agent:alpha:global", "agent:alpha:main", "agent:alpha:workspace"],
+      hostKeys: ["agent:alpha:main", "agent:alpha:workspace"],
       candidates: [
         { sessionKey: "global", agentId: "alpha" },
-        { sessionKey: "agent:alpha:global" },
+
         { sessionKey: "agent:alpha:main" },
         { sessionKey: "agent:alpha:workspace" },
       ],
@@ -359,7 +360,7 @@ describe("visibleSessionMatches", () => {
       "global",
       "main",
       "workspace",
-      "agent:work:global",
+
       "agent:work:main",
       "agent:work:workspace",
     ];
@@ -371,7 +372,7 @@ describe("visibleSessionMatches", () => {
       const host = {
         ...baseHost,
         sessionKey: hostKey,
-        agentsList: { defaultId: "work", mainKey: "workspace" },
+        agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
       };
       for (const candidate of candidates) {
         expect(visibleSessionMatches(host, candidate.sessionKey, candidate.agentId)).toBe(true);
@@ -411,6 +412,18 @@ describe("visibleSessionMatches", () => {
 
 describe("isSystemCreatedSessionRow", () => {
   const base = { key: "agent:main:explicit:probe", kind: "direct", updatedAt: 1 } as const;
+  it("keeps a newly created operator-named CLI session visible", () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:incident-42",
+      kind: "direct",
+      updatedAt: 1,
+      createdVia: "run",
+      displayName: "incident-42",
+    };
+
+    expect(isSystemCreatedSessionRow(row)).toBe(false);
+  });
+
   it.each([
     ["run + no actor + unnamed is system", { createdVia: "run" }, true],
     ["internal + no actor + unnamed is system", { createdVia: "internal" }, true],
@@ -421,11 +434,6 @@ describe("isSystemCreatedSessionRow", () => {
       false,
     ],
     ["run + label stays visible", { createdVia: "run", label: "My batch job" }, false],
-    [
-      "run + displayName stays visible",
-      { createdVia: "run", displayName: "Nightly digest" },
-      false,
-    ],
     ["operator creation stays visible", { createdVia: "operator" }, false],
     ["legacy row without provenance stays visible", {}, false],
     [
@@ -435,5 +443,20 @@ describe("isSystemCreatedSessionRow", () => {
     ],
   ] as const)("%s", (_name, fields, expected) => {
     expect(isSystemCreatedSessionRow({ ...base, ...fields } as GatewaySessionRow)).toBe(expected);
+  });
+});
+
+describe("compareSessionRowsByUpdatedAt", () => {
+  it("breaks updatedAt ties by key, matching the gateway list order", () => {
+    // Gateway compareSessionEntryPairs ends with an ascending key tie-break
+    // ("Stable key ties keep offset paging deterministic"); a UI order that
+    // differs makes tied rows visibly swap on the canonical refresh.
+    const rows = [
+      { key: "agent:main:zeta", kind: "direct", updatedAt: null },
+      { key: "agent:main:alpha", kind: "direct", updatedAt: null },
+      { key: "agent:main:mid", kind: "direct", updatedAt: null },
+    ] as GatewaySessionRow[];
+    const sorted = rows.toSorted(compareSessionRowsByUpdatedAt).map((row) => row.key);
+    expect(sorted).toEqual(["agent:main:alpha", "agent:main:mid", "agent:main:zeta"]);
   });
 });

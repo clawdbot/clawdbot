@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createAgentTurnTaintState } from "./turn-taint-state.js";
 
 describe("agent turn taint state", () => {
+  it("starts tainted for a restricted maintenance source turn", () => {
+    expect(createAgentTurnTaintState(true).isTainted()).toBe(true);
+  });
+
   it("becomes sticky after network content while ignoring presentation updates", () => {
     const state = createAgentTurnTaintState();
     expect(state.isTainted()).toBe(false);

@@ -4,13 +4,16 @@ import {
   EnvironmentsCreateResultSchema,
   EnvironmentsDestroyResultSchema,
   EnvironmentsListResultSchema,
+  EnvironmentsStatusResultSchema,
   EnvironmentSummarySchema,
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
+  validateEnvironmentsListParams,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
 } from "../index.js";
+import { WorkerSlotSummarySchema } from "./environments.js";
 
 const workerStates = [
   "requested",
@@ -114,6 +117,148 @@ describe("worker environment protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts only redacted node worker bundle status", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "missing" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: {
+          status: "installed",
+          version: "2026.8.9",
+          bundleHash: "a".repeat(64),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts only bounded closed worker slot summaries", () => {
+    const slots = { total: 2, available: 1 };
+    expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: slots,
+      }),
+    ).toBe(true);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 0, available: 0 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 3 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 1_025 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { ...slots, busy: 1 })).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: { total: 2, available: 3 },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts only bounded, unique effective node command authority", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        invocableCommands: ["codex.exec-server.stdio.v1", "system.run"],
+      }),
+    ).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands: [] })).toBe(true);
+
+    for (const invocableCommands of [
+      [""],
+      ["system.run", "system.run"],
+      ["x".repeat(129)],
+      Array.from({ length: 129 }, (_, index) => `command.${index}`),
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands })).toBe(false);
+    }
+  });
+
+  it("keeps runtime-scoped node command state bounded and closed", () => {
+    const node = { id: "node:build-mac", type: "node", status: "available" };
+    for (const state of ["invocable", "pending-approval", "undeclared", "unauthorized"] as const) {
+      expect(
+        Value.Check(EnvironmentSummarySchema, {
+          ...node,
+          requiredNodeCommand: { command: "runtime.exec", state },
+        }),
+      ).toBe(true);
+    }
+    const commandState = {
+      ...node,
+      requiredNodeCommand: { command: "runtime.exec", state: "invocable" },
+    };
+    for (const schema of [
+      EnvironmentsCreateResultSchema,
+      EnvironmentsDestroyResultSchema,
+      EnvironmentsStatusResultSchema,
+    ]) {
+      expect(Value.Check(schema, commandState)).toBe(false);
+    }
+    for (const requiredNodeCommand of [
+      { command: "", state: "undeclared" },
+      { command: "x".repeat(129), state: "undeclared" },
+      { command: "runtime.exec", state: "unknown" },
+      { command: "runtime.exec", state: "invocable", pending: true },
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...node, requiredNodeCommand })).toBe(false);
+    }
+
+    expect(validateEnvironmentsListParams({})).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
+    expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex", command: "runtime.exec" })).toBe(
+      false,
+    );
+  });
+
+  it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "unavailable",
+      lastConnectedAtMs: 1_000,
+      lastDisconnectedAtMs: 2_000,
+      lastSeenAtMs: 1_500,
+      lastSeenReason: "silent_push",
+    };
+    expect(Value.Check(EnvironmentSummarySchema, node)).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastDisconnectedAtMs: -1 })).toBe(
+      false,
+    );
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastSeenReason: "" })).toBe(false);
+  });
+
   it("keeps desktop app launch requests, results, and projected ids closed", () => {
     expect(validateWorkerDesktopLaunchParams({ environmentId: "worker:one", app: "browser" })).toBe(
       true,
@@ -145,7 +290,32 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            trust: "disposable",
+            executionMode: "worker-turn",
+            executionModes: ["worker-turn", "remote-exec"],
+            machines: [
+              {
+                id: "standard",
+                label: "Standard",
+                cpu: 32,
+                memoryGb: 64,
+                default: true,
+              },
+            ],
+          },
+          {
+            id: "worker",
+            providerId: "static-ssh",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+          { id: "legacy-primary", providerId: "static-ssh", executionMode: "worker-turn" },
+          { id: "legacy", providerId: "static-ssh" },
+        ],
       }),
     ).toBe(true);
     expect(
@@ -160,6 +330,38 @@ describe("worker environment protocol schemas", () => {
         profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
       }),
     ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", executionMode: "sandbox" }],
+      }),
+    ).toBe(false);
+    for (const executionModes of [
+      [],
+      ["worker-turn", "worker-turn"],
+      ["remote-exec", "worker-turn"],
+      ["worker-turn", "sandbox"],
+      ["worker-turn", "remote-exec", "worker-turn"],
+    ]) {
+      expect(
+        Value.Check(EnvironmentsListResultSchema, {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox", executionModes }],
+        }),
+      ).toBe(false);
+    }
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            machines: [{ id: "standard", label: "Standard", cpu: 0 }],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("preserves summaries without worker metadata and rejects malformed worker metadata", () => {
@@ -170,6 +372,29 @@ describe("worker environment protocol schemas", () => {
         status: "available",
       }),
     ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [
+          {
+            code: "update-required",
+            action: "update-and-reconnect",
+            updateCommand: "openclaw update",
+            headlessReconnectCommand: "openclaw node restart",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [{ code: "update-required", action: "run-legacy-worker" }],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("ready", "available"),

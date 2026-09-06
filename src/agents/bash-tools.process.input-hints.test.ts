@@ -3,7 +3,13 @@
  * Idle writable sessions should surface actionable metadata and user-facing hints.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
+import {
+  addSession,
+  appendOutput,
+  markExited,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -55,6 +61,40 @@ function installWritableStdin(
 }
 
 describe("process input-wait hints", () => {
+  it("does not close stdin when requester authority is revoked during a pending write", async () => {
+    let current = true;
+    const controller = new AbortController();
+    const budget = createAgentToolExecutionBudget({
+      signal: controller.signal,
+      abort: (error) => controller.abort(error),
+      isCurrent: () => current,
+    });
+    const session = createProcessSessionFixture({
+      id: "sess-revoked-input",
+      command: "cat",
+      backgrounded: true,
+    });
+    const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, done) => {
+      current = false;
+      done?.(null);
+    });
+    const end = vi.fn();
+    session.stdin = { write, end, destroyed: false };
+    addSession(session);
+    await expect(
+      budget.run(() =>
+        runProcessAction(createProcessTool(), {
+          action: "write",
+          sessionId: session.id,
+          data: "allowed input",
+          eof: true,
+        }),
+      ),
+    ).rejects.toThrow("execution scope is no longer active");
+    expect(write).toHaveBeenCalledOnce();
+    expect(end).not.toHaveBeenCalled();
+  });
+
   it("reports the UTF-8 byte count for process writes", async () => {
     const processTool = createProcessTool();
     const session = createProcessSessionFixture({
@@ -248,5 +288,59 @@ describe("process input-wait hints", () => {
       sessionId: "sess-finished",
       exitCode: 0,
     });
+  });
+});
+
+describe("process session list chronology", () => {
+  async function expectProcessListOrder(processTool: ProcessTool, expectedIds: string[]) {
+    const result = await runProcessAction(processTool, { action: "list" });
+    const records = (result.details as { sessions: Array<{ sessionId: string }> }).sessions;
+    expect(records.map(({ sessionId }) => sessionId)).toEqual(expectedIds);
+    expect(
+      textOf(result)
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(expectedIds);
+    for (const record of records) {
+      expect(record).not.toHaveProperty("startOrder");
+    }
+  }
+
+  it("keeps equal-timestamp text and details newest-first across terminal transitions", async () => {
+    const sessions = ["z-oldest", "a-middle", "m-newest"].map((id) => {
+      const session = createProcessSessionFixture({
+        id,
+        startedAt: 1_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      return session;
+    });
+    const processTool = createProcessTool();
+    const expectedIds = ["m-newest", "a-middle", "z-oldest"];
+
+    await expectProcessListOrder(processTool, expectedIds);
+    markExited(sessions[0]!, 0, null, "completed");
+    await expectProcessListOrder(processTool, expectedIds);
+    markExited(sessions[2]!, 0, null, "completed");
+    await expectProcessListOrder(processTool, expectedIds);
+    markExited(sessions[1]!, 0, null, "completed");
+    await expectProcessListOrder(processTool, expectedIds);
+  });
+
+  it("keeps actual start timestamps ahead of registration chronology", async () => {
+    for (const [id, startedAt] of [
+      ["middle-clock", 2_000],
+      ["later-clock", 3_000],
+      ["earlier-clock", 1_000],
+    ] as const) {
+      addSession(createProcessSessionFixture({ id, startedAt, backgrounded: true }));
+    }
+
+    await expectProcessListOrder(createProcessTool(), [
+      "later-clock",
+      "middle-clock",
+      "earlier-clock",
+    ]);
   });
 });

@@ -28,7 +28,6 @@ import {
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
 
-const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
 const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
 const DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS = 240;
@@ -171,6 +170,7 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
   const voiceStatesEnabled = intentsConfig?.voiceStates ?? voiceEnabled ?? false;
   let intents =
     discordGateway.GatewayIntents.Guilds |
+    discordGateway.GatewayIntents.GuildExpressions |
     discordGateway.GatewayIntents.GuildMessages |
     discordGateway.GatewayIntents.DirectMessages |
     discordGateway.GatewayIntents.GuildMessageReactions |
@@ -264,7 +264,6 @@ function createGatewayPlugin(params: {
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
       const socket = new WebSocketCtor(url, {
         ...discordGateway.DISCORD_GATEWAY_WS_CLIENT_OPTIONS,
-        handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),
       });
       let lastTransportError: DiscordGatewayTransportErrorDetails | undefined;

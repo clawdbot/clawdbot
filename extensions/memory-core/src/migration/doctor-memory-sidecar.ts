@@ -11,8 +11,8 @@ import {
   legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-// sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
-// enumeration does not cold-load it with this closure.
+// This doctor closure must stay dependency-light while accepting legacy array-backed objects.
+import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   importLegacyMemorySidecarIndex,
   LEGACY_MEMORY_SIDECAR_SUFFIXES,
@@ -25,13 +25,6 @@ function formatLegacyVectorRows(count: number | undefined): string {
 }
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
-
-// This doctor closure must stay dependency-light while accepting legacy array-backed objects.
-function readLegacyObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
   const cfg = config as { agents?: { entries?: unknown; list?: unknown } };
@@ -139,12 +132,41 @@ function readMemorySearchFtsTokenizer(
   return raw === "unicode61" || raw === "trigram" ? raw : undefined;
 }
 
+async function isCanonicalAgentDatabaseSymlink(params: {
+  legacyPath: string;
+  agentDatabasePath: string;
+}): Promise<boolean> {
+  try {
+    if (!(await fs.lstat(params.legacyPath)).isSymbolicLink()) {
+      return false;
+    }
+    for (const suffix of LEGACY_MEMORY_SIDECAR_SUFFIXES.slice(1)) {
+      try {
+        await fs.lstat(`${params.legacyPath}${suffix}`);
+        return false;
+      } catch (err: unknown) {
+        if (!err || typeof err !== "object" || !("code" in err) || err.code !== "ENOENT") {
+          return false;
+        }
+      }
+    }
+    const [legacyTarget, canonicalTarget] = await Promise.all([
+      fs.realpath(params.legacyPath),
+      fs.realpath(params.agentDatabasePath),
+    ]);
+    return legacyTarget === canonicalTarget;
+  } catch {
+    // Only the exact compatibility alias is known non-legacy state. Any unresolved
+    // target remains visible so Doctor cannot hide data it failed to classify.
+    return false;
+  }
+}
+
 async function collectLegacyMemorySidecarSources(params: {
   config: unknown;
   env: NodeJS.ProcessEnv;
   stateDir: string;
 }): Promise<LegacyMemorySidecarSource[]> {
-  const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
   const agentIds = new Set(resolveConfiguredAgentIds(params.config));
   const legacyDir = path.join(params.stateDir, "memory");
   const retrySidecars: Array<{ agentId: string; legacyPath: string }> = [];
@@ -174,11 +196,26 @@ async function collectLegacyMemorySidecarSources(params: {
       return;
     }
     seen.add(key);
+    // Most startups have no legacy sidecars. Load the SQLite graph only after
+    // finding a source that needs its canonical database path checked.
+    const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
+    const agentDatabasePath = resolveOpenClawAgentSqlitePath({
+      agentId,
+      env: migrationEnv,
+    });
+    if (
+      await isCanonicalAgentDatabaseSymlink({
+        legacyPath: normalizedPath,
+        agentDatabasePath,
+      })
+    ) {
+      return;
+    }
     sources.push({
       agentId,
       legacyPath: normalizedPath,
       stateDir: params.stateDir,
-      agentDatabasePath: resolveOpenClawAgentSqlitePath({ agentId, env: migrationEnv }),
+      agentDatabasePath,
     });
   }
   for (const agentId of agentIds) {

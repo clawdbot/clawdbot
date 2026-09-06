@@ -55,6 +55,9 @@ function classifyRest(rest: string): SessionClassification {
   if (normalized.startsWith("hook:")) {
     return "hook";
   }
+  if (normalized.startsWith("node-") || normalized.startsWith("node:")) {
+    return "node";
+  }
   if (normalized.startsWith("harness:")) {
     return "harness";
   }
@@ -64,7 +67,11 @@ function classifyRest(rest: string): SessionClassification {
   if (normalized.startsWith("dreaming-narrative-")) {
     return "dreaming";
   }
-  if (normalized === "boot" || normalized.startsWith("internal-session-effects:")) {
+  if (
+    normalized === "boot" ||
+    normalized.startsWith("boot:") ||
+    normalized.startsWith("internal-session-effects:")
+  ) {
     return "system";
   }
   return "custom";

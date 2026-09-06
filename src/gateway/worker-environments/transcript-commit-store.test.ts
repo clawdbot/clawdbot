@@ -113,6 +113,25 @@ describe("worker transcript commit store", () => {
     expect(store.complete({ ...BASE_INPUT, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
   });
 
+  it("releases only the exact pending reservation without rewinding or releasing its owner", () => {
+    store.begin(BASE_INPUT);
+    store.discardUncommitted({ ...BASE_INPUT, requestHash: "b".repeat(64) });
+    store.discardUncommitted({ ...BASE_INPUT, environmentId: "worker-b" });
+    expect(store.begin(BASE_INPUT)).toEqual({ kind: "recover" });
+
+    store.discardUncommitted(BASE_INPUT);
+    const replacement = { ...BASE_INPUT, requestHash: "b".repeat(64) };
+    expect(store.begin({ ...replacement, environmentId: "worker-b" })).toEqual({
+      kind: "rejected",
+      reason: "conflict",
+    });
+    expect(store.begin(replacement)).toEqual({ kind: "claimed" });
+    store.complete({ ...replacement, outcome: SUCCESS_OUTCOME });
+    store.discardUncommitted(replacement);
+    expect(store.begin(replacement)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
+    expect(store.begin({ ...BASE_INPUT, seq: 2 })).toEqual({ kind: "claimed" });
+  });
+
   it("starts an independent sequence for a later owner epoch", () => {
     expect(store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
     store.complete({ ...BASE_INPUT, outcome: SUCCESS_OUTCOME });

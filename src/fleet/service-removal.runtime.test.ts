@@ -190,6 +190,10 @@ describe("fleet service filesystem and removal", () => {
       gid: 0,
     });
     expect(docker.run.mock.calls[0]?.[0].selinuxRelabel).toBe(true);
+    expect(docker.run.mock.calls[0]?.[0].environment.XDG_CACHE_HOME).toBe(
+      "/home/node/.openclaw/cache",
+    );
+    expect(docker.run.mock.calls[0]?.[0].userEnvironmentKeys).toEqual([]);
 
     const podman = createContainerMock();
     await createFleetService({
@@ -203,6 +207,8 @@ describe("fleet service filesystem and removal", () => {
     expect(podman.run.mock.calls[0]?.[0]).toMatchObject({
       containerUser: { mode: "podman-keep-id", uid: 1001, gid: 1002 },
       selinuxRelabel: true,
+      environment: { XDG_CACHE_HOME: "/home/node/.openclaw/cache" },
+      userEnvironmentKeys: [],
     });
   });
 

@@ -10,6 +10,7 @@ const placement = {
   sessionKey: "agent:main:cloud-session",
   agentId: "main",
   environmentId: "worker:previous",
+  executionMode: "worker-turn",
 } as ReclaimedWorkerPlacement;
 
 describe("createReclaimedPlacementRedispatch", () => {
@@ -25,7 +26,7 @@ describe("createReclaimedPlacementRedispatch", () => {
           ({
             profileId: "development",
             providerId: "fake",
-            profileSnapshot: { settings: { region: "parent" } },
+            profileSnapshot: { machineClass: "large", settings: { region: "parent" } },
           }) as never,
       },
       dispatch,
@@ -37,12 +38,118 @@ describe("createReclaimedPlacementRedispatch", () => {
       sessionKey: placement.sessionKey,
       agentId: placement.agentId,
       profileId: "development",
+      executionMode: "worker-turn",
       inheritedProfile: {
         providerId: "fake",
-        profileSnapshot: { settings: { region: "parent" } },
+        profileSnapshot: { machineClass: "large", settings: { region: "parent" } },
       },
     });
   });
+
+  it("carries the exact paired node and owner-resolved requirement through redispatch", async () => {
+    const requirement = { requiredNodeCommands: [], consumesWorkerSlot: true };
+    const dispatch = vi.fn(async () => ({ state: "active" }) as never);
+    const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
+    const redispatch = createReclaimedPlacementRedispatch({
+      environments: {
+        get: () =>
+          ({
+            profileId: "device:paired-node",
+            providerId: "device",
+            nodeDeviceId: "paired-node",
+            profileSnapshot: { install: "bundle", settings: { device: "paired-node" } },
+          }) as never,
+      },
+      dispatch,
+      resolveDevicePlacementRequirement,
+    });
+
+    await redispatch(placement);
+
+    expect(resolveDevicePlacementRequirement).toHaveBeenCalledWith({
+      sessionId: placement.sessionId,
+      sessionKey: placement.sessionKey,
+      agentId: placement.agentId,
+      executionMode: "worker-turn",
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "paired-node", devicePlacement: requirement }),
+    );
+  });
+
+  it("revalidates a reclaimed cloud node without targeting its retired device", async () => {
+    const remotePlacement = {
+      ...placement,
+      executionMode: "remote-exec" as const,
+    } as ReclaimedWorkerPlacement;
+    const requirement = {
+      requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+      consumesWorkerSlot: false,
+    };
+    const dispatch = vi.fn(async () => ({ state: "active" }) as never);
+    const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
+    const redispatch = createReclaimedPlacementRedispatch({
+      environments: {
+        get: () =>
+          ({
+            profileId: "cloud:development",
+            providerId: "crabbox",
+            nodeDeviceId: "retired-cloud-node",
+            profileSnapshot: { machineClass: "large", settings: { region: "parent" } },
+          }) as never,
+      },
+      dispatch,
+      resolveDevicePlacementRequirement,
+    });
+
+    await redispatch(remotePlacement);
+
+    expect(resolveDevicePlacementRequirement).toHaveBeenCalledWith({
+      sessionId: remotePlacement.sessionId,
+      sessionKey: remotePlacement.sessionKey,
+      agentId: remotePlacement.agentId,
+      executionMode: "remote-exec",
+    });
+    expect(dispatch).toHaveBeenCalledWith({
+      sessionId: remotePlacement.sessionId,
+      sessionKey: remotePlacement.sessionKey,
+      agentId: remotePlacement.agentId,
+      profileId: "cloud:development",
+      executionMode: "remote-exec",
+      devicePlacement: requirement,
+      inheritedProfile: {
+        providerId: "crabbox",
+        profileSnapshot: { machineClass: "large", settings: { region: "parent" } },
+      },
+    });
+  });
+
+  it.each([
+    { providerId: "device", executionMode: "worker-turn" },
+    { providerId: "crabbox", executionMode: "remote-exec" },
+  ] as const)(
+    "rejects $providerId node redispatch without its runtime requirement owner",
+    async ({ providerId, executionMode }) => {
+      const dispatch = vi.fn();
+      const redispatch = createReclaimedPlacementRedispatch({
+        environments: {
+          get: () =>
+            ({
+              profileId: "device:paired-node",
+              providerId,
+              nodeDeviceId: "paired-node",
+              profileSnapshot: { install: "bundle", settings: { device: "paired-node" } },
+            }) as never,
+        },
+        dispatch,
+      });
+
+      await expect(
+        redispatch({ ...placement, executionMode } as ReclaimedWorkerPlacement),
+      ).rejects.toThrow("authoritative runtime requirement");
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails closed when the prior environment record is unavailable", async () => {
     const redispatch = createReclaimedPlacementRedispatch({

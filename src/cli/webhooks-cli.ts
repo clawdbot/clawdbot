@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Webhook CLI registrations, currently Gmail Pub/Sub setup and service runner commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -20,7 +21,7 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -71,7 +72,10 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailSetupOptions(opts);
         await runGmailSetup(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        if (opts.json) {
+          throw new Error(formatErrorMessage(err), { cause: err });
+        }
+        defaultRuntime.error(danger(formatErrorMessage(err)));
         defaultRuntime.exit(1);
       }
     });
@@ -103,7 +107,7 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailRunOptions(opts);
         await runGmailService(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(formatErrorMessage(err)));
         defaultRuntime.exit(1);
       }
     });
@@ -121,7 +125,7 @@ function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions
   return {
     account,
     project: normalizeOptionalString(raw.project),
-    ...gmailOptionsFromCommon(common),
+    ...common,
     pushEndpoint: normalizeOptionalString(raw.pushEndpoint),
     json: Boolean(raw.json),
   };
@@ -131,11 +135,11 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
   const common = parseGmailCommonOptions(raw);
   return {
     account: normalizeOptionalString(raw.account),
-    ...gmailOptionsFromCommon(common),
+    ...common,
   };
 }
 
-function parseGmailCommonOptions(raw: Record<string, unknown>) {
+function parseGmailCommonOptions(raw: Record<string, unknown>): Omit<GmailRunOptions, "account"> {
   return {
     topic: normalizeOptionalString(raw.topic),
     subscription: normalizeOptionalString(raw.subscription),
@@ -152,28 +156,6 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     tailscale: tailscaleModeOption(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
-  };
-}
-
-function gmailOptionsFromCommon(
-  common: ReturnType<typeof parseGmailCommonOptions>,
-): Omit<GmailRunOptions, "account"> {
-  return {
-    topic: common.topic,
-    subscription: common.subscription,
-    label: common.label,
-    hookUrl: common.hookUrl,
-    hookToken: common.hookToken,
-    pushToken: common.pushToken,
-    bind: common.bind,
-    port: common.port,
-    path: common.path,
-    includeBody: common.includeBody,
-    maxBytes: common.maxBytes,
-    renewEveryMinutes: common.renewEveryMinutes,
-    tailscale: common.tailscale,
-    tailscalePath: common.tailscalePath,
-    tailscaleTarget: common.tailscaleTarget,
   };
 }
 

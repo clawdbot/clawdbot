@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
@@ -89,8 +90,7 @@ function createSandboxTempDir(hostEnv: BaselineHostEnv): string {
 function assertWorkdirInsideWorkspace(workspaceDir: string, workdir: string): string {
   const workspace = realpathForExistingPath(workspaceDir, "sandbox workspace");
   const candidate = realpathForPotentialPath(workdir);
-  const relative = path.relative(workspace, candidate);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+  if (isPathInside(workspace, candidate)) {
     return candidate;
   }
   throw new Error(

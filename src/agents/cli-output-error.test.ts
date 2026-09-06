@@ -27,9 +27,79 @@ describe("formatCliOutputError", () => {
     expect(hasDanglingSurrogate(error)).toBe(false);
     expect(error).toContain(`Claude session: ${"s".repeat(199)}.`);
   });
+
+  it("names the Claude terminal reason and the hook that stopped the turn", () => {
+    const error = formatCliOutputError(
+      {
+        text: "",
+        sessionId: "claude-session-1",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "tool_use",
+        },
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    expect(error).toBe(
+      "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
+        "OpenClaw run: run-1. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+        "apply to headless runs — move or disable that hook.",
+    );
+  });
+
+  it("omits the hook guidance for terminal reasons no hook caused", () => {
+    const error = formatCliOutputError({
+      text: "",
+      terminalFailure: { reason: "turn_stopped", terminalReason: "aborted_tools" },
+    });
+
+    expect(error).toBe(
+      "Claude CLI ended the turn without a reply (terminal_reason: aborted_tools). " +
+        "Tool actions may already have run; verify their effects before retrying.",
+    );
+  });
 });
 
 describe("parseCliJsonl errors", () => {
+  it("keeps an explicit Claude execution error that also reports a terminal reason", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "partial" } },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          session_id: "claude-execution-error",
+          stop_reason: "error",
+          terminal_reason: "error_during_execution",
+          result: "",
+          errors: ["API Error: 529 Overloaded"],
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "claude-execution-error",
+      usage: undefined,
+      errorText: "API Error: 529 Overloaded",
+    });
+  });
+
   it("keeps detailed Gemini stream-json result errors over generic error events", () => {
     const result = parseCliJsonl(
       [
@@ -287,35 +357,38 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it("keeps plugin-owned terminal errors ahead of later result summaries", () => {
-    const usageEvents: Array<{ usage: unknown; isTerminal: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
-      parseJsonlEvent: (line) =>
-        line === "failed"
-          ? { kind: "result", errorText: "provider failed" }
-          : {
-              kind: "result",
-              text: "must not replace the provider error",
-              sessionId: "late-successor",
-              usage: { input: 2, output: 1, total: 3 },
-            },
-      onAssistantDelta: () => {},
-      onUsage: (usage, isTerminal) => usageEvents.push({ usage, isTerminal }),
-    });
+  it.each(["", "preserved answer"])(
+    "keeps plugin-owned terminal errors and text %j ahead of later result summaries",
+    (text) => {
+      const usageEvents: Array<{ usage: unknown; isTerminal: boolean }> = [];
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "acme", output: "jsonl" },
+        providerId: "acme-cli",
+        parseJsonlEvent: (line) =>
+          line === "failed"
+            ? { kind: "result", text, errorText: "provider failed" }
+            : {
+                kind: "result",
+                text: "must not replace the provider error",
+                sessionId: "late-successor",
+                usage: { input: 2, output: 1, total: 3 },
+              },
+        onAssistantDelta: () => {},
+        onUsage: (usage, isTerminal) => usageEvents.push({ usage, isTerminal }),
+      });
 
-    parser.push("failed\nsummary\n");
-    parser.finish();
+      parser.push("failed\nsummary\n");
+      parser.finish();
 
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: "late-successor",
-      usage: { input: 2, output: 1, total: 3 },
-      errorText: "provider failed",
-    });
-    expect(usageEvents).toEqual([{ usage: { input: 2, output: 1, total: 3 }, isTerminal: true }]);
-  });
+      expect(parser.getOutput()).toEqual({
+        text,
+        sessionId: "late-successor",
+        usage: { input: 2, output: 1, total: 3 },
+        errorText: "provider failed",
+      });
+      expect(usageEvents).toEqual([{ usage: { input: 2, output: 1, total: 3 }, isTerminal: true }]);
+    },
+  );
 
   it("preserves plugin-owned session ids emitted after terminal errors", () => {
     const sessionIds: string[] = [];
@@ -388,7 +461,11 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it("retains built-in fallback text after a plugin handles other lines", () => {
+  it.each([
+    ["without a result", undefined, "delegated answer"],
+    ["with an empty result", "  ", "delegated answer"],
+    ["with an authoritative result", "final answer", "final answer"],
+  ] as const)("retains mixed plugin text precedence %s", (_label, resultText, expectedText) => {
     const parser = createCliJsonlStreamingParser({
       backend: { command: "acme", output: "jsonl" },
       providerId: "acme-cli",
@@ -398,6 +475,9 @@ describe("createCliJsonlStreamingParser errors", () => {
         }
         if (line === "prefix") {
           return { kind: "text", text: "streamed prefix" };
+        }
+        if (line === "result") {
+          return { kind: "result", text: resultText };
         }
         return null;
       },
@@ -412,13 +492,14 @@ describe("createCliJsonlStreamingParser errors", () => {
           type: "item.completed",
           item: { type: "agent_message", text: "delegated answer" },
         }),
+        ...(resultText === undefined ? [] : ["result"]),
         "",
       ].join("\n"),
     );
     parser.finish();
 
     expect(parser.getOutput()).toEqual({
-      text: "delegated answer",
+      text: expectedText,
       sessionId: "custom-session",
       usage: undefined,
     });

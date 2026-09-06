@@ -1,0 +1,114 @@
+--- telegram-direct-codex-message-tool.md	sha256=4ccd7b67897480239b45c7bd8fb2e01c69a1d8a4d1a2feec480d9f57c417509a
++++ telegram-heartbeat-codex-tool.md	sha256=66b6638b021d22ed67f20d91129e12de72a7c7631b6f696b863fcb57818fa7da
+@@ -1,1 +1,1 @@
+-# Telegram Direct Codex Message Tool Turn
++# Telegram Direct Codex Heartbeat Tool Turn
+@@ -7,2 +7,2 @@
+-- Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
+-- A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
++- Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.
++- The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.
+@@ -30,2 +30,2 @@
+-  "toolSnapshot": "codex-dynamic-tools.telegram-direct.json",
+-  "trigger": "user"
++  "toolSnapshot": "codex-dynamic-tools.heartbeat-turn.json",
++  "trigger": "heartbeat"
+@@ -98,0 +99,1 @@
++    "heartbeat_respond",
+@@ -137,1 +138,1 @@
+-  "threadId": "thread-telegram-direct-codex-message-tool"
++  "threadId": "thread-telegram-heartbeat-codex-tool"
+@@ -146,4 +146,0 @@
+-    "openclaw_current_sender": {
+-      "kind": "untrusted",
+-      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+-    },
+@@ -183,1 +180,1 @@
+-  "threadId": "thread-telegram-direct-codex-message-tool"
++  "threadId": "thread-telegram-heartbeat-codex-tool"
+@@ -222,1 +219,1 @@
+-    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
++    "dynamicToolsFrom": "codex-dynamic-tools.heartbeat-turn.json",
+@@ -234,2 +231,2 @@
+-    "chars": 882,
+-    "roughTokens": 221
++    "chars": 752,
++    "roughTokens": 188
+@@ -254,2 +251,2 @@
+-    "chars": 57821,
+-    "roughTokens": 14456
++    "chars": 59314,
++    "roughTokens": 14829
+@@ -262,2 +259,2 @@
+-    "chars": 27692,
+-    "roughTokens": 6923
++    "chars": 27904,
++    "roughTokens": 6976
+@@ -266,2 +263,2 @@
+-    "chars": 85515,
+-    "roughTokens": 21379
++    "chars": 87220,
++    "roughTokens": 21805
+@@ -270,2 +267,2 @@
+-    "chars": 863,
+-    "roughTokens": 216
++    "chars": 1205,
++    "roughTokens": 302
+@@ -520,6 +516,0 @@
+-### User: OpenClaw Additional Context (openclaw_current_sender)
+-
+-```text
+-<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
+-```
+-
+@@ -565,1 +556,1 @@
+-{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
++{"chat_id":"user:1000001","message_id":"heartbeat-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
+@@ -568,1 +559,1 @@
+-Can you check whether the nightly build finished and tell me what happened?
++Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
+@@ -573,1 +564,1 @@
+-Full JSON: `codex-dynamic-tools.telegram-direct.json`
++Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
+@@ -593,0 +585,1 @@
++  "heartbeat_respond",
+@@ -744,0 +737,39 @@
++  },
++  {
++    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
++    "inputSchema": {
++      "additionalProperties": false,
++      "properties": {
++        "nextCheck": {
++          "type": "string"
++        },
++        "notificationText": {
++          "type": "string"
++        },
++        "notify": {
++          "type": "boolean"
++        },
++        "outcome": {
++          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
++          "type": "string"
++        },
++        "priority": {
++          "enum": ["low", "normal", "high"],
++          "type": "string"
++        },
++        "reason": {
++          "type": "string"
++        },
++        "scratch": {
++          "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
++          "type": "string"
++        },
++        "summary": {
++          "type": "string"
++        }
++      },
++      "required": ["outcome", "notify", "summary"],
++      "type": "object"
++    },
++    "name": "heartbeat_respond",
++    "type": "function"

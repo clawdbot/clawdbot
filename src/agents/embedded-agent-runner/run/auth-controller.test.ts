@@ -1,4 +1,7 @@
 // Coverage for embedded run auth initialization and runtime credential refresh.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -10,6 +13,9 @@ import {
   resolveSecretSentinel,
 } from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
+import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../../auth-profiles/store-runtime.js";
 import { FailoverError } from "../../failover-error.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
@@ -39,6 +45,7 @@ vi.mock("../../model-auth.js", async () => {
 import {
   createEmbeddedRunAuthController,
   resolveEmbeddedAuthCooldownProbePolicy,
+  type EmbeddedRunAuthState,
 } from "./auth-controller.js";
 
 function createTestModel(): Model {
@@ -65,15 +72,6 @@ function getRuntimeAuthSnapshot(
   return state ? { profileId: state.profileId, refreshInFlight: state.refreshInFlight } : null;
 }
 
-type MutableAuthControllerHarness = {
-  runtimeModel: Model;
-  effectiveModel: Model;
-  apiKeyInfo: unknown;
-  lastProfileId?: string;
-  runtimeAuthState: RuntimeAuthState | null;
-  profileIndex: number;
-};
-
 type RuntimeApiKeySetter = Mock<(provider: string, apiKey: string) => void>;
 
 function expectProtectedRuntimeValue(value: string | undefined, plaintext: string): void {
@@ -82,35 +80,35 @@ function expectProtectedRuntimeValue(value: string | undefined, plaintext: strin
   expect(resolveSecretSentinel(value ?? "")).toBe(plaintext);
 }
 
-function createMutableAuthControllerHarness(): MutableAuthControllerHarness {
-  // Mutable harness mirrors the runner fields the auth controller updates
-  // through injected getters/setters.
+function createMutableAuthControllerHarness(): EmbeddedRunAuthState {
   return {
-    runtimeModel: createTestModel(),
-    effectiveModel: createTestModel(),
+    models: { runtime: createTestModel(), effective: createTestModel() },
     apiKeyInfo: null,
     lastProfileId: undefined,
     runtimeAuthState: null,
+    runtimeAuthRefreshCancelled: false,
     profileIndex: 0,
+    thinkLevel: "medium",
   };
 }
 
 function createMutableEmbeddedRunAuthController(params: {
-  harness: MutableAuthControllerHarness;
+  harness: EmbeddedRunAuthState;
   setRuntimeApiKey: RuntimeApiKeySetter;
-  profileCandidates?: string[];
+  profileCandidates?: Array<string | undefined>;
   authStore?: AuthProfileStore;
   fallbackConfigured?: boolean;
   lockedProfileId?: string;
   allowTransientCooldownProbe?: boolean;
   warn?: (message: string) => void;
+  agentDir?: string;
   prepareModelForAuthProfile?: Parameters<
     typeof createEmbeddedRunAuthController
   >[0]["prepareModelForAuthProfile"];
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
-    agentDir: "/tmp/agent",
+    agentDir: params.agentDir ?? "/tmp/agent",
     workspaceDir: "/tmp/workspace",
     authStore:
       params.authStore ??
@@ -125,38 +123,12 @@ function createMutableEmbeddedRunAuthController(params: {
     attemptedThinking: new Set(),
     fallbackConfigured: params.fallbackConfigured ?? false,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe ?? false,
-    getProvider: () => "custom-openai",
-    getModelId: () => "test-model",
-    getRuntimeModel: () => params.harness.runtimeModel,
-    setRuntimeModel: (next) => {
-      params.harness.runtimeModel = next;
-    },
-    getEffectiveModel: () => params.harness.effectiveModel,
-    setEffectiveModel: (next) => {
-      params.harness.effectiveModel = next;
-    },
-    getApiKeyInfo: () => params.harness.apiKeyInfo as never,
-    setApiKeyInfo: (next) => {
-      params.harness.apiKeyInfo = next;
-    },
-    getLastProfileId: () => params.harness.lastProfileId,
-    setLastProfileId: (next) => {
-      params.harness.lastProfileId = next;
-    },
-    getRuntimeAuthState: () => params.harness.runtimeAuthState as never,
-    setRuntimeAuthState: (next) => {
-      params.harness.runtimeAuthState = next;
-    },
-    getRuntimeAuthRefreshCancelled: () => false,
-    setRuntimeAuthRefreshCancelled: () => undefined,
-    getProfileIndex: () => params.harness.profileIndex,
-    setProfileIndex: (next) => {
-      params.harness.profileIndex = next;
-    },
+    provider: "custom-openai",
+    modelId: "test-model",
+    state: params.harness,
     ...(params.prepareModelForAuthProfile
       ? { prepareModelForAuthProfile: params.prepareModelForAuthProfile }
       : {}),
-    setThinkLevel: () => undefined,
     log: {
       debug: () => undefined,
       info: () => undefined,
@@ -181,7 +153,7 @@ describe("createEmbeddedRunAuthController", () => {
     };
     mocks.getApiKeyForModelCore.mockImplementation(async ({ model }) => {
       expect(model).toBe(selectedModel);
-      expect(harness.runtimeModel).not.toBe(selectedModel);
+      expect(harness.models.runtime).not.toBe(selectedModel);
       return {
         apiKey: "subscription-token",
         mode: "oauth" as const,
@@ -199,14 +171,14 @@ describe("createEmbeddedRunAuthController", () => {
         runtimeModel: selectedModel,
         authRequirement: "subscription",
         commit: () => {
-          harness.runtimeModel = selectedModel;
-          harness.effectiveModel = selectedModel;
+          harness.models.runtime = selectedModel;
+          harness.models.effective = selectedModel;
         },
       }),
     });
 
     await controller.initializeAuthProfile();
-    expect(harness.runtimeModel).toBe(selectedModel);
+    expect(harness.models.runtime).toBe(selectedModel);
     expect(harness.lastProfileId).toBe("openai:chatgpt");
   });
 
@@ -276,11 +248,14 @@ describe("createEmbeddedRunAuthController", () => {
       | undefined;
     expect(apiKeyParams?.agentDir).toBe("/tmp/agent");
     expect(apiKeyParams?.workspaceDir).toBe("/tmp/workspace");
-    expect(harness.runtimeModel.baseUrl).toBe("https://runtime.example.com/v1");
-    expectProtectedRuntimeValue(harness.runtimeModel.headers?.["api-key"], "runtime-header-token");
-    expect(harness.effectiveModel.baseUrl).toBe("https://runtime.example.com/v1");
+    expect(harness.models.runtime.baseUrl).toBe("https://runtime.example.com/v1");
     expectProtectedRuntimeValue(
-      harness.effectiveModel.headers?.["api-key"],
+      harness.models.runtime.headers?.["api-key"],
+      "runtime-header-token",
+    );
+    expect(harness.models.effective.baseUrl).toBe("https://runtime.example.com/v1");
+    expectProtectedRuntimeValue(
+      harness.models.effective.headers?.["api-key"],
       "runtime-header-token",
     );
     const storedApiKey = setRuntimeApiKey.mock.calls[0]?.[1];
@@ -327,8 +302,8 @@ describe("createEmbeddedRunAuthController", () => {
       ...createTestModel(),
       headers: { "x-base": "base" },
     };
-    harness.runtimeModel = baseModel;
-    harness.effectiveModel = baseModel;
+    harness.models.runtime = baseModel;
+    harness.models.effective = baseModel;
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
     mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => ({
@@ -360,17 +335,17 @@ describe("createEmbeddedRunAuthController", () => {
     });
 
     await controller.initializeAuthProfile();
-    expect(harness.runtimeModel.baseUrl).toBe("https://default-runtime.example.com/v1");
-    expect(harness.runtimeModel.headers?.["x-base"]).toBe("base");
+    expect(harness.models.runtime.baseUrl).toBe("https://default-runtime.example.com/v1");
+    expect(harness.models.runtime.headers?.["x-base"]).toBe("base");
     expectProtectedRuntimeValue(
-      harness.runtimeModel.headers?.["x-profile-token"],
+      harness.models.runtime.headers?.["x-profile-token"],
       "default-profile-token",
     );
 
     await controller.advanceAuthProfile();
 
-    expect(harness.runtimeModel.baseUrl).toBe("https://old.example.com/v1");
-    expect(harness.runtimeModel.headers).toEqual({ "x-base": "base" });
+    expect(harness.models.runtime.baseUrl).toBe("https://old.example.com/v1");
+    expect(harness.models.runtime.headers).toEqual({ "x-base": "base" });
     expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "backup-source-key");
   });
 
@@ -403,6 +378,95 @@ describe("createEmbeddedRunAuthController", () => {
     ).toHaveLength(1);
     expect(harness.profileIndex).toBe(2);
   });
+
+  it.each([
+    {
+      label: "initial candidate",
+      profileCandidates: ["expired", "healthy"],
+      expectedOrder: ["healthy", "expired"],
+      advanceAfterInitialization: false,
+    },
+    {
+      label: "rotated candidate",
+      profileCandidates: ["current", "expired", "healthy"],
+      expectedOrder: ["current", "healthy", "expired"],
+      advanceAfterInitialization: true,
+    },
+  ])(
+    "records a failed OAuth refresh for the $label and prefers the healthy profile next",
+    async ({ profileCandidates, expectedOrder, advanceAfterInitialization }) => {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-controller-"));
+      try {
+        const authStore: AuthProfileStore = {
+          version: 1,
+          profiles: {
+            current: { type: "api_key", provider: "custom-openai", key: "current-key" },
+            expired: {
+              type: "oauth",
+              provider: "custom-openai",
+              access: "expired-access",
+              refresh: "revoked-refresh",
+              expires: 0,
+            },
+            healthy: { type: "api_key", provider: "custom-openai", key: "healthy-key" },
+          },
+          order: { "custom-openai": profileCandidates },
+        };
+        saveAuthProfileStore(authStore, agentDir);
+        mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
+          if (profileId === "expired") {
+            throw new OAuthRefreshFailureError({
+              provider: "custom-openai",
+              profileId,
+              message: "OAuth token refresh failed for custom-openai: invalid_grant",
+            });
+          }
+          return {
+            apiKey: `${String(profileId)}-key`,
+            mode: "api-key" as const,
+            profileId,
+            source: `profile:${String(profileId)}`,
+          };
+        });
+        mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+        const harness = createMutableAuthControllerHarness();
+        const warn = vi.fn<(message: string) => void>();
+        const controller = createMutableEmbeddedRunAuthController({
+          harness,
+          setRuntimeApiKey: vi.fn(),
+          profileCandidates,
+          authStore,
+          agentDir,
+          warn,
+        });
+
+        await controller.initializeAuthProfile();
+        if (advanceAfterInitialization) {
+          await expect(controller.advanceAuthProfile()).resolves.toBe(true);
+        }
+
+        expect(harness.lastProfileId).toBe("healthy");
+        const persistedStore = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+        expect(persistedStore.usageStats?.expired).toMatchObject({
+          disabledReason: "auth_permanent",
+          failureCounts: { auth_permanent: 1 },
+        });
+        expect(persistedStore.usageStats?.expired?.disabledUntil).toBeGreaterThan(Date.now());
+        expect(
+          resolveAuthProfileOrder({
+            store: persistedStore,
+            provider: "custom-openai",
+            forModel: "test-model",
+          }),
+        ).toEqual(expectedOrder);
+        expect(warn).toHaveBeenCalledWith(
+          'auth profile "expired" failed for provider "custom-openai": OAuth token refresh failed for custom-openai: invalid_grant',
+        );
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("unwraps a sentinel for runtime auth exchange but keeps auth storage opaque", async () => {
     const harness = createMutableAuthControllerHarness();
@@ -437,7 +501,7 @@ describe("createEmbeddedRunAuthController", () => {
     const storedApiKey = setRuntimeApiKey.mock.calls[0]?.[1];
     expect(storedApiKey && looksLikeSecretSentinel(storedApiKey)).toBe(true);
     expect(storedApiKey && resolveSecretSentinel(storedApiKey)).toBe("runtime-exchange-token");
-    const storedHeader = harness.runtimeModel.headers?.["api-key"];
+    const storedHeader = harness.models.runtime.headers?.["api-key"];
     expect(storedHeader && looksLikeSecretSentinel(storedHeader)).toBe(true);
     expect(storedHeader && resolveSecretSentinel(storedHeader)).toBe("runtime-header-token");
   });
@@ -509,41 +573,74 @@ describe("createEmbeddedRunAuthController", () => {
     });
   });
 
-  it("preserves OAuth mode when billing-disabled profiles are all unavailable", async () => {
+  it.each(["billing", "auth_permanent"] as const)(
+    "preserves OAuth mode when %s-disabled profiles are all unavailable",
+    async (disabledReason) => {
+      const harness = createMutableAuthControllerHarness();
+      const profileId = "custom-openai:oauth";
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey: vi.fn(),
+        profileCandidates: [profileId],
+        fallbackConfigured: true,
+        authStore: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "custom-openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+          usageStats: {
+            [profileId]: {
+              disabledUntil: Date.now() + 60_000,
+              disabledReason,
+            },
+          },
+        },
+      });
+
+      const error = await controller.initializeAuthProfile().catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(FailoverError);
+      expect(error).toMatchObject({
+        reason: disabledReason,
+        authMode: "oauth",
+      });
+    },
+  );
+
+  it("preserves selected-profile identity through auth exhaustion bookkeeping", async () => {
     const harness = createMutableAuthControllerHarness();
-    const profileId = "custom-openai:oauth";
+    mocks.getApiKeyForModelCore.mockRejectedValue(
+      Object.assign(new Error("selected profile missing"), {
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+      }),
+    );
     const controller = createMutableEmbeddedRunAuthController({
       harness,
       setRuntimeApiKey: vi.fn(),
-      profileCandidates: [profileId],
+      profileCandidates: ["first", "second"],
       fallbackConfigured: true,
-      authStore: {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "custom-openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
-        usageStats: {
-          [profileId]: {
-            disabledUntil: Date.now() + 60_000,
-            disabledReason: "billing",
-          },
-        },
-      },
     });
 
     const error = await controller.initializeAuthProfile().catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(FailoverError);
     expect(error).toMatchObject({
-      reason: "billing",
-      authMode: "oauth",
+      reason: "auth",
+      code: "selected_auth_profile_unavailable",
+      authProfileFailure: { allInCooldown: false },
     });
+    expect(mocks.getApiKeyForModelCore.mock.calls.map(([params]) => params.profileId)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(harness.profileIndex).toBe(2);
   });
 
   it("only enables transient cooldown probing when every automatic profile is transiently cooled", () => {
@@ -647,8 +744,6 @@ describe("createEmbeddedRunAuthController", () => {
   });
 
   it("rejects privileged runtime transport overrides on the first auth exchange", async () => {
-    let runtimeModel = createTestModel();
-
     mocks.getApiKeyForModelCore.mockResolvedValue({
       apiKey: "source-api-key",
       mode: "api-key",
@@ -665,46 +760,9 @@ describe("createEmbeddedRunAuthController", () => {
       },
     });
 
-    const controller = createEmbeddedRunAuthController({
-      config: undefined,
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-      authStore: {
-        version: 1,
-        profiles: {},
-      } as AuthProfileStore,
-      authStorage: {
-        setRuntimeApiKey: vi.fn<(provider: string, apiKey: string) => void>(),
-      },
-      profileCandidates: ["default"],
-      initialThinkLevel: "medium",
-      attemptedThinking: new Set(),
-      fallbackConfigured: false,
-      allowTransientCooldownProbe: false,
-      getProvider: () => "custom-openai",
-      getModelId: () => "test-model",
-      getRuntimeModel: () => runtimeModel,
-      setRuntimeModel: (next) => {
-        runtimeModel = next;
-      },
-      getEffectiveModel: () => runtimeModel,
-      setEffectiveModel: () => undefined,
-      getApiKeyInfo: () => null as never,
-      setApiKeyInfo: () => undefined,
-      getLastProfileId: () => undefined,
-      setLastProfileId: () => undefined,
-      getRuntimeAuthState: () => null,
-      setRuntimeAuthState: () => undefined,
-      getRuntimeAuthRefreshCancelled: () => false,
-      setRuntimeAuthRefreshCancelled: () => undefined,
-      getProfileIndex: () => 0,
-      setProfileIndex: () => undefined,
-      setThinkLevel: () => undefined,
-      log: {
-        debug: () => undefined,
-        info: () => undefined,
-        warn: () => undefined,
-      },
+    const controller = createMutableEmbeddedRunAuthController({
+      harness: createMutableAuthControllerHarness(),
+      setRuntimeApiKey: vi.fn(),
     });
 
     await expect(controller.initializeAuthProfile()).rejects.toThrow(
@@ -797,8 +855,8 @@ describe("createEmbeddedRunAuthController", () => {
 
       await controller.advanceAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");
-      expect(harness.runtimeModel.baseUrl).toBe("https://backup-runtime.example.com/v1");
-      const backupHeader = harness.runtimeModel.headers?.["api-key"];
+      expect(harness.models.runtime.baseUrl).toBe("https://backup-runtime.example.com/v1");
+      const backupHeader = harness.models.runtime.headers?.["api-key"];
       expectProtectedRuntimeValue(backupHeader, "backup-runtime-header-token");
 
       staleRefresh.resolve({
@@ -817,8 +875,8 @@ describe("createEmbeddedRunAuthController", () => {
       await Promise.resolve();
 
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");
-      expect(harness.runtimeModel.baseUrl).toBe("https://backup-runtime.example.com/v1");
-      expect(harness.runtimeModel.headers?.["api-key"]).toBe(backupHeader);
+      expect(harness.models.runtime.baseUrl).toBe("https://backup-runtime.example.com/v1");
+      expect(harness.models.runtime.headers?.["api-key"]).toBe(backupHeader);
       const storedBackupApiKey = setRuntimeApiKey.mock.calls.at(-1)?.[1];
       expectProtectedRuntimeValue(storedBackupApiKey, "backup-runtime-api-key");
       controller.stopRuntimeAuthRefreshTimer();
@@ -845,7 +903,7 @@ describe("createEmbeddedRunAuthController", () => {
       const controller = createMutableEmbeddedRunAuthController({
         harness,
         setRuntimeApiKey,
-        profileCandidates: [undefined as unknown as string],
+        profileCandidates: [undefined],
       });
 
       await controller.initializeAuthProfile();
@@ -872,7 +930,7 @@ describe("createEmbeddedRunAuthController", () => {
       const controller = createMutableEmbeddedRunAuthController({
         harness,
         setRuntimeApiKey,
-        profileCandidates: [undefined as unknown as string],
+        profileCandidates: [undefined],
       });
 
       await controller.initializeAuthProfile();
@@ -904,7 +962,7 @@ describe("createEmbeddedRunAuthController", () => {
         const controller = createMutableEmbeddedRunAuthController({
           harness,
           setRuntimeApiKey,
-          profileCandidates: [undefined as unknown as string],
+          profileCandidates: [undefined],
         });
 
         await controller.initializeAuthProfile();
@@ -932,7 +990,7 @@ describe("createEmbeddedRunAuthController", () => {
       const controller = createMutableEmbeddedRunAuthController({
         harness,
         setRuntimeApiKey,
-        profileCandidates: [undefined as unknown as string],
+        profileCandidates: [undefined],
         warn,
       });
 

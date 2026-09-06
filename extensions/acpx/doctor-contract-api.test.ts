@@ -12,7 +12,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   legacyConfigRules,
   normalizeCompatibilityConfig,
@@ -28,6 +28,10 @@ import {
   ACPX_LEGACY_PROCESS_LEASE_FILE,
   type AcpxGatewayInstanceRecord,
 } from "./src/state.js";
+
+vi.mock("./runtime-api.js", () => {
+  throw new Error("Empty-state doctor detection must not load ACPX runtime helpers");
+});
 
 describe("acpx doctor config repair", () => {
   it("flags both retired config keys for openclaw doctor --fix", () => {
@@ -105,6 +109,7 @@ describe("acpx doctor state migration", () => {
   });
 
   afterEach(async () => {
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -117,6 +122,33 @@ describe("acpx doctor state migration", () => {
       context: createDoctorContext(env),
     };
   }
+
+  it.each(["missing", "empty"])(
+    "does not load runtime helpers or inspect claims when the legacy directory is %s",
+    async (directoryState) => {
+      if (directoryState === "empty") {
+        await fs.mkdir(path.join(stateDir, "state", "sessions"), { recursive: true });
+      }
+      const migration = expectDefined(
+        stateMigrations.find((entry) => entry.id === "acpx-session-owner-resources"),
+        "ACP session owner migration",
+      );
+      await expect(
+        migration.detectLegacyState({
+          ...migrationParams(),
+          serviceWorkspaceDir: stateDir,
+          context: {
+            openPluginStateKeyedStore() {
+              throw new Error("No record requires a state store");
+            },
+            async inspectAcpSessionClaims() {
+              throw new Error("No record requires canonical ownership evidence");
+            },
+          },
+        }),
+      ).resolves.toBeNull();
+    },
+  );
 
   it("imports legacy gateway identity and open process leases into plugin state", async () => {
     const gatewayPath = path.join(stateDir, ACPX_LEGACY_GATEWAY_INSTANCE_FILE);

@@ -1,10 +1,12 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
+import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -28,6 +30,11 @@ export type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
+  /** Host-only root for system-owned turns; never persisted in cron state. */
+  executionRoot?: string;
+  /** Explicit instruction set for a host-owned turn, including an empty review context. */
+  skillsSnapshot?: SkillSnapshot;
 };
 
 export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
@@ -41,6 +48,25 @@ export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
 ) => RunCronAgentTurnResult;
 
+const CRON_EXECUTION_ROOT_RUNTIME_ERROR =
+  "collection review requires the embedded agent runtime; the configured CLI runtime cannot be rooted at the Workshop directory";
+
+export class CronExecutionRootRuntimeError extends Error {
+  constructor() {
+    super(CRON_EXECUTION_ROOT_RUNTIME_ERROR);
+    this.name = "CronExecutionRootRuntimeError";
+  }
+}
+
+export function assertCronExecutionRootRuntime(
+  executionRoot: string | undefined,
+  runtime: string,
+): void {
+  if (executionRoot && runtime !== "openclaw") {
+    throw new CronExecutionRootRuntimeError();
+  }
+}
+
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
 );
@@ -50,9 +76,6 @@ const cronExternalContentRuntimeLoader = createLazyImportLoader(
 const cronAuthProfileRuntimeLoader = createLazyImportLoader(
   () => import("./run-auth-profile.runtime.js"),
 );
-const cronModelPreflightRuntimeLoader = createLazyImportLoader(
-  () => import("./model-preflight.runtime.js"),
-);
 export async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
 }
@@ -61,20 +84,61 @@ export async function loadCronExternalContentRuntime() {
   return await cronExternalContentRuntimeLoader.load();
 }
 
-export async function loadCronAuthProfileRuntime() {
+async function loadCronAuthProfileRuntime() {
   return await cronAuthProfileRuntimeLoader.load();
 }
 
-export async function loadCronModelPreflightRuntime() {
-  return await cronModelPreflightRuntimeLoader.load();
-}
-
-export function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
+function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
   return (
     Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
     Boolean(cfg.auth?.order && Object.keys(cfg.auth.order).length > 0)
   );
 }
+
+/**
+ * Resolves the run's auth profile, skipping the lazy runtime entirely when no
+ * override, configured profile, or store source exists for it to find. Auth
+ * resolution may mutate session state, so it uses the store and key that
+ * persistence will write.
+ */
+export async function resolveCronAuthSelection(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  configuredProfileId?: string;
+  harnessRuntime: Parameters<
+    CronAuthProfileRuntime["resolveSessionAuthSelection"]
+  >[0]["harnessRuntime"];
+  agentDir: string;
+  cronSession: MutableCronSession;
+  sessionKey: string;
+  isNewSession: boolean;
+}) {
+  const hasSessionOverride = Boolean(params.cronSession.sessionEntry.authProfileOverride?.trim());
+  if (
+    !hasSessionOverride &&
+    !hasConfiguredAuthProfiles(params.cfg) &&
+    !hasAnyAuthProfileStoreSource(params.agentDir)
+  ) {
+    return undefined;
+  }
+  const runtime = await loadCronAuthProfileRuntime();
+  return await runtime.resolveSessionAuthSelection({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
+    harnessRuntime: params.harnessRuntime,
+    agentDir: params.agentDir,
+    sessionEntry: params.cronSession.sessionEntry,
+    sessionStore: params.cronSession.store,
+    sessionKey: params.sessionKey,
+    storePath: params.cronSession.storePath,
+    isNewSession: params.isNewSession,
+  });
+}
+
+type CronAuthProfileRuntime = Awaited<ReturnType<typeof loadCronAuthProfileRuntime>>;
 
 export async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
@@ -103,8 +167,8 @@ export function appendCronUnattendedRunPreamble(
   commandBody: string,
   opts: { externalHook: boolean },
 ) {
-  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${HEARTBEAT_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
+  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${SILENT_REPLY_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
   const trustedExtra =
-    " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the automations tool.";
+    " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
   return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;
 }

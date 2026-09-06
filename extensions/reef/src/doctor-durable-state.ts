@@ -9,6 +9,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Import from defining modules, not the protocol barrel: index.js re-exports
 // guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
 import { verifyChain, verifyChainSegment, type AuditEntry } from "../protocol/audit.js";
+import { parseVerdict } from "../protocol/guard.js";
 import type { ReviewRequest } from "../protocol/pipeline.js";
 import type { SignedReceipt } from "../protocol/receipts.js";
 import {
@@ -121,6 +122,43 @@ function requireLegacyReplayString(record: Record<string, unknown>, field: strin
   return value;
 }
 
+function parseLegacySignedReceipt(value: Record<string, unknown>): SignedReceipt {
+  const id = requireLegacyReplayString(value, "id");
+  const bodyHash = requireLegacyReplayString(value, "bodyHash");
+  const auditHead = requireLegacyReplayString(value, "auditHead");
+  const signature = requireLegacyReplayString(value, "signature");
+  if (value.status !== "accepted" && value.status !== "rejected") {
+    throw new Error("invalid Reef replay receipt status");
+  }
+  if (value.category !== undefined && typeof value.category !== "string") {
+    throw new Error("invalid Reef replay receipt category");
+  }
+  return {
+    id,
+    bodyHash,
+    auditHead,
+    status: value.status,
+    signature,
+    ...(value.category !== undefined ? { category: value.category } : {}),
+  };
+}
+
+function parseLegacyReviewRequest(value: Record<string, unknown>): ReviewRequest {
+  const direction = value.direction;
+  if (direction !== "inbound" && direction !== "outbound") {
+    throw new Error("invalid Reef review direction");
+  }
+  return {
+    id: requireLegacyReplayString(value, "id"),
+    from: requireLegacyReplayString(value, "from"),
+    to: requireLegacyReplayString(value, "to"),
+    direction,
+    bodyHash: requireLegacyReplayString(value, "bodyHash"),
+    approvalDigest: requireLegacyReplayString(value, "approvalDigest"),
+    verdict: parseVerdict(value.verdict),
+  };
+}
+
 function parseLegacyReefReplayLine(value: unknown): LegacyReefReplayLogRecord {
   if (!isRecord(value)) {
     throw new Error("invalid Reef replay record");
@@ -141,7 +179,7 @@ function parseLegacyReefReplayLine(value: unknown): LegacyReefReplayLogRecord {
   if (value.op !== "complete" || !isRecord(value.receipt)) {
     throw new Error("invalid Reef replay operation");
   }
-  const receipt = value.receipt as unknown as SignedReceipt;
+  const receipt = parseLegacySignedReceipt(value.receipt);
   if (receipt.id !== id || !["accepted", "rejected"].includes(receipt.status)) {
     throw new Error("invalid Reef replay receipt");
   }
@@ -227,7 +265,7 @@ async function readLegacyReefReviews(filePath: string): Promise<Map<string, Reef
     if (!isRecord(raw) || !isRecord(raw.review)) {
       throw new Error(`invalid Reef review ${digest}`);
     }
-    const review = raw.review as unknown as ReviewRequest;
+    const review = parseLegacyReviewRequest(raw.review);
     if (
       review.approvalDigest !== digest ||
       (raw.approved !== undefined && typeof raw.approved !== "boolean")

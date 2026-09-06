@@ -1,18 +1,13 @@
 // Shared policy doctor value readers.
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getPolicyPath } from "../policy-value.js";
+export { readBooleanPath as readPolicyBoolean } from "../policy-state-helpers.js";
 
 export function readPolicyStringArray(
   policy: unknown,
   path: readonly string[],
   options: { readonly lowercase?: boolean } = {},
 ): readonly string[] | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
     return undefined;
   }
@@ -34,13 +29,7 @@ export function readStringList(
 }
 
 export function readPolicyPathString(policy: unknown, path: readonly string[]): string | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   return typeof current === "string" ? current.trim().toLowerCase() : undefined;
 }
 
@@ -49,15 +38,4 @@ export function ocPathSegment(value: string): string {
     return value;
   }
   return JSON.stringify(value);
-}
-
-export function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return typeof current === "boolean" ? current : undefined;
 }

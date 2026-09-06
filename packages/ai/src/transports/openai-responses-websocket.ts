@@ -3,18 +3,30 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
 import type {
   ResponseInput,
-  ResponseOutputItem,
   ResponsesClientEvent,
   ResponsesServerEvent,
 } from "openai/resources/responses/responses.js";
 import { ResponsesWS } from "openai/resources/responses/ws.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import type { StreamOptions, UserMessage } from "../types.js";
 import {
+  resolveResponsesContinuationRequest,
+  type ResponsesContinuationRequest,
+  type ResponsesContinuationState,
+  type ResponsesContinuationStatus,
+} from "./openai-responses-continuation.js";
+import {
+  parseOpenAIResponsesWebSocketServerError,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
-  OpenAIResponsesWebSocketResponseFailedError,
+  OpenAIResponsesWebSocketSafeRetryError,
 } from "./openai-responses-contracts.js";
+import {
+  responsesInputFingerprint,
+  type ResponsesInputReplay,
+} from "./openai-responses-input-replay.js";
+import { createResponsesSteering, omitAcceptedSteering } from "./openai-responses-steering.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 import { sha256Hex } from "./transport-utils.js";
 
@@ -22,43 +34,37 @@ const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const SESSION_WEBSOCKET_MAX_AGE_MS = 55 * 60 * 1000;
 const WEBSOCKET_OPEN_STATE = 1;
 
-type ResponsesWebSocketRequest = Record<string, unknown> & {
-  input?: ResponseInput;
-  previous_response_id?: string;
-};
-
-type CachedWebSocketContinuation = {
-  lastRequest: ResponsesWebSocketRequest;
-  lastResponseId: string;
-  lastResponseItems: ResponseOutputItem[];
-};
-
 type CachedWebSocketConnection = {
   socket: ResponsesWS;
   sessionId: string;
   busy: boolean;
   createdAt: number;
   idleTimer?: ReturnType<typeof setTimeout>;
-  continuation?: CachedWebSocketContinuation;
+  continuation?: ResponsesContinuationState;
+  steeringContinuation?: SteeringContinuation;
 };
 
 type ResponsesWebSocketStreamMessage =
   ReturnType<ResponsesWS["stream"]> extends AsyncIterable<infer T> ? T : never;
 
+type SteeringContinuation = {
+  iterator: AsyncIterator<ResponsesWebSocketStreamMessage>;
+  buffered: ResponsesWebSocketStreamMessage[];
+  acceptedInput: ResponseInput;
+  requiresInput: boolean;
+  steering: ReturnType<typeof createResponsesSteering>;
+  instructions: unknown;
+  tools: unknown;
+};
+
 export type OpenAIResponsesWebSocketMode = "websocket" | "websocket-cached" | "auto";
 
 type OpenAIResponsesWebSocketStream = {
   stream: AsyncIterable<unknown>;
-  request: ResponsesWebSocketRequest;
+  request: ResponsesContinuationRequest;
   reusedConnection: boolean;
-  continuationStatus:
-    | "continued"
-    | "explicit_previous_response_id"
-    | "history_changed"
-    | "history_shorter"
-    | "no_previous_response"
-    | "request_changed"
-    | "socket_not_cached";
+  continuationStatus: ResponsesContinuationStatus | "socket_not_cached";
+  inputReplay?: ResponsesInputReplay;
   finish: (options?: { keep?: boolean }) => void;
 };
 
@@ -74,22 +80,19 @@ function isOfficialOpenAIResponsesBaseUrl(baseUrl: string | undefined): boolean 
   }
   try {
     const url = new URL(baseUrl);
-    const path = url.pathname.replace(/\/+$/, "");
     return (
-      url.protocol === "https:" &&
-      url.hostname === "api.openai.com" &&
-      url.port === "" &&
+      url.origin === "https://api.openai.com" &&
       url.username === "" &&
       url.password === "" &&
       url.search === "" &&
       url.hash === "" &&
-      path === "/v1"
+      url.pathname.replace(/\/+$/, "") === "/v1"
     );
   } catch {
     return false;
   }
 }
-export function supportsNativeOpenAIResponsesWebSocket(params: {
+export function supportsNativeOpenAIResponsesEndpoint(params: {
   provider: string;
   api: string;
   baseUrl?: string;
@@ -117,6 +120,9 @@ function invalidateOwnedWebSocketSession(
     entry.idleTimer = undefined;
   }
   closeWebSocketSilently(entry.socket, reason);
+  entry.steeringContinuation?.steering.close(new Error("Responses steering connection closed"));
+  void entry.steeringContinuation?.iterator.return?.().catch(() => undefined);
+  entry.steeringContinuation = undefined;
   if (websocketSessionCache.get(cacheKey) === entry) {
     websocketSessionCache.delete(cacheKey);
   }
@@ -199,6 +205,7 @@ type WebSocketLease = {
   iterator: AsyncIterator<ResponsesWebSocketStreamMessage>;
   entry?: CachedWebSocketConnection;
   reusedConnection: boolean;
+  steeringContinuation?: SteeringContinuation;
   release: (options?: { keep?: boolean }) => void;
 };
 
@@ -220,11 +227,14 @@ function createCachedWebSocketLease(
   reusedConnection: boolean,
 ): WebSocketLease {
   entry.busy = true;
+  const steeringContinuation = entry.steeringContinuation;
+  entry.steeringContinuation = undefined;
   return {
     socket: entry.socket,
-    iterator: entry.socket.stream(),
+    iterator: steeringContinuation?.iterator ?? entry.socket.stream(),
     entry,
     reusedConnection,
+    steeringContinuation,
     release: ({ keep } = {}) => {
       if (!keep || entry.socket.socket.readyState !== WEBSOCKET_OPEN_STATE) {
         invalidateOwnedWebSocketSession(cacheKey, entry);
@@ -283,113 +293,9 @@ function acquireWebSocket(
   return createCachedWebSocketLease(cacheKey, entry, false);
 }
 
-function requestWithoutInput(request: ResponsesWebSocketRequest): ResponsesWebSocketRequest {
-  const { input: _input, previous_response_id: _previousResponseId, ...rest } = request;
-  if (!rest.metadata || typeof rest.metadata !== "object" || Array.isArray(rest.metadata)) {
-    return rest;
-  }
-  const metadata = Object.fromEntries(
-    Object.entries(rest.metadata as Record<string, unknown>).filter(
-      ([key]) => key !== "openclaw_turn_id" && key !== "openclaw_turn_attempt",
-    ),
-  );
-  return { ...rest, metadata };
-}
-
-function sanitizeWebSocketRequest(request: Record<string, unknown>): ResponsesWebSocketRequest {
+function sanitizeWebSocketRequest(request: Record<string, unknown>): ResponsesContinuationRequest {
   const { stream: _stream, background: _background, ...websocketRequest } = request;
-  return websocketRequest as ResponsesWebSocketRequest;
-}
-
-function jsonValuesEqual(left: object, right: object): boolean {
-  // Round-trip first so stable key ordering retains JSON's omitted/undefined wire semantics.
-  const leftJson = JSON.parse(JSON.stringify(left) as string);
-  const rightJson = JSON.parse(JSON.stringify(right) as string);
-  return stableStringify(leftJson) === stableStringify(rightJson);
-}
-
-function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
-  return input.map((item) => {
-    if (!isRecord(item)) {
-      return item;
-    }
-    if (item.type === "reasoning") {
-      return { type: "reasoning" };
-    }
-    if (item.type !== "function_call" && !(item.type === "message" && item.role === "assistant")) {
-      return item;
-    }
-    const { id: _id, status: _status, ...stableItem } = item;
-    if (item.type === "message" && Array.isArray(stableItem.content)) {
-      // Strip only provider delivery metadata that reconstructed assistant replay cannot contain.
-      stableItem.content = stableItem.content.map((part) => {
-        if (!isRecord(part) || part.type !== "output_text") {
-          return part;
-        }
-        const { annotations: _annotations, logprobs: _logprobs, ...stablePart } = part;
-        return stablePart;
-      });
-    }
-    return stableItem;
-  });
-}
-
-function buildCachedWebSocketRequest(
-  entry: CachedWebSocketConnection,
-  request: ResponsesWebSocketRequest,
-): Pick<OpenAIResponsesWebSocketStream, "continuationStatus" | "request"> {
-  const continuation = entry.continuation;
-  if (!continuation) {
-    return { request, continuationStatus: "no_previous_response" };
-  }
-  const rejectContinuation = (
-    continuationStatus: Exclude<
-      OpenAIResponsesWebSocketStream["continuationStatus"],
-      "continued" | "no_previous_response" | "socket_not_cached"
-    >,
-  ) => {
-    entry.continuation = undefined;
-    return { request, continuationStatus };
-  };
-  if (request.previous_response_id) {
-    return rejectContinuation("explicit_previous_response_id");
-  }
-  if (
-    !jsonValuesEqual(requestWithoutInput(request), requestWithoutInput(continuation.lastRequest))
-  ) {
-    return rejectContinuation("request_changed");
-  }
-
-  const currentInput = request.input ?? [];
-  const previousInput = continuation.lastRequest.input ?? [];
-  const baselineLength = previousInput.length + continuation.lastResponseItems.length;
-  if (currentInput.length < baselineLength) {
-    return rejectContinuation("history_shorter");
-  }
-  if (
-    !jsonValuesEqual(
-      normalizeAssistantReplayInput(currentInput.slice(0, previousInput.length)),
-      normalizeAssistantReplayInput(previousInput),
-    ) ||
-    !jsonValuesEqual(
-      normalizeAssistantReplayInput(currentInput.slice(previousInput.length, baselineLength)),
-      normalizeAssistantReplayInput(continuation.lastResponseItems),
-    )
-  ) {
-    return rejectContinuation("history_changed");
-  }
-
-  // Continuations are single-use. A terminal incomplete/error cannot leave an
-  // older response id eligible for a later, unrelated turn.
-  entry.continuation = undefined;
-  return {
-    request: {
-      ...request,
-      previous_response_id: continuation.lastResponseId,
-      input: currentInput.slice(baselineLength),
-    },
-    continuationStatus: "continued",
-  };
+  return websocketRequest as ResponsesContinuationRequest;
 }
 
 async function nextWebSocketMessage(
@@ -425,7 +331,10 @@ function readServerEvent(
     return message.message;
   }
   if (message.type === "error") {
-    throw new Error("OpenAI Responses WebSocket transport failed", { cause: message.error });
+    throw (
+      parseOpenAIResponsesWebSocketServerError(message.error) ??
+      new Error("OpenAI Responses WebSocket transport failed", { cause: message.error })
+    );
   }
   if (message.type === "close") {
     throw new Error(`OpenAI Responses WebSocket closed before completion (code ${message.code})`);
@@ -442,6 +351,8 @@ export function createOpenAIResponsesWebSocketStream(params: {
   signal?: AbortSignal;
   callerSignal?: AbortSignal;
   degradeCooldownMs?: number;
+  onActiveResponse?: StreamOptions["onActiveResponse"];
+  steeringInput?: (messages: readonly UserMessage[]) => ResponseInput | Promise<ResponseInput>;
 }): OpenAIResponsesWebSocketStream {
   const connection = prepareWebSocketConnection(params.client, params.headers);
   const fullRequest = sanitizeWebSocketRequest(params.request);
@@ -471,14 +382,26 @@ export function createOpenAIResponsesWebSocketStream(params: {
     markDegraded();
     throw new OpenAIResponsesWebSocketPreDispatchError(error);
   }
-  let prepared: ReturnType<typeof buildCachedWebSocketRequest>;
+  let prepared: Omit<ReturnType<typeof resolveResponsesContinuationRequest>, "continuationStatus"> &
+    Pick<OpenAIResponsesWebSocketStream, "continuationStatus">;
+  const resumedSteering = lease.steeringContinuation;
+  const steeringMode = resumedSteering
+    ? resumedSteering.requiresInput
+      ? "required-input"
+      : "automatic"
+    : undefined;
   try {
-    prepared = lease.entry
-      ? buildCachedWebSocketRequest(lease.entry, fullRequest)
-      : {
-          request: fullRequest,
-          continuationStatus: "socket_not_cached" as const,
-        };
+    const continuation = lease.entry?.continuation;
+    if (continuation && lease.entry) {
+      // Consume before dispatch so incomplete/error terminals cannot reuse stale state.
+      lease.entry.continuation = undefined;
+      prepared = resolveResponsesContinuationRequest(continuation, fullRequest, steeringMode);
+    } else {
+      prepared = {
+        request: fullRequest,
+        continuationStatus: lease.entry ? "no_previous_response" : "socket_not_cached",
+      };
+    }
   } catch (error) {
     void lease.iterator.return?.().catch(() => undefined);
     lease.release({ keep: false });
@@ -491,6 +414,71 @@ export function createOpenAIResponsesWebSocketStream(params: {
     | undefined;
   let terminalReceived = false;
   let released = false;
+  let retainIterator = false;
+  let deferredInput = false;
+  let inputReplay: ResponsesInputReplay | undefined;
+  if (resumedSteering) {
+    try {
+      if (prepared.continuationStatus !== "continued" || !prepared.request.previous_response_id) {
+        throw new Error("Responses steering continuation changed its request or history");
+      }
+      const input = omitAcceptedSteering(
+        prepared.request.input ?? [],
+        resumedSteering.acceptedInput,
+      );
+      if (
+        !resumedSteering.requiresInput &&
+        (stableStringify(fullRequest.instructions) !==
+          stableStringify(resumedSteering.instructions) ||
+          stableStringify(fullRequest.tools) !== stableStringify(resumedSteering.tools))
+      ) {
+        throw new Error(
+          "Responses automatic steering continuation cannot change instructions or tools",
+        );
+      }
+      const baseline = prepared.fullRequest ?? fullRequest;
+      const priorLength = (baseline.input?.length ?? 0) - (prepared.request.input?.length ?? 0);
+      const fingerprints = input.map(responsesInputFingerprint);
+      if (fingerprints.length > 0) {
+        inputReplay = {
+          afterResponseId: prepared.request.previous_response_id,
+          before: resumedSteering.requiresInput ? fingerprints : [],
+          after: resumedSteering.requiresInput ? [] : fingerprints,
+        };
+      }
+      // The server prepends accepted steering. An automatic response receives
+      // none of the later local input; transcript replay owns its eventual delivery.
+      const delivered = resumedSteering.requiresInput ? input : [];
+      prepared.fullRequest = {
+        ...baseline,
+        input: [
+          ...(baseline.input ?? []).slice(0, priorLength),
+          ...resumedSteering.acceptedInput,
+          ...delivered,
+        ],
+      };
+      prepared.request = { ...prepared.request, input: delivered };
+      deferredInput = !resumedSteering.requiresInput && input.length > 0;
+    } catch (error) {
+      void lease.iterator.return?.().catch(() => undefined);
+      lease.release({ keep: false });
+      throw new OpenAIResponsesWebSocketPostDispatchError(error);
+    }
+  }
+  const steering =
+    lease.entry && params.onActiveResponse && params.steeringInput
+      ? createResponsesSteering({
+          onActiveResponse: params.onActiveResponse,
+          toInput: params.steeringInput,
+          send: (event) => lease.socket.sendRaw(JSON.stringify(event)),
+          needsContinuation: () => deferredInput,
+          assertActive: () => {
+            if (released || terminalReceived || params.signal?.aborted) {
+              throw new Error("Responses steering is no longer active");
+            }
+          },
+        })
+      : undefined;
   const finish = ({ keep = true }: { keep?: boolean } = {}) => {
     if (released) {
       return;
@@ -498,7 +486,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
     released = true;
     if (keep && lease.entry && terminalResponse) {
       lease.entry.continuation = {
-        lastRequest: fullRequest,
+        lastRequest: prepared.fullRequest ?? fullRequest,
         lastResponseId: terminalResponse.id,
         lastResponseItems: terminalResponse.output,
       };
@@ -518,8 +506,22 @@ export function createOpenAIResponsesWebSocketStream(params: {
           throw transportAbortError(params.signal);
         }
 
+        // An automatic continuation may start immediately after the old terminal.
+        // Retain the SDK iterator across the handoff so those events cannot be lost.
+        if (resumedSteering) {
+          requestDispatched = true;
+          if (resumedSteering.requiresInput) {
+            lease.socket.send({
+              ...prepared.request,
+              type: "response.create",
+            } as ResponsesClientEvent); // SAFETY: Valid create request with newer SDK input items.
+          }
+        }
         for (;;) {
-          const next = await nextWebSocketMessage(iterator, params.signal);
+          const buffered = resumedSteering?.buffered.shift();
+          const next = buffered
+            ? { value: buffered, done: false }
+            : await nextWebSocketMessage(iterator, params.signal);
           if (next.done) {
             throw new Error("OpenAI Responses WebSocket closed before a terminal response event");
           }
@@ -538,14 +540,87 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (!event) {
             continue;
           }
-          if (event.type === "response.failed") {
-            throw new OpenAIResponsesWebSocketResponseFailedError(event.response.output.length > 0);
+          if (
+            isRecord(event) &&
+            typeof event.type === "string" &&
+            event.type.startsWith("response.steer.")
+          ) {
+            const owner =
+              isRecord(event.steer) && event.steer.previous_response_id === steering?.responseId
+                ? steering
+                : (resumedSteering?.steering ?? steering);
+            if (owner?.handle(event)) {
+              continue;
+            }
           }
+          steering?.handle(event);
           if (event.type === "response.completed") {
             terminalResponse = event.response;
           }
           terminalReceived =
-            event.type === "response.completed" || event.type === "response.incomplete";
+            event.type === "response.completed" ||
+            event.type === "response.incomplete" ||
+            event.type === "response.failed";
+          if (terminalReceived) {
+            steering?.seal();
+            if (event.type === "response.failed") {
+              steering?.close(new Error("Responses failed before steering could be applied"));
+            }
+            const continuationBuffer: ResponsesWebSocketStreamMessage[] = [];
+            for (;;) {
+              if (!steering?.pending) {
+                break;
+              }
+              const acknowledgement = await nextWebSocketMessage(iterator, params.signal);
+              if (acknowledgement.done) {
+                throw new Error("Responses closed before acknowledging steering");
+              }
+              const acknowledgedEvent = readServerEvent(acknowledgement.value);
+              if (!steering.handle(acknowledgedEvent)) {
+                continuationBuffer.push(acknowledgement.value);
+              }
+            }
+            const acceptedInput = steering?.acceptedInput ?? [];
+            const isSteered =
+              event.type === "response.incomplete" &&
+              isRecord(event.response.incomplete_details) &&
+              event.response.incomplete_details.reason === "steered";
+            if (
+              lease.entry &&
+              steering &&
+              acceptedInput.length > 0 &&
+              (event.type === "response.completed" || isSteered)
+            ) {
+              if (event.type === "response.incomplete") {
+                terminalResponse = event.response;
+              }
+              lease.entry.steeringContinuation = {
+                iterator,
+                buffered: continuationBuffer,
+                acceptedInput,
+                requiresInput: (terminalResponse?.output ?? []).some(
+                  (item) =>
+                    ((item.type === "function_call" || item.type === "custom_tool_call") &&
+                      !(isRecord(item) && item.async === true)) ||
+                    item.type === "mcp_approval_request",
+                ),
+                steering,
+                instructions: fullRequest.instructions,
+                tools: fullRequest.tools,
+              };
+              retainIterator = true;
+              if (isSteered) {
+                // A steered response is a successful segment, not a failed agent turn.
+                // The next stream consumes its already-running server continuation.
+                yield {
+                  ...event,
+                  type: "response.completed",
+                  response: { ...event.response, status: "completed", incomplete_details: null },
+                };
+                return;
+              }
+            }
+          }
           yield event;
           if (terminalReceived) {
             degradedWebSocketConnections.delete(degradationKey);
@@ -553,25 +628,31 @@ export function createOpenAIResponsesWebSocketStream(params: {
           }
         }
       } catch (error) {
+        const steeringDispatched = Boolean(
+          steering?.pending || steering?.acceptedInput.length || resumedSteering,
+        );
+        steering?.close(error instanceof Error ? error : new Error("Responses steering failed"));
         if (lease.entry) {
           lease.entry.continuation = undefined;
         }
-        if (!params.callerSignal?.aborted) {
+        const safeRetry =
+          error instanceof OpenAIResponsesWebSocketSafeRetryError && !steeringDispatched;
+        if (!params.callerSignal?.aborted && !safeRetry) {
           markDegraded();
         }
         if (!requestDispatched && !params.signal?.aborted) {
           throw new OpenAIResponsesWebSocketPreDispatchError(error);
         }
-        if (
-          !requestDispatched ||
-          params.callerSignal?.aborted ||
-          error instanceof OpenAIResponsesWebSocketResponseFailedError
-        ) {
+        if (!requestDispatched || params.callerSignal?.aborted || safeRetry) {
           throw error;
         }
         throw new OpenAIResponsesWebSocketPostDispatchError(error);
       } finally {
-        await iterator.return?.().catch(() => undefined);
+        steering?.seal();
+        if (!retainIterator) {
+          steering?.close(new Error("Responses stream ended before steering was confirmed"));
+          await iterator.return?.().catch(() => undefined);
+        }
         if (!terminalReceived) {
           finish({ keep: false });
         }
@@ -584,6 +665,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
     request: prepared.request,
     reusedConnection: lease.reusedConnection,
     continuationStatus: prepared.continuationStatus,
+    inputReplay,
     finish,
   };
 }

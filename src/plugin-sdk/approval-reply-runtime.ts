@@ -8,6 +8,7 @@ export {
   buildExecApprovalPresentation,
   buildExecApprovalActionDescriptors,
   buildExecApprovalPendingReplyPayload,
+  formatExecApprovalExpiresIn,
   buildTypedApprovalPresentation,
   buildTypedExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,

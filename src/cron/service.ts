@@ -12,6 +12,7 @@ import * as runOps from "./service/ops-run.js";
 import {
   type CronAddOptions,
   type CronServiceDeps,
+  type CronRunMode,
   type CronUpdatePrecondition,
   type CronUpdateOptions,
   type CronWakeMode,
@@ -27,14 +28,13 @@ export class CronService implements CronServiceContract {
   private readonly state;
   private startInProgress = 0;
   private startState: { generation: number; promise: Promise<void> } | null = null;
-  private lifecycleGeneration = 0;
 
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
   }
 
   async start() {
-    const generation = this.lifecycleGeneration;
+    const generation = this.state.lifecycleGeneration;
     const pending = this.startState;
     if (pending) {
       try {
@@ -66,7 +66,7 @@ export class CronService implements CronServiceContract {
     this.state.schedulerStarted = false;
     try {
       await lifecycleOps.start(this.state);
-      if (generation !== this.lifecycleGeneration) {
+      if (generation !== this.state.lifecycleGeneration) {
         lifecycleOps.stop(this.state);
         return;
       }
@@ -77,7 +77,6 @@ export class CronService implements CronServiceContract {
   }
 
   stop() {
-    this.lifecycleGeneration += 1;
     lifecycleOps.stop(this.state);
   }
 
@@ -109,12 +108,11 @@ export class CronService implements CronServiceContract {
     return await mutationOps.add(this.state, input, opts);
   }
 
-  async removeStaleJobFamily(family: {
-    declarationKey: string;
-    name: string;
-    ownerPluginTag: string;
-  }) {
-    return await mutationOps.removeStaleJobFamily(this.state, family);
+  async removeStaleJobFamily(
+    family: { declarationKey: string; name: string; ownerPluginTag: string },
+    opts?: { commitGuard?: () => void },
+  ) {
+    return await mutationOps.removeStaleJobFamily(this.state, family, opts);
   }
 
   async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
@@ -138,9 +136,13 @@ export class CronService implements CronServiceContract {
     return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
+  async quiesceJobs(jobs: readonly { id: string; revision: string }[], commitGuard: () => void) {
+    await mutationOps.quiesceJobs(this.state, jobs, commitGuard);
+  }
+
   async run(
     id: string,
-    mode?: "due" | "force",
+    mode?: CronRunMode,
     opts?: CronServiceRunOptions,
   ): Promise<CronServiceRunResult> {
     return await runOps.run(this.state, id, mode, opts);
@@ -148,7 +150,7 @@ export class CronService implements CronServiceContract {
 
   async enqueueRun(
     id: string,
-    mode?: "due" | "force",
+    mode?: CronRunMode,
     opts?: { commitGuard?: () => void },
   ): Promise<CronServiceRunResult> {
     const result = await runOps.enqueueRun(this.state, id, mode, opts);

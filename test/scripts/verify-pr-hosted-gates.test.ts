@@ -1,13 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
-  compareCommitPageCount,
   HOSTED_GATE_MAX_AGE_HOURS,
+  loadPullRequestCommitShas,
   notApplicableScheduledHostedWorkflows,
   parseArgs,
   parseWorkflowRunPage,
@@ -17,6 +17,7 @@ import {
 } from "../../scripts/verify-pr-hosted-gates.mts";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
+const mainSha = "d".repeat(40);
 const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
 const scheduledFallbackSha = "ad620a11e5d9ed3888b6afb3c35c4c30e8054f4e";
 const pr = 100606;
@@ -31,6 +32,8 @@ const requiredCliArgs = [
   String(pr),
   "--output",
   ".local/gates-hosted-checks.json",
+  "--main-sha",
+  mainSha,
 ];
 
 type WorkflowRunFixture = {
@@ -97,13 +100,14 @@ function queuedBuildArtifactFallbackRuns() {
   ];
 }
 
-function collectHostedGateEvidence(options: Omit<CollectHostedGateOptions, "nowMs" | "pr">) {
-  return collectHostedGateEvidenceWithReuse({ nowMs, pr, ...options });
+function collectHostedGateEvidence(
+  options: Omit<CollectHostedGateOptions, "nowMs" | "pr" | "mainSha">,
+) {
+  return collectHostedGateEvidenceRaw({ nowMs, pr, mainSha, ...options });
 }
 
 type GitExec = (args: string[], options?: { input?: string }) => string;
 type CollectHostedGateOptions = Parameters<typeof collectHostedGateEvidenceRaw>[0];
-const collectHostedGateEvidenceWithReuse = collectHostedGateEvidenceRaw;
 
 function priorSuccessfulCiRun(overrides: Partial<WorkflowRunFixture> = {}): WorkflowRunFixture {
   return {
@@ -174,6 +178,53 @@ function patchReuseOptions(
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("compares patch IDs against one main snapshot while the shared ref advances", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-patch-snapshot-")));
+    const git: GitExec = (args, options) => {
+      const result = spawnSync("git", args, { cwd: root, encoding: "utf8", input: options?.input });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    try {
+      git(["init", "-q", "-b", "main"]);
+      git(["config", "user.name", "OpenClaw Test"]);
+      git(["config", "user.email", "test@example.invalid"]);
+      git(["config", "commit.gpgSign", "false"]);
+      git(["config", "core.hooksPath", "/dev/null"]);
+      writeFileSync(join(root, "subject.txt"), "base\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const snapshot = git(["rev-parse", "HEAD"]).trim();
+      git(["update-ref", "refs/remotes/origin/main", snapshot]);
+      writeFileSync(join(root, "subject.txt"), "reviewed\n");
+      git(["commit", "-qam", "reviewed"]);
+      const target = git(["rev-parse", "HEAD"]).trim();
+      git(["commit", "--allow-empty", "-qm", "same tree, different commit"]);
+      const candidate = git(["rev-parse", "HEAD"]).trim();
+      let comparisons = 0;
+      const evidence = collectHostedGateEvidenceRaw({
+        sha: target,
+        mainSha: snapshot,
+        pr,
+        nowMs,
+        workflowRuns: [],
+        loadCiReuseCandidates: () => [priorSuccessfulCiRun({ head_sha: candidate })],
+        execGit: (args, options) => {
+          const result = git(args, options);
+          if (args[0] === "patch-id" && ++comparisons === 1)
+            git(["update-ref", "refs/remotes/origin/main", candidate]);
+          return result;
+        },
+      });
+      expect(evidence.reusedFromSha).toBe(candidate);
+      expect(evidence.patchIdMatched).toBe(true);
+      expect(comparisons).toBe(2);
+      expect(git(["rev-parse", "refs/remotes/origin/main"]).trim()).toBe(candidate);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("starts from an older target cwd without current normalization helpers", () => {
     const targetRoot = mkdtempSync(join(tmpdir(), "openclaw-hosted-gates-old-cwd-"));
     try {
@@ -357,7 +408,7 @@ describe("verify-pr-hosted-gates", () => {
 
   it("fails closed when patch-id computation errors", () => {
     const { execGit } = createPatchIdExec({
-      failCommand: `merge-base origin/main ${previousSha}`,
+      failCommand: `merge-base ${mainSha} ${previousSha}`,
     });
     expect(() =>
       collectHostedGateEvidence({
@@ -735,11 +786,89 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow(`Missing successful recent CI workflow for ${sha}`);
   });
 
-  it("paginates comparisons beyond the pull-request endpoint's 250-commit cap", () => {
-    expect(compareCommitPageCount(0)).toBe(1);
-    expect(compareCommitPageCount(250)).toBe(3);
-    expect(compareCommitPageCount(251)).toBe(3);
-    expect(compareCommitPageCount(301)).toBe(4);
+  it("loads the complete PR commit set with one local rev-list command", () => {
+    const baseSha = "a".repeat(40);
+    const shas = Array.from({ length: 301 }, (_, index) =>
+      (index + 1).toString(16).padStart(40, "0"),
+    );
+    const headSha = expectDefined(shas.at(-1), "generated head sha");
+    const calls: string[][] = [];
+
+    expect(
+      loadPullRequestCommitShas({ baseSha, headSha }, (args) => {
+        calls.push(args);
+        return `${shas.join("\n")}\n`;
+      }),
+    ).toEqual(shas);
+    expect(calls).toEqual([["rev-list", "--reverse", `${baseSha}..${headSha}`]]);
+  });
+
+  it.each([
+    ["uppercase", "A".repeat(40)],
+    ["too short", "a".repeat(39)],
+    ["too long", "a".repeat(65)],
+    ["leading whitespace", ` ${"a".repeat(40)}`],
+    ["multiple fields", `${"a".repeat(40)} ${"b".repeat(40)}`],
+    ["blank line", `${"a".repeat(40)}\n\n${"b".repeat(40)}`],
+  ])("rejects malformed rev-list object ids: %s", (_case, output) => {
+    expect(() =>
+      loadPullRequestCommitShas(
+        { baseSha: "c".repeat(40), headSha: "b".repeat(40) },
+        () => `${output}\n`,
+      ),
+    ).toThrow("Expected pull request commit object ids from git rev-list.");
+  });
+
+  it("rejects empty rev-list output and output missing the requested head", () => {
+    const baseSha = "a".repeat(40);
+    const headSha = "b".repeat(40);
+    expect(() => loadPullRequestCommitShas({ baseSha, headSha }, () => "")).toThrow(
+      "Expected pull request commit object ids from git rev-list.",
+    );
+    expect(() =>
+      loadPullRequestCommitShas({ baseSha, headSha }, () => `${"c".repeat(40)}\n`),
+    ).toThrow(`Expected pull request commit list to contain head ${headSha}.`);
+  });
+
+  it("propagates rev-list command failures", () => {
+    const commandError = new Error("git rev-list failed");
+    expect(() =>
+      loadPullRequestCommitShas({ baseSha: "a".repeat(40), headSha: "b".repeat(40) }, () => {
+        throw commandError;
+      }),
+    ).toThrow(commandError);
+  });
+
+  it("keeps complete membership when the PR head is behind the current base", () => {
+    const fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-pr-commit-set-")));
+    const git = (args: string[]) => {
+      const result = spawnSync("git", args, { cwd: fixtureRoot, encoding: "utf8" });
+      expect(result.status, `git ${args.join(" ")}\n${result.stderr}`).toBe(0);
+      return result.stdout;
+    };
+    try {
+      git(["init", "-q", "-b", "main"]);
+      git(["config", "user.name", "OpenClaw Test"]);
+      git(["config", "user.email", "test@example.invalid"]);
+      git(["commit", "-q", "--allow-empty", "-m", "root"]);
+      git(["branch", "feature"]);
+      git(["commit", "-q", "--allow-empty", "-m", "main one"]);
+      git(["commit", "-q", "--allow-empty", "-m", "main two"]);
+      const baseSha = git(["rev-parse", "HEAD"]).trim();
+      git(["switch", "-q", "feature"]);
+      git(["commit", "-q", "--allow-empty", "-m", "feature one"]);
+      const firstFeatureSha = git(["rev-parse", "HEAD"]).trim();
+      git(["commit", "-q", "--allow-empty", "-m", "feature two"]);
+      const headSha = git(["rev-parse", "HEAD"]).trim();
+
+      expect(loadPullRequestCommitShas({ baseSha, headSha }, (args) => git(args))).toEqual([
+        firstFeatureSha,
+        headSha,
+      ]);
+      expect(Number(git(["rev-list", "--count", `${headSha}..${baseSha}`]).trim())).toBe(2);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   it("requires recent evidence for scheduled gates observed on the target head", () => {
@@ -1423,6 +1552,7 @@ describe("verify-pr-hosted-gates", () => {
     expect(parseArgs(requiredCliArgs)).toEqual({
       repo: "openclaw/openclaw",
       sha,
+      mainSha,
       pr,
       recentSha: "",
       output: ".local/gates-hosted-checks.json",
@@ -1431,12 +1561,46 @@ describe("verify-pr-hosted-gates", () => {
     expect(() => parseArgs(["--repo", "openclaw/openclaw"])).toThrow("Usage:");
     expect(() => parseArgs(requiredCliArgs.with(1, "-h"))).toThrow("Expected --repo <value>.");
     expect(() => parseArgs(requiredCliArgs.with(3, "-h"))).toThrow("Expected --sha <value>.");
-    expect(() => parseArgs(requiredCliArgs.with(5, "zero"))).toThrow(
-      "Expected --pr <positive-integer>.",
+    expect(() => parseArgs(requiredCliArgs.with(5, "-h"))).toThrow("Expected --pr <value>.");
+    for (const [value, expected] of [
+      ["1", 1],
+      ["001", 1],
+      [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+    ] as const) {
+      expect(parseArgs(requiredCliArgs.with(5, value)).pr).toBe(expected);
+    }
+    for (const value of [
+      "zero",
+      "0",
+      String(Number.MAX_SAFE_INTEGER + 1),
+      "1e3",
+      "0x10",
+      "0b10",
+      "1.5",
+      "+1",
+      " 1 ",
+    ]) {
+      expect(() => parseArgs(requiredCliArgs.with(5, value))).toThrow(
+        "Expected --pr <positive-integer>.",
+      );
+    }
+    expect(() => parseArgs(requiredCliArgs.with(7, "-h"))).toThrow("Expected --output <value>.");
+    expect(() => parseArgs(requiredCliArgs.with(9, "origin/main"))).toThrow("Usage:");
+  });
+
+  it("rejects malformed PR numbers before invoking GitHub", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(process.cwd(), "scripts/verify-pr-hosted-gates.mjs"),
+        ...requiredCliArgs.with(5, "1e3"),
+      ],
+      { encoding: "utf8", env: { ...process.env, PATH: "" } },
     );
-    expect(() => parseArgs(requiredCliArgs.with(requiredCliArgs.length - 1, "-h"))).toThrow(
-      "Expected --output <value>.",
-    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Expected --pr <positive-integer>.");
+    expect(result.stderr).not.toContain("spawnSync gh");
   });
 
   it("rejects duplicate hosted gate verifier CLI arguments", () => {

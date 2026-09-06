@@ -1,4 +1,5 @@
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
@@ -11,6 +12,7 @@ import {
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
+  runHostDesktopHealth,
   runGitHubProjectHealth,
   runOpenAIOAuthTlsHealth,
   runSecurityHealth,
@@ -20,7 +22,7 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   collectMemorySearchHealthFindings,
-  collectWorkspaceStatusPluginVersionDrift,
+  collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
   runHeartbeatScratchMigrationHealth,
@@ -40,6 +42,9 @@ import type {
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import type { HealthCheck } from "./health-checks.js";
 
+const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
+  "core/doctor/channel-package-state-capabilities";
+
 export function resolveFinalDoctorHealthContributions(params: {
   runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
   detectSystemdLingerFindings: HealthCheck["detect"];
@@ -55,6 +60,20 @@ export function resolveFinalDoctorHealthContributions(params: {
         "core/doctor/gateway-services/platform-notes",
       ],
       run: runGatewayServicesHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:host-desktop",
+      label: "Host desktop",
+      healthChecks: {
+        description: "Gateway-host desktop enablement, reachability, and RFB security state.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectHostDesktopHealthFindings } =
+            await import("../commands/doctor-host-desktop.js");
+          return collectHostDesktopHealthFindings(ctx.cfg);
+        },
+      },
+      run: runHostDesktopHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:default-account-routing",
@@ -74,6 +93,30 @@ export function resolveFinalDoctorHealthContributions(params: {
             checkId: "core/doctor/default-account-routing",
             severity: "warning" as const,
             message: message.replace(/^- /, "").trim(),
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:channel-package-state-capabilities",
+      label: "Channel package-state capabilities",
+      healthChecks: {
+        id: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+        description: "Declared channel package-state checker modules must load.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          if (shouldDeferConfiguredPluginInstallRepair(ctx.env ?? process.env)) {
+            return [];
+          }
+          const { collectBundledChannelPackageStateLoadFailures } =
+            await import("../channels/plugins/package-state-probes.js");
+          return collectBundledChannelPackageStateLoadFailures().map((failure) => ({
+            checkId: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+            severity: "warning" as const,
+            message: `Plugin ${failure.pluginId} declared ${failure.metadataKey}, but its checker failed to load: ${failure.detail}`,
+            target: failure.pluginId,
+            requirement: "declared-channel-package-state-capability-loadable",
+            fixHint: `Rebuild or reinstall plugin ${failure.pluginId}, then rerun \`openclaw doctor\`.`,
           }));
         },
       },
@@ -145,6 +188,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:model-references",
+      label: "Model references",
+      healthCheckIds: ["core/doctor/model-references"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",
       label: "Provider catalog projection",
       healthCheckIds: ["core/doctor/provider-catalog-projection"],
@@ -169,6 +218,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy"),
     }),
     createDoctorHealthContribution({
+      id: "doctor:skill-workshop-relocation",
+      label: "Skill Workshop relocation",
+      healthCheckIds: ["core/doctor/skill-workshop-relocation"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-relocation"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
       healthChecks: {
@@ -187,14 +242,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWorkspaceStatusHealthFindings } =
             await import("../commands/doctor-workspace-status.js");
-          const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+          const pluginVersionReadiness = await collectWorkspaceStatusPluginVersionReadiness({
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
           const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
             .runWithPluginMetadataSnapshot;
           return collectWorkspaceStatusHealthFindings(ctx.cfg, {
-            pluginVersionDrift,
+            pluginVersionReadiness,
             ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
           });
         },
@@ -295,8 +350,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
       healthChecks: {
-        description:
-          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
@@ -341,7 +395,11 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectDevicePairingHealthFindings } =
             await import("../commands/doctor-device-pairing.js");
-          return collectDevicePairingHealthFindings({ cfg: ctx.cfg, healthOk: false });
+          return collectDevicePairingHealthFindings({
+            cfg: ctx.cfg,
+            healthOk: false,
+            env: ctx.env,
+          });
         },
       },
       run: runDevicePairingHealth,

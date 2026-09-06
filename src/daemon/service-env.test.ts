@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
-import { inspectGatewayHeapLimit } from "./gateway-heap.js";
+import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -727,14 +727,36 @@ describe("buildServiceEnvironment", () => {
 });
 
 describe("buildServiceEnvironment NODE_OPTIONS", () => {
-  it("sets the adaptive default heap flag", () => {
+  it.each([
+    { capacityMiB: 65536, wrapper: undefined, expected: "--max-old-space-size=8192" },
+    { capacityMiB: 2048, wrapper: undefined, expected: "--max-old-space-size=1536" },
+    { capacityMiB: 65536, wrapper: "/custom/launcher", expected: "" },
+  ])(
+    "retains only direct Bun's prior budget at $capacityMiB MiB (wrapper=$wrapper)",
+    ({ capacityMiB, wrapper, expected }) => {
+      const physical = vi.spyOn(os, "totalmem").mockReturnValue(capacityMiB * 1024 ** 2);
+      const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+      try {
+        expect(
+          buildServiceEnvironment({
+            env: { HOME: "/home/user", OPENCLAW_WRAPPER: wrapper },
+            port: 18789,
+            runtime: "bun",
+          }).NODE_OPTIONS,
+        ).toBe(expected);
+      } finally {
+        physical.mockRestore();
+        constrained.mockRestore();
+      }
+    },
+  );
+
+  it("explicitly clears ambient options when no stored service control exists", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
     });
-    expect(env.NODE_OPTIONS).toBe(
-      `--max-old-space-size=${inspectGatewayHeapLimit(undefined).maxOldSpaceSizeMiB}`,
-    );
+    expect(env.NODE_OPTIONS).toBe("");
   });
 
   it("drops ambient NODE_OPTIONS", () => {
@@ -784,6 +806,44 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.node");
   });
 
+  it("fences inherited Node compile cache in macOS node LaunchAgents", () => {
+    const environment = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/Users/user",
+        NODE_COMPILE_CACHE: "/tmp/ambient-node-compile-cache",
+      },
+      platform: "darwin",
+    });
+    const plist = buildLaunchAgentPlist({
+      label: "ai.openclaw.node",
+      programArguments: ["/usr/local/bin/node", "dist/index.js", "node", "run"],
+      stdoutPath: "/tmp/openclaw-node.log",
+      stderrPath: "/tmp/openclaw-node.err.log",
+      environment,
+    });
+
+    expect(environment.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(environment.NODE_COMPILE_CACHE).toBeUndefined();
+    expect(plist).toContain("<key>NODE_DISABLE_COMPILE_CACHE</key>");
+    expect(plist).not.toContain("<key>NODE_COMPILE_CACHE</key>");
+  });
+
+  it.each(["linux", "win32"] as const)(
+    "does not force Node compile cache off for %s node services",
+    (platform) => {
+      const environment = buildNodeServiceEnvironment({
+        env: {
+          HOME: platform === "win32" ? "C:\\Users\\user" : "/home/user",
+          NODE_COMPILE_CACHE: "/tmp/ambient-node-compile-cache",
+        },
+        platform,
+      });
+
+      expect(environment.NODE_DISABLE_COMPILE_CACHE).toBeUndefined();
+      expect(environment.NODE_COMPILE_CACHE).toBeUndefined();
+    },
+  );
+
   it("passes through OPENCLAW_GATEWAY_TOKEN for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: " node-token " },
@@ -796,6 +856,18 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user", OPENCLAW_GATEWAY_PASSWORD: " node-password " },
     });
     expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
+  });
+
+  it("passes through the Cloudflare Access service-token pair for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        CF_ACCESS_CLIENT_ID: " cf-client-id ",
+        CF_ACCESS_CLIENT_SECRET: " cf-client-secret ",
+      },
+    });
+    expect(env.CF_ACCESS_CLIENT_ID).toBe("cf-client-id");
+    expect(env.CF_ACCESS_CLIENT_SECRET).toBe("cf-client-secret");
   });
 
   it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {
@@ -956,6 +1028,11 @@ describe("resolveGatewayStateDir", () => {
   it("expands ~ in OPENCLAW_STATE_DIR", () => {
     const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "~/openclaw-state" };
     expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
+  });
+
+  it("does not interpret $ patterns in HOME when expanding ~ in OPENCLAW_STATE_DIR", () => {
+    const env = { HOME: "/home/$&user", OPENCLAW_STATE_DIR: "~/openclaw-state" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/home/$&user/openclaw-state"));
   });
 
   it("preserves Windows absolute paths without HOME", () => {

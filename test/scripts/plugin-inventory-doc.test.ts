@@ -21,24 +21,44 @@ describe("resolvePluginSurface", () => {
         },
         skills: ["example"],
       }),
-    ).toBe(
-      "channels: `discord`; providers: `openai`; contracts: `tools`, `webSearchProviders`; dashboard data bindings: `example.items.list`; dashboard action verbs: `example.refresh`; skills",
-    );
+    ).toEqual([
+      "Channels: `discord`",
+      "Providers: `openai`",
+      "Contracts: `tools`, `webSearchProviders`",
+      "Dashboard data bindings: `example.items.list`",
+      "Dashboard action verbs: `example.refresh`",
+      "Skills",
+    ]);
   });
 
-  it("retains the generic fallback", () => {
-    expect(resolvePluginSurface({})).toBe("plugin");
+  it("returns no surface items when the manifest declares none", () => {
+    // The generic fallback now lives in renderSurface(), which prints
+    // "This plugin declares no channels, providers, commands, or contracts."
+    // for an empty list. Keeping it out of the data layer lets the caller
+    // choose its own wording.
+    expect(resolvePluginSurface({})).toEqual([]);
   });
 
-  it("renders only runtime slash command aliases", () => {
+  it("renders root CLI commands separately from runtime slash command aliases", () => {
     expect(
       resolvePluginSurface({
+        cliCommands: [
+          { name: " voicecall " },
+          { name: "browser" },
+          { name: "voicecall" },
+          { name: " " },
+        ],
         commandAliases: [
           { name: "voice", kind: "runtime-slash" },
+          { name: " voice ", kind: "runtime-slash" },
+          { name: " ", kind: "runtime-slash" },
           { name: "internal", kind: "activation-only" },
         ],
       }),
-    ).toBe("commands: `/voice`");
+    ).toEqual([
+      "CLI commands: `openclaw browser`, `openclaw voicecall`",
+      "Slash commands: `/voice`",
+    ]);
   });
 
   it("escapes dashboard plugin owner delimiters and literal escape markers", () => {
@@ -47,13 +67,13 @@ describe("resolvePluginSurface", () => {
         id: "dashboard.segmented",
         dashboard: { actionVerbs: [{ id: "refresh" }] },
       }),
-    ).toBe("dashboard action verbs: `dashboard%2Esegmented.refresh`");
+    ).toEqual(["Dashboard action verbs: `dashboard%2Esegmented.refresh`"]);
     expect(
       resolvePluginSurface({
         id: "dashboard%2Esegmented",
         dashboard: { dataBindings: [{ id: "refresh" }] },
       }),
-    ).toBe("dashboard data bindings: `dashboard%252Esegmented.refresh`");
+    ).toEqual(["Dashboard data bindings: `dashboard%252Esegmented.refresh`"]);
   });
 });
 

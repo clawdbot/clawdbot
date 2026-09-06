@@ -239,6 +239,16 @@ describe("validateAnthropicTurns", () => {
     ]);
   });
 
+  it("keeps consecutive user messages separate when user-turn merging is disabled", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "/model anthropic/claude-fable-5-1 -s" }] },
+      { role: "user", content: [{ type: "text", text: "Read notes.txt" }] },
+      { role: "assistant", content: [{ type: "text", text: "Done" }] },
+    ]);
+
+    expect(validateAnthropicTurns(msgs, { mergeConsecutiveUserTurns: false })).toEqual(msgs);
+  });
+
   it("should merge three consecutive user messages", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "One" }] },

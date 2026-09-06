@@ -5,7 +5,6 @@ import {
   normalizeOptionalString,
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
@@ -32,7 +31,7 @@ export type SessionDeliveryTarget = {
   lastThreadId?: string | number;
 };
 
-function resolveParsedRouteTarget(params: {
+function resolveRouteTarget(params: {
   channel: string;
   accountId?: string;
   rawTarget?: string | null;
@@ -43,19 +42,13 @@ function resolveParsedRouteTarget(params: {
   if (!channel || !rawTo) {
     return null;
   }
-  const parsed = resolveExplicitDeliveryTargetCompat({
-    channel,
-    rawTarget: rawTo,
-    fallbackThreadId: params.fallbackThreadId,
-  });
-  const threadId = normalizeOptionalThreadValue(parsed?.threadId ?? params.fallbackThreadId);
+  const threadId = normalizeOptionalThreadValue(params.fallbackThreadId);
   return {
     channel,
     accountId: params.accountId,
     rawTo,
-    to: parsed?.to ?? rawTo,
+    to: rawTo,
     ...(threadId != null ? { threadId } : {}),
-    chatType: parsed?.chatType,
   };
 }
 
@@ -85,7 +78,7 @@ export function resolveSessionDeliveryTarget(params: {
   const sessionLastChannel =
     context?.channel && isNormalizedMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel
-    ? resolveParsedRouteTarget({
+    ? resolveRouteTarget({
         channel: sessionLastChannel,
         accountId: context?.accountId,
         rawTarget: context?.to,
@@ -96,7 +89,7 @@ export function resolveSessionDeliveryTarget(params: {
   const hasTurnSourceChannel = params.turnSourceChannel != null;
   const parsedTurnSourceTarget =
     hasTurnSourceChannel && params.turnSourceChannel
-      ? resolveParsedRouteTarget({
+      ? resolveRouteTarget({
           channel: params.turnSourceChannel,
           accountId: params.turnSourceAccountId,
           rawTarget: params.turnSourceTo,
@@ -152,17 +145,17 @@ export function resolveSessionDeliveryTarget(params: {
     channel = params.fallbackChannel;
   }
 
-  const parsedExplicitTarget =
+  const explicitTarget =
     channel && rawExplicitTo
-      ? resolveExplicitDeliveryTargetCompat({
+      ? resolveRouteTarget({
           channel,
           rawTarget: rawExplicitTo,
           fallbackThreadId: params.explicitThreadId,
         })
       : null;
-  const explicitTo = parsedExplicitTarget?.to ?? rawExplicitTo;
+  const explicitTo = explicitTarget?.to ?? rawExplicitTo;
   const explicitThreadId = normalizeOptionalThreadValue(
-    parsedExplicitTarget?.threadId ?? params.explicitThreadId,
+    explicitTarget?.threadId ?? params.explicitThreadId,
   );
   const explicitThreadIdSource = explicitThreadId != null ? "explicit" : undefined;
 

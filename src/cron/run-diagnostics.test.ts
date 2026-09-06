@@ -209,6 +209,97 @@ describe("cron run diagnostics", () => {
     });
   });
 
+  it("prefers a terminal tool failure over a generic failed-tool payload", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+          },
+        },
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics?.summary).toBe("Code Mode could not resolve a configured MCP tool.");
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 123,
+        source: "tool",
+        severity: "error",
+        message: "⚠️ Exec failed",
+        toolName: "exec",
+      },
+      {
+        ts: 123,
+        source: "tool",
+        severity: "error",
+        message: "Code Mode could not resolve a configured MCP tool.",
+        toolName: "exec",
+      },
+    ]);
+  });
+
+  it("downgrades a recovered terminal tool failure to a warning", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+          },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "Code Mode could not resolve a configured MCP tool.",
+      entries: [
+        {
+          ts: 123,
+          source: "tool",
+          severity: "warn",
+          message: "Code Mode could not resolve a configured MCP tool.",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
+  it("reconstructs a safe diagnostic from terminal tool metadata", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+            message: "private-path /home/operator/.config/token",
+          },
+        },
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "Code Mode could not resolve a configured MCP tool.",
+      entries: [
+        {
+          ts: 123,
+          source: "tool",
+          severity: "error",
+          message: "Code Mode could not resolve a configured MCP tool.",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
   it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
     const diagnostics = createCronRunDiagnosticsFromAgentResult(
       {

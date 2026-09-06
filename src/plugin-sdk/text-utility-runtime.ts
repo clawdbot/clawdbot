@@ -2,6 +2,9 @@
 import type { BaseProbeResult } from "../channels/plugins/types.public.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
+export { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
+export { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+
 export {
   estimateToolResultTextChars,
   sliceToolResultTextToBudget,
@@ -11,7 +14,7 @@ export {
   resolveLiveToolResultMaxChars,
 } from "../agents/tool-result-limits.js";
 export { escapeHtml } from "../shared/html-escape.js";
-export { estimateStringChars } from "../utils/cjk-chars.js";
+export { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 type ChannelProbeResult = BaseProbeResult & { elapsedMs?: number };
 
@@ -62,4 +65,5 @@ export {
   truncateUtf16Safe,
 } from "../utils.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 export { withTimeout };

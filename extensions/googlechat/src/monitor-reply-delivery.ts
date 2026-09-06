@@ -1,4 +1,5 @@
 // Googlechat plugin module implements monitor reply delivery behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -62,9 +63,19 @@ export async function deliverGoogleChatReply(params: {
   let typingMessage = params.typingMessage;
   const replyThreadName = payload.replyToId?.trim() || undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
-  const text = reply.text;
-  let firstTextChunk = true;
   let deliveryThreadName = replyThreadName;
+  const acceptedText: Array<{ id?: string; text: string }> = [];
+  const runTextOperation = async <T>(operation: Promise<T>): Promise<T> =>
+    await operation.catch((error: unknown) => {
+      if (acceptedText.length === 0) {
+        throw error;
+      }
+      throw createChannelPartialDeliveryError(error, {
+        messageIds: acceptedText.flatMap(({ id }) => (id ? [id] : [])),
+        content: acceptedText.map(({ text }) => text).join("\n"),
+        visibleReplySent: true,
+      });
+    });
 
   const typingMatchesReply =
     typingMessage?.placement === "thread"
@@ -119,44 +130,46 @@ export async function deliverGoogleChatReply(params: {
     }
   };
   const sendTextMessage = async (chunk: string) => {
-    const sent = await sendGoogleChatMessage({
-      account,
-      space: spaceId,
-      text: chunk,
-      thread: deliveryThreadName,
-    });
+    const sent = await runTextOperation(
+      sendGoogleChatMessage({
+        account,
+        space: spaceId,
+        text: chunk,
+        thread: deliveryThreadName,
+      }),
+    );
+    if (sent) {
+      acceptedText.push({ id: sent.messageName?.trim() || undefined, text: chunk });
+    }
     if (replyThreadName) {
       deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
     }
   };
-  const chunks = core.channel.text.chunkMarkdownTextWithMode(text, chunkLimit, chunkMode);
+  const chunks = core.channel.text.chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
   for (const chunk of chunks) {
     if (!chunk) {
       continue;
     }
-    if (firstTextChunk && typingMessage) {
+    if (typingMessage) {
       try {
-        await updateGoogleChatMessage({
+        const updated = await updateGoogleChatMessage({
           account,
           messageName: typingMessage.name,
           text: chunk,
         });
+        acceptedText.push({ id: updated.messageName?.trim() || typingMessage.name, text: chunk });
       } catch (error) {
         if (!(error instanceof GoogleChatApiError) || error.status !== 404) {
           throw error;
         }
         runtime.error?.(`Google Chat typing update failed: ${String(error)}`);
-        typingMessage = undefined;
         await sendTextMessage(chunk);
       }
-      firstTextChunk = false;
+      typingMessage = undefined;
       recordOutboundStatus();
       continue;
     }
-    // Core delivery contract: a failed send must reject so the reply dispatcher
-    // routes to onError instead of recording a dropped chunk as delivered.
     await sendTextMessage(chunk);
-    firstTextChunk = false;
     recordOutboundStatus();
   }
 }

@@ -1,19 +1,19 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  forceKillVitestProcessGroup,
-  forwardSignalToVitestProcessGroup,
-} from "../../scripts/vitest-process-group.mts";
-import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
-import { runE2eGlobalSetup } from "../vitest/vitest.e2e.global-setup.js";
+  inspectManagedProcessGroup,
+  waitForManagedProcessGroupExit,
+} from "../../scripts/lib/managed-child-process.mts";
+import { runE2eGlobalSetup } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { forwardSignalToVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
+import { waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { withTestTimeout } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 type SetupCommandRunner = NonNullable<Parameters<typeof runE2eGlobalSetup>[0]>;
 
@@ -74,11 +74,15 @@ describe("vitest E2E global setup", () => {
 
   posixIt("forwards output and SIGTERM through the runner process group", async () => {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-setup-group-"));
-    const fixturePath = path.join(fixtureDir, "build-fixture.mjs");
+    const fixturePath = path.join(fixtureDir, "scripts", "run-node.mjs");
     const pidPaths = ["child.pid", "descendant.pid"].map((name) => path.join(fixtureDir, name));
-    fs.writeFileSync(
-      fixturePath,
-      `import { spawn } from "node:child_process";
+    let cleanup = async () => fs.rmSync(fixtureDir, { force: true, recursive: true });
+    await runQaGatewayFixture(
+      async () => {
+        fs.mkdirSync(path.dirname(fixturePath), { recursive: true });
+        fs.writeFileSync(
+          fixturePath,
+          `import { spawn } from "node:child_process";
 import fs from "node:fs";
 process.stdin.once("data", () => {
   const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
@@ -90,48 +94,104 @@ process.stdin.once("data", () => {
 });
 process.stdin.resume();
 `,
-    );
-    const setupUrl = new URL("../vitest/vitest.e2e.global-setup.ts", import.meta.url).href;
-    const runnerScript = `import { runE2eSetupCommand } from ${JSON.stringify(setupUrl)};
-await runE2eSetupCommand([${JSON.stringify(fixturePath)}], process.env);`;
-    const runner = spawn(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", runnerScript],
-      { detached: true, stdio: ["pipe", "pipe", "pipe"] },
-    );
-    const pids: number[] = [];
-    let stdout = "";
-    let stderr = "";
-    runner.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-    runner.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+        );
+        const setupUrl = new URL(
+          "../../scripts/lib/vitest-build-prerequisites.mts",
+          import.meta.url,
+        ).href;
+        const runnerScript = `import { runE2eGlobalSetup } from ${JSON.stringify(setupUrl)};
+process.chdir(${JSON.stringify(fixtureDir)});
+await runE2eGlobalSetup(undefined, process.env);`;
+        const runner = spawn(
+          process.execPath,
+          ["--import", "tsx", "--input-type=module", "--eval", runnerScript],
+          { detached: true, stdio: ["pipe", "pipe", "pipe"] },
+        );
+        const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) => {
+            runner.once("close", (code, signal) => resolve({ code, signal }));
+          },
+        );
+        const pids: number[] = [];
+        cleanup = () =>
+          runQaGatewayFixture(
+            async () => {
+              if (!runner.pid) {
+                return;
+              }
+              try {
+                process.kill(-runner.pid, "SIGKILL");
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+                  throw error;
+                }
+              }
+            },
+            () => killPidIfAlive(runner.pid),
+            ...pidPaths.map((file) => async () => {
+              if (!fs.existsSync(file)) {
+                return;
+              }
+              const pid = await waitForPidFile(file, PROCESS_TIMEOUT_MS);
+              killPidIfAlive(pid);
+            }),
+            async () => {
+              // Keep PID evidence unless every process and its output have finished.
+              await runQaGatewayFixture(
+                async () => {
+                  await withTestTimeout(
+                    closed,
+                    PROCESS_TIMEOUT_MS,
+                    `runner did not close; retained fixture: ${fixtureDir}`,
+                  );
+                },
+                async () => {
+                  if (!runner.pid) {
+                    return;
+                  }
+                  await waitForManagedProcessGroupExit(runner, PROCESS_TIMEOUT_MS, {
+                    errorPolicy: "indeterminate",
+                  });
+                  expect(
+                    inspectManagedProcessGroup(runner, { errorPolicy: "indeterminate" }),
+                    `retained fixture: ${fixtureDir}`,
+                  ).toBe("dead");
+                },
+              );
+              fs.rmSync(fixtureDir, { force: true, recursive: true });
+            },
+          );
+        await once(runner, "spawn");
+        let stdout = "";
+        let stderr = "";
+        runner.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+        runner.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
 
-    try {
-      runner.stdin.write("start\n");
-      pids.push(
-        ...(await Promise.all(pidPaths.map((file) => waitForPidFile(file, PROCESS_TIMEOUT_MS)))),
-      );
-      await vi.waitFor(() => {
-        expect(stdout).toContain("setup-stdout");
-        expect(stderr).toContain("setup-stderr");
-      });
-      const closed = waitForChildClose(runner, PROCESS_TIMEOUT_MS);
-      expect(
-        forwardSignalToVitestProcessGroup({
-          child: runner,
-          kill: process.kill.bind(process),
-          signal: "SIGTERM",
-        }),
-      ).toBe(true);
-      await expect(closed).resolves.toEqual({ code: null, signal: "SIGTERM" });
-      await Promise.all(pids.map((pid) => waitForDead(pid, PROCESS_TIMEOUT_MS)));
-    } finally {
-      forceKillVitestProcessGroup(runner);
-      for (const pid of pids) {
-        if (isProcessAlive(pid)) {
-          process.kill(pid, "SIGKILL");
+        runner.stdin.write("start\n");
+        for (const file of pidPaths) {
+          pids.push(await waitForPidFile(file, PROCESS_TIMEOUT_MS));
         }
-      }
-      fs.rmSync(fixtureDir, { force: true, recursive: true });
-    }
+        await vi.waitFor(() => {
+          expect(stdout).toContain("setup-stdout");
+          expect(stderr).toContain("setup-stderr");
+        });
+        expect(
+          forwardSignalToVitestProcessGroup({
+            child: runner,
+            kill: process.kill.bind(process),
+            signal: "SIGTERM",
+          }),
+        ).toBe(true);
+        await expect(
+          withTestTimeout(
+            closed,
+            PROCESS_TIMEOUT_MS,
+            `runner did not close; retained fixture: ${fixtureDir}`,
+          ),
+        ).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await Promise.all(pids.map((pid) => waitForDead(pid, PROCESS_TIMEOUT_MS)));
+      },
+      () => cleanup(),
+    );
   });
 });

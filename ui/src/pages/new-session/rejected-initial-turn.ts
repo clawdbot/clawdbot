@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
@@ -13,12 +13,14 @@ export function retainRejectedInitialTurn(options: {
   context: ApplicationContext;
   error: string;
   message: string;
+  mentions?: readonly HumanMention[];
   sessionKey: string;
 }): boolean {
   const gateway = options.context.gateway.snapshot;
   const rejectedItem = {
     id: generateUUID(),
     text: options.message,
+    ...(options.mentions?.length ? { mentions: options.mentions } : {}),
     attachments: options.attachments,
     createdAt: Date.now(),
     kind: "queued" as const,
@@ -29,6 +31,12 @@ export function retainRejectedInitialTurn(options: {
     sessionKey: options.sessionKey,
     agentId: normalizeAgentId(options.agentId),
   };
+  // The rejected turn already has a server-created destination; never resolve
+  // it against the defaults of a later selected route.
+  const admission = {
+    scope: { sessionKey: rejectedItem.sessionKey, agentId: rejectedItem.agentId },
+    awaitingDefaults: false,
+  };
   const persisted = admitStoredChatComposerQueueItem(
     {
       settings: loadSettings(),
@@ -36,7 +44,7 @@ export function retainRejectedInitialTurn(options: {
       agentsList: options.context.agents.state.agentsList,
       hello: gateway.hello,
     },
-    options.sessionKey,
+    admission,
     rejectedItem,
   );
   if (persisted) {

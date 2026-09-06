@@ -2,17 +2,30 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("../../infra/command-analysis/explain.js", () => ({
+  resolveCommandAnalysisSummaryForDisplay: vi.fn(async () => null),
+}));
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    for (const dir of tempDirs.dirs) {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }));
+    }
+    cleanup();
+  }),
+);
 
 function databaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.realpathSync(tempDirs.make("exec-approval-id-"));
@@ -88,13 +101,9 @@ function requestOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
-
 describe("exec approval signed agent runtime", () => {
-  it("rejects closed authority before creating an exec approval", async () => {
-    const manager = new ExecApprovalManager({
+  it("rejects closed authority before creating an exec approval", async (testContext) => {
+    const manager = createTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => false,
     });
     const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
@@ -108,9 +117,33 @@ describe("exec approval signed agent runtime", () => {
     });
   });
 
-  it("cancels an exec approval when authority closes after the handshake", async () => {
+  it("sanitizes display-only cwd and resolvedPath in the stored request", async (testContext) => {
+    const manager = createTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+    const opts = requestOptions(identity(false));
+    // Bidi override in cwd/resolvedPath can spoof what path reviewers see.
+    (opts.params as Record<string, unknown>).cwd = "/tmp/safe‮evil";
+    (opts.params as Record<string, unknown>).resolvedPath = "/usr/bin/echo​x";
+    // Free-form policy strings must not reach reviewer meta rows: security/ask
+    // are closed enums (arbitrary values null out), host is escape-hardened.
+    (opts.params as Record<string, unknown>).security = "full‮looks-deny";
+    (opts.params as Record<string, unknown>).ask = "always​ish";
+    const pending = handler(opts);
+    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+    const record = manager.listPendingRecords()[0]!;
+    expect(record.request.cwd).toBe("/tmp/safe\\u{202E}evil");
+    expect(record.request.resolvedPath).toBe("/usr/bin/echo\\u{200B}x");
+    expect(record.request.security).toBeNull();
+    expect(record.request.ask).toBeNull();
+    manager.resolve(record.id, "deny");
+    await pending;
+  });
+
+  it("cancels an exec approval when authority closes after the handshake", async (testContext) => {
     let active = true;
-    const manager = new ExecApprovalManager({
+    const manager = createTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => active,
     });
     const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;

@@ -220,7 +220,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
     agentRuntime: params.agentRuntime,
-    loadRuntimeCatalog: async () => params.catalog,
+    loadModelCatalog: async () => params.catalog,
   });
 }
 
@@ -253,7 +253,11 @@ export async function executeTelegramBuiltinCommand(
   if (!dispatch) {
     return false;
   }
-  const commandDefinition = findCommandByNativeName(params.commandName, "telegram");
+  // Loaded-registry lookup only: Telegram defines no resolveNativeCommandName
+  // hook, and the bundled fallback would jiti-load the plugin source in dev/test.
+  const commandDefinition = findCommandByNativeName(params.commandName, "telegram", {
+    includeBundledChannelFallback: false,
+  });
   const commandArgs = commandDefinition
     ? parseCommandArgs(commandDefinition, params.rawText)
     : params.rawText
@@ -317,6 +321,7 @@ export async function executeTelegramBuiltinCommand(
         command: commandDefinition,
         args: commandArgs,
         cfg: dispatch.runtimeCfg,
+        session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
         ...menuModelContext,
         ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
       })

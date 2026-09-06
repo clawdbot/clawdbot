@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
+import { runSecurityAuditCore } from "./audit.js";
 
 type ChannelSecurityFinding = Awaited<
   ReturnType<typeof collectChannelSecurityFindingsCore>
@@ -80,6 +81,76 @@ function createDmPlugin(
 }
 
 describe("security audit channel dm policy", () => {
+  it.each(["doctor", "audit"] as const)(
+    "reports unowned DM routes without losing sibling findings in %s mode",
+    async (mode) => {
+      const findings = await collectChannelSecurityFindingsCore({
+        mode,
+        cfg: {
+          agents: { entries: { main: {}, research: {} } },
+          bindings: [{ agentId: "research", match: { channel: "whatsapp", accountId: "owned" } }],
+        },
+        plugins: [
+          createDmPlugin({
+            accounts: {
+              finite: { allowFrom: ["user-a", "user-b"] },
+              open: { policy: "open", allowFrom: ["*"] },
+              owned: { allowFrom: ["user-c", "user-d"] },
+            },
+          }),
+        ],
+      });
+
+      for (const account of ["finite", "open"]) {
+        const finding = requireFinding(
+          findings,
+          `channels.whatsapp.routing.owner_missing.${account}`,
+        );
+        expect(finding).toMatchObject({
+          severity: "warn",
+          remediation: expect.stringContaining(`whatsapp:${account}`),
+        });
+      }
+      expect(
+        findings.filter((finding) => finding.checkId.includes(".routing.owner_missing.")),
+      ).toHaveLength(2);
+      expect(requireFinding(findings, "channels.whatsapp.dm.open").severity).toBe("critical");
+      expect(collisionFindings(findings)).toHaveLength(1);
+      expect(collisionFindings(findings)[0]?.detail).toContain("owned");
+    },
+  );
+
+  it("keeps producer-owned channel severity through the audit summary", async () => {
+    const pluginOptions = {
+      accounts: { default: { policy: "disabled", allowFrom: [] } },
+    };
+    const plugin = createDmPlugin(pluginOptions);
+    if (!plugin.security) {
+      throw new Error("test plugin security adapter missing");
+    }
+    plugin.security.collectWarnings = () => [
+      {
+        checkId: "channels.whatsapp.test.open_access",
+        severity: "critical",
+        title: "WhatsApp security warning",
+        detail: "Open access test finding",
+      },
+    ];
+
+    const auditOptions = { config: {}, includeFilesystem: false } as const;
+    const baseline = await runSecurityAuditCore({
+      ...auditOptions,
+      plugins: [createDmPlugin(pluginOptions)],
+    });
+    const report = await runSecurityAuditCore({ ...auditOptions, plugins: [plugin] });
+
+    expect(requireFinding(report.findings, "channels.whatsapp.test.open_access")).toMatchObject({
+      severity: "critical",
+      detail: "Open access test finding",
+    });
+    expect(report.summary.critical).toBe(baseline.summary.critical + 1);
+  });
+
   it.each([
     {
       name: "global main + winning isolated binding is safe",

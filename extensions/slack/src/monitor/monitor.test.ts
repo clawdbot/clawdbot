@@ -223,7 +223,7 @@ describe("resolveSlackChannelConfig", () => {
     );
   });
 
-  it("matches per-channel users only in their selected workspace", () => {
+  it("preserves org-wide and workspace-qualified per-channel user identities", () => {
     const channels = {
       "team:T11111111:channel:C01234567": {
         users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
@@ -309,7 +309,6 @@ const baseParams = () => ({
     ephemeral: true,
   },
   textLimit: 4000,
-  ackReactionScope: "group-mentions",
   typingReaction: "",
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
@@ -357,12 +356,13 @@ describe("normalizeSlackChannelType", () => {
   });
 });
 
-describe("resolveSlackSystemEventSessionKey", () => {
+describe("resolveSlackSystemEventRoute", () => {
   it("defaults missing channel_type to channel sessions", () => {
     const ctx = createSlackMonitorContext(baseParams());
-    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
-      "agent:main:slack:channel:c123",
-    );
+    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:c123",
+    });
   });
 
   it("uses the configured default agent for fallback system-event sessions", () => {
@@ -372,9 +372,10 @@ describe("resolveSlackSystemEventSessionKey", () => {
         agents: { list: [{ id: "ops", default: true }] },
       },
     });
-    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
-      "agent:ops:slack:channel:c123",
-    );
+    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
+      agentId: "ops",
+      sessionKey: "agent:ops:slack:channel:c123",
+    });
   });
 
   it("routes channel system events through account bindings", () => {
@@ -393,9 +394,9 @@ describe("resolveSlackSystemEventSessionKey", () => {
         ],
       },
     });
-    expect(
-      ctx.resolveSlackSystemEventSessionKey({ channelId: "C123", channelType: "channel" }),
-    ).toBe("agent:ops:slack:channel:c123");
+    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123", channelType: "channel" })).toEqual(
+      { agentId: "ops", sessionKey: "agent:ops:slack:channel:c123" },
+    );
   });
 
   it("routes DM system events through direct-peer bindings when sender is known", () => {
@@ -416,12 +417,12 @@ describe("resolveSlackSystemEventSessionKey", () => {
       },
     });
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "D123",
         channelType: "im",
         senderId: "U123",
       }),
-    ).toBe("agent:ops-dm:main");
+    ).toEqual({ agentId: "ops-dm", sessionKey: "agent:ops-dm:main" });
   });
 });
 

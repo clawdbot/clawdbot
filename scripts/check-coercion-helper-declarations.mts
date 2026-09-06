@@ -8,7 +8,7 @@ import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
+import { getPropertyNameText, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
 const ABSOLUTE_LEGACY_COERCION_HELPER_NAMES = [
   "asObject",
@@ -30,6 +30,11 @@ export type CoercionHelperDeclarationKind =
   | "variable";
 
 export const CANONICAL_COERCION_HELPER_OWNERS = [
+  {
+    file: "packages/normalization-core/src/agent-id.ts",
+    kind: "function",
+    names: ["isValidAgentId", "normalizeAgentId", "normalizeAgentIdStrict"],
+  },
   {
     file: "packages/normalization-core/src/string-coerce.ts",
     kind: "function",
@@ -57,6 +62,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
       "normalizeAtHashSlug",
@@ -149,6 +155,9 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     kind: "function",
     names: [
       "coerceErrorMessage",
+      "collectErrorGraphCandidates",
+      "collectNestedErrorCandidates",
+      "extractErrorCodeOrErrno",
       "stringifyNonErrorCause",
       "toErrorObject",
       "toStringifiedError",
@@ -181,6 +190,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
 }[];
 
 export const CANONICAL_COERCION_MODULES = [
+  "packages/normalization-core/src/agent-id.ts",
   "packages/normalization-core/src/string-coerce.ts",
   "packages/normalization-core/src/string-normalization.ts",
   "packages/normalization-core/src/number-coercion.ts",
@@ -192,7 +202,19 @@ export const CANONICAL_COERCION_MODULES = [
   "src/utils/boolean.ts",
 ] as const;
 
+const MIXED_CANONICAL_COERCION_MODULES = ["scripts/lib/arg-utils.runtime.mjs"] as const;
+
 export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    name: "extractErrorCode",
+    reason: "Provider adapters share this name for nested response-code extraction.",
+  },
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    name: "readErrorName",
+    reason: "Diagnostic adapters share this name for filtered or non-blank error names.",
+  },
   {
     file: "packages/normalization-core/src/error-coercion.ts",
     name: "formatErrorMessage",
@@ -207,31 +229,45 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
   {
+    file: "scripts/lib/ci-test-timings-schema.mts",
+    name: "isRecord",
+    kind: "function",
+    reason: "Dependency-free CI preflight runs before install and cannot use workspace resolution.",
+  },
+  {
     file: "ui/src/test-helpers/control-ui-e2e.ts",
     name: "isRecord",
     kind: "function",
-    count: 1,
     reason: "Serialized mock Gateway closure cannot capture module imports.",
+  },
+  {
+    file: "src/gateway/mcp-app-standalone-host.ts",
+    name: "asStandaloneRecord",
+    kind: "variable",
+    reason: "Serialized standalone app closure cannot capture module imports.",
+  },
+  {
+    file: "extensions/diffs/src/viewer-payload.ts",
+    name: "isViewerRecord",
+    kind: "function",
+    reason: "Standalone browser asset build cannot resolve workspace package imports.",
   },
   {
     file: "scripts/lib/kova-report-gate.mts",
     name: "isRecord",
     kind: "function",
-    count: 1,
     reason: "Copied standalone report gate cannot rely on workspace package resolution.",
   },
   {
     file: "scripts/lib/record-shared.mjs",
     name: "isRecord",
     kind: "function",
-    count: 1,
     reason: "Plain-Node shared helper serves MJS and E2E callers without package resolution.",
   },
   {
     file: "scripts/pr-lib/process-group-runner.mjs",
     name: "toError",
     kind: "function",
-    count: 1,
     reason:
       "Bootstrap process supervisor preserves fallback errors without workspace dependencies.",
   },
@@ -239,11 +275,9 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     file: "scripts/lib/bounded-response.mjs",
     name: "toLintErrorObject",
     kind: "function",
-    count: 1,
     reason: "Standalone copied response reader cannot resolve workspace packages.",
   },
 ] as const satisfies readonly {
-  count: number;
   file: string;
   kind: CoercionHelperDeclarationKind;
   name: string;
@@ -294,7 +328,6 @@ export type CanonicalCoercionExportAudit = {
 };
 
 export type CoercionHelperCarveOut = {
-  count: number;
   file: string;
   kind: CoercionHelperDeclarationKind;
   name: BannedCoercionHelperName;
@@ -308,7 +341,6 @@ function canonicalOwnerCarveOuts(
     file: owner.file,
     kind: owner.kind,
     name,
-    count: 1,
     reason: "Canonical coercion helper owned by this module.",
   }));
 }
@@ -318,14 +350,10 @@ export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
   ...EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS,
 ];
 
-type CarveOutMismatch = CoercionHelperCarveOut & {
-  actualCount: number;
-};
-
 type CoercionHelperAudit = {
   excessDeclarations: CoercionHelperDeclaration[];
   invalidCarveOuts: string[];
-  staleCarveOuts: CarveOutMismatch[];
+  staleCarveOuts: CoercionHelperCarveOut[];
 };
 
 type ScriptIo = {
@@ -360,16 +388,6 @@ export function isGovernedCoercionHelperPath(filePath: string) {
     !/\.d\.[cm]?ts$/u.test(filePath) &&
     !GENERATED_OR_FIXTURE_PATH_RE.test(filePath)
   );
-}
-
-function propertyNameText(name: ts.PropertyName | undefined): string | undefined {
-  if (!name) {
-    return undefined;
-  }
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return undefined;
 }
 
 function isCallableInitializer(expression: ts.Expression): boolean {
@@ -434,7 +452,7 @@ export function findBannedCoercionHelperDeclarations(
         });
       }
     } else if (ts.isMethodDeclaration(node)) {
-      const name = propertyNameText(node.name);
+      const name = getPropertyNameText(node.name);
       if (name && BANNED_HELPER_NAMES.has(name)) {
         declarations.push({
           file,
@@ -444,7 +462,7 @@ export function findBannedCoercionHelperDeclarations(
         });
       }
     } else if (ts.isPropertyDeclaration(node) && node.initializer) {
-      const name = propertyNameText(node.name);
+      const name = getPropertyNameText(node.name);
       if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
         declarations.push({
           file,
@@ -454,7 +472,7 @@ export function findBannedCoercionHelperDeclarations(
         });
       }
     } else if (ts.isPropertyAssignment(node)) {
-      const name = propertyNameText(node.name);
+      const name = getPropertyNameText(node.name);
       if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
         declarations.push({
           file,
@@ -562,7 +580,7 @@ export function auditCanonicalCoercionExports(
   return { invalidClassifications, staleClassifications, unclassifiedExports };
 }
 
-/** Checks exact file/name/count carve-outs and rejects stale or excess entries. */
+/** Checks exact file/name/kind carve-outs and rejects stale or excess entries. */
 export function auditCoercionHelperDeclarations(
   declarations: readonly CoercionHelperDeclaration[],
   carveOuts: readonly CoercionHelperCarveOut[],
@@ -583,9 +601,6 @@ export function auditCoercionHelperDeclarations(
         `${carveOut.file} [${carveOut.name}] has invalid kind ${carveOut.kind}`,
       );
     }
-    if (!Number.isInteger(carveOut.count) || carveOut.count < 1) {
-      invalidCarveOuts.push(`${carveOut.file} [${carveOut.name}] must have a positive count`);
-    }
     if (!carveOut.reason.trim()) {
       invalidCarveOuts.push(`${carveOut.file} [${carveOut.name}] needs a non-empty reason`);
     }
@@ -602,22 +617,15 @@ export function auditCoercionHelperDeclarations(
 
   const excessDeclarations: CoercionHelperDeclaration[] = [];
   for (const [key, actual] of declarationsByKey) {
-    const allowedCount = carveOutByKey.get(key)?.count ?? 0;
-    if (actual.length > allowedCount) {
-      excessDeclarations.push(...actual.slice(allowedCount));
+    if (carveOutByKey.has(key)) {
+      excessDeclarations.push(...actual.slice(1));
+    } else {
+      excessDeclarations.push(...actual);
     }
   }
-  const staleCarveOuts = carveOuts
-    .map((carveOut): CarveOutMismatch | null => {
-      const actual = declarationsByKey.get(carveOutKey(carveOut)) ?? [];
-      return actual.length < carveOut.count
-        ? {
-            ...carveOut,
-            actualCount: actual.length,
-          }
-        : null;
-    })
-    .filter((entry): entry is CarveOutMismatch => entry !== null);
+  const staleCarveOuts = carveOuts.filter(
+    (carveOut) => !declarationsByKey.has(carveOutKey(carveOut)),
+  );
 
   return {
     excessDeclarations: excessDeclarations.toSorted(
@@ -637,15 +645,28 @@ function writeLine(stream: ScriptIo["stdout"] | ScriptIo["stderr"], value: strin
 
 function auditDefaultCanonicalExports(repoRoot: string): CanonicalCoercionExportAudit {
   const canonicalModules = new Set<string>(CANONICAL_COERCION_MODULES);
+  const mixedModules = new Set<string>(MIXED_CANONICAL_COERCION_MODULES);
+  const auditedModules = [...CANONICAL_COERCION_MODULES, ...MIXED_CANONICAL_COERCION_MODULES];
   const exportsByFile = new Map(
-    CANONICAL_COERCION_MODULES.map((file) => {
+    auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return [file, findExportedCallableNames(source, file)] as const;
+      const exportedNames = findExportedCallableNames(source, file);
+      if (!mixedModules.has(file)) {
+        return [file, exportedNames] as const;
+      }
+      const registeredNames = new Set<string>(
+        CANONICAL_COERCION_HELPER_OWNERS.filter((owner) => owner.file === file).flatMap(
+          (owner) => owner.names,
+        ),
+      );
+      return [file, exportedNames.filter((name) => registeredNames.has(name))] as const;
     }),
   );
   const classifications: CanonicalCoercionExportClassification[] = [
-    ...CANONICAL_COERCION_HELPER_OWNERS.filter(({ file }) => canonicalModules.has(file)).flatMap(
-      ({ file, names }) => names.map((name) => ({ file, name, status: "enforced" as const })),
+    ...CANONICAL_COERCION_HELPER_OWNERS.filter(
+      ({ file }) => canonicalModules.has(file) || mixedModules.has(file),
+    ).flatMap(({ file, names }) =>
+      names.map((name) => ({ file, name, status: "enforced" as const })),
     ),
     ...DEFERRED_CANONICAL_COERCION_EXPORTS.map(({ file, name, reason }) => ({
       file,
@@ -719,7 +740,7 @@ export function runCoercionHelperDeclarationGuard(
     for (const carveOut of audit.staleCarveOuts) {
       writeLine(
         io.stderr,
-        `- ${carveOut.file} [${carveOut.name}] expected ${carveOut.count} ${carveOut.kind} declaration(s), found ${carveOut.actualCount}; remove or reduce the carve-out`,
+        `- ${carveOut.file} [${carveOut.name}] has no ${carveOut.kind} declaration; remove the carve-out`,
       );
     }
   }
@@ -743,11 +764,11 @@ export function runCoercionHelperDeclarationGuard(
   }
   writeLine(
     io.stderr,
-    "Core/package/UI/workspace-script code: use the matching @openclaw/normalization-core coercion subpath.",
+    "Core/package/UI/workspace-script code: use the matching @openclaw/normalization-core export or module.",
   );
   writeLine(
     io.stderr,
-    "Plugin production code: use openclaw/plugin-sdk/string-coerce-runtime, number-runtime, or error-runtime.",
+    "Bundled plugin production code: use the matching openclaw/plugin-sdk runtime; number-runtime is bundled/private-local, not a third-party typed contract.",
   );
   writeLine(
     io.stderr,

@@ -1,10 +1,7 @@
 // Outbound payload planning normalizes reply payloads into sendable text,
 // media, presentation, interactive, and mirror projections.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import {
-  mergeReactionDirectiveChannelData,
-  parseReplyDirectives,
-} from "../../auto-reply/reply/reply-directives.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -12,6 +9,7 @@ import {
 } from "../../auto-reply/reply/reply-payloads.js";
 import { stripLeadingInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { formatLocationText } from "../../channels/location.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
@@ -42,6 +40,8 @@ export type NormalizedOutboundPayload = {
   location?: ReplyPayload["location"];
   /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
   hookContent?: string;
+  /** Preserves the status/answer distinction through delivery hooks. */
+  isStatusNotice?: boolean;
 };
 
 /** JSON-safe outbound payload projection used for envelopes and diagnostics. */
@@ -141,16 +141,12 @@ function collectPresentationMirrorText(presentation: MessagePresentation | undef
   return lines;
 }
 
-function collectInteractiveMirrorText(interactive: LegacyInteractiveReply | undefined): string[] {
-  if (!interactive) {
-    return [];
-  }
-  return collectBlockMirrorText(interactive.blocks);
-}
-
-function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
-  const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
-  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+/** Renders user-visible payload content safely for every outbound transcript mirror. */
+export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string {
+  const text = payload.text?.trim()
+    ? payload.text
+    : payload.location && formatLocationText(payload.location);
+  const presentation = normalizeMessagePresentation(payload.presentation);
   if (text?.trim()) {
     const structuredDataText = presentation
       ? collectBlockMirrorText(
@@ -159,10 +155,10 @@ function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
       : [];
     return [text, ...structuredDataText].join("\n");
   }
-  const interactive = normalizeLegacyInteractiveReply(entry.payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   return [
     ...collectPresentationMirrorText(presentation),
-    ...collectInteractiveMirrorText(interactive),
+    ...collectBlockMirrorText(interactive?.blocks ?? []),
   ].join("\n");
 }
 
@@ -228,26 +224,20 @@ function createOutboundPayloadPlanEntry(
   const mergedMedia = mergeMediaUrls(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
+    parsed.mediaUrls,
   );
   const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  if (
-    (strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText)) &&
-    mergedMedia.length === 0
-  ) {
-    return null;
-  }
-  const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
-  const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
-  const channelData = mergeReactionDirectiveChannelData(payload.channelData, parsed.reaction);
+  const suppressedText = strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText);
+  const resolvedMediaUrl = mergedMedia.length > 1 ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
       formatBtwTextForExternalDelivery({
         ...payload,
-        text: parsedText,
+        text: suppressedText ? "" : parsedText,
       }) ?? "",
     mediaUrls: mergedMedia.length ? mergedMedia : undefined,
     mediaUrl: resolvedMediaUrl,
@@ -255,9 +245,11 @@ function createOutboundPayloadPlanEntry(
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
-    ...(channelData ? { channelData } : {}),
   };
-  if (!isRenderablePayload(normalizedPayload)) {
+  const hasRenderableContent = suppressedText
+    ? hasReplyPayloadContent(normalizedPayload)
+    : isRenderablePayload(normalizedPayload);
+  if (!hasRenderableContent) {
     return null;
   }
   const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
@@ -329,6 +321,7 @@ export function projectOutboundPayloadPlanForOutbound(
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
       ...(entry.hasChannelData ? { channelData: payload.channelData } : {}),
       ...(payload.location ? { location: payload.location } : {}),
+      ...(payload.isStatusNotice === true ? { isStatusNotice: true } : {}),
     });
   }
   return normalizedPayloads;
@@ -365,7 +358,7 @@ export function projectOutboundPayloadPlanForMirror(
 ): OutboundPayloadMirror {
   return {
     text: plan
-      .map(resolveOutboundMirrorText)
+      .map(({ payload }) => resolveOutboundPayloadMirrorText(payload))
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
@@ -394,6 +387,7 @@ export function summarizeOutboundPayloadForTransport(
     channelData: payload.channelData,
     ...(payload.location ? { location: payload.location } : {}),
     ...(text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(payload.isStatusNotice === true ? { isStatusNotice: true } : {}),
   };
 }
 
@@ -402,13 +396,6 @@ export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
   return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
-}
-
-/** Normalizes reply payloads into JSON-safe outbound envelope payloads. */
-export function normalizeOutboundPayloadsForJson(
-  payloads: readonly ReplyPayload[],
-): OutboundPayloadJson[] {
-  return projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads));
 }
 
 /** Formats normalized outbound payload text and attachments for logs. */

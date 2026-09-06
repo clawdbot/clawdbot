@@ -122,9 +122,8 @@ export function resolveSlackChannelConfig(params: {
   const users = resolveSlackUserAllowListForTeam({
     allowList: firstDefined(resolved.users, fallback?.users),
     teamId: params.teamId,
-    allowUnscoped: params.allowUnscoped,
-    // Keeping unmatched entries preserves the configured allowlist gate; strict
-    // workspace ingress treats bare and differently scoped values as non-matching.
+    // Keeping unmatched entries preserves the configured allowlist gate;
+    // ingress treats differently scoped values as non-matching.
     preserveUnmatchedScopedEntries: true,
   });
   const skills = firstDefined(resolved.skills, fallback?.skills);

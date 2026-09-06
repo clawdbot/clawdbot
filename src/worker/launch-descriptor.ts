@@ -6,11 +6,20 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
+  type SessionPermissionMode,
+  SessionPermissionModeSchema,
+} from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
+  SkillResourceDeliverySchema,
+  type SkillResourceDelivery,
+} from "../../packages/gateway-protocol/src/schema/skill-resources.js";
+import {
   type WorkerConnectParams,
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
   type WorkerTranscriptMessage,
   WorkerTranscriptMessageSchema,
+  WorkerTranscriptUserMessageSchema,
   type WorkerTranscriptCommitParams,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -23,19 +32,51 @@ import {
   WorkerInferenceModelRefSchema,
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WorkerSkillWorkshopBindingSchema,
+  type WorkerSkillWorkshopBinding,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  ComputerUseCapabilityDescriptorSchema,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
+import {
+  parseWorkerConnectionEndpoint,
+  type WorkerConnectionEndpoint,
+} from "./worker-connection-endpoint.js";
 
-const LAUNCH_VERSION = 2;
+const LAUNCH_VERSION = 4;
 
 export type WorkerBrowserLaunchDescriptor = {
   cdpUrl: string;
   launcherPath: string;
 };
 
-type WorkerLaunchAssignment = {
+export type WorkerComputerLaunchDescriptor = {
+  nodeId: string;
+  computerUse: ComputerUseCapabilityDescriptor;
+};
+
+export type WorkerGitHubLaunchBinding = {
+  token: string;
+  login: string;
+  branch: string;
+  remoteUrl?: string;
+  gitAuthor?: { name?: string; email?: string };
+};
+
+type WorkerLaunchPermissionContext =
+  | { permissionMode: SessionPermissionMode; workerContainmentRoot: string }
+  | { permissionMode?: never; workerContainmentRoot?: never };
+
+type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
+  skillAuthoring?: WorkerSkillWorkshopBinding;
+  skillResources?: SkillResourceDelivery;
   /** Host placement namespace used for worker-local policy, hooks, and audit attribution. */
   agentId: string;
   operationalRunInstance: OperationalRunInstanceRef;
@@ -43,7 +84,7 @@ type WorkerLaunchAssignment = {
   agentRuntimeIdentityToken: string;
   runId: string;
   turnId: string;
-  prompt: string;
+  prompt: string | Extract<WorkerTranscriptMessage, { role: "user" }>["content"];
   suppressPromptTranscript: boolean;
   workspaceDir: string;
   modelRef: WorkerInferenceModelRef;
@@ -60,25 +101,23 @@ type WorkerLaunchAssignment = {
   };
   toolAuthority: WorkerToolAuthority;
   browser?: WorkerBrowserLaunchDescriptor;
+  computer?: WorkerComputerLaunchDescriptor;
+  github?: WorkerGitHubLaunchBinding;
 };
 
 type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
   sessionId: string;
 };
 
-export type WorkerLaunchDescriptor = {
-  version: 2;
-  socketPath: string;
+export type WorkerLaunchPlan = {
+  version: 4;
   admission: WorkerLaunchAdmission;
   assignment: WorkerLaunchAssignment;
 };
 
-function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => key in value) && Object.keys(value).every((key) => allowed.has(key))
-  );
-}
+export type WorkerLaunchDescriptor = WorkerLaunchPlan & {
+  connectionEndpoint: WorkerConnectionEndpoint;
+};
 
 function isIdentifier(value: unknown): value is string {
   return (
@@ -93,6 +132,10 @@ function isSafeSequence(value: unknown, minimum: number): value is number {
   return Number.isSafeInteger(value) && typeof value === "number" && value >= minimum;
 }
 
+function isAbsoluteHostPath(value: string): boolean {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
 function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
   return Value.Check(WorkerInferenceOptionsSchema, value);
 }
@@ -100,7 +143,7 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
 function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["allowedToolNames"]) ||
+    !hasExactOwnKeys(value, ["allowedToolNames"]) ||
     !Array.isArray(value.allowedToolNames) ||
     !value.allowedToolNames.every(isWorkerToolName) ||
     new Set(value.allowedToolNames).size !== value.allowedToolNames.length
@@ -113,10 +156,10 @@ function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
 function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescriptor | undefined {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["cdpUrl", "launcherPath"]) ||
+    !hasExactOwnKeys(value, ["cdpUrl", "launcherPath"]) ||
     typeof value.cdpUrl !== "string" ||
     typeof value.launcherPath !== "string" ||
-    !path.isAbsolute(value.launcherPath)
+    !isAbsoluteHostPath(value.launcherPath)
   ) {
     return undefined;
   }
@@ -148,10 +191,65 @@ function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescri
   };
 }
 
+export function parseWorkerGitHubLaunchBinding(
+  value: unknown,
+): WorkerGitHubLaunchBinding | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["token", "login", "branch"], ["remoteUrl", "gitAuthor"]) ||
+    typeof value.token !== "string" ||
+    value.token.length < 1 ||
+    value.token.length > 2048 ||
+    /[\s\p{Cc}]/u.test(value.token) ||
+    typeof value.login !== "string" ||
+    value.login.trim() !== value.login ||
+    !/^[A-Za-z0-9-]{1,39}$/u.test(value.login) ||
+    typeof value.branch !== "string" ||
+    value.branch.length < 1 ||
+    value.branch.length > 256 ||
+    /[\s~^:?*[\\]/u.test(value.branch) ||
+    value.branch.includes("\u0000") ||
+    value.branch.startsWith("-") ||
+    value.branch.includes("..") ||
+    value.branch.includes("@{") ||
+    (Object.hasOwn(value, "remoteUrl") &&
+      (typeof value.remoteUrl !== "string" ||
+        value.remoteUrl.trim() !== value.remoteUrl ||
+        !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/u.test(value.remoteUrl)))
+  ) {
+    return undefined;
+  }
+  let gitAuthor: WorkerGitHubLaunchBinding["gitAuthor"];
+  if (Object.hasOwn(value, "gitAuthor")) {
+    if (!isRecord(value.gitAuthor) || !hasExactOwnKeys(value.gitAuthor, [], ["name", "email"])) {
+      return undefined;
+    }
+    for (const entry of Object.values(value.gitAuthor)) {
+      if (
+        typeof entry !== "string" ||
+        !entry.trim() ||
+        entry.length > 256 ||
+        entry.includes("\u0000") ||
+        /[\r\n]/u.test(entry)
+      ) {
+        return undefined;
+      }
+    }
+    gitAuthor = value.gitAuthor;
+  }
+  return {
+    token: value.token,
+    login: value.login,
+    branch: value.branch,
+    ...(typeof value.remoteUrl === "string" ? { remoteUrl: value.remoteUrl } : {}),
+    ...(gitAuthor ? { gitAuthor } : {}),
+  };
+}
+
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (
     !isRecord(value) ||
-    !hasExactKeys(
+    !hasExactOwnKeys(
       value,
       [
         "agentId",
@@ -169,8 +267,41 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt", "browser"],
+      [
+        "systemPrompt",
+        "browser",
+        "computer",
+        "github",
+        "permissionMode",
+        "workerContainmentRoot",
+        "skillResources",
+        "skillAuthoring",
+      ],
     )
+  ) {
+    return undefined;
+  }
+  const hasPermissionMode = Object.hasOwn(value, "permissionMode");
+  if (
+    value.skillAuthoring !== undefined &&
+    !Value.Check(WorkerSkillWorkshopBindingSchema, value.skillAuthoring)
+  ) {
+    return undefined;
+  }
+  if (
+    value.skillResources !== undefined &&
+    !Value.Check(SkillResourceDeliverySchema, value.skillResources)
+  ) {
+    return undefined;
+  }
+  const hasContainmentRoot = Object.hasOwn(value, "workerContainmentRoot");
+  if (
+    hasPermissionMode !== hasContainmentRoot ||
+    (hasPermissionMode &&
+      (!Value.Check(SessionPermissionModeSchema, value.permissionMode) ||
+        typeof value.workerContainmentRoot !== "string" ||
+        !isIdentifier(value.workerContainmentRoot) ||
+        !isAbsoluteHostPath(value.workerContainmentRoot)))
   ) {
     return undefined;
   }
@@ -184,10 +315,17 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     value.agentRuntimeIdentityToken.length < 1 ||
     value.agentRuntimeIdentityToken.length > 16_384 ||
     !isIdentifier(value.turnId) ||
-    typeof value.prompt !== "string" ||
+    !(
+      typeof value.prompt === "string" ||
+      Value.Check(WorkerTranscriptUserMessageSchema, {
+        role: "user",
+        content: value.prompt,
+        timestamp: 0,
+      })
+    ) ||
     typeof value.suppressPromptTranscript !== "boolean" ||
     !isIdentifier(value.workspaceDir) ||
-    !path.isAbsolute(value.workspaceDir) ||
+    !isAbsoluteHostPath(value.workspaceDir) ||
     (value.systemPrompt !== undefined && typeof value.systemPrompt !== "string") ||
     !Array.isArray(value.initialMessages) ||
     value.initialMessages.length > WORKER_INFERENCE_MAX_CONTEXT_MESSAGES ||
@@ -204,6 +342,22 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (value.browser !== undefined && !browser) {
     return undefined;
   }
+  const github = Object.hasOwn(value, "github")
+    ? parseWorkerGitHubLaunchBinding(value.github)
+    : undefined;
+  if (Object.hasOwn(value, "github") && !github) {
+    return undefined;
+  }
+  if (
+    toolAuthority.allowedToolNames.includes("computer") !== (value.computer !== undefined) ||
+    (value.computer !== undefined &&
+      (!isRecord(value.computer) ||
+        !hasExactOwnKeys(value.computer, ["nodeId", "computerUse"]) ||
+        !isIdentifier(value.computer.nodeId) ||
+        !Value.Check(ComputerUseCapabilityDescriptorSchema, value.computer.computerUse)))
+  ) {
+    return undefined;
+  }
   if (
     !Value.Check(WorkerInferenceModelRefSchema, value.modelRef) ||
     !isInferenceOptions(value.inferenceOptions)
@@ -212,7 +366,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   }
   if (
     !isRecord(value.transcript) ||
-    !hasExactKeys(value.transcript, ["baseLeafId", "nextSeq"]) ||
+    !hasExactOwnKeys(value.transcript, ["baseLeafId", "nextSeq"]) ||
     (value.transcript.baseLeafId !== null && !isIdentifier(value.transcript.baseLeafId)) ||
     !isSafeSequence(value.transcript.nextSeq, 1)
   ) {
@@ -220,7 +374,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   }
   if (
     !isRecord(value.liveEvents) ||
-    !hasExactKeys(value.liveEvents, ["ackedSeq", "nextSeq"]) ||
+    !hasExactOwnKeys(value.liveEvents, ["ackedSeq", "nextSeq"]) ||
     !isSafeSequence(value.liveEvents.ackedSeq, 0) ||
     !isSafeSequence(value.liveEvents.nextSeq, 1) ||
     value.liveEvents.nextSeq !== value.liveEvents.ackedSeq + 1
@@ -235,11 +389,12 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     }),
     toolAuthority,
     ...(browser ? { browser } : {}),
+    ...(github ? { github } : {}),
   } as WorkerLaunchAssignment;
 }
 
 export function buildWorkerConnectParams(
-  descriptor: Pick<WorkerLaunchDescriptor, "admission" | "assignment">,
+  descriptor: Pick<WorkerLaunchPlan, "admission" | "assignment">,
 ): WorkerConnectParams {
   return {
     minProtocol: PROTOCOL_VERSION,
@@ -258,26 +413,7 @@ export function buildWorkerConnectParams(
   };
 }
 
-export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescriptor {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ["version", "socketPath", "admission", "assignment"]) ||
-    value.version !== LAUNCH_VERSION ||
-    !isIdentifier(value.socketPath) ||
-    !path.isAbsolute(value.socketPath)
-  ) {
-    throw new Error("invalid worker launch descriptor");
-  }
-  const assignment = parseAssignment(value.assignment);
-  if (!assignment || !isRecord(value.admission)) {
-    throw new Error("invalid worker launch descriptor");
-  }
-  const candidate: WorkerLaunchDescriptor = {
-    version: LAUNCH_VERSION,
-    socketPath: value.socketPath,
-    admission: value.admission as WorkerLaunchAdmission,
-    assignment,
-  };
+function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan {
   const frame: WorkerConnectRequestFrame = {
     type: "req",
     id: "launch-validation",
@@ -290,11 +426,62 @@ export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescrip
     candidate.admission.ownerEpoch < 1 ||
     !isWorkerTranscriptMessageFrameSafe({
       role: "user",
-      content: [{ type: "text", text: candidate.assignment.prompt }],
+      content:
+        typeof candidate.assignment.prompt === "string"
+          ? [{ type: "text", text: candidate.assignment.prompt }]
+          : candidate.assignment.prompt,
       timestamp: Number.MAX_SAFE_INTEGER,
     })
   ) {
     throw new Error("invalid worker launch descriptor");
   }
   return candidate;
+}
+
+export function parseWorkerLaunchPlan(value: unknown): WorkerLaunchPlan {
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["version", "admission", "assignment"]) ||
+    value.version !== LAUNCH_VERSION
+  ) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  const assignment = parseAssignment(value.assignment);
+  if (!assignment || !isRecord(value.admission)) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  return validateWorkerLaunchPlan({
+    version: LAUNCH_VERSION,
+    admission: value.admission as WorkerLaunchAdmission,
+    assignment,
+  });
+}
+
+export function completeWorkerLaunchDescriptor(
+  plan: WorkerLaunchPlan,
+  connectionEndpoint: WorkerConnectionEndpoint,
+): WorkerLaunchDescriptor {
+  const parsedPlan = parseWorkerLaunchPlan(plan);
+  const parsedEndpoint = parseWorkerConnectionEndpoint(connectionEndpoint);
+  if (!parsedEndpoint) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  return { ...parsedPlan, connectionEndpoint: parsedEndpoint };
+}
+
+export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescriptor {
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["version", "connectionEndpoint", "admission", "assignment"])
+  ) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  return completeWorkerLaunchDescriptor(
+    {
+      version: value.version as 4,
+      admission: value.admission as WorkerLaunchAdmission,
+      assignment: value.assignment as WorkerLaunchAssignment,
+    },
+    value.connectionEndpoint as WorkerConnectionEndpoint,
+  );
 }

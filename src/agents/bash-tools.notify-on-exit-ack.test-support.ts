@@ -12,12 +12,15 @@ type SupervisorSpawnMock = {
 export async function startDeferredNotifyRun(params: {
   spawn: SupervisorSpawnMock;
   sessionKey: string;
+  agentId?: string;
   notifyDeliveryContext?: DeliveryContext;
 }) {
   const exit = createDeferredCore<Awaited<ReturnType<ManagedRun["wait"]>>>();
+  const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
   params.spawn.mockImplementationOnce(async (input) => {
     input.onStdout?.("producer output\n");
     return {
+      activity,
       runId: input.runId ?? "notify-on-exit",
       startedAtMs: Date.now(),
       wait: async () => await exit.promise,
@@ -34,6 +37,7 @@ export async function startDeferredNotifyRun(params: {
     pendingMaxOutput: 1000,
     notifyOnExit: true,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     notifyDeliveryContext: params.notifyDeliveryContext,
     timeoutSec: null,
   });
@@ -41,6 +45,7 @@ export async function startDeferredNotifyRun(params: {
   return {
     run,
     finish: async () => {
+      activity.resultSettled = true;
       exit.resolve({
         reason: "exit",
         exitCode: 0,

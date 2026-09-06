@@ -62,9 +62,8 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       skipRequesterSettleWake: true,
     });
   } catch (error) {
-    const mutableEntry = entry as unknown as Record<string, unknown>;
-    for (const key of Object.keys(mutableEntry)) {
-      delete mutableEntry[key];
+    for (const key of Object.keys(entry)) {
+      Reflect.deleteProperty(entry, key);
     }
     Object.assign(entry, snapshot);
     if (wasResumed) {

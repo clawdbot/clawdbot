@@ -460,6 +460,22 @@ describe.each([
     ]);
   });
 
+  it("preserves unsafe integers in confirmed tool arguments", async () => {
+    const { result } = await collectFixture(
+      confirmedModernCallChunks('{"target":9223372036854775807}', {
+        id: "call_unsafe_integer",
+      }),
+    );
+
+    expect(result.content).toContainEqual(
+      expect.objectContaining({
+        type: "toolCall",
+        id: "call_unsafe_integer",
+        arguments: { target: "9223372036854775807" },
+      }),
+    );
+  });
+
   it("preserves confirmed tool completion before following text blocks close", async () => {
     const { eventTypes, result } = await collectFixture([
       modernCallChunk('{"query":"cats"}', { id: "call_before_text" }),

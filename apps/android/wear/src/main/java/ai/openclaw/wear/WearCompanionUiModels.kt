@@ -34,6 +34,8 @@ internal data class WearSessionSummary(
   val title: String?,
   val updatedAtEpochMillis: Long?,
   val selected: Boolean,
+  val activeOnPhone: Boolean = false,
+  val openOnWatch: Boolean = false,
 )
 
 internal data class WearModelSummary(
@@ -49,15 +51,27 @@ internal data class WearConversationSnapshot(
   val agentControlsSupported: Boolean = false,
   val gatewayControlsSupported: Boolean = false,
   val activeSessionId: String? = null,
+  val phoneActiveSessionId: String? = null,
   val sessions: List<WearSessionSummary> = emptyList(),
+  val sessionSearchQuery: String? = null,
+  val sessionSearchResults: List<WearSessionSummary> = emptyList(),
+  val sessionSearchHasMore: Boolean = false,
+  val sessionSearchSupported: Boolean = false,
   val models: List<WearModelSummary> = emptyList(),
+  val modelSearchQuery: String? = null,
+  val modelSearchResults: List<WearModelSummary> = emptyList(),
   val modelControlsSupported: Boolean = false,
+  val modelSearchSupported: Boolean = false,
   val messages: List<WearChatMessage> = emptyList(),
   val streamingAssistantText: String? = null,
   val pendingRunCount: Int = 0,
   val selectedModelRef: String? = null,
   val failure: WearConversationFailure? = null,
   val realtimeTalk: WearRealtimeTalkSnapshot = WearRealtimeTalkSnapshot(),
+  val agentPulseSupported: Boolean = false,
+  val agentPulse: WearAgentPulseSnapshot? = null,
+  val agentPulseLoading: Boolean = false,
+  val agentPulseFailure: WearConversationFailure? = null,
 )
 
 internal enum class WearConversationFailure {
@@ -81,6 +95,9 @@ internal enum class WearInteractionState {
 
 internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
   if (phoneNodeId == null) return null
+  val pulseSupported =
+    connected &&
+      WearProxyCapability.AgentPulse in proxyCapabilities
   return WearConversationSnapshot(
     gatewayState = if (connected) WearGatewayState.CONNECTED else WearGatewayState.DISCONNECTED,
     activeAgentId = activeAgentId,
@@ -96,6 +113,7 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
     agentControlsSupported = WearProxyCapability.AgentControls in proxyCapabilities,
     gatewayControlsSupported = WearProxyCapability.GatewayControls in proxyCapabilities,
     activeSessionId = selectedSession?.key,
+    phoneActiveSessionId = phoneActiveSessionKey,
     sessions =
       sessions.map { session ->
         WearSessionSummary(
@@ -103,8 +121,24 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
           title = session.title,
           updatedAtEpochMillis = session.updatedAt,
           selected = session.key == selectedSession?.key,
+          activeOnPhone = session.key == phoneActiveSessionKey,
+          openOnWatch = session.key == selectedSession?.key,
         )
       },
+    sessionSearchQuery = sessionSearchQuery,
+    sessionSearchResults =
+      sessionSearchResults.map { session ->
+        WearSessionSummary(
+          id = session.key,
+          title = session.title,
+          updatedAtEpochMillis = session.updatedAt,
+          selected = session.key == selectedSession?.key,
+          activeOnPhone = session.key == phoneActiveSessionKey,
+          openOnWatch = session.key == selectedSession?.key,
+        )
+      },
+    sessionSearchHasMore = sessionSearchHasMore,
+    sessionSearchSupported = WearProxyCapability.SessionSearchPagination in proxyCapabilities,
     models =
       models.map { model ->
         WearModelSummary(
@@ -114,11 +148,25 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
         )
       },
     modelControlsSupported = WearProxyCapability.ModelControls in proxyCapabilities,
+    modelSearchSupported = WearProxyCapability.ModelCatalogSearch in proxyCapabilities,
+    modelSearchQuery = modelSearchQuery,
+    modelSearchResults =
+      modelSearchResults.map { model ->
+        WearModelSummary(
+          ref = model.ref,
+          name = model.name,
+          selected = model.ref == selectedModelRef,
+        )
+      },
     messages = messages,
     streamingAssistantText = streamText,
     pendingRunCount = if (activeRunId != null) 1 else 0,
     selectedModelRef = selectedModelRef,
     failure = failure,
     realtimeTalk = realtimeTalk,
+    agentPulseSupported = pulseSupported,
+    agentPulse = agentPulse.takeIf { pulseSupported },
+    agentPulseLoading = pulseSupported && agentPulseLoading,
+    agentPulseFailure = agentPulseFailure.takeIf { pulseSupported },
   )
 }

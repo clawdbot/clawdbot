@@ -1,4 +1,5 @@
-import { clampOpenAIPromptCacheKey } from "@openclaw/ai/providers";
+import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "@openclaw/ai/providers";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 
 export function resolveSessionBoundaryPromptCacheKey(params: {
   api: string;
@@ -17,8 +18,8 @@ export function resolveSessionBoundaryPromptCacheKey(params: {
   if (!usesOpenAIPromptCacheKey) {
     return undefined;
   }
-  // Clamp at derivation, not only in provider param builders: proxy runtimes
-  // serialize this key verbatim, and long internal-effects session ids
-  // (companion/btw) otherwise exceed OpenAI's 64-char prompt_cache_key limit.
-  return clampOpenAIPromptCacheKey(`${params.sessionId}:${params.boundaryCount}`);
+  // Reserve the lifecycle suffix inside OpenAI's 64-code-point limit for proxy runtimes.
+  const suffix = `:${params.boundaryCount}`;
+  const maxSessionIdLength = OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH - suffix.length;
+  return `${truncateCodePoints(params.sessionId, maxSessionIdLength)}${suffix}`;
 }

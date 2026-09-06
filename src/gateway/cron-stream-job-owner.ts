@@ -391,8 +391,6 @@ export class CronStreamJobOwner {
     let run: ManagedRun;
     try {
       run = await this.params.getProcessSupervisor().spawn({
-        sessionId: `cron-stream:${this.job.id}`,
-        backendId: "cron-stream-source",
         scopeKey: scopeKey(this.job.id),
         replaceExistingScope: true,
         mode: "child",
@@ -573,7 +571,8 @@ export class CronStreamJobOwner {
       reason === "trust-disabled"
         ? {
             streamStatus: "disabled",
-            streamError: "stream sources require cron.triggers.enabled=true",
+            streamError:
+              "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
           }
         : reason === "cron-disabled"
           ? { streamStatus: "disabled", streamError: "cron is disabled" }

@@ -2,6 +2,7 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import {
   loadPluginManifestRegistryCore,
@@ -40,9 +41,14 @@ export function resolvePluginConfigContractsById(params: {
     normalizeSortedUniqueStringEntries(params.fallbackBundledPluginIds),
   );
   const bundledContractFallbacks = new Map<string, PluginManifestConfigContracts | undefined>();
+  const snapshot = params.discovery ? undefined : getGatewayPluginMetadataSnapshot();
   const findBundledConfigContracts = (
     pluginId: string,
   ): PluginManifestConfigContracts | undefined => {
+    if (snapshot) {
+      return snapshot.bundledManifestRegistry?.plugins.find((plugin) => plugin.id === pluginId)
+        ?.configContracts;
+    }
     if (bundledContractFallbacks.has(pluginId)) {
       return bundledContractFallbacks.get(pluginId);
     }
@@ -80,6 +86,7 @@ export function resolvePluginConfigContractsById(params: {
   const resolvedPluginOrigins = new Map<string, PluginOrigin>();
   const registry =
     params.manifestRegistry ??
+    snapshot?.manifestRegistry ??
     loadPluginManifestRegistryForPluginRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -100,13 +107,13 @@ export function resolvePluginConfigContractsById(params: {
     });
   }
 
-  if (!params.manifestRegistry && (params.fallbackToBundledMetadata ?? true)) {
+  if (params.fallbackToBundledMetadata ?? true) {
     for (const pluginId of pluginIds) {
       const existing = matches.get(pluginId);
       const shouldHydrateBundledMatch =
         existing &&
         ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
-          fallbackBundledPluginIds.has(pluginId));
+          (!params.manifestRegistry && fallbackBundledPluginIds.has(pluginId)));
       if (shouldHydrateBundledMatch) {
         const bundledConfigContracts = findBundledConfigContracts(pluginId);
         if (bundledConfigContracts) {
@@ -134,6 +141,12 @@ export function resolvePluginConfigContractsById(params: {
         !(params.fallbackToBundledMetadataForResolvedBundled && resolvedOrigin === "bundled") &&
         !fallbackBundledPluginIds.has(pluginId)
       ) {
+        continue;
+      }
+      if (params.manifestRegistry && resolvedOrigin && resolvedOrigin !== "bundled") {
+        continue;
+      }
+      if (params.manifestRegistry && !fallbackBundledPluginIds.has(pluginId)) {
         continue;
       }
       const bundledConfigContracts = findBundledConfigContracts(pluginId);

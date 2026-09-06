@@ -104,42 +104,6 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 export { isRecord };
 
-// Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
-// hot MSTeams attachment tests for one tiny estimator.
-function estimateBase64DecodedBytes(base64: string): number {
-  let effectiveLen = 0;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    if (code <= 0x20) {
-      continue;
-    }
-    effectiveLen += 1;
-  }
-
-  if (effectiveLen === 0) {
-    return 0;
-  }
-
-  let padding = 0;
-  let end = base64.length - 1;
-  while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
-    end -= 1;
-  }
-  if (end >= 0 && base64[end] === "=") {
-    padding = 1;
-    end -= 1;
-    while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
-      end -= 1;
-    }
-    if (end >= 0 && base64[end] === "=") {
-      padding = 2;
-    }
-  }
-
-  const estimated = Math.floor((effectiveLen * 3) / 4) - padding;
-  return Math.max(0, estimated);
-}
-
 /**
  * Host suffixes for SharePoint/OneDrive shared links that must be fetched via
  * the Graph `/shares/{shareId}/driveItem/content` endpoint instead of directly.
@@ -165,16 +129,20 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
  * than directly.
  */
 function isGraphSharedLinkUrl(url: string): boolean {
-  let host: string;
+  let parsed: URL;
   try {
-    host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
+    parsed = new URL(url);
   } catch {
     return false;
   }
-  if (!host) {
+  const host = normalizeLowercaseStringOrEmpty(parsed.hostname);
+  if (parsed.protocol !== "https:" || !host) {
     return false;
   }
-  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(suffix));
+  // Only HTTPS URLs on a DNS label boundary may select the authenticated Graph path.
+  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some(
+    (suffix) => host === suffix || host.endsWith(suffix.startsWith(".") ? suffix : `.${suffix}`),
+  );
 }
 
 /**
@@ -392,7 +360,8 @@ function decodeDataImageWithLimits(
     return { candidate: null, estimatedBytes: 0 };
   }
 
-  const estimatedBytes = estimateBase64DecodedBytes(canonicalPayload);
+  // Validation above guarantees whitespace-free base64 for this allocation-free size check.
+  const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
   if (estimatedBytes <= 0) {
     return { candidate: null, estimatedBytes: 0 };
   }
@@ -660,7 +629,7 @@ async function safeFetch(params: {
     "dispatcher" in (params.requestInit as Record<string, unknown>),
   );
   const currentHeaders = new Headers(params.requestInit?.headers);
-  let currentUrl = params.url;
+  const currentUrl = params.url;
 
   if (!isUrlAllowed(currentUrl, params.allowHosts)) {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
@@ -703,70 +672,53 @@ async function safeFetch(params: {
     return responseWithRelease(guarded.response, guarded.release);
   }
 
-  if (resolveFn) {
-    try {
-      const initialHost = new URL(currentUrl).hostname;
-      await resolveAndValidateIP(initialHost, resolveFn);
-    } catch {
-      throw new Error(`Initial download URL blocked: ${currentUrl}`);
-    }
+  try {
+    const initialHost = new URL(currentUrl).hostname;
+    await resolveAndValidateIP(initialHost, resolveFn);
+  } catch {
+    throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
-  for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
-    const res = await (params.fetchFn ?? fetch)(currentUrl, {
-      ...params.requestInit,
-      headers: currentHeaders,
-      redirect: "manual",
-    });
+  const res = await (params.fetchFn ?? fetch)(currentUrl, {
+    ...params.requestInit,
+    headers: currentHeaders,
+    redirect: "manual",
+  });
 
-    if (!isRedirectStatus(res.status)) {
-      return res;
-    }
-
-    const location = res.headers.get("location");
-    if (!location) {
-      return res;
-    }
-
-    let redirectUrl: string;
-    try {
-      redirectUrl = new URL(location, currentUrl).toString();
-    } catch {
-      throw new Error(`Invalid redirect URL: ${location}`);
-    }
-
-    // Validate redirect target against hostname allowlist
-    if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
-      throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
-    }
-
-    // Prevent credential bleed: only keep Authorization on redirect hops that
-    // are explicitly auth-allowlisted.
-    if (
-      currentHeaders.has("authorization") &&
-      params.authorizationAllowHosts &&
-      !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
-    ) {
-      currentHeaders.delete("authorization");
-    }
-
-    // When a pinned dispatcher is already injected by an upstream guard
-    // (for example fetchWithSsrFGuard), let that guard own redirect handling
-    // after this allowlist validation step.
-    if (hasDispatcher) {
-      return res;
-    }
-
-    // Validate redirect target's resolved IP
-    if (resolveFn) {
-      const redirectHost = new URL(redirectUrl).hostname;
-      await resolveAndValidateIP(redirectHost, resolveFn);
-    }
-
-    currentUrl = redirectUrl;
+  if (!isRedirectStatus(res.status)) {
+    return res;
   }
 
-  throw new Error(`Too many redirects (>${MAX_SAFE_REDIRECTS})`);
+  const location = res.headers.get("location");
+  if (!location) {
+    return res;
+  }
+
+  let redirectUrl: string;
+  try {
+    redirectUrl = new URL(location, currentUrl).toString();
+  } catch {
+    throw new Error(`Invalid redirect URL: ${location}`);
+  }
+
+  // Validate redirect target against hostname allowlist
+  if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+    throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
+  }
+
+  // Prevent credential bleed: only keep Authorization on redirect hops that
+  // are explicitly auth-allowlisted.
+  if (
+    currentHeaders.has("authorization") &&
+    params.authorizationAllowHosts &&
+    !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
+  ) {
+    currentHeaders.delete("authorization");
+  }
+
+  // A pinned dispatcher is already injected by an upstream guard; let it own
+  // redirect handling after this allowlist validation step.
+  return res;
 }
 
 export async function safeFetchWithPolicy(params: {

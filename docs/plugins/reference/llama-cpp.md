@@ -1,30 +1,35 @@
 ---
-summary: "Local GGUF text inference and embeddings through node-llama-cpp."
+summary: "Managed and external llama.cpp servers for GGUF chat and embeddings."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
-title: "Llama Cpp plugin"
+title: "Llama Cpp plugin reference"
 ---
 
-# Llama Cpp plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Local GGUF text inference and embeddings through node-llama-cpp.
+Managed and external llama.cpp servers for GGUF chat and embeddings.
 
 ## Distribution
 
 - Package: `@openclaw/llama-cpp-provider`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub
 
 ## Surface
 
-providers: `llama-cpp`; contracts: `embeddingProviders`
+- Providers: `llama-cpp`
+- Contracts: `embeddingProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
 ## Default text model
 
-During interactive setup, OpenClaw offers Gemma 4 E4B IT Q4_K_M as an
-approximately 5.0 GB bundled download. The offer requires at least 16 GiB of
-total RAM. Existing cached models are still detected on smaller machines.
+During interactive setup, OpenClaw installs a pinned, verified `llama-server`
+and offers Gemma 4 E4B IT Q4_K_M as an approximately 5.0 GB download. The model
+offer requires at least 16 GiB of total RAM. Existing cached models are still
+detected on smaller machines.
 
 To use another model, set `params.modelPath` to any custom GGUF. Custom models
 are not subject to the bundled-download RAM requirement. On machines below the

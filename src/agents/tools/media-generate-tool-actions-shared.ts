@@ -21,7 +21,7 @@ type MediaGenerateActionResult = {
 type TaskStatusTextBuilder<Task> = (task: Task, params?: { duplicateGuard?: boolean }) => string;
 type MediaGenerateTaskStatusParams<Task> = {
   inactiveText: string;
-  findActiveTask: (sessionKey?: string) => Task | undefined;
+  findActiveTask: (sessionKey?: string, agentId?: string) => Task | undefined;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
 };
@@ -163,8 +163,12 @@ export function createMediaGenerateTaskStatusActions<Task>(
   params: MediaGenerateTaskStatusParams<Task>,
 ) {
   return {
-    createStatusActionResult(this: void, sessionKey?: string): MediaGenerateActionResult {
-      const activeTask = params.findActiveTask(sessionKey);
+    createStatusActionResult(
+      this: void,
+      sessionKey?: string,
+      agentId?: string,
+    ): MediaGenerateActionResult {
+      const activeTask = params.findActiveTask(sessionKey, agentId);
       return activeTask
         ? {
             content: [{ type: "text", text: params.buildStatusText(activeTask) }],
@@ -183,7 +187,7 @@ export function createMediaGenerateTaskActions<Task>(
   params: MediaGenerateTaskStatusParams<Task> & {
     findDuplicateTask: (
       sessionKey?: string,
-      request?: { prompt?: string; requestKey?: string },
+      request?: { prompt?: string; requestKey?: string; agentId?: string },
     ) => Task | undefined;
   },
 ) {
@@ -192,7 +196,7 @@ export function createMediaGenerateTaskActions<Task>(
     createDuplicateGuardResult(
       this: void,
       sessionKey?: string,
-      request?: { prompt?: string; requestKey?: string },
+      request?: { prompt?: string; requestKey?: string; agentId?: string },
     ) {
       return createMediaGenerateDuplicateGuardResult({ sessionKey, ...request, ...params });
     },
@@ -204,9 +208,10 @@ export function createMediaGenerateDuplicateGuardResult<Task>(params: {
   sessionKey?: string;
   prompt?: string;
   requestKey?: string;
+  agentId?: string;
   findDuplicateTask: (
     sessionKey?: string,
-    params?: { prompt?: string; requestKey?: string },
+    params?: { prompt?: string; requestKey?: string; agentId?: string },
   ) => Task | undefined;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
@@ -214,6 +219,7 @@ export function createMediaGenerateDuplicateGuardResult<Task>(params: {
   const blockingTask = params.findDuplicateTask(params.sessionKey, {
     prompt: params.prompt,
     requestKey: params.requestKey,
+    agentId: params.agentId,
   });
   if (!blockingTask) {
     return undefined;

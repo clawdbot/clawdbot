@@ -17,6 +17,7 @@ describe("nvidia onboard", () => {
     expect(provider.api).toBe("openai-completions");
     expect(provider.models.map((model) => model.id)).toEqual([
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
@@ -44,6 +45,7 @@ describe("nvidia onboard", () => {
     expect(provider?.models.map((model) => model.id)).toEqual([
       "nvidia/custom-model",
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
@@ -69,6 +71,7 @@ describe("nvidia onboard", () => {
     expect(provider?.models.map((model) => model.id)).toEqual([
       id,
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",

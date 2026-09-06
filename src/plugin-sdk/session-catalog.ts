@@ -53,3 +53,11 @@ export {
   classifyClaudeCliHistoryLine,
   type ClaudeCliHistoryLineClassification,
 } from "../gateway/cli-session-history.claude-activity.js";
+export {
+  createSessionCatalogFamily,
+  createSessionCatalogNodeHostBindings,
+  type SessionCatalogFamilyOptions,
+  type SessionCatalogNodeHostBindingsOptions,
+} from "../plugins/session-catalog-family.js";
+
+export { publishSessionCatalogHost, sessionCatalogPaging } from "./session-catalog-paging.js";

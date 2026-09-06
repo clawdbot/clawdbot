@@ -1,0 +1,245 @@
+name: Full Release Candidate
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact target commit SHA
+        required: true
+        type: string
+      request_json:
+        description: Canonical full release candidate request
+        required: true
+        type: string
+      request_sha256:
+        description: Canonical request digest
+        required: true
+        type: string
+      prepared_npm_bundle_json:
+        description: Immutable publishable npm package bundle for this source and tooling SHA
+        required: true
+        type: string
+    outputs:
+      state:
+        description: Candidate acquisition state
+        value: ${{ jobs.resolve_candidate.outputs.state }}
+      source:
+        description: Whether the ready candidate was reused or freshly produced
+        value: ${{ jobs.resolve_candidate.outputs.source }}
+      reuse_reason:
+        description: Candidate acquisition result
+        value: ${{ jobs.discover.outputs.reuse_reason }}
+      request_json:
+        description: Validated canonical request
+        value: ${{ jobs.discover.outputs.request_json }}
+      request_sha256:
+        description: Validated request digest
+        value: ${{ jobs.discover.outputs.request_sha256 }}
+      binding_json:
+        description: Validated immutable candidate binding
+        value: ${{ jobs.resolve_candidate.outputs.binding_json }}
+      candidate_artifact_json:
+        description: Candidate artifact tuple for child workflows
+        value: ${{ jobs.resolve_candidate.outputs.candidate_artifact_json }}
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  pull-requests: read
+
+concurrency:
+  # Every waiter rechecks after taking the request lock. Only a proven miss can
+  # become the single producer for these exact candidate bytes.
+  group: full-release-candidate-${{ inputs.request_sha256 }}
+  cancel-in-progress: false
+  queue: max
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  discover:
+    name: Find trusted release candidate
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    outputs:
+      state: ${{ steps.discover.outputs.state }}
+      reuse_reason: ${{ steps.discover.outputs.reuse_reason }}
+      request_json: ${{ steps.discover.outputs.request_json }}
+      request_sha256: ${{ steps.discover.outputs.request_sha256 }}
+      binding_json: ${{ steps.discover.outputs.binding_json }}
+    steps:
+      - name: Checkout trusted candidate discovery
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Discover trusted release candidate
+        id: discover
+        env:
+          CANDIDATE_REQUEST_JSON: ${{ inputs.request_json }}
+          EXPECTED_REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          EXPECTED_PACKAGE_SHA256: ${{ fromJSON(inputs.prepared_npm_bundle_json).package.sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          request_input="${RUNNER_TEMP}/full-release-candidate-request.json"
+          printf '%s\n' "$CANDIDATE_REQUEST_JSON" > "$request_input"
+          node scripts/full-release-candidate-reuse.mjs discover \
+            --request-input "$request_input" \
+            --expected-request-sha256 "$EXPECTED_REQUEST_SHA256" \
+            --expected-package-sha256 "$EXPECTED_PACKAGE_SHA256"
+
+      - name: Summarize release candidate discovery
+        env:
+          STATE: ${{ steps.discover.outputs.state }}
+          REUSE_REASON: ${{ steps.discover.outputs.reuse_reason }}
+          REQUEST_SHA256: ${{ steps.discover.outputs.request_sha256 }}
+        run: |
+          {
+            echo "## Release candidate acquisition"
+            echo
+            echo "- Request: \`${REQUEST_SHA256}\`"
+            echo "- State: \`${STATE}\`"
+            echo "- Result: ${REUSE_REASON}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prepare:
+    name: Prepare shared release candidate
+    needs: discover
+    if: ${{ needs.discover.result == 'success' && needs.discover.outputs.state == 'miss' }}
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ inputs.ref }}
+      prepared_npm_bundle_json: ${{ inputs.prepared_npm_bundle_json }}
+      prepare_only: true
+      emit_candidate_evidence: true
+      package_published: ${{ fromJSON(inputs.request_json).packagePublished }}
+      release_soak: ${{ fromJSON(inputs.request_json).releaseSoak }}
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: false
+      include_live_suites: false
+      enable_prepublish_plugin_registry: true
+      published_upgrade_survivor_scenarios: ${{ join(fromJSON(inputs.request_json).upgradeSurvivorScenarios, ',') }}
+      allow_frozen_target_scenario_omissions: ${{ fromJSON(inputs.request_json).allowFrozenTargetScenarioOmissions }}
+      allow_unreleased_changelog: ${{ fromJSON(inputs.request_json).allowUnreleasedChangelog }}
+      release_test_profile: ${{ fromJSON(inputs.request_json).releaseProfile }}
+      shared_image_artifact_namespace: full-release
+      shared_image_policy: ${{ fromJSON(inputs.request_json).sharedImagePolicy }}
+
+  resolve_candidate:
+    name: Resolve release candidate
+    needs: [discover, prepare]
+    if: always()
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    outputs:
+      state: ${{ steps.result.outputs.state }}
+      source: ${{ steps.result.outputs.source }}
+      binding_json: ${{ steps.result.outputs.binding_json }}
+      candidate_artifact_json: ${{ steps.result.outputs.candidate_artifact_json }}
+    steps:
+      - name: Checkout candidate binding authority
+        if: ${{ !cancelled() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Resolve candidate binding
+        if: ${{ success() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
+        id: resolve
+        env:
+          CANDIDATE_REQUEST_JSON: ${{ needs.discover.outputs.request_json }}
+          DISCOVERY_STATE: ${{ needs.discover.outputs.state }}
+          FRESH_CANDIDATE_BINDING_JSON: ${{ needs.prepare.outputs.candidate_evidence_json }}
+          REUSED_CANDIDATE_BINDING_JSON: ${{ needs.discover.outputs.binding_json }}
+          EXPECTED_PACKAGE_SHA256: ${{ fromJSON(inputs.prepared_npm_bundle_json).package.sha256 }}
+        run: |
+          set -euo pipefail
+          input="${RUNNER_TEMP}/full-release-candidate-binding-input.json"
+          jq -cn \
+            --argjson required true \
+            --argjson request "$CANDIDATE_REQUEST_JSON" \
+            --argjson freshBinding "${FRESH_CANDIDATE_BINDING_JSON:-null}" \
+            --argjson reusedBinding "${REUSED_CANDIDATE_BINDING_JSON:-null}" \
+            '$ARGS.named' > "$input"
+          result="$(node scripts/full-release-candidate-reuse.mjs resolve --input "$input")"
+          jq -e --arg sha "$EXPECTED_PACKAGE_SHA256" '.binding.package.packageSha256 == $sha' \
+            <<< "$result" >/dev/null || {
+              echo "Release candidate must consume the prepared publishable npm package bytes." >&2
+              exit 1
+            }
+          {
+            printf 'state=ready\n'
+            if [[ "$DISCOVERY_STATE" == "hit" ]]; then
+              printf 'source=reused\n'
+            else
+              printf 'source=fresh\n'
+            fi
+            printf 'binding_json=%s\n' "$(jq -c '.binding' <<< "$result")"
+            printf 'candidate_artifact_json=%s\n' "$(jq -r '.candidateArtifactJson' <<< "$result")"
+          } >> "$GITHUB_OUTPUT"
+
+      # A failed or cancelled binding must never publish ready, even if it wrote outputs.
+      # Runner loss may omit this projection; callers also require acquisition success.
+      - name: Record candidate acquisition result
+        if: always()
+        id: result
+        env:
+          JOB_STATUS: ${{ job.status }}
+          DISCOVERY_RESULT: ${{ needs.discover.result }}
+          DISCOVERY_STATE: ${{ needs.discover.outputs.state }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          RESOLVE_RESULT: ${{ steps.resolve.outcome }}
+          RESOLVED_STATE: ${{ steps.resolve.outputs.state }}
+          RESOLVED_SOURCE: ${{ steps.resolve.outputs.source }}
+          BINDING_JSON: ${{ steps.resolve.outputs.binding_json }}
+          CANDIDATE_ARTIFACT_JSON: ${{ steps.resolve.outputs.candidate_artifact_json }}
+        run: |
+          set -euo pipefail
+          state=unavailable
+          source=""
+          binding_json=""
+          candidate_artifact_json=""
+          if [[ "$JOB_STATUS" == "success" &&
+                "$DISCOVERY_RESULT" == "success" &&
+                "$DISCOVERY_STATE" != "unavailable" &&
+                "$PREPARE_RESULT" =~ ^(success|skipped)$ &&
+                "$RESOLVE_RESULT" == "success" &&
+                "$RESOLVED_STATE" == "ready" ]]; then
+            state=ready
+            source="$RESOLVED_SOURCE"
+            binding_json="$BINDING_JSON"
+            candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON"
+          fi
+          {
+            printf 'state=%s\n' "$state"
+            printf 'source=%s\n' "$source"
+            printf 'binding_json=%s\n' "$binding_json"
+            printf 'candidate_artifact_json=%s\n' "$candidate_artifact_json"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Enforce candidate acquisition
+        if: always()
+        env:
+          STATE: ${{ steps.result.outputs.state }}
+        run: |
+          set -euo pipefail
+          if [[ "$STATE" == "ready" ]]; then
+            exit 0
+          fi
+          echo "::error::Release candidate acquisition is unavailable."
+          exit 1

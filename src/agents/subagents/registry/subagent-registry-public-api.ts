@@ -79,8 +79,15 @@ export function createSubagentRegistryPublicApi(config: {
   function getSubagentRunsByRunIds(runIds: readonly string[]): {
     entries: Map<string, SubagentRunRecord>;
   } {
+    const requested = new Set(runIds.map((runId) => runId.trim()));
     const byId = new Map<string, SubagentRunRecord>();
-    for (const entry of readRuns().values()) {
+    // Waiters need only their targets; retained results must not expand every wake's maps.
+    const selected = getSubagentRunsSnapshotForRead(
+      runs,
+      (entry) =>
+        requested.has(entry.runId) || Boolean(entry.swarmRunId && requested.has(entry.swarmRunId)),
+    );
+    for (const entry of selected.values()) {
       byId.set(entry.runId, entry);
       if (entry.swarmRunId) {
         byId.set(entry.swarmRunId, entry);
@@ -137,6 +144,7 @@ export function createSubagentRegistryPublicApi(config: {
   function listSwarmRunsForGroup(
     groupId: string,
     requesterSessionKey?: string,
+    requesterAgentId?: string,
   ): SubagentRunRecord[] {
     const key = groupId.trim();
     const requesterKey = requesterSessionKey?.trim();
@@ -145,7 +153,8 @@ export function createSubagentRegistryPublicApi(config: {
         entry.collect === true &&
         entry.groupId === key &&
         (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey),
+          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
+        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
     );
   }
 
@@ -153,6 +162,7 @@ export function createSubagentRegistryPublicApi(config: {
   function getSwarmRunByLaunchReplayKey(
     replayKey: string,
     requesterSessionKey?: string,
+    requesterAgentId?: string,
   ): SubagentRunRecord | undefined {
     const key = replayKey.trim();
     const requesterKey = requesterSessionKey?.trim();
@@ -164,13 +174,14 @@ export function createSubagentRegistryPublicApi(config: {
         entry.collect === true &&
         entry.swarmLaunchReplayKey === key &&
         (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey),
+          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
+        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
     );
   }
 
   function countActiveRunsForSession(
     requesterSessionKey: string,
-    options?: { collect?: boolean },
+    options?: { collect?: boolean; requesterAgentId?: string },
   ): number {
     return countActiveRunsForSessionFromRuns(readRuns(), requesterSessionKey, options);
   }
@@ -178,6 +189,7 @@ export function createSubagentRegistryPublicApi(config: {
   /** Records sessions_yield before the active requester run is aborted. */
   function markRequesterTurnYielded(params: {
     requesterSessionKey: string;
+    requesterAgentId?: string;
     requesterTurnRunId: string;
   }): number {
     restoreOnce();

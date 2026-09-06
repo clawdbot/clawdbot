@@ -23,6 +23,7 @@ import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js"
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
+import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
 import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
 import { resolveAgentNodeId } from "./nodes-utils.js";
 
@@ -167,6 +168,7 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
+  agentId?: string;
   agentChannel?: string;
   agentAccountId?: string;
   currentChannelId?: string;
@@ -178,13 +180,14 @@ export function createNodesTool(options?: {
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
+    agentId: options?.agentId,
   });
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -241,7 +244,7 @@ export function createNodesTool(options?: {
               throw new Error("title or body required");
             }
             const nodeId = await resolveAgentNodeId(gatewayOpts, node);
-            await callGatewayTool("node.invoke", gatewayOpts, {
+            await callNodesToolNodeInvoke(gatewayOpts, {
               nodeId,
               command: "system.notify",
               params: {

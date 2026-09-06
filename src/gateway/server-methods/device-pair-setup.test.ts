@@ -13,10 +13,17 @@ const mocks = vi.hoisted(() => ({
   encodePairingSetupCode: vi.fn(),
   renderQrPngDataUrl: vi.fn(),
   runCommandWithTimeout: vi.fn(),
+  readDevicePairSetupCompletion: vi.fn(),
 }));
 
 vi.mock("../../pairing/setup-code.js", () => ({
   resolvePairingSetupFromConfig: mocks.resolvePairingSetupFromConfig,
+  resolveConfiguredPairingPublicUrl: (config: {
+    plugins?: { entries?: Record<string, { config?: Record<string, unknown> }> };
+  }) => {
+    const value = config.plugins?.entries?.["device-pair"]?.config?.publicUrl;
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  },
   encodePairingSetupCode: mocks.encodePairingSetupCode,
 }));
 vi.mock("../../media/qr-image.js", () => ({
@@ -24,6 +31,9 @@ vi.mock("../../media/qr-image.js", () => ({
 }));
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
+}));
+vi.mock("../../infra/device-bootstrap.js", () => ({
+  readDevicePairSetupCompletion: mocks.readDevicePairSetupCompletion,
 }));
 
 import { devicePairSetupHandlers } from "./device-pair-setup.js";
@@ -61,6 +71,7 @@ const okResolution = {
   urlSource: "remote",
   access: "full" as const,
   accessDowngraded: false,
+  setupId: "setup-123",
   expiresAtMs: 123_456,
 };
 
@@ -70,6 +81,7 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReset();
     mocks.renderQrPngDataUrl.mockReset();
     mocks.runCommandWithTimeout.mockReset();
+    mocks.readDevicePairSetupCompletion.mockReset();
   });
 
   afterEach(() => {
@@ -95,6 +107,8 @@ describe("device.pair.setupCode", () => {
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     expect(payload).toEqual({
+      setupId: "setup-123",
+      expiresAtMs: 123_456,
       setupCode: "SETUP-CODE-XYZ",
       qrDataUrl: "data:image/png;base64,qr",
       gatewayUrl: "wss://gw.example:8443",
@@ -102,9 +116,8 @@ describe("device.pair.setupCode", () => {
       auth: "token",
       urlSource: "remote",
       access: "full",
-      expiresAtMs: 123_456,
     });
-    // The bootstrap token only lives inside the (opaque) setup code, never as a field.
+    // The setup id is an independent correlator; the bearer remains only in the opaque code.
     expect(JSON.stringify(payload)).not.toContain("boot-123");
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
@@ -222,21 +235,43 @@ describe("device.pair.setupCode", () => {
     expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
   });
 
-  it("requests a node-only bootstrap profile for companion setup", async () => {
+  it.each([
+    { bootstrapProfile: "node", profile: { roles: ["node"], scopes: [] } },
+    {
+      bootstrapProfile: "limited",
+      profile: {
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+      },
+    },
+    {
+      bootstrapProfile: "voice-node",
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["operator.read", "operator.talk"],
+        purpose: "voice-node",
+      },
+    },
+  ])("requests the exact $bootstrapProfile setup grant", async ({ bootstrapProfile, profile }) => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
 
-    const { options } = createOptions({ includeQr: false, bootstrapProfile: "node" });
+    const { options, respond } = createOptions({ includeQr: false, bootstrapProfile });
     await expectDefined(
       devicePairSetupHandlers["device.pair.setupCode"],
       'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
     )(options);
 
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({
-        bootstrapProfile: { roles: ["node"], scopes: [] },
-      }),
+      expect.objectContaining({ bootstrapProfile: profile }),
     );
   });
 
@@ -280,32 +315,19 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("requests the limited mobile bootstrap profile when selected", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+  it.each(["limited", "voice-node"])(
+    "does not put a %s grant in a join URL",
+    async (bootstrapProfile) => {
+      const { options, respond } = createOptions({ joinUrl: true, bootstrapProfile });
+      await expectDefined(
+        devicePairSetupHandlers["device.pair.setupCode"],
+        'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
+      )(options);
 
-    const { options } = createOptions({ includeQr: false, bootstrapProfile: "limited" });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
-
-    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        bootstrapProfile: {
-          roles: ["node", "operator"],
-          scopes: [
-            "operator.approvals",
-            "operator.questions",
-            "operator.read",
-            "operator.talk.secrets",
-            "operator.write",
-          ],
-        },
-      }),
-    );
-  });
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("omits an oversized QR but still returns the setup code", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
@@ -381,5 +403,98 @@ describe("device.pair.setupCode", () => {
     expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
     expect(payload.qrDataUrl).toBeUndefined();
     expect(error).toBeUndefined();
+  });
+});
+
+describe("device.pair.setupStatus", () => {
+  async function runSetupStatus(params: Record<string, unknown>) {
+    const { options, respond } = createOptions(params);
+    await expectDefined(
+      devicePairSetupHandlers["device.pair.setupStatus"],
+      'devicePairSetupHandlers["device.pair.setupStatus"] test invariant',
+    )(options);
+    return expectDefined(respond.mock.calls[0], "respond.mock.calls[0] test invariant");
+  }
+
+  beforeEach(() => {
+    mocks.readDevicePairSetupCompletion.mockReset();
+  });
+
+  it("returns the recorded completion for the exact setup id", async () => {
+    mocks.readDevicePairSetupCompletion.mockResolvedValue({
+      setupId: "setup-123",
+      deviceId: "device-123",
+      deviceName: "Pixel 9",
+      access: "full",
+      completedAtMs: 1_800_000_000_000,
+      deliveryState: "confirmed",
+      retainUntilMs: 1_800_000_600_000,
+    });
+
+    const [ok, payload, error] = await runSetupStatus({ setupId: "setup-123" });
+
+    expect(mocks.readDevicePairSetupCompletion).toHaveBeenCalledWith({ setupId: "setup-123" });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    // Retention bookkeeping stays server-side; the client sees the event payload only.
+    expect(payload).toEqual({
+      completion: {
+        setupId: "setup-123",
+        deviceId: "device-123",
+        deviceName: "Pixel 9",
+        access: "full",
+        ts: 1_800_000_000_000,
+      },
+    });
+  });
+
+  it("returns a recoverable outcome when credential delivery is uncertain", async () => {
+    mocks.readDevicePairSetupCompletion.mockResolvedValue({
+      setupId: "setup-uncertain",
+      deviceId: "device-123",
+      access: "limited",
+      completedAtMs: 1_800_000_000_000,
+      deliveryState: "uncertain",
+      retainUntilMs: 1_800_000_600_000,
+    });
+
+    const [ok, payload, error] = await runSetupStatus({ setupId: "setup-uncertain" });
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(payload).toEqual({
+      deliveryUncertain: {
+        setupId: "setup-uncertain",
+        deviceId: "device-123",
+        access: "limited",
+        ts: 1_800_000_000_000,
+      },
+    });
+  });
+
+  it("returns an empty result when no completion is recorded", async () => {
+    mocks.readDevicePairSetupCompletion.mockResolvedValue(null);
+
+    const [ok, payload] = await runSetupStatus({ setupId: "setup-unknown" });
+
+    expect(ok).toBe(true);
+    expect(payload).toEqual({});
+  });
+
+  it("rejects unknown params before reading pairing state", async () => {
+    const [ok] = await runSetupStatus({ setupId: "setup-123", bogus: true });
+
+    expect(ok).toBe(false);
+    expect(mocks.readDevicePairSetupCompletion).not.toHaveBeenCalled();
+  });
+
+  it("reports an unavailable error when the completion store throws", async () => {
+    mocks.readDevicePairSetupCompletion.mockRejectedValue(new Error("state db locked"));
+
+    const [ok, payload, error] = await runSetupStatus({ setupId: "setup-123" });
+
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.message).toContain("state db locked");
   });
 });

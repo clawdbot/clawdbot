@@ -11,9 +11,8 @@ import {
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 // Amazon Bedrock tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
-import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
 
 type BedrockClientResult =
@@ -317,11 +316,6 @@ describe("amazon-bedrock provider plugin", () => {
     destroyBedrockClient.mockClear();
     refreshSharedConfigCache.mockClear();
     sendBedrockCommand.mockClear();
-    resetBedrockDiscoveryCacheForTest();
-  });
-
-  afterEach(() => {
-    resetBedrockDiscoveryCacheForTest();
   });
 
   afterAll(() => {
@@ -338,6 +332,37 @@ describe("amazon-bedrock provider plugin", () => {
     expect(
       provider.createStreamFn?.({ model: { api: "anthropic-messages" } } as never),
     ).toBeUndefined();
+  });
+
+  it("returns raw discovery for the host to merge with materialized config", async () => {
+    const provider = await registerWithConfig();
+
+    const result = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [
+                {
+                  id: NON_ANTHROPIC_MODEL,
+                  input: ["text", "image"],
+                },
+              ],
+            },
+          },
+        },
+      },
+      env: { AWS_PROFILE: "default", AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(result.provider.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
+    expect(result.provider.models[0]).toMatchObject({
+      id: NON_ANTHROPIC_MODEL,
+      input: ["text"],
+    });
   });
 
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
@@ -470,25 +495,33 @@ describe("amazon-bedrock provider plugin", () => {
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
   });
 
-  it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+  it.each([
+    [ANTHROPIC_MODEL, false],
+    ["us.anthropic.claude-fable-5-1-v1:0", true],
+    ["global.anthropic.claude-mythos-5-1-v1:0", false],
+  ])(
+    "owns Anthropic-style replay policy for Bedrock %s",
+    async (modelId, appendOnlyRuntimeContext) => {
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "amazon-bedrock",
-        modelApi: "bedrock-converse-stream",
-        modelId: ANTHROPIC_MODEL,
-      } as never),
-    ).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
+      expect(
+        provider.buildReplayPolicy?.({
+          provider: "amazon-bedrock",
+          modelApi: "bedrock-converse-stream",
+          modelId,
+        }),
+      ).toEqual({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        appendOnlyRuntimeContext,
+        preserveSignatures: true,
+        repairToolUseResultPairing: true,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      });
+    },
+  );
 
   it("disables prompt caching for non-Anthropic Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);

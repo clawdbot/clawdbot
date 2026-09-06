@@ -7,10 +7,12 @@ import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
+import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-transport.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
@@ -22,10 +24,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
 ]);
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
-  "openai-responses": "openclaw-openai-responses-transport",
-  "openai-chatgpt-responses": "openclaw-openai-chatgpt-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
-  "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
   "google-generative-ai": "openclaw-google-generative-ai-transport",
 };
@@ -41,7 +40,7 @@ function createProviderOwnedGoogleTransportStreamFn(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  return (
+  const streamFn =
     getAiTransportHost().plugin.resolveProviderStream({
       provider: model.provider,
       config: ctx?.cfg,
@@ -70,8 +69,14 @@ function createProviderOwnedGoogleTransportStreamFn(
         model,
       },
     }) ??
-    undefined
-  );
+    undefined;
+  return streamFn
+    ? (requestModel, context, options) =>
+        streamFn(requestModel, context, {
+          ...options,
+          headers: resolveOpencodeSessionHeaders(requestModel, options),
+        })
+    : undefined;
 }
 
 function createSupportedTransportStreamFn(
@@ -106,6 +111,10 @@ function isTransportAwareApiSupported(api: Api): boolean {
 
 /** Maps public model APIs to the internal transport API id used by simple runtime dispatch. */
 export function resolveTransportAwareSimpleApi(api: Api): Api | undefined {
+  if (OPENAI_RESPONSES_APIS.has(api)) {
+    const alias = `openclaw-${api}-transport` as Api;
+    return OPENAI_RESPONSES_APIS.has(alias) ? alias : undefined;
+  }
   return SIMPLE_TRANSPORT_API_ALIAS[api];
 }
 

@@ -38,7 +38,6 @@ export default definePluginEntry({
             gatewayTlsEnabled: ctx.gatewayTlsEnabled,
             gatewayTlsFingerprintSha256: ctx.gatewayTlsFingerprintSha256,
             gatewayDirectReachable: ctx.gatewayDirectReachable,
-            canvasPort: ctx.canvasPort,
             sshPort: ctx.sshPort,
             tailnetDns: ctx.tailnetDns,
             cliPath: ctx.cliPath,

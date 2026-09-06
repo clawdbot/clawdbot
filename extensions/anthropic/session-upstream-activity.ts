@@ -11,7 +11,6 @@ import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerc
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
 const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
-export const continueOperations = new Map<string, Promise<{ sessionKey: string }>>();
 
 async function readFileRange(
   handle: Awaited<ReturnType<typeof fs.open>>,

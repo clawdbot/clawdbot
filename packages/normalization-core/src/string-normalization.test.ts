@@ -1,8 +1,10 @@
 // Normalization Core tests cover string normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
+  containsAsciiControlCharacter,
   filterStringEntries,
   normalizeAtHashSlug,
+  normalizeCsvOrLooseStringList,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
   normalizeSortedUniqueStringEntries,
@@ -19,6 +21,18 @@ import {
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
+  it.each([
+    { label: "empty", value: "", expected: false },
+    { label: "printable Unicode", value: "fix/a&b λ", expected: false },
+    { label: "C1", value: String.fromCharCode(0x80, 0x9f), expected: false },
+    { label: "NUL", value: `branch${String.fromCharCode(0)}name`, expected: true },
+    { label: "unit separator", value: `branch${String.fromCharCode(0x1f)}`, expected: true },
+    { label: "DEL", value: `branch${String.fromCharCode(0x7f)}name`, expected: true },
+    { label: "line feed", value: "main\n", expected: true },
+  ])("detects only ASCII controls: $label", ({ value, expected }) => {
+    expect(containsAsciiControlCharacter(value)).toBe(expected);
+  });
+
   it.each([
     { value: undefined, expected: [] },
     { value: "value", expected: [] },
@@ -45,8 +59,26 @@ describe("normalization-core/string-normalization", () => {
     expect(normalizeStringEntriesLower([" A ", "MiXeD", 7])).toEqual(["a", "mixed", "7"]);
   });
 
-  it("sorts unique string values", () => {
-    expect(sortUniqueStrings(["b", "a", "b"])).toEqual(["a", "b"]);
+  it.each([
+    { label: "empty", values: [], expected: [] },
+    { label: "duplicates", values: ["b", "a", "b"], expected: ["a", "b"] },
+    {
+      label: "case and numeric text",
+      values: ["a", "Z", "10", "2", "A", ""],
+      expected: ["", "10", "2", "A", "Z", "a"],
+    },
+    {
+      label: "UTF-16 without normalization",
+      values: ["\ue000", "\ud83d\ude00", "\ud800", "\udc00", "é", "e\u0301", "é"],
+      expected: ["e\u0301", "é", "\ud800", "\ud83d\ude00", "\udc00", "\ue000"],
+    },
+  ])("sorts fresh unique strings from iterables: $label", ({ values, expected }) => {
+    const input = Object.freeze(values);
+    const result = sortUniqueStrings(input);
+    expect(result).toEqual(expected);
+    expect(result).not.toBe(input);
+    expect(sortUniqueStrings(new Set(input))).toEqual(expected);
+    expect(sortUniqueStrings(input.values())).toEqual(expected);
   });
 
   it("deduplicates string values while preserving first-seen order", () => {
@@ -80,6 +112,15 @@ describe("normalization-core/string-normalization", () => {
     expect(normalizeTrimmedStringList("first")).toEqual([]);
     expect(normalizeOptionalTrimmedStringList(values)).toEqual(["first", "second"]);
     expect(normalizeOptionalTrimmedStringList(["", 42])).toBeUndefined();
+  });
+
+  it.each([
+    { value: " first, second, , first ", expected: ["first", "second", "first"] },
+    { value: [" first ", 42, "", "  ", 7], expected: ["first", "42", "7"] },
+    { value: null, expected: [] },
+    { value: { value: "first" }, expected: [] },
+  ])("normalizes CSV or loose string-list input", ({ value, expected }) => {
+    expect(normalizeCsvOrLooseStringList(value)).toEqual(expected);
   });
 
   it("normalizes sorted unique trimmed string lists", () => {

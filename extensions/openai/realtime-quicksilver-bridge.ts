@@ -1,24 +1,21 @@
 // GPT-Live backend bridge over the Frameless Bidi WebSocket protocol used by Codex realtime v3.
 import { randomUUID } from "node:crypto";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  captureWsEvent,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
-import {
-  convertPcmToMulaw8k,
+  canonicalizeBase64,
+  rawDataToString,
+  createStreamingPcmResampler,
   mulawToPcm,
+  pcmToMulaw,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   RealtimeVoiceSessionLifecycle,
-  resamplePcm,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
   type RealtimeVoiceSessionConnection,
   type RealtimeVoiceToolResultOptions,
-} from "openclaw/plugin-sdk/realtime-voice";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import WebSocket, { type RawData } from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   connectOpenAIQuicksilverSideband,
   type OpenAIQuicksilverSocket,
@@ -44,6 +41,7 @@ type OpenAIQuicksilverVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
   voice?: string;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
+  logger?: Pick<PluginLogger, "warn">;
   webSocketFactory?: OpenAIQuicksilverSocketFactory;
 };
 
@@ -73,7 +71,15 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   readonly handlesInputAudioBargeIn = false;
 
   private socket: OpenAIQuicksilverSocket | undefined;
-  private readonly lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI");
+  private readonly lifecycle: RealtimeVoiceSessionLifecycle;
+  private inboundTelephonyResampler = createStreamingPcmResampler(
+    8_000,
+    OPENAI_QUICKSILVER_SAMPLE_RATE,
+  );
+  private outboundTelephonyResampler = createStreamingPcmResampler(
+    OPENAI_QUICKSILVER_SAMPLE_RATE,
+    8_000,
+  );
   private activeDelegations = new Set<string>();
   private readonly flowId = randomUUID();
   private readonly requestIds: OpenAIQuicksilverRequestIds = {
@@ -82,7 +88,18 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     threadId: randomUUID(),
   };
 
-  constructor(private readonly config: OpenAIQuicksilverVoiceBridgeConfig) {}
+  constructor(
+    private readonly config: OpenAIQuicksilverVoiceBridgeConfig,
+    private readonly runtime: OpenAIRealtimeHost,
+  ) {
+    this.lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow: () =>
+        (config.logger?.warn ?? console.warn)(
+          "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
+        ),
+    });
+  }
 
   async connect(): Promise<void> {
     await this.lifecycle.connect((connection) => this.connectConnection(connection));
@@ -97,13 +114,16 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       }
       const url = buildOpenAIQuicksilverWebSocketUrl(this.config.model);
       const createSocket = this.config.webSocketFactory ?? this.createSocketFactory();
-      connected = await connectOpenAIQuicksilverSideband({
-        auth,
-        createSocket,
-        requestIds: this.requestIds,
-        signal: connection.signal,
-        url,
-      });
+      connected = await connectOpenAIQuicksilverSideband(
+        {
+          auth,
+          createSocket,
+          requestIds: this.requestIds,
+          signal: connection.signal,
+          url,
+        },
+        this.runtime,
+      );
     } catch (error) {
       if (
         !this.lifecycle.isCurrent(connection) ||
@@ -120,7 +140,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     }
     const url = buildOpenAIQuicksilverWebSocketUrl(this.config.model);
     this.socket = connected.socket;
-    captureWsEvent({
+    this.runtime.captureWsEvent({
       url,
       direction: "local",
       kind: "ws-open",
@@ -204,7 +224,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       const payload = rawDataToString(data);
-      captureWsEvent({
+      this.runtime.captureWsEvent({
         url,
         direction: "inbound",
         kind: "ws-frame",
@@ -227,7 +247,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         this.fail(connection, error);
       }
     });
-    connected.socket.on("close", () => {
+    connected.socket.on("close", (code) => {
       if (!this.lifecycle.isCurrent(connection) || this.socket !== connected.socket) {
         return;
       }
@@ -244,7 +264,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         this.lifecycle.close(connection, "error");
         return;
       }
-      this.notifyClose(connection, "error");
+      this.notifyClose(connection, code === 1000 ? "completed" : "error");
     });
 
     const terminalEvent = connected.detachBuffer();
@@ -268,7 +288,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
           ? terminalEvent.error
           : new Error("GPT-Live WebSocket closed during startup");
       if (reachedReady) {
-        if (this.fail(connection, error, "startup terminal event")) {
+        if (terminalEvent.kind === "close" && terminalEvent.code === 1000) {
+          this.notifyClose(connection, "completed");
+        } else if (this.fail(connection, error, "startup terminal event")) {
           this.notifyClose(connection, "error");
         }
       } else {
@@ -353,7 +375,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private createSocketFactory(): OpenAIQuicksilverSocketFactory {
     return (url, options) => {
-      const proxyAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
+      const proxyAgent = this.runtime.createDebugProxyWebSocketAgent(
+        this.runtime.resolveDebugProxySettings(),
+      );
       return new WebSocket(url, {
         ...options,
         maxPayload: OPENAI_QUICKSILVER_MAX_PAYLOAD_BYTES,
@@ -416,15 +440,31 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       const pcm = Buffer.from(canonical, "base64");
-      this.config.onAudio(
+      const output =
         this.config.audioFormat?.encoding === "g711_ulaw"
-          ? convertPcmToMulaw8k(pcm, OPENAI_QUICKSILVER_SAMPLE_RATE)
-          : pcm,
-      );
+          ? pcmToMulaw(this.outboundTelephonyResampler.process(pcm))
+          : pcm;
+      if (output.length > 0) {
+        this.config.onAudio(output);
+      }
       this.config.onEvent?.({ direction: "server", type: "output_audio.delta" });
       return;
     }
     if (event.kind === "transcript-delta" || event.kind === "transcript-done") {
+      if (
+        event.kind === "transcript-done" &&
+        event.role === "assistant" &&
+        this.config.audioFormat?.encoding === "g711_ulaw"
+      ) {
+        const tail = pcmToMulaw(this.outboundTelephonyResampler.flush());
+        this.outboundTelephonyResampler = createStreamingPcmResampler(
+          OPENAI_QUICKSILVER_SAMPLE_RATE,
+          8_000,
+        );
+        if (tail.length > 0) {
+          this.config.onAudio(tail);
+        }
+      }
       this.config.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
       this.config.onEvent?.({
         direction: "server",
@@ -468,8 +508,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private sendAudioNow(audio: Buffer): void {
     const pcm =
       this.config.audioFormat?.encoding === "g711_ulaw"
-        ? resamplePcm(mulawToPcm(audio), 8_000, OPENAI_QUICKSILVER_SAMPLE_RATE)
+        ? this.inboundTelephonyResampler.process(mulawToPcm(audio))
         : audio;
+    if (pcm.length === 0) {
+      return;
+    }
     this.sendEvent({ type: "input_audio.append", audio: pcm.toString("base64") });
   }
 
@@ -494,7 +537,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     const payload = JSON.stringify(event);
-    captureWsEvent({
+    this.runtime.captureWsEvent({
       url: buildOpenAIQuicksilverWebSocketUrl(this.config.model),
       direction: "outbound",
       kind: "ws-frame",
@@ -528,6 +571,14 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private resetTerminalState(): void {
     this.activeDelegations.clear();
+    this.inboundTelephonyResampler = createStreamingPcmResampler(
+      8_000,
+      OPENAI_QUICKSILVER_SAMPLE_RATE,
+    );
+    this.outboundTelephonyResampler = createStreamingPcmResampler(
+      OPENAI_QUICKSILVER_SAMPLE_RATE,
+      8_000,
+    );
   }
 
   private closeSocket(reason: string, socket = this.socket): void {

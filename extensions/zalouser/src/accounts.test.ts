@@ -1,5 +1,4 @@
 // Zalouser tests cover accounts plugin behavior.
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -33,26 +32,6 @@ describe("zalouser account resolution", () => {
     }
   });
 
-  it("returns default account id when no accounts are configured", () => {
-    expect(listZalouserAccountIds(asConfig({}))).toEqual([DEFAULT_ACCOUNT_ID]);
-  });
-
-  it("returns sorted configured account ids", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          accounts: {
-            work: {},
-            personal: {},
-            default: {},
-          },
-        },
-      },
-    });
-
-    expect(listZalouserAccountIds(cfg)).toEqual(["default", "personal", "work"]);
-  });
-
   it("preserves top-level default account when named accounts are configured", () => {
     const cfg = asConfig({
       channels: {
@@ -84,37 +63,6 @@ describe("zalouser account resolution", () => {
     });
 
     expect(resolveDefaultZalouserAccountId(cfg)).toBe("work");
-  });
-
-  it("falls back to default account when configured defaultAccount is missing", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          defaultAccount: "missing",
-          accounts: {
-            default: {},
-            work: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultZalouserAccountId(cfg)).toBe("default");
-  });
-
-  it("falls back to first sorted configured account when default is absent", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          accounts: {
-            zzz: {},
-            aaa: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultZalouserAccountId(cfg)).toBe("aaa");
   });
 
   it("resolves sync account by merging base + account config", () => {

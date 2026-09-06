@@ -49,22 +49,19 @@ export async function createWhatsAppQaTransportAdapter(
     authRoot = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-qa-adapter-"),
     );
-    const [unpackedDriverAuthDir, unpackedSutAuthDir] = await Promise.all([
-      unpackWhatsAppAuthArchive({
-        archiveBase64: runtimeEnv.driverAuthArchiveBase64,
-        clearSignalSessions: true,
-        label: "driver-auth",
-        parentDir: authRoot,
-      }),
-      unpackWhatsAppAuthArchive({
-        archiveBase64: runtimeEnv.sutAuthArchiveBase64,
-        clearSignalSessions: true,
-        label: "sut-auth",
-        parentDir: authRoot,
-      }),
-    ]);
-    driverAuthDir = unpackedDriverAuthDir;
-    sutAuthDir = unpackedSutAuthDir;
+    // Unpack sequentially so rollback cannot remove authRoot while another unpack is writing.
+    driverAuthDir = await unpackWhatsAppAuthArchive({
+      archiveBase64: runtimeEnv.driverAuthArchiveBase64,
+      clearSignalSessions: true,
+      label: "driver-auth",
+      parentDir: authRoot,
+    });
+    sutAuthDir = await unpackWhatsAppAuthArchive({
+      archiveBase64: runtimeEnv.sutAuthArchiveBase64,
+      clearSignalSessions: true,
+      label: "sut-auth",
+      parentDir: authRoot,
+    });
     driver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
   } catch (error) {
     try {
@@ -225,18 +222,18 @@ export async function createWhatsAppQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
-      // Credential and auth cleanup must run even when the live driver cannot close cleanly.
+      await getDriver().close();
+    },
+    async cleanupAfterGatewayStop() {
+      // The Gateway still uses SUT auth and the shared lease after the driver closes.
+      // Release them only after the suite confirms Gateway teardown succeeded.
       try {
-        await getDriver().close();
+        await heartbeat.stop();
       } finally {
         try {
-          await heartbeat.stop();
+          await lease.release();
         } finally {
-          try {
-            await lease.release();
-          } finally {
-            await fs.rm(authRoot, { force: true, recursive: true });
-          }
+          await fs.rm(authRoot, { force: true, recursive: true });
         }
       }
     },

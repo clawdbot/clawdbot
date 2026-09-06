@@ -3,14 +3,12 @@
  *
  * Tracks runtime and browser containers in the shared state DB.
  */
-import fsSync from "node:fs";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
 export type SandboxRegistryEntry = {
@@ -181,58 +179,56 @@ function readRegistryRows(
   kind: SandboxRegistryKind,
   filter?: { backendId: string; scopeKey: string },
 ): SandboxRegistryRow[] {
-  if (!fsSync.existsSync(resolveOpenClawStateSqlitePath(process.env))) {
-    return [];
-  }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "sandbox_registry_entries")) {
-      return [];
-    }
-    const stateDb = getSandboxRegistryKysely(db);
-    let query = stateDb
-      .selectFrom("sandbox_registry_entries")
-      .selectAll()
-      .where("registry_kind", "=", kind);
-    if (filter) {
-      query = query
-        .where("session_key", "=", filter.scopeKey)
-        .where("backend_id", "=", filter.backendId);
-    }
-    return executeSqliteQuerySync(
-      db,
-      filter
-        ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
-        : query.orderBy("container_name", "asc"),
-    ).rows;
-  });
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "sandbox_registry_entries")) {
+        return [];
+      }
+      const stateDb = getSandboxRegistryKysely(db);
+      let query = stateDb
+        .selectFrom("sandbox_registry_entries")
+        .selectAll()
+        .where("registry_kind", "=", kind);
+      if (filter) {
+        query = query
+          .where("session_key", "=", filter.scopeKey)
+          .where("backend_id", "=", filter.backendId);
+      }
+      return executeSqliteQuerySync(
+        db,
+        filter
+          ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
+          : query.orderBy("container_name", "asc"),
+      ).rows;
+    }) ?? []
+  );
 }
 
 function readRegistryRow(
   kind: SandboxRegistryKind,
   containerName: string,
 ): SandboxRegistryRow | null {
-  if (!fsSync.existsSync(resolveOpenClawStateSqlitePath(process.env))) {
-    return null;
-  }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "sandbox_registry_entries")) {
-      return null;
-    }
-    const stateDb = getSandboxRegistryKysely(db);
-    return (
-      executeSqliteQuerySync(
-        db,
-        stateDb
-          .selectFrom("sandbox_registry_entries")
-          .selectAll()
-          .where("registry_kind", "=", kind)
-          .where("container_name", "=", containerName)
-          .limit(1),
-      ).rows[0] ?? null
-    );
-  });
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "sandbox_registry_entries")) {
+        return null;
+      }
+      const stateDb = getSandboxRegistryKysely(db);
+      return (
+        executeSqliteQuerySync(
+          db,
+          stateDb
+            .selectFrom("sandbox_registry_entries")
+            .selectAll()
+            .where("registry_kind", "=", kind)
+            .where("container_name", "=", containerName)
+            .limit(1),
+        ).rows[0] ?? null
+      );
+    }) ?? null
+  );
 }
 
 function insertRegistryRowIfMissing(row: SandboxRegistryInsert): void {

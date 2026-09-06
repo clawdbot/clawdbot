@@ -11,7 +11,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const { resolveExternalAuthProfilesWithPluginsMock } = vi.hoisted(() => ({
@@ -30,8 +30,10 @@ const { resolveExternalAuthProfilesWithPluginsMock } = vi.hoisted(() => ({
   ]),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+  }),
 }));
 
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;

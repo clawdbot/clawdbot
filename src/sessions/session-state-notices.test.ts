@@ -1,6 +1,22 @@
 // Session-state notice context key decoding: strict UTF-8 after hex validation.
-import { describe, expect, it } from "vitest";
-import { decodeSessionStateNoticeContextKey } from "./session-state-notices.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import {
+  decodeSessionStateNoticeContextKey,
+  enqueueSessionStateNotice,
+} from "./session-state-notices.js";
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeat: vi.fn(),
+}));
+
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(requestHeartbeat).mockClear();
+});
 
 function encodeTarget(sessionKey: string): string {
   return `session-state:${Buffer.from(sessionKey, "utf8").toString("hex")}`;
@@ -28,5 +44,28 @@ describe("decodeSessionStateNoticeContextKey", () => {
     expect(decodeSessionStateNoticeContextKey("session-state:")).toBeUndefined();
     expect(decodeSessionStateNoticeContextKey("session-state:abc")).toBeUndefined();
     expect(decodeSessionStateNoticeContextKey("session-state:zz")).toBeUndefined();
+  });
+});
+
+describe("enqueueSessionStateNotice", () => {
+  it("coalesces active wakes for 20 seconds and leaves queue-only notices asleep", () => {
+    const notice = {
+      watcherSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:slack:channel:C01234567",
+      lastSeenSequence: 42,
+    };
+
+    enqueueSessionStateNotice(notice);
+    expect(requestHeartbeat).toHaveBeenCalledWith({
+      source: "session-state",
+      intent: "immediate",
+      reason: `session-state:${notice.targetSessionKey}`,
+      sessionKey: notice.watcherSessionKey,
+      coalesceMs: 20_000,
+    });
+
+    vi.mocked(requestHeartbeat).mockClear();
+    enqueueSessionStateNotice({ ...notice, queueOnly: true });
+    expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 });

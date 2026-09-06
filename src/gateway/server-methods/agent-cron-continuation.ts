@@ -36,6 +36,7 @@ export function createCronContinuationController(params: {
       try {
         const released = await applySessionEntryReplacements({
           activeSessionKey: activeClaim.sessionKey,
+          agentId: activeClaim.sessionAgentId,
           requireWriteSuccess: true,
           sessionKeys:
             baseSessionKey && baseSessionKey !== activeClaim.sessionKey
@@ -53,6 +54,7 @@ export function createCronContinuationController(params: {
               !current ||
               marker?.phase !== "continuing" ||
               marker.ownerRunId !== params.runId ||
+              marker.ownerLifecycleGeneration !== params.lifecycleGeneration ||
               marker.lifecycleRevision !== activeClaim.lifecycleRevision
             ) {
               return { result: false };
@@ -116,6 +118,7 @@ export function createCronContinuationController(params: {
         if (released && baseSessionKey) {
           emitSessionsChanged(params.context, {
             sessionKey: baseSessionKey,
+            agentId: activeClaim.sessionAgentId,
             reason: "cron-continuation",
           });
         }
@@ -162,7 +165,7 @@ export function createCronContinuationController(params: {
       params.context.logGateway.warn(
         `cron continuation release recovery exhausted for ${params.runId}`,
       );
-    });
+    }, "cron:continuation-recovery");
     return false;
   };
 

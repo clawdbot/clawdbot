@@ -86,6 +86,17 @@ struct ChatCodeHighlighterTests {
         #expect(tokens.contains(where: { $0.0 == .number && $0.1 == "3" }))
     }
 
+    @Test func `unicode numerals advance highlighting without changing source`() {
+        for numeral in ["①", "½", "١", "Ⅷ"] {
+            let code = "let value = \(numeral)"
+            let tokens = self.kinds(code, language: "swift")
+
+            #expect(tokens.map(\.1).joined().utf8.elementsEqual(code.utf8))
+            #expect(!tokens.map(\.1).contains(""))
+            #expect(tokens.contains(where: { $0.0 == .number && $0.1 == numeral }))
+        }
+    }
+
     @Test func `unknown language passes through unstyled`() {
         let attributed = ChatCodeHighlighter.attributedCode("SELECT *", languageId: "sql")
         #expect(String(attributed.characters) == "SELECT *")

@@ -9,31 +9,42 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  getChangedCoreTestPaths,
+  hasConfigDocInput,
+  isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
+  hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
   listStagedChangedPaths,
 } from "./changed-lanes.mts";
 import type { ChangedLaneResult } from "./changed-lanes.mts";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import { detectChangedScope, isMacosToolingPath } from "./ci-changed-scope.mjs";
+import {
+  booleanFlag,
+  isOpenEndedTruthyValue,
+  parseFlagArgs,
+  stringFlag,
+} from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
-import {
-  acquireLocalHeavyCheckLockSync,
-  resolveLocalHeavyCheckEnv,
-} from "./lib/local-heavy-check-runtime.mts";
+import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
+import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
+import { hasImportGraphImpactOnTargets } from "./test-projects.test-support.mts";
 
 type ChangedCheckCommand = {
+  coreTestCheck?: "checkBoundary" | "checkTypes";
   name: string;
   args: string[];
   bin?: string;
@@ -54,7 +65,6 @@ type TargetedLintOptions = {
 };
 
 type ChangedCheckDelegateOptions = {
-  cwd?: string;
   result?: ChangedLaneResult;
   diffRefsReady?: boolean;
 };
@@ -95,31 +105,32 @@ const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
   /^extensions\/[^/]+\/(?:openclaw\.plugin\.json$|(?!.*\.test\.).*\.(?:c|m)?[jt]s$)/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
-const PLUGIN_SDK_API_BASELINE_PATH_RE =
-  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\/[^/]+\.json$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
-  /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+  /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|extensions\/(?:tsconfig\.package-boundary\.paths\.json|xai\/tsconfig\.json)$|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const WRAPPER_SHADOWING_PATH_RE =
-  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/(?:export-name-collision-baseline\.json$|ts-guard-utils\.mts$|wrapper-shadowing-baseline\.json$)))/u;
-const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
-  /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
+  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/(?:source-file-scan-cache|ts-guard-utils)\.mts$))/u;
+const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
+  /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
-  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
-const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
+const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
+const ROOT_TEST_TS_CONFIG = "test/tsconfig/tsconfig.test.root.json";
 const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
+// The assertion baseline is checked by its ratchet, not consumed by Oxlint.
+const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/assertion-safety-baseline\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
-const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
-const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
+const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/CHANGELOG.md",
@@ -127,8 +138,9 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
 ]);
+const SWIFT_BUILD_CACHE_METADATA_TEST_PATH = "test/scripts/swift-build-cache-metadata.test.ts";
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -147,19 +159,8 @@ if (!isDirectRun()) {
   await ensureChangedCheckRuntimeDependencies(["package.json"]);
 }
 
-export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
-  return {
-    ...resolvedBaseEnv,
-    OPENCLAW_OXLINT_SKIP_LOCK: "1",
-    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-    OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
-  };
-}
-
-function isTruthyEnvFlag(value: string | undefined) {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
+  return resolveLocalCheckEnv(baseEnv);
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -169,7 +170,15 @@ function hasAndroidVersionSyncPath(paths: string[]) {
 }
 
 function hasMacosAppCiPath(paths: string[]) {
-  return paths.some((changedPath) => MACOS_APP_CI_PATH_RE.test(normalizeChangedPath(changedPath)));
+  // The metadata test has its own command; production edits still need native app proof.
+  // Swift test-target sources do not feed the packaged app; native CI still covers them.
+  return paths.some((changedPath) => {
+    const normalized = normalizeChangedPath(changedPath);
+    return (
+      normalized !== SWIFT_BUILD_CACHE_METADATA_TEST_PATH &&
+      (MACOS_APP_CI_PATH_RE.test(normalized) || isMacosToolingPath(normalized))
+    );
+  });
 }
 
 function executableExistsOnPath(command: string, env: NodeJS.ProcessEnv = process.env) {
@@ -199,42 +208,15 @@ function shouldSkipAppLintForMissingSwiftlint(options: ChangedCheckPlanOptions =
   return platform !== "darwin" && !swiftlintAvailable;
 }
 
-export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
-  const nodeModules = path.join(cwd, "node_modules");
-  return (
-    existsSync(path.join(nodeModules, ".modules.yaml")) &&
-    existsSync(path.join(nodeModules, ".bin", "oxfmt")) &&
-    existsSync(path.join(nodeModules, "typescript", "package.json"))
-  );
-}
-
-export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
-  if (!result || result.paths.length === 0) {
-    return false;
-  }
-  if (
-    shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
-    shouldRunPluginSdkApiBaselineCheck(result.paths)
-  ) {
-    return true;
-  }
-  if (result.docsOnly) {
-    return false;
-  }
-  return Object.entries(result.lanes).some(
-    ([lane, enabled]) => enabled && lane !== "docs" && lane !== "releaseMetadata",
-  );
-}
-
 export function shouldDelegateChangedCheckToCrabbox(
   argv: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
   options: ChangedCheckDelegateOptions = {},
 ) {
-  if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
+  if (isOpenEndedTruthyValue(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
-  if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
+  if (isOpenEndedTruthyValue(env.CI) || isOpenEndedTruthyValue(env.GITHUB_ACTIONS)) {
     return false;
   }
   if (argv.includes("--dry-run")) {
@@ -247,7 +229,7 @@ export function shouldDelegateChangedCheckToCrabbox(
   if (result.paths.length === 0) {
     return false;
   }
-  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+  if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
   }
   // Release metadata plans diff the supplied commits after classification. A missing
@@ -255,10 +237,7 @@ export function shouldDelegateChangedCheckToCrabbox(
   if (result.lanes.releaseMetadata && options.diffRefsReady === false) {
     return true;
   }
-  return (
-    changedCheckRequiresRemote(result) ||
-    !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
-  );
+  return false;
 }
 
 function changedCheckDiffRefsReady({
@@ -359,17 +338,6 @@ export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
   );
 }
 
-/** Returns whether changed files can alter the published Plugin SDK API contract. */
-export function shouldRunPluginSdkApiBaselineCheck(paths: string[]) {
-  return paths.some((changedPath) => {
-    const normalizedPath = normalizeChangedPath(changedPath);
-    return (
-      !getChangedPathFacts(normalizedPath).isTestOnly &&
-      PLUGIN_SDK_API_BASELINE_PATH_RE.test(normalizedPath)
-    );
-  });
-}
-
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
 export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
   return paths.some((changedPath) =>
@@ -388,12 +356,6 @@ export function shouldRunDeprecationHygieneChecks(paths: string[]) {
 export function shouldRunWrapperShadowingCheck(paths: string[]) {
   return paths.some((changedPath) =>
     WRAPPER_SHADOWING_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
-}
-
-export function shouldRunCanvasA2uiNativeResourceCheck(paths: string[]) {
-  return paths.some((changedPath) =>
-    CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
   );
 }
 
@@ -507,6 +469,8 @@ export function createChangedCheckPlan(
   options: ChangedCheckPlanOptions = {},
 ) {
   const commands: ChangedCheckCommand[] = [];
+  const broadAudits = new Set<ChangedCheckCommand>();
+  const typechecks = new Set<ChangedCheckCommand>();
   const baseEnv: NodeJS.ProcessEnv = createChangedCheckChildEnv(options.env ?? process.env);
   const generatedExtensionAssetPaths = result.paths.some((changedPath) =>
     LINTABLE_EXTENSION_PATH_RE.test(changedPath),
@@ -514,21 +478,79 @@ export function createChangedCheckPlan(
     ? (cachedGeneratedExtensionAssetPaths ??= new Set(listGeneratedExtensionAssetSources()))
     : new Set<string>();
   const add = (name: string, args: string[], env?: NodeJS.ProcessEnv) => {
-    if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
-      commands.push({ name, args, ...(env ? { env } : {}) });
+    const existing = commands.find(
+      (command) => command.name === name && sameArgs(command.args, args),
+    );
+    if (existing) {
+      return existing;
     }
+    const command = { name, args, ...(env ? { env } : {}) };
+    commands.push(command);
+    return command;
   };
   const addCommand = (name: string, bin: string, args: string[], env?: NodeJS.ProcessEnv) => {
-    if (
-      !commands.some(
-        (command) => command.name === name && command.bin === bin && sameArgs(command.args, args),
-      )
-    ) {
-      commands.push({ name, bin, args, ...(env ? { env } : {}) });
+    const existing = commands.find(
+      (command) => command.name === name && command.bin === bin && sameArgs(command.args, args),
+    );
+    if (existing) {
+      return existing;
     }
+    const command = { name, bin, args, ...(env ? { env } : {}) };
+    commands.push(command);
+    return command;
   };
   const addTypecheck = (name: string, args: string[]) =>
-    add(name, args, createSparseTsgoSkipEnv(baseEnv));
+    typechecks.add(add(name, args, createSparseTsgoSkipEnv(baseEnv)));
+  const finishPlan = (summary: string) => {
+    // Full lint shards exclude test/. Keep changed root sources covered even
+    // when another path selects the all-lane early return, without widening lint.
+    let rootTestTargets = result.paths.filter(
+      (file) => getChangedPathFacts(file).isRootTestSource && existsSync(file),
+    );
+    if (rootTestTargets.length > 0) {
+      // --tsconfig affects import resolution, not native semantic discovery or
+      // target selection. Expand the canonical roots before passing explicit files.
+      const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
+      const config = ts.getParsedCommandLineOfConfigFile(
+        path.resolve(ROOT_TEST_TS_CONFIG),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic(diagnostic) {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!config || config.errors.length > 0) {
+        throw new Error(
+          `Invalid ${ROOT_TEST_TS_CONFIG}: ${config?.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n")}`,
+        );
+      }
+      const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
+      rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
+    }
+    for (let offset = 0; offset < rootTestTargets.length; offset += TARGETED_LINT_PATH_LIMIT) {
+      const batch = rootTestTargets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
+      addCommand(
+        batch.length === 1 ? "lint test root changed file" : "lint test root changed files",
+        "node",
+        ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...batch],
+        baseEnv,
+      );
+    }
+    const end = commands.findLastIndex((command) => typechecks.has(command)) + 1;
+    const prefix = commands.slice(0, end);
+    // These audits produce diagnostics, not compiler inputs. Defer them without
+    // moving compiler prerequisites or overlapping their resource-heavy processes.
+    return {
+      commands: [
+        ...prefix.filter((command) => !broadAudits.has(command)),
+        ...prefix.filter((command) => broadAudits.has(command)),
+        ...commands.slice(end),
+      ],
+      summary,
+    };
+  };
   const addLint = (name: string, args: string[]) => add(name, args, baseEnv);
   const addTargetedLint = (
     createCommand: (
@@ -540,6 +562,7 @@ export function createChangedCheckPlan(
     fallbackName: string,
     fallbackArgs: string[],
     ignoredPaths?: Set<string>,
+    fallbackWithoutTargets = true,
   ) => {
     const candidatePaths = ignoredPaths
       ? result.paths.filter((changedPath) => !ignoredPaths.has(changedPath))
@@ -561,8 +584,10 @@ export function createChangedCheckPlan(
     }
 
     if (targetedCommands.length === 0) {
-      addLint(fallbackName, fallbackArgs);
-      return false;
+      if (fallbackWithoutTargets) {
+        addLint(fallbackName, fallbackArgs);
+      }
+      return !fallbackWithoutTargets;
     }
     for (const command of targetedCommands) {
       addCommand(command.name, command.bin, command.args, command.env);
@@ -586,26 +611,22 @@ export function createChangedCheckPlan(
     );
   };
 
+  if (result.lanes.all || hasProtocolEventCoverageInput(result.paths)) {
+    addCommand(
+      "mobile protocol event coverage",
+      "node",
+      ["scripts/check-protocol-event-coverage.mjs"],
+      baseEnv,
+    );
+  }
   add("conflict markers", ["check:no-conflict-markers"]);
   if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|packages\/|extensions\/|config\/env-var-count-budget\.txt$|scripts\/check-env-var-count\.mts$)/u.test(
-        filePath,
-      ),
-    )
-  ) {
-    add("environment variable count ratchet", [
-      "check:env-var-count",
-      ...(options.staged ? ["--staged"] : []),
-      "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
-    ]);
-  }
-  if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
-        filePath,
-      ),
+    result.paths.some(
+      (filePath) =>
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/(?:env-var-count-budget|max-lines-baseline)\.txt$|scripts\/check-(?:env-var-count|max-lines-ratchet)\.mts$)/u.test(
+          filePath,
+        ),
     )
   ) {
     add("max-lines suppression ratchet", [
@@ -615,12 +636,34 @@ export function createChangedCheckPlan(
       options.staged ? "HEAD" : (options.base ?? "origin/main"),
     ]);
   }
+  if (
+    result.paths.some(
+      (filePath) =>
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
+          filePath,
+        ),
+    )
+  ) {
+    add("assertion SAFETY comment ratchet", [
+      "check:assertion-safety",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
   add("changelog attributions", ["check:changelog-attributions"]);
   add("doctor deprecation registry", ["check:doctor-deprecation-registry"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
+  if (
+    result.lanes.all ||
+    result.paths.some((changedPath) => EXTENSION_TEST_CORE_IMPORT_PATH_RE.test(changedPath))
+  ) {
+    add("extension test core imports", ["lint:plugins:no-extension-test-core-imports"]);
+  }
   add("duplicate scan target coverage", ["dup:check:coverage"]);
-  add("coercion helper declaration guard", ["check:coercion-helpers"]);
+  broadAudits.add(add("coercion helper declaration guard", ["check:coercion-helpers"]));
   add("dependency pin guard", ["deps:pins:check"]);
   if (result.paths.length > 0) {
     add("format changed files", [
@@ -671,32 +714,37 @@ export function createChangedCheckPlan(
   if (result.lanes.all || result.lanes.bundledChannelConfigMetadata) {
     add("bundled channel config metadata", ["check:bundled-channel-config-metadata"]);
   }
+  // Select before docs-only returns; trace schema entries without expanding config IO/loaders.
+  if (
+    result.lanes.all ||
+    result.lanes.releaseMetadata ||
+    hasConfigDocInput(result.paths) ||
+    hasImportGraphImpactOnTargets(
+      result.paths.filter(
+        (file) => /\.[cm]?[jt]sx?$/u.test(file) && !getChangedPathFacts(file).isChangedLaneTest,
+      ),
+      isConfigDocSchemaSourcePath,
+      process.cwd(),
+      { tooling: true },
+    )
+  ) {
+    add("config docs baseline", ["config:docs:check"]);
+  }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
-  }
-  if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
   }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
     add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
   }
   if (result.lanes.all || shouldRunDeprecationHygieneChecks(result.paths)) {
-    add("deprecated API usage", ["check:deprecated-api-usage"]);
+    broadAudits.add(add("deprecated API usage", ["check:deprecated-api-usage"]));
     // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
     // until their scheduled deletion PRs land.
     add("plugin boundaries", ["plugins:boundary-report:ci"]);
   }
   if (result.lanes.all || shouldRunWrapperShadowingCheck(result.paths)) {
     add("wrapper shadowing", ["check:wrapper-shadowing"]);
-  }
-  if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
-    addCommand(
-      "Canvas A2UI native resource generation",
-      "node",
-      ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      baseEnv,
-    );
   }
   if (shouldRunAppcastOwnerTest(result.paths)) {
     add(
@@ -705,24 +753,36 @@ export function createChangedCheckPlan(
       baseEnv,
     );
   }
+  if (
+    result.paths.some(
+      (changedPath) =>
+        changedPath === "scripts/swift-build-cache-metadata.py" ||
+        changedPath === SWIFT_BUILD_CACHE_METADATA_TEST_PATH,
+    )
+  ) {
+    add(
+      "Swift build cache metadata tests",
+      ["test:serial", SWIFT_BUILD_CACHE_METADATA_TEST_PATH],
+      baseEnv,
+    );
+  }
   add("package patch guard", ["deps:patches:check"]);
   if (
     hasDeadcodeScannedSource(result.paths) &&
-    !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
+    !isOpenEndedTruthyValue(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
   ) {
-    addCommand(
-      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
-      "node",
-      ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
-      baseEnv,
+    broadAudits.add(
+      addCommand(
+        "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+        "node",
+        ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
+        baseEnv,
+      ),
     );
   }
 
   if (result.docsOnly) {
-    return {
-      commands,
-      summary: "docs-only",
-    };
+    return finishPlan("docs-only");
   }
 
   addTestTempCreationReport();
@@ -730,6 +790,20 @@ export function createChangedCheckPlan(
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+
+  // Typechecking alone accepts extension imports; the graph guard also covers
+  // shared test/tooling dependencies that core tests can pull into their graph.
+  const narrowCoreTests = getChangedCoreTestPaths(result) !== undefined;
+  if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
+    if (narrowCoreTests) {
+      commands.at(-1)!.coreTestCheck = "checkBoundary";
+    }
+  }
+
+  if (runAll || lanes.scripts || result.paths.includes("scripts/check-script-erasability.mjs")) {
+    add("script TypeScript erasability", ["check:script-erasability"]);
+  }
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -740,12 +814,8 @@ export function createChangedCheckPlan(
     ]);
     add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
-    add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
-    return {
-      commands,
-      summary: "release metadata",
-    };
+    return finishPlan("release metadata");
   }
 
   if (shouldRunAndroidVersionSync) {
@@ -759,10 +829,7 @@ export function createChangedCheckPlan(
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
-    return {
-      commands,
-      summary: "all",
-    };
+    return finishPlan("all");
   }
 
   if (shouldRunControlUiI18nVerify(result.paths)) {
@@ -773,6 +840,9 @@ export function createChangedCheckPlan(
   }
   if (lanes.coreTests) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+    if (narrowCoreTests) {
+      commands.at(-1)!.coreTestCheck = "checkTypes";
+    }
   }
   if (lanes.ui) {
     addTypecheck("typecheck UI", ["tsgo:ui"]);
@@ -791,14 +861,46 @@ export function createChangedCheckPlan(
   }
 
   if (lanes.core || lanes.coreTests || lanes.ui) {
-    addTargetedLint(createTargetedCoreLintCommand, LINTABLE_CORE_PATH_RE, "lint core", [
-      "lint:core",
-    ]);
+    // CSS is covered by targeted Stylelint below. Other non-Oxlint core/UI
+    // inputs keep the full lane so changed checks do not silently drop lint.
+    const fallbackWithoutTargets = result.paths.some((changedPath) => {
+      const surface = getChangedPathFacts(changedPath).surface;
+      return (
+        (surface === "source" || surface === "package" || surface === "ui") &&
+        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath) &&
+        !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
+      );
+    });
+    addTargetedLint(
+      createTargetedCoreLintCommand,
+      LINTABLE_CORE_PATH_RE,
+      "lint core",
+      ["lint:core"],
+      undefined,
+      fallbackWithoutTargets,
+    );
+  }
+  if (lanes.ui) {
+    const targets = result.paths
+      .filter(
+        (changedPath) => LINTABLE_UI_STYLE_PATH_RE.test(changedPath) && existsSync(changedPath),
+      )
+      .toSorted((left, right) => left.localeCompare(right));
+    for (let offset = 0; offset < targets.length; offset += TARGETED_LINT_PATH_LIMIT) {
+      const batch = targets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
+      addCommand(
+        batch.length === 1 ? "lint UI changed style file" : "lint UI changed style files",
+        "node",
+        ["--import", "tsx", "scripts/run-stylelint.mts", ...batch],
+        baseEnv,
+      );
+    }
   }
   if (
     lanes.liveDockerTooling &&
     result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);
   }
@@ -832,18 +934,34 @@ export function createChangedCheckPlan(
       addLint("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
     }
   }
-  if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
-    addCommand(
-      "lint apps (swiftlint unavailable on this host)",
-      "node",
-      [
-        "-e",
-        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
-      ],
-      baseEnv,
-    );
-  } else if (lanes.apps) {
-    addLint("lint apps", ["lint:apps"]);
+  if (lanes.apps) {
+    const appScopes = result.paths
+      .filter((changedPath) => getChangedPathFacts(changedPath).surface === "app")
+      .map((changedPath) => detectChangedScope([changedPath]));
+    // Shared Apple sources select Android consumer CI, but Gradle ktlint owns
+    // only Android-exclusive app paths. Classify each path so mixed diffs retain both.
+    if (
+      appScopes.some(
+        ({ runAndroid, runMacos, runIosBuild }) => runAndroid && !runMacos && !runIosBuild,
+      )
+    ) {
+      addLint("lint Android", ["android:lint"]);
+    }
+    if (appScopes.some(({ runMacos, runIosBuild }) => runMacos || runIosBuild)) {
+      if (shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
+        addCommand(
+          "lint apps (swiftlint unavailable on this host)",
+          "node",
+          [
+            "-e",
+            "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
+          ],
+          baseEnv,
+        );
+      } else {
+        addLint("lint apps", ["lint:apps"]);
+      }
+    }
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);
@@ -878,13 +996,12 @@ export function createChangedCheckPlan(
     });
   }
 
-  return {
-    commands,
-    summary: Object.entries(lanes)
+  return finishPlan(
+    Object.entries(lanes)
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
       .join(", "),
-  };
+  );
 }
 
 export function createTargetedCoreLintCommand(
@@ -912,7 +1029,7 @@ export function createTargetedExtensionLintCommand(
     env,
     label: "extension",
     lintablePathRe: LINTABLE_EXTENSION_PATH_RE,
-    neutralPathRe: EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
     ...options,
@@ -928,7 +1045,7 @@ export function createTargetedScriptLintCommand(
     env,
     label: "script",
     lintablePathRe: LINTABLE_SCRIPT_PATH_RE,
-    neutralPathRe: SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
     ...options,
@@ -951,8 +1068,9 @@ function createTargetedOxlintCommand({
         !LINTABLE_CORE_PATH_RE.test(changedPath) &&
         !LINTABLE_EXTENSION_PATH_RE.test(changedPath) &&
         !LINTABLE_SCRIPT_PATH_RE.test(changedPath) &&
+        !getChangedPathFacts(changedPath).isRootTestSource &&
         !neutralPathRe.test(changedPath) &&
-        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
+        !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
     )
   ) {
     return null;
@@ -980,41 +1098,36 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
     return 0;
   }
   await ensureChangedCheckRuntimeDependencies(result.paths);
-  const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
+  const baseEnv = resolveLocalCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
   const plan = createChangedCheckPlan(result, {
     ...options,
     env: childEnv,
   });
-  const releaseLock = options.dryRun
-    ? () => {}
-    : acquireLocalHeavyCheckLockSync({
-        cwd: process.cwd(),
-        env: baseEnv,
-        toolName: "check:changed",
-      });
 
-  try {
-    printPlan(result, plan, options);
+  printPlan(result, plan, options);
 
-    if (options.dryRun) {
-      return 0;
-    }
-
-    const timings: ChangedCheckTiming[] = [];
-    for (const command of plan.commands) {
-      const status = await runPlanCommand(command, timings);
-      if (status !== 0) {
-        printSummary(timings, options);
-        return status;
-      }
-    }
-
-    printSummary(timings, options);
+  if (options.dryRun) {
     return 0;
-  } finally {
-    releaseLock();
   }
+
+  const coreTestCheck = plan.commands.some((command) => command.coreTestCheck)
+    ? (await import("./run-tsgo-core-test-shards.mts")).createChangedCoreTestCheck(
+        getChangedCoreTestPaths(result)!,
+        createSparseTsgoSkipEnv(childEnv),
+      )
+    : undefined;
+  const timings: ChangedCheckTiming[] = [];
+  for (const command of plan.commands) {
+    const status = await runPlanCommand(command, timings, coreTestCheck);
+    if (status !== 0) {
+      printSummary(timings, options);
+      return status;
+    }
+  }
+
+  printSummary(timings, options);
+  return 0;
 }
 
 function sameArgs(left: string[], right: string[]) {
@@ -1045,7 +1158,18 @@ async function runPnpm(command: ChangedCheckCommand, timings: ChangedCheckTiming
   return await runCommand(createPnpmManagedCommand(command), timings);
 }
 
-async function runPlanCommand(command: ChangedCheckCommand, timings: ChangedCheckTiming[]) {
+async function runPlanCommand(
+  command: ChangedCheckCommand,
+  timings: ChangedCheckTiming[],
+  coreTestCheck?: ReturnType<typeof createChangedCoreTestCheck>,
+) {
+  if (command.coreTestCheck && coreTestCheck) {
+    return await runCommand(
+      createPnpmManagedCommand(command),
+      timings,
+      coreTestCheck[command.coreTestCheck],
+    );
+  }
   if (command.bin) {
     return await runCommand({ ...command, bin: command.bin }, timings);
   }
@@ -1065,8 +1189,8 @@ export function createPnpmManagedCommand<T extends ChangedCheckCommand>(
   command: T,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
-  if (isTruthyEnvFlag(commandEnv.CI) || isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)) {
+  const commandEnv = command.env ?? resolveLocalCheckEnv(env);
+  if (isOpenEndedTruthyValue(commandEnv.CI) || isOpenEndedTruthyValue(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
       ...command,
@@ -1120,16 +1244,19 @@ export function cleanupCorepackPnpmShimDir() {
 async function runCommand(
   command: ChangedCheckCommand & { bin: string },
   timings: ChangedCheckTiming[],
+  run?: () => Promise<number>,
 ) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
   let status = 1;
   try {
-    status = await runManagedCommand({
-      bin: command.bin,
-      args: command.args,
-      env: command.env ?? resolveLocalHeavyCheckEnv(),
-    });
+    status = run
+      ? await run()
+      : await runManagedCommand({
+          bin: command.bin,
+          args: command.args,
+          env: command.env ?? resolveLocalCheckEnv(),
+        });
   } catch (error) {
     console.error(error);
   }
@@ -1256,7 +1383,6 @@ async function main() {
       });
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
-          cwd: process.cwd(),
           result,
           diffRefsReady: result.lanes.releaseMetadata
             ? args.staged ||

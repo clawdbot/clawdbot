@@ -5,7 +5,7 @@
         app:queryPatterns="@array/ask_openclaw_query_patterns">
         <intent
             android:action="ai.openclaw.app.action.ASK_OPENCLAW"
-            android:targetPackage="ai.openclaw.app"
+            android:targetPackage="@string/application_id"
             android:targetClass="ai.openclaw.app.MainActivity">
             <parameter
                 android:name="prompt"

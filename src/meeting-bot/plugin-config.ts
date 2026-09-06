@@ -47,7 +47,6 @@ export type MeetingPluginConfig = MeetingRealtimeEngineConfig & {
   chromeNode: { node?: string };
   realtime: MeetingRealtimeEngineConfig["realtime"] & {
     strategy: "agent" | "bidi";
-    agentId?: string;
     toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
   };
 };

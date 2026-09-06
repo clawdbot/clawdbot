@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createChatRunState } from "../server-chat-state.js";
+import { broadcastChatDelta, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { GatewayRequestContext } from "./types.js";
 
 function createContext(seq = 0) {
@@ -29,6 +31,70 @@ function createContext(seq = 0) {
 }
 
 describe("chat terminal broadcasts", () => {
+  it.each([
+    { sessionKey: "agent:main:main", agentId: "main", keys: ["agent:main:main"] },
+    { sessionKey: "global", agentId: "work", keys: ["agent:work:global"] },
+  ])(
+    "keeps pending snapshots scoped and retires them with $sessionKey",
+    ({ sessionKey, agentId, keys }) => {
+      const { context: base, deleteSpy } = createContext();
+      const context = { ...base, chatRunState: createChatRunState() };
+      let current = true;
+      const request = { context, runId: "run-1", sessionKey, agentId, isCurrent: () => current };
+
+      broadcastChatDelta({ ...request, text: "First instruction" });
+      const first = context.broadcast.mock.calls[0];
+      expect(first?.[1]).toMatchObject({
+        state: "delta",
+        deltaText: "First instruction",
+        replace: true,
+        seq: 1,
+      });
+      expect(first?.[2]?.sessionKeys).toEqual(keys);
+      expect(context.nodeSendToSession.mock.calls.map(([key]) => key)).toEqual(keys);
+      expect(deleteSpy).not.toHaveBeenCalled();
+
+      broadcastChatDelta({ ...request, text: "First instruction\n\nSecond instruction" });
+      const second = context.broadcast.mock.calls[1];
+      const liveText = second?.[2]?.liveText;
+      expect(liveText?.group).toBe(first?.[2]?.liveText?.group);
+      expect(liveText?.coalesce?.merge(first?.[1], second?.[1])).toBe(second?.[1]);
+      expect(context.chatRunState.resolveBuffer("run-1").text).toBe(
+        "First instruction\n\nSecond instruction",
+      );
+
+      broadcastChatFinal({
+        ...request,
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      });
+      expect(context.broadcast.mock.calls[2]?.[1]).toMatchObject({ state: "final", seq: 3 });
+      expect(context.broadcast.mock.calls[2]?.[2]?.liveText).toEqual({ group: liveText?.group });
+      expect(deleteSpy).toHaveBeenCalledOnce();
+
+      current = false;
+      context.chatRunState.clearRun("run-1");
+      expect(liveText?.group.aborted).toBe(true);
+      expect(liveText?.isCurrent?.()).toBe(false);
+      broadcastChatDelta({ ...request, text: "late instruction" });
+      expect(context.broadcast).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("bounds live command text", () => {
+    const { context: base } = createContext();
+    const context = { ...base, chatRunState: createChatRunState() };
+    const text = "x".repeat(500_001);
+    broadcastChatDelta({
+      context,
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      text,
+      isCurrent: () => true,
+    });
+    expect(context.chatRunState.resolveBuffer("run-1").text).toHaveLength(500_000);
+    expect(context.broadcast.mock.calls[0]?.[1]).toHaveProperty("deltaText.length", 500_000);
+  });
+
   it("projects global final payloads and fans out one object to both delivery keys", () => {
     const { context, order, deleteSpy } = createContext(7);
     const message = {
@@ -132,5 +198,43 @@ describe("chat terminal broadcasts", () => {
     expect(context.broadcast).toHaveBeenCalledOnce();
     expect(context.agentRunSeq.get("run-1")).toBe(10);
     expect(deleteSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("global chat broadcast ownership", () => {
+  it("keeps the bare global subscription for its persisted fixed-store owner", () => {
+    const broadcast = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const context = {
+      agentRunSeq: new Map<string, number>(),
+      broadcast,
+      getRuntimeConfig: () =>
+        ({
+          session: { scope: "global", store: "/stores/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+        }) satisfies OpenClawConfig,
+      nodeSendToSession,
+    };
+
+    broadcastChatFinal({
+      context,
+      runId: "run-ops-global",
+      sessionKey: "global",
+      agentId: "ops",
+    });
+
+    expect(broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+      { sessionKeys: ["agent:ops:global", "global"] },
+    );
+    expect(nodeSendToSession.mock.calls.map(([key]) => key)).toEqual([
+      "agent:ops:global",
+      "global",
+    ]);
   });
 });

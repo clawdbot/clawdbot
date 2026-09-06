@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { buildBootstrapPromptWarning } from "./bootstrap-budget-warning.js";
 import {
-  appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
@@ -34,16 +33,19 @@ describe("buildBootstrapBudgetState", () => {
       config: {
         agents: { defaults: { bootstrapMaxChars: 10, bootstrapTotalMaxChars: 12 } },
       },
-      bootstrapFiles,
-      injectedFiles: [
-        { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
-        { path: "/tmp/SOUL.md", content: "b".repeat(4) },
-      ],
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: [
+          { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
+          { path: "/tmp/SOUL.md", content: "b".repeat(4) },
+        ],
+      }),
     });
 
     expect(state.bootstrapMaxChars).toBe(10);
     expect(state.bootstrapTotalMaxChars).toBe(12);
     expect(state.bootstrapPromptWarningMode).toBe("always");
+    expect(state.bootstrapAnalysis.totalNearLimit).toBe(true);
     expect(state.bootstrapAnalysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
     expect(state.bootstrapPromptWarning.warningShown).toBe(true);
   });
@@ -84,6 +86,48 @@ describe("buildBootstrapInjectionStats", () => {
     expect(stats[1]?.truncated).toBe(true);
   });
 
+  it("gives a budget-dropped file zero injected chars when a sibling shares its basename", () => {
+    // Extra bootstrap files can repeat a root basename (packages/*/AGENTS.md).
+    // Injection identity is the source path, so a file the total budget dropped
+    // must not inherit the bytes of the sibling that consumed that budget.
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md",
+        path: "/tmp/workspace/AGENTS.md",
+        content: "a".repeat(1_000),
+        missing: false,
+      },
+      {
+        name: "AGENTS.md",
+        path: "/tmp/workspace/packages/core/AGENTS.md",
+        content: "b".repeat(500),
+        missing: false,
+      },
+    ];
+
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: stats,
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 1_000,
+    });
+
+    expect(stats[1]).toMatchObject({
+      path: "/tmp/workspace/packages/core/AGENTS.md",
+      rawChars: 500,
+      injectedChars: 0,
+      truncated: true,
+    });
+    expect(analysis.totals.injectedChars).toBe(1_000);
+    expect(analysis.truncatedFiles.map((file) => file.path)).toEqual([
+      "/tmp/workspace/packages/core/AGENTS.md",
+    ]);
+    expect(analysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+  });
+
   it("derives names for path-only files supplied by bootstrap hooks", () => {
     const pathOnlyFile = {
       path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
@@ -119,7 +163,7 @@ describe("buildBootstrapInjectionStats", () => {
 });
 
 describe("analyzeBootstrapBudget", () => {
-  it("reports per-file and total-limit causes", () => {
+  it("reports causes while excluding missing-file markers from file totals", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
         {
@@ -131,11 +175,19 @@ describe("analyzeBootstrapBudget", () => {
           truncated: true,
         },
         {
+          name: "IDENTITY.md",
+          path: "/tmp/IDENTITY.md",
+          missing: true,
+          rawChars: 0,
+          injectedChars: 40,
+          truncated: false,
+        },
+        {
           name: "SOUL.md",
           path: "/tmp/SOUL.md",
           missing: false,
-          rawChars: 90,
-          injectedChars: 80,
+          rawChars: 50,
+          injectedChars: 40,
           truncated: true,
         },
       ],
@@ -143,8 +195,10 @@ describe("analyzeBootstrapBudget", () => {
       bootstrapTotalMaxChars: 200,
     });
     expect(analysis.hasTruncation).toBe(true);
-    expect(analysis.totalNearLimit).toBe(true);
+    expect(analysis.totalNearLimit).toBe(false);
     expect(analysis.truncatedFiles).toHaveLength(2);
+    expect(analysis.totals).toMatchObject({ rawChars: 200, injectedChars: 160 });
+    expect(analysis.files[1]).toMatchObject({ nearLimit: false, causes: [] });
     const agents = analysis.truncatedFiles.find((file) => file.name === "AGENTS.md");
     const soul = analysis.truncatedFiles.find((file) => file.name === "SOUL.md");
     expect(agents?.causes).toContain("per-file-limit");
@@ -296,36 +350,6 @@ describe("bootstrap prompt warnings", () => {
       mode: "always",
     }).lines;
     expect(lines.join("\n")).toContain("10 raw -> 1 injected");
-  });
-
-  it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
-    const prompt = appendBootstrapPromptWarning("Please continue.", [
-      "AGENTS.md: 200 raw -> 0 injected",
-    ]);
-    expect(prompt.startsWith("Please continue.")).toBe(true);
-    expect(prompt).toContain("[Bootstrap truncation warning]");
-    expect(prompt).toContain("Treat Project Context as partial");
-    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
-    expect(prompt.endsWith("- AGENTS.md: 200 raw -> 0 injected")).toBe(true);
-  });
-
-  it("preserves raw prompt whitespace when appending warning details", () => {
-    const prompt = appendBootstrapPromptWarning("  indented\nkeep tail  ", [
-      "AGENTS.md: 200 raw -> 0 injected",
-    ]);
-
-    expect(prompt).toContain("  indented\nkeep tail  ");
-    expect(prompt.indexOf("  indented\nkeep tail  ")).toBe(0);
-  });
-
-  it("preserves exact heartbeat prompts without warning suffixes", () => {
-    const heartbeatPrompt = "Read HEARTBEAT.md. Reply HEARTBEAT_OK.";
-
-    expect(
-      appendBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
-        preserveExactPrompt: heartbeatPrompt,
-      }),
-    ).toBe(heartbeatPrompt);
   });
 
   it("builds a concise agent notice without raw truncation diagnostics", () => {

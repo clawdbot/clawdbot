@@ -16,6 +16,9 @@ const SURFACE_PATTERNS = [
   ["app", /^(?:apps\/|Swabble\/|appcast\.xml$)/u],
   ["rootTest", /^test\//u],
   ["testFixture", /^test-fixtures\//u],
+  // This hidden helper only reports maintainer activity; it has no product consumers.
+  // Match the reviewed leaf exactly so unreviewed skill executables still fail safe.
+  ["rootTooling", /^\.agents\/skills\/openclaw-pr-maintainer\/scripts\/github-activity\.sh$/u],
   [
     "rootTooling",
     /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u,
@@ -28,6 +31,7 @@ const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|suite|test-utils|test-(?:helpers|support|harness)|e2e-harness)\.[cm]?[jt]sx?$)/u;
 const NATIVE_ONLY_PATH_RE =
   /^(?:apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/u;
+const ROOT_TEST_SOURCE_PATH_RE = /^test\/(?!fixtures\/).*\.[cm]?tsx?$/u;
 
 /**
  * Normalizes a changed file path into repo-relative POSIX form.
@@ -44,7 +48,7 @@ export function normalizeChangedPath(inputPath) {
 /**
  * Returns shared path facts without imposing a caller's lane-selection policy.
  * @param {unknown} inputPath
- * @returns {{ path: string; surface: ChangedPathSurface; isChangedLaneTest: boolean; isTestOnly: boolean; isNativeOnly: boolean }}
+ * @returns {{ path: string; surface: ChangedPathSurface; isChangedLaneTest: boolean; isRootTestSource: boolean; isTestOnly: boolean; isNativeOnly: boolean }}
  */
 export function getChangedPathFacts(inputPath) {
   const path = typeof inputPath === "string" ? inputPath.trim() : "";
@@ -54,6 +58,7 @@ export function getChangedPathFacts(inputPath) {
     path,
     surface,
     isChangedLaneTest: CHANGED_LANE_TEST_PATH_RE.test(path),
+    isRootTestSource: ROOT_TEST_SOURCE_PATH_RE.test(path),
     isTestOnly: TEST_ONLY_PATH_RE.test(path),
     isNativeOnly: NATIVE_ONLY_PATH_RE.test(path),
   };

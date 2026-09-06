@@ -266,20 +266,43 @@ jobs:
             }
           }
 
-      - name: Summary
+      - name: Record Windows promotion outcome
+        if: ${{ always() }}
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
         run: |
+          # Detached publication owns terminal evidence, including failures that
+          # happen after the npm/GitHub publisher has already finished.
+          $outcome = "${{ job.status }}"
+          $runUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          @{
+            schemaVersion = 1
+            tag = $env:RELEASE_TAG
+            sourceTag = $env:WINDOWS_NODE_TAG
+            installerDigests = $env:EXPECTED_INSTALLER_DIGESTS
+            outcome = $outcome
+            runUrl = $runUrl
+          } | ConvertTo-Json | Set-Content -Encoding utf8NoBOM "$env:RUNNER_TEMP/windows-promotion.json"
           @"
-          ## Windows Hub installers promoted
+          ## Windows Hub promotion: $outcome
 
           OpenClaw release: $env:RELEASE_TAG
           Source release: openclaw/openclaw-windows-node@$env:WINDOWS_NODE_TAG
+          Evidence: $runUrl
+
+          npm and GitHub publication are independent of this app promotion.
           "@ >> $env:GITHUB_STEP_SUMMARY
-          Get-ChildItem -LiteralPath dist -File |
-            Sort-Object Name |
-            ForEach-Object {
-              "- https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/$($_.Name)"
-            } >> $env:GITHUB_STEP_SUMMARY
+          if ($outcome -ne "success") {
+            Write-Output "::warning::Windows assets remain pending. Inspect this run and recover with Windows Node Release using the same exact tags and approved digests."
+          }
+
+      - name: Upload Windows promotion evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-release-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-promotion.json
+          if-no-files-found: error

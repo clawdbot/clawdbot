@@ -4,11 +4,13 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { formatErrorMessage } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
@@ -62,6 +64,7 @@ const PLAYBACK_TRANSCODE_POLICY = {
       "audio/webm": "matroska,webm",
       "audio/x-aiff": "aiff",
       "audio/x-caf": "caf",
+      "audio/x-ms-asf": "asf",
       "audio/x-ms-wma": "asf",
     },
     target: { contentType: "audio/mp4", extension: ".m4a" },
@@ -139,6 +142,7 @@ const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, Promise<PlaybackInspection>>();
+const log = createSubsystemLogger("media/playback");
 
 /** Hashes the immutable source identity used by playback cache file names. */
 function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string {
@@ -200,9 +204,7 @@ function resolvePlaybackMode(
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
     createPlaybackTranscodeCacheKey,
-    PLAYBACK_TRANSCODE_POLICY,
     readPlaybackSourceBounded,
-    resolvePlaybackMode,
     getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
   };
 }
@@ -353,13 +355,6 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
 export async function resolvePlaybackModeForSource(
   params: PlaybackSourceParams,
 ): Promise<PlaybackMode | undefined> {
-  const containerMode = resolvePlaybackMode(
-    params.mimeType,
-    PLAYBACK_TRANSCODE_POLICY[params.kind],
-  );
-  if (!containerMode) {
-    return undefined;
-  }
   const inspection = await inspectPlaybackSource(params);
   return inspection.mode === "transcode"
     ? "transcode"
@@ -442,7 +437,12 @@ function buildPlaybackFfmpegArgs(params: {
   outputPath: string;
   videoStreamIndex?: number;
 }): string[] {
-  const common = [
+  const audioOnly = params.kind === "audio";
+  const primaryStreamIndex = audioOnly ? params.audioStreamIndex : params.videoStreamIndex;
+  if (primaryStreamIndex === undefined) {
+    throw new Error(`Playback ${audioOnly ? "audio" : "video"} stream is missing`);
+  }
+  return [
     "-hide_banner",
     "-loglevel",
     "error",
@@ -465,53 +465,28 @@ function buildPlaybackFfmpegArgs(params: {
     "-1",
     "-map_chapters",
     "-1",
-  ];
-  if (params.kind === "audio") {
-    if (params.audioStreamIndex === undefined) {
-      throw new Error("Playback audio stream is missing");
-    }
-    return [
-      ...common,
-      "-map",
-      `0:${params.audioStreamIndex}`,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(PLAYBACK_TRANSCODE_MAX_DURATION_SECS),
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-movflags",
-      "+faststart",
-      "-f",
-      "ipod",
-      "-fs",
-      String(params.maxOutputBytes + 1),
-      params.outputPath,
-    ];
-  }
-  if (params.videoStreamIndex === undefined) {
-    throw new Error("Playback video stream is missing");
-  }
-  return [
-    ...common,
     "-map",
-    `0:${params.videoStreamIndex}`,
-    ...(params.audioStreamIndex === undefined ? [] : ["-map", `0:${params.audioStreamIndex}`]),
+    `0:${primaryStreamIndex}`,
+    ...(!audioOnly && params.audioStreamIndex !== undefined
+      ? ["-map", `0:${params.audioStreamIndex}`]
+      : []),
+    ...(audioOnly ? ["-vn"] : []),
     "-sn",
     "-dn",
     "-t",
     String(PLAYBACK_TRANSCODE_MAX_DURATION_SECS),
-    "-vf",
-    "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-    "-c:v",
-    "libx264",
-    "-threads",
-    String(PLAYBACK_TRANSCODE_THREADS),
-    "-pix_fmt",
-    "yuv420p",
+    ...(audioOnly
+      ? []
+      : [
+          "-vf",
+          "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+          "-c:v",
+          "libx264",
+          "-threads",
+          String(PLAYBACK_TRANSCODE_THREADS),
+          "-pix_fmt",
+          "yuv420p",
+        ]),
     "-c:a",
     "aac",
     "-b:a",
@@ -519,7 +494,7 @@ function buildPlaybackFfmpegArgs(params: {
     "-movflags",
     "+faststart",
     "-f",
-    "mp4",
+    audioOnly ? "ipod" : "mp4",
     "-fs",
     String(params.maxOutputBytes + 1),
     params.outputPath,
@@ -659,10 +634,10 @@ export async function resolvePlaybackTranscode(
   }
   const failedAtMs = playbackFailures.get(operationKey);
   if (failedAtMs !== undefined) {
-    if (Date.now() - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
+    const nowMs = Date.now();
+    if (failedAtMs <= nowMs && nowMs - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
       return { kind: "fallback" };
     }
-    playbackFailures.delete(operationKey);
   }
   if (playbackJobs.size >= MAX_PLAYBACK_TRANSCODE_JOBS) {
     return { kind: "preparing" };
@@ -689,8 +664,13 @@ export async function resolvePlaybackTranscode(
       playbackJobs.delete(operationKey);
       playbackFailures.delete(operationKey);
     },
-    () => {
+    (reason: unknown) => {
       playbackJobs.delete(operationKey);
+      if (!playbackFailures.has(operationKey)) {
+        log.warn(
+          `Playback transcode failed for ${params.sourcePath}: ${formatErrorMessage(reason)}`,
+        );
+      }
       playbackFailures.delete(operationKey);
       playbackFailures.set(operationKey, Date.now());
       pruneMapToMaxSize(playbackFailures, MAX_PLAYBACK_ENTRIES.failures);

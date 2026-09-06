@@ -1,5 +1,6 @@
 // Memory Host SDK module implements embeddings remote provider behavior.
 import {
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
@@ -24,11 +25,19 @@ export function createRemoteEmbeddingProvider(params: {
   client: RemoteEmbeddingClient;
   errorPrefix: string;
   maxInputTokens?: number;
+  /** Keep query arrays in one request when the provider has no query/document wire distinction. */
+  batchQueryInputs?: boolean;
+  /** Additional payload fields; model and input remain owned by the shared request path. */
+  buildRequestFields?: (kind: "query" | "document") => Record<string, unknown>;
 }): EmbeddingProvider {
   const { client } = params;
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
-  const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (
+    input: string[],
+    signal?: AbortSignal,
+    kind: "query" | "document" = "document",
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -38,7 +47,11 @@ export function createRemoteEmbeddingProvider(params: {
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
       signal,
-      body: { model: client.model, input },
+      body: {
+        ...params.buildRequestFields?.(kind),
+        model: client.model,
+        input,
+      },
       errorPrefix: params.errorPrefix,
     });
   };
@@ -47,11 +60,28 @@ export function createRemoteEmbeddingProvider(params: {
     id: params.id,
     model: client.model,
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
-    embedQuery: async (text, options) => {
-      const [vec] = await embed([text], options?.signal);
+    embed: async (input, options) => {
+      const text = typeof input === "string" ? input : input.text;
+      const [vec] = await embedMany(
+        [text],
+        options?.signal,
+        options?.inputType === "query" ? "query" : "document",
+      );
       return vec ?? [];
     },
-    embedBatch: async (texts, options) => await embed(texts, options?.signal),
+    embedBatch: async (inputs, options) => {
+      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+      if (options?.inputType === "query" && params.batchQueryInputs !== true) {
+        return await Promise.all(
+          texts.map(async (text) => (await embedMany([text], options.signal, "query"))[0] ?? []),
+        );
+      }
+      return await embedMany(
+        texts,
+        options?.signal,
+        options?.inputType === "query" ? "query" : "document",
+      );
+    },
   };
 }
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createZeroUsage } from "../usage.test-support.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   createAssistantOutput,
@@ -168,7 +169,7 @@ describe("openai completions stream", () => {
     expectRecordFields(output.content[0], expected);
   });
 
-  it("preserves reasoning_details item order when visible text and thinking are interleaved", async () => {
+  it("preserves explicitly visible reasoning_details without phase reclassification", async () => {
     const model = makeCompletionsModel({
       id: "openrouter/minimax/minimax-m2.7",
       name: "MiniMax M2.7",
@@ -182,15 +183,8 @@ describe("openai completions stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
+      usage: createZeroUsage(),
+      stopReason: "stop" as const,
       timestamp: Date.now(),
     };
 
@@ -233,6 +227,60 @@ describe("openai completions stream", () => {
     expectRecordFields(output.content[2], { type: "text", text: " Visible third." });
   });
 
+  it("phases text interrupted by resumed reasoning_details", async () => {
+    const model = makeCompletionsModel({
+      id: "openrouter/qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+    const output = createAssistantOutput(model);
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({
+          reasoning_details: [{ type: "reasoning.text", text: "First thought." }],
+        }),
+        makeCompletionsChunk({ content: "Interim." }),
+        makeCompletionsChunk({
+          reasoning_details: [{ type: "reasoning.text", text: "Second thought." }],
+        }),
+        makeCompletionsChunk({ content: "Final." }),
+        makeCompletionsChunk({}, "stop"),
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "First thought.",
+        thinkingSignature: "reasoning_details",
+      },
+      {
+        type: "text",
+        text: "Interim.",
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
+      },
+      {
+        type: "thinking",
+        thinking: "Second thought.",
+        thinkingSignature: "reasoning_details",
+      },
+      {
+        type: "text",
+        text: "Final.",
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+        ),
+      },
+    ]);
+  });
+
   it("keeps fallback thinking when reasoning_details only carries visible text", async () => {
     const model = makeCompletionsModel({
       id: "openrouter/minimax/minimax-m2.7",
@@ -247,15 +295,8 @@ describe("openai completions stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
+      usage: createZeroUsage(),
+      stopReason: "stop" as const,
       timestamp: Date.now(),
     };
 

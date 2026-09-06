@@ -44,16 +44,11 @@ describe("forced worker environment abandonment", () => {
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
     store.markWorkspaceResultPending(claim);
-    const binding = {
-      sessionId: claim.sessionId,
-      environmentId,
-      ownerEpoch: 2,
-      runId: claim.runId,
-    };
+    const binding = claim;
     store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
       store.beginWorkerSessionToolOperation({
-        binding,
+        claim: binding,
         toolName: "sessions_send",
         toolCallId: "forced-send",
         requestDigest: "forced-send-digest",
@@ -63,7 +58,7 @@ describe("forced worker environment abandonment", () => {
     const abandonment = forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
-      resolveWorkspacePath: async () => root,
+      resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     });
 
     await vi.waitFor(() => {
@@ -87,44 +82,47 @@ describe("forced worker environment abandonment", () => {
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("releases a pending worker claim when its workspace is already gone", async () => {
+  it("releases a pending reclaim claim when its workspace is already gone", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = store.claimTurn({
+    store.startDrain({
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    const claim = store.claimReclaimWorkspaceResult({
       ...REQUEST,
-      claimId: "forced-missing-workspace-claim",
-      runId: "forced-missing-workspace-run",
+      claimId: "reclaim-forced-missing-workspace",
+      runId: "reclaim-forced-missing-workspace",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.markWorkspaceResultPending(claim);
     store.recordStagedWorkspaceResult(
       claim,
-      "refs/openclaw/worker-results/forced-missing-workspace-claim",
+      "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
     );
-
-    await forceAbandonWorkerEnvironment({
-      placements: store,
-      environmentId,
-      resolveWorkspacePath: async () => {
-        throw new Error("session-owned managed worktree is missing");
-      },
+    const resolveWorkspace = vi.fn(async () => {
+      throw new Error("session-owned managed worktree is missing");
     });
+
+    await forceAbandonWorkerEnvironment({ placements: store, environmentId, resolveWorkspace });
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(resolveWorkspace).toHaveBeenCalledOnce();
   });
 
   it("deletes a stale journal without replaying it into the current workspace", async () => {
@@ -166,15 +164,15 @@ describe("forced worker environment abandonment", () => {
       ownerEpoch: draining.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    const resolveWorkspacePath = vi.fn(async () => root);
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
 
     await forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
-      resolveWorkspacePath,
+      resolveWorkspace,
     });
 
-    expect(resolveWorkspacePath).not.toHaveBeenCalled();
+    expect(resolveWorkspace).not.toHaveBeenCalled();
     expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
   });
@@ -205,7 +203,7 @@ describe("forced worker environment abandonment", () => {
     });
     const onCleanupError = vi.fn();
 
-    const resolveWorkspacePath = vi.fn(async () => {
+    const resolveWorkspace = vi.fn(async () => {
       throw new Error("workspace temporarily unavailable");
     });
 
@@ -213,14 +211,14 @@ describe("forced worker environment abandonment", () => {
       await forceAbandonWorkerEnvironment({
         placements: store,
         environmentId,
-        resolveWorkspacePath,
+        resolveWorkspace,
         onCleanupError,
       });
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
-    expect(resolveWorkspacePath).toHaveBeenCalledTimes(2);
+    expect(resolveWorkspace).toHaveBeenCalledTimes(2);
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "workspace temporarily unavailable" }),
     );
@@ -255,19 +253,19 @@ describe("forced worker environment abandonment", () => {
       throw new Error("journal temporarily unreadable");
     });
 
-    const resolveWorkspacePath = vi.fn(async () => root);
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await forceAbandonWorkerEnvironment({
         placements: store,
         environmentId,
-        resolveWorkspacePath,
+        resolveWorkspace,
         onCleanupError,
       });
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
-    expect(resolveWorkspacePath).not.toHaveBeenCalled();
+    expect(resolveWorkspace).not.toHaveBeenCalled();
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "journal temporarily unreadable" }),
     );

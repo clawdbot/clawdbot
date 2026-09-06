@@ -6,11 +6,17 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
+import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+export type SessionMcpConfigReload = {
+  cfg: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  reloadPlugins?: boolean;
+};
 
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
 export type BundleMcpToolRuntime = {
@@ -40,10 +46,7 @@ export type McpServerCatalog = {
   };
   requestTimeoutMs?: number;
   supportsParallelToolCalls?: boolean;
-  toolFilter?: {
-    include?: string[];
-    exclude?: string[];
-  };
+  toolFilter?: McpServerToolFilterConfig;
   deniedToolNames?: string[];
   codexApprovalMode?: McpCodexToolApprovalMode;
 };
@@ -59,6 +62,8 @@ export type McpCatalogTool = {
   fallbackDescription: string;
   uiResourceUri?: string;
   uiVisibility?: Array<"app" | "model">;
+  /** Listed by the server but excluded from OpenClaw's callable tool catalog. */
+  excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
   codexAnnotations?: McpCodexToolAnnotations;
 };
@@ -69,6 +74,8 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  /** Complete raw catalog used to project policy into native MCP clients. */
+  policyTools?: McpCatalogTool[];
   /** Listed tools hidden only by the session override, retained for read-only inventory. */
   sessionDeniedTools?: McpCatalogTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
@@ -80,6 +87,18 @@ export type RequesterMcpConnect = {
   authorizedServerNames: readonly string[];
   configFingerprint: string;
   createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+};
+
+type PreparedNativeMcpServerPolicy = {
+  serverName: string;
+  safeServerName: string;
+  allowedTools: string[];
+  deniedTools: string[];
+};
+
+/** Concrete raw/safe policy fact prepared once for native MCP adapters. */
+export type PreparedNativeMcpPolicy = {
+  servers: Record<string, PreparedNativeMcpServerPolicy>;
 };
 
 export type McpToolCatalogDiagnostic = {
@@ -125,6 +144,8 @@ export type SessionMcpRuntime = {
   lastUsedAt: number;
   activeLeases?: number;
   acquireLease?: () => () => void;
+  /** Terminal server outcome recorded at retirement, with no callable tools. */
+  readonly retiredCatalog?: McpToolCatalog;
   /** Lists tools if needed and may connect MCP transports. */
   getCatalog: () => Promise<McpToolCatalog>;
   /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
@@ -142,12 +163,26 @@ export type SessionMcpRuntime = {
   ) => Promise<ListResourceTemplatesResult>;
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
+  /** Joins cleanup already owned by this runtime, without closing live shared peers.
+   * Rejects when an earlier retirement or disposal could not confirm closure. */
+  joinCleanup?: () => Promise<void>;
   dispose: () => Promise<void>;
+};
+
+/** Acquisition owns a lease before any caller can observe the runtime. */
+export type SessionMcpRuntimeLease = {
+  runtime: SessionMcpRuntime;
+  releaseLease: () => void;
+};
+
+/** One requester call's lease and immutable catalog publication version. */
+export type RequesterScopedMcpRuntimeHandle = SessionMcpRuntimeLease & {
+  advertisedCatalogConfigFingerprint: string;
 };
 
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */
 export type SessionMcpRuntimeManager = {
-  getOrCreate: (params: {
+  acquire: (params: {
     sessionId: string;
     sessionKey?: string;
     workspaceDir: string;
@@ -159,12 +194,12 @@ export type SessionMcpRuntimeManager = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }) => Promise<SessionMcpRuntime>;
+  }) => Promise<SessionMcpRuntimeLease>;
   /**
    * Requester-scoped partition only — never creates static transports.
    * Undefined when no scoped servers, no senderId, or nothing resolves.
    */
-  getOrCreateRequesterScoped: (params: {
+  acquireRequesterScoped: (params: {
     sessionId: string;
     sessionKey?: string;
     workspaceDir: string;
@@ -175,12 +210,15 @@ export type SessionMcpRuntimeManager = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }) => Promise<SessionMcpRuntime | undefined>;
+  }) => Promise<RequesterScopedMcpRuntimeHandle | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread
    * harnesses so dynamic tool specs do not rotate per sender.
    */
-  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  rememberAdvertisedScopedCatalog: (
+    handle: RequesterScopedMcpRuntimeHandle,
+    catalog: McpToolCatalog,
+  ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
@@ -193,6 +231,7 @@ export type SessionMcpRuntimeManager = {
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;
   completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
+  reloadConfig: (params: SessionMcpConfigReload) => Promise<void>;
   disposeAll: () => Promise<void>;
   sweepIdleRuntimes: () => Promise<number>;
   listSessionIds: () => string[];

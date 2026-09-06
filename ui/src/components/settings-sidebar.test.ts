@@ -16,13 +16,14 @@ const saveIndicator = () => ({
   applying: false,
   applyDisabled: false,
   onRetry: vi.fn(),
+  onSave: vi.fn(),
   onReload: vi.fn(),
   onApply: vi.fn(),
 });
 
 const inactiveRefresh = {
   refreshRequired: false,
-  onRefresh: () => undefined,
+  onRefresh: async () => false,
 };
 
 beforeEach(async () => {
@@ -183,7 +184,9 @@ describe("settings sidebar search", () => {
       ),
     ].map((item) => item.textContent?.trim());
     expect(resultLabels).toEqual(["MCP", "Appearance", "Language"]);
-    expect(container.querySelector(".settings-sidebar__item--active")).toBeNull();
+    const active = container.querySelector(".settings-sidebar__item--active");
+    expect(active?.textContent).toContain("Appearance");
+    expect(active?.getAttribute("aria-current")).toBe("page");
 
     const language = container.querySelector<HTMLAnchorElement>(
       '.settings-sidebar__subitem[href="/settings/appearance?section=__appearance__#settings-language"]',
@@ -272,6 +275,42 @@ describe("settings sidebar search", () => {
       '.settings-sidebar__item[href="/settings/ai-agents"]',
     );
     expect(result?.textContent?.trim()).toBe("Agent Defaults");
+  });
+
+  it("excludes admin-only pages and config blocks from non-admin search", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        canAdmin: false,
+        searchQuery: "security",
+        searchBlockMatches: [
+          {
+            routeId: "security",
+            label: "Security policy",
+            hash: "#config-section-security",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector('a[href="/settings/security"]')).toBeNull();
+    expect(container.querySelector('a[href$="#config-section-security"]')).toBeNull();
+    expect(container.querySelector('a[href="/settings/approvals"]')).not.toBeNull();
   });
 
   it("keeps Memory search results on the canonical Settings tab path", () => {
@@ -378,7 +417,14 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
+    expect(labels()).toEqual([
+      "Gateway",
+      "Channels",
+      "Communications",
+      "Talk",
+      "Devices",
+      "Cloud workers",
+    ]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
@@ -395,6 +441,54 @@ describe("settings sidebar search", () => {
       .querySelector<HTMLAnchorElement>('.settings-sidebar__item[href="/settings/channels"]')
       ?.click();
     expect(onNavigate).toHaveBeenCalledWith("channels");
+  });
+
+  it("clears a focused search before Escape exits Settings", () => {
+    let searchQuery = "gateway";
+    const onExit = vi.fn();
+    const rerender = () => {
+      render(
+        renderSettingsSidebar({
+          basePath: "",
+          activeRouteId: "appearance",
+          offline: false,
+          lastError: null,
+          gatewayVersion: "",
+          updateAvailable: null,
+          updateBusy: false,
+          onUpdate: vi.fn(),
+          ...inactiveRefresh,
+          searchQuery,
+          onExit,
+          onRetryConnect: vi.fn(),
+          onNavigate: vi.fn(),
+          onSearchQueryChange: (nextQuery) => {
+            searchQuery = nextQuery;
+            rerender();
+          },
+          preloadTimers: new Map(),
+          saveIndicator: saveIndicator(),
+        }),
+        container,
+      );
+    };
+
+    rerender();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input");
+    expect(input).not.toBeNull();
+    input?.focus();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(searchQuery).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
   });
 
   it("renders refreshed settings route titles from the active locale", async () => {
@@ -437,69 +531,22 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("keeps the refresh card above the settings footer and forwards its action", async () => {
-    const onUpdate = vi.fn();
-    const onRefresh = vi.fn();
-    const onNavigate = vi.fn();
-    render(
-      renderSettingsSidebar({
-        basePath: "",
-        activeRouteId: "appearance",
-        offline: false,
-        lastError: null,
-        gatewayVersion: "1.0.0",
-        updateAvailable: {
-          currentVersion: "1.0.0",
-          latestVersion: "2.0.0",
-          channel: "stable",
-        },
-        updateBusy: false,
-        canUpdate: true,
-        onUpdate,
-        refreshRequired: true,
-        onRefresh,
-        searchQuery: "",
-        onExit: vi.fn(),
-        onRetryConnect: vi.fn(),
-        onNavigate,
-        onSearchQueryChange: vi.fn(),
-        preloadTimers: new Map(),
-        saveIndicator: saveIndicator(),
-      }),
-      container,
-    );
-
-    const card = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-update-card",
-    );
-    await card?.updateComplete;
-    expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    expect(onUpdate).not.toHaveBeenCalled();
-
-    const buildChip = container.querySelector<
-      HTMLElement & {
-        gatewayVersion: string | null;
-        variant: string;
-        updateComplete: Promise<boolean>;
-      }
-    >("openclaw-sidebar-build-chip");
-    await buildChip?.updateComplete;
-    expect(buildChip?.gatewayVersion).toBe("1.0.0");
-    expect(buildChip?.variant).toBe("settings");
-    buildChip?.querySelector<HTMLAnchorElement>(".sidebar-footer-build")?.click();
-    expect(onNavigate).toHaveBeenCalledWith("about");
-  });
-
   it("shows the offline retry action without an online status", () => {
     const onRetryConnect = vi.fn();
-    const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>
+    const renderSidebar = (
+      offline: boolean,
+      lastError: string | null,
+      queuedOutboxCount = 0,
+      restartPending = false,
+      suspensionPhase?: Parameters<typeof renderSettingsSidebar>[0]["suspensionPhase"],
+    ) =>
       render(
         renderSettingsSidebar({
           basePath: "",
           activeRouteId: "appearance",
           offline,
+          restartPending,
+          suspensionPhase,
           queuedOutboxCount,
           lastError,
           gatewayVersion: "1.0.0",
@@ -522,7 +569,14 @@ describe("settings sidebar search", () => {
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
     expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
-    renderSidebar(true, "connection refused?token=settings-secret", 3);
+    renderSidebar(false, null, 0, false, "prepared");
+    expect(container.querySelector(".sidebar-footer-bar__status")?.textContent).toBe("Suspended");
+    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
+    renderSidebar(false, null, 0, false, "accepting");
+    expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
+
+    renderSidebar(true, "connection refused?token=settings-secret", 3, false, "prepared");
     expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.hasAttribute("title")).toBe(false);
@@ -533,5 +587,11 @@ describe("settings sidebar search", () => {
     expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     button?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
+
+    renderSidebar(true, null, 3, true, "prepared");
+    expect(container.querySelector(".sidebar-footer-bar__status--restarting")?.textContent).toBe(
+      "Restarting…",
+    );
+    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
   });
 });

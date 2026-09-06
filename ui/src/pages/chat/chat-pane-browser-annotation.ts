@@ -40,7 +40,11 @@ export function receiveBrowserAnnotation(
     (event as BrowserAnnotationEvent).rejection = "limit";
     return false;
   }
-  const attachment = chatAttachmentFromDataUrl(detail.dataUrl, detail.fileName || "annotation");
+  const attachment = chatAttachmentFromDataUrl(
+    detail.dataUrl,
+    detail.fileName || "annotation",
+    state.hello?.policy?.attachments,
+  );
   if (!attachment) {
     return false;
   }

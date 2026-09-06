@@ -94,6 +94,8 @@ describe("registerCodexSessionCli", () => {
           [
             "codex",
             "sessions",
+            "--agent",
+            "JarVis",
             "--search",
             "  openclaw  ",
             "--host",
@@ -123,6 +125,7 @@ describe("registerCodexSessionCli", () => {
           json: true,
         },
         {
+          agentId: "jarvis",
           catalogId: "codex",
           search: "openclaw",
           limitPerHost: 25,
@@ -270,6 +273,10 @@ describe("registerCodexSessionCli", () => {
             "codex",
             "continue",
             "thread-1",
+            "--agent",
+            "JarVis",
+            "--host",
+            "gateway:local:source-a",
             "--url",
             "ws://gateway.test",
             "--token",
@@ -289,7 +296,12 @@ describe("registerCodexSessionCli", () => {
           timeout: "4321",
           json: false,
         },
-        { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+        {
+          agentId: "jarvis",
+          catalogId: "codex",
+          hostId: "gateway:local:source-a",
+          threadId: "thread-1",
+        },
         { mode: "cli", scopes: ["operator.write"] },
       );
       expect(output).toBe("OpenClaw session: harness:codex:supervision:branch\n");
@@ -351,6 +363,10 @@ describe("registerCodexSessionCli", () => {
             "codex",
             "archive",
             "thread-1",
+            "--agent",
+            "JarVis",
+            "--host",
+            "gateway:local:source-b",
             "--confirm-no-other-runner",
             "--json",
             "--url",
@@ -364,8 +380,9 @@ describe("registerCodexSessionCli", () => {
         "sessions.catalog.archive",
         { url: "ws://gateway.test", timeout: "30000", json: true },
         {
+          agentId: "jarvis",
           catalogId: "codex",
-          hostId: "gateway:local",
+          hostId: "gateway:local:source-b",
           threadId: "thread-1",
           confirmNoOtherRunner: true,
         },

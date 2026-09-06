@@ -1,5 +1,10 @@
 // Runway tests cover video generation provider plugin behavior.
 import {
+  capturePluginRegistration,
+  createRuntimeEnv,
+  resolveProviderPluginChoice,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
@@ -82,6 +87,49 @@ function streamedRawResponse(text: string): Response {
 }
 
 describe("runway video generation provider", () => {
+  it("registers media-only API-key onboarding alongside video generation", async () => {
+    const { default: plugin } = await import("./index.js");
+    const captured = capturePluginRegistration(plugin);
+
+    expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual(["runway"]);
+    expect(captured.modelCatalogProviders).toEqual([]);
+    expect(captured.providers).toHaveLength(1);
+    expect(captured.providers[0]).toMatchObject({
+      id: "runway",
+      docsPath: "/providers/runway",
+      envVars: ["RUNWAYML_API_SECRET", "RUNWAY_API_KEY"],
+    });
+
+    const choice = resolveProviderPluginChoice({
+      providers: captured.providers,
+      choice: "runway-api-key",
+    });
+    expect(choice?.method.id).toBe("api-key");
+    expect(choice?.method.starterModel).toBeUndefined();
+    expect(choice?.wizard?.onboardingScopes).toEqual(["image-generation"]);
+    if (!choice?.method.validateNonInteractive) {
+      throw new Error("expected Runway non-interactive API-key validation");
+    }
+
+    const resolveApiKey = vi.fn(async () => ({ key: "runway-test-key", source: "flag" as const }));
+    expect(
+      await choice.method.validateNonInteractive({
+        authChoice: "runway-api-key",
+        config: {},
+        baseConfig: {},
+        opts: { runwayApiKey: "runway-test-key" },
+        runtime: createRuntimeEnv(),
+        resolveApiKey,
+      }),
+    ).toBe(true);
+    expect(resolveApiKey).toHaveBeenCalledWith({
+      provider: "runway",
+      flagValue: "runway-test-key",
+      flagName: "--runway-api-key",
+      envVar: "RUNWAYML_API_SECRET",
+    });
+  });
+
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
   });

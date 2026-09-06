@@ -38,12 +38,16 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
   options: {
     defaultAgentId: string;
     env?: NodeJS.ProcessEnv;
+    registeredDatabases?: readonly { agentId: string; path: string }[];
     onDiagnostic?: (diagnostic: SessionStoreTargetCollisionDiagnostic) => void;
+    onSharedTarget?: (selected: SessionStoreTarget, sharedStorePaths: ReadonlySet<string>) => void;
+    onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
 ): SessionStoreTarget[] {
   // Ownership must not fall back while the authoritative registry is unreadable:
   // doing so can project the same physical DB under a different configured default.
-  const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
+  const registeredDatabases =
+    options.registeredDatabases ?? listOpenClawRegisteredAgentDatabases({ env: options.env });
   const grouped = new Map<
     string,
     Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string; shared: boolean }>
@@ -63,9 +67,6 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     [...groups.keys()].find((candidate) => isSameDatabasePath(candidate, pathname)) ??
     path.resolve(pathname);
   for (const target of targets) {
-    const resolvedUnsuffixedPath = path.resolve(
-      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
-    );
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
       defaultAgentId: options.defaultAgentId,
@@ -81,6 +82,13 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
     });
     grouped.set(sqlitePath, group);
+    // Exact shared locators do not allocate legacy per-agent suffixes.
+    if (resolved.shared) {
+      continue;
+    }
+    const resolvedUnsuffixedPath = path.resolve(
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
+    );
     const unsuffixedPath = resolvePhysicalGroupKey(logicalGroups, resolvedUnsuffixedPath);
     const logicalGroup = logicalGroups.get(unsuffixedPath) ?? [];
     logicalGroup.push({
@@ -126,14 +134,19 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     const byAgentId = new Map(
       group.map(({ target }) => [normalizeAgentId(target.agentId), target] as const),
     );
-    const registeredOwners = [
-      ...new Set(
-        registeredDatabases
-          .filter((entry) => isSameDatabasePath(entry.path, sqlitePath))
-          .map((entry) => normalizeAgentId(entry.agentId)),
-      ),
-    ];
     const pathOwners = [...new Set(group.flatMap((entry) => entry.databaseOwnerAgentId ?? []))];
+    // A unique path owner outranks registry owners, so identity matching cannot change the result.
+    // Registry loading above still preserves unreadable-registry semantics.
+    const registeredOwners =
+      pathOwners.length === 1
+        ? []
+        : [
+            ...new Set(
+              registeredDatabases
+                .filter((entry) => isSameDatabasePath(entry.path, sqlitePath))
+                .map((entry) => normalizeAgentId(entry.agentId)),
+            ),
+          ];
     const collision = byAgentId.size > 1;
     if (pathOwners.length !== 1 && registeredOwners.length > 1) {
       const diagnostic: SessionStoreTargetCollisionDiagnostic = {
@@ -170,6 +183,17 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         : undefined);
     if (selected) {
       deduped.push(selected);
+      options.onResolvedTarget?.(selected, { agentId: ownerAgentId, storePath: sqlitePath });
+      if (options.onSharedTarget) {
+        // A shared alias can select a per-agent registry spelling. Preserve its
+        // original shared claims so consumers need no second ownership scan.
+        const sharedStorePaths = new Set(
+          group.filter((entry) => entry.shared).map((entry) => entry.target.storePath),
+        );
+        if (sharedStorePaths.size > 0) {
+          options.onSharedTarget(selected, sharedStorePaths);
+        }
+      }
     }
     const selectedAgentId = selected ? normalizeAgentId(selected.agentId) : ownerAgentId;
     const ignoredAgentIds = [...byAgentId.keys()].filter((agentId) => agentId !== selectedAgentId);

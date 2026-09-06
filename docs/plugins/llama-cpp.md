@@ -1,56 +1,246 @@
 ---
-summary: "Run local GGUF text inference and memory embeddings in OpenClaw with llama.cpp"
+summary: "Run GGUF chat with managed or existing llama.cpp servers and managed local embeddings"
 read_when:
-  - You want local text inference without an API key or model server
+  - You want OpenClaw to install and manage a local llama.cpp server
+  - You want a local model recommendation for your Gateway hardware
+  - You want OpenClaw to connect to an existing llama-server
   - You want memory search embeddings from a local GGUF model
   - You are configuring memory.search.provider = "local"
-  - You need the OpenClaw plugin that owns the node-llama-cpp runtime
 title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
 ---
 
-`llama-cpp` is the official external provider plugin for in-process local GGUF
-text inference and embeddings. It registers text provider `llama-cpp`,
-embedding provider `local`, and owns the `node-llama-cpp` native runtime.
-
-Install it before using either local inference or local memory embeddings:
+The `llama-cpp` plugin provides one `llama-cpp` model provider. OpenClaw can
+manage a local `llama-server` or connect to one that you operate. Both choices
+use `llama-cpp/<model>` references and the OpenAI-compatible transport.
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
+openclaw onboard
 ```
 
-The main `openclaw` npm package does not include `node-llama-cpp`. Keeping the
-native dependency in this plugin prevents normal OpenClaw npm updates from
-deleting a manually installed runtime inside the OpenClaw package directory.
+## Choose server ownership
 
-## Local text inference
+| Setup choice          | Process owner                 | Local embeddings |
+| --------------------- | ----------------------------- | ---------------- |
+| Managed local server  | OpenClaw                      | Yes              |
+| Existing llama-server | You or an external supervisor | No               |
 
-Choose **llama.cpp** during interactive onboarding. OpenClaw installs the
-official provider plugin, then asks before downloading the default model:
+`models.providers.llama-cpp.localService` is the ownership discriminator. If
+it exists, OpenClaw manages the process. Without it, `baseUrl` identifies an
+existing endpoint. Switching choices rewrites ownership-specific state on the
+same provider; it never creates another provider namespace.
 
-`hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf`
+## Managed local server
 
-The Gemma 4 E4B IT Q4_K_M file is about 5.0 GB. OpenClaw offers this default
-only on machines with at least 16 GiB of RAM, leaving room for model weights,
-context, and Gateway overhead. The default context is automatically sized with
-an 8,192-token cap. Configure a larger context only when the machine has enough
-memory.
+Choose **Managed local server** when OpenClaw should install, start, and stop
+the server. Setup reads the **Gateway host's** hardware and recommends a model
+from its available memory, GPU capability, and free disk space. A browser
+connected to a remote Gateway installs and runs the model on that Gateway,
+not on the browser's computer.
 
-The onboarding discovery check is read-only. It offers llama.cpp automatically
-only when the default or configured GGUF file is already in the model cache; it
-never downloads during discovery. Ollama and LM Studio remain separate local
-service choices and keep their own discovery flows. Manually choosing llama.cpp
-is the path that installs the runtime, prompts for the default model download,
-and verifies a real model reply before marking setup complete.
+Review the named host, execution backend, model, and download size, then confirm
+the download. Setup verifies pinned model files and the llama.cpp build,
+prepares a loopback endpoint, and checks inference before saving the new
+default. Guided activation also asks the model to read a temporary file through
+an OpenClaw tool and return its contents. The tool check uses an isolated
+workspace without your agent's bootstrap instructions. A plain text reply alone
+does not pass that check. Each verification check has a 90-second deadline;
+changing `agents.defaults.timeoutSeconds` does not extend setup verification.
+Failures identify whether the response check or tool-use check timed out.
 
-The provider uses the GGUF model's embedded chat template and native
-node-llama-cpp function calling. Text streams token by token. Tool calls return
-to OpenClaw for execution rather than running inside node-llama-cpp.
+Managed local models automatically use structured [Tool Search](/tools/tool-search)
+unless you have explicitly configured it. Optional capabilities remain available;
+their schemas load as needed, reducing the input the model must process before
+replying. Setup does not enable lean mode. Normal chats still
+include your agent's instructions. On CPU-only hosts, the first reply can take
+several minutes even after setup verification succeeds.
 
-### Use another GGUF model
+### Model recommendations
 
-Add a model to `models.providers.llama-cpp`. Put a local path or full `hf:` file
-URI in `params.modelPath`:
+Setup prefers these text-only recipes as memory permits. Each uses a 65,536-token
+context and supports tools:
+
+| Model                   | Chat download | Minimum host memory         |
+| ----------------------- | ------------- | --------------------------- |
+| Qwen3.5 4B Q4_K_M       | About 2.7 GB  | 8 GiB                       |
+| Qwen3.5 9B Q4_K_M       | About 5.7 GB  | 16 GiB                      |
+| Gemma 4 12B IT Q4_K_M   | About 7.1 GB  | 24 GiB and GPU acceleration |
+| Muse Glimmer 30B Q4_K_M | About 16.8 GB | 32 GiB and GPU acceleration |
+| Qwen3.8 27B UD-Q4_K_M   | About 16.5 GB | 32 GiB and GPU acceleration |
+
+Qwen3.8 is the first recommendation when its memory budget fits. Muse has a
+smaller context-cache budget and can fit a 24 GiB NVIDIA card where Qwen3.8
+does not. CPU recommendations stop at Qwen3.5 9B. Gemma 4 E2B, E4B, and 26B A4B
+remain in the catalog for existing routes and cached downloads. The recommendation
+order is a product default, not a claim that one model wins every task.
+
+These are selection floors, not guaranteed fit or speed. Setup reserves memory
+for the operating system, context cache, runtime, and default embedding model. It accounts
+for current memory pressure and container memory limits, and may recommend a
+smaller model when RAM, GPU memory, or disk space is limited. Separate NVIDIA
+cards are not added together to assume a model will fit. Existing Gemma 4 E4B
+configurations and cached custom models remain supported.
+
+The chat download also includes your configured local embedding model, or
+EmbeddingGemma by default (about 0.3 GB). Leave additional disk space for the
+runtime and download staging; setup checks this before offering a new model.
+When the cache and runtime use independent volumes, setup checks each volume's
+free space separately. Shared storage pools and volumes whose independence cannot
+be established use a combined reserve.
+Custom embedding models may need more memory and disk space than these budgets.
+
+### Execution backends
+
+| Gateway host                                         | Managed backend           |
+| ---------------------------------------------------- | ------------------------- |
+| macOS on Apple silicon                               | Metal with unified memory |
+| macOS on Intel                                       | CPU                       |
+| Linux x64 or arm64                                   | CPU                       |
+| Windows x64 with a supported NVIDIA GPU              | CUDA 12.4                 |
+| Windows x64 without supported CUDA, or Windows arm64 | CPU                       |
+
+The verified Windows CUDA build requires NVIDIA driver 551.78 or newer and
+compute capability 5.0 or newer. Setup checks the driver and installed runtime's
+device discovery. When an NVIDIA GPU has no compatible managed CUDA build,
+setup explains the limitation and names CPU execution in the confirmation.
+For other acceleration backends, run a compatible server yourself and choose
+**Existing llama-server**.
+
+If no recommendation fits, setup explains whether to free memory, free disk
+space, or fix cache-directory permissions. Cancelling or failing guided
+verification leaves the previous default model selected. A setup candidate has
+its own server preset, so verification does not rewrite an existing managed
+server's preset. Downloaded files may remain cached for a retry. Setup verifies and reuses cached
+recommendations, and charges disk space only for missing model and runtime files.
+
+Managed router presets retain configured chat models in deterministic order and
+remove model sections outside that inventory. Chat and embedding preparation
+update their owned settings while preserving the header, `[*]` defaults,
+comments, and additional options on retained models. Embedding-only setup uses
+a fresh preset.
+
+### Set up only local embeddings
+
+When `memory.search.provider` is `local` and chat setup cannot proceed or is
+declined, OpenClaw offers a separate embedding-only setup. It installs only the
+managed server and the configured embedding model after explicit consent. It
+does not add a llama.cpp chat model or change the current chat model. Setup discovery remains
+read-only and never installs or downloads anything.
+
+If the llama.cpp provider has any configured chat models, embedding-only setup
+leaves it unchanged. Move any chat routes to another provider and remove those
+model entries before retrying. An existing external llama.cpp server config
+must also be removed before OpenClaw can manage embeddings.
+
+### Use another managed GGUF
+
+Add a model under `models.providers.llama-cpp.models`, select its
+`llama-cpp/<id>` reference, and run managed setup again:
+
+```json5
+{
+  id: "my-local-model",
+  name: "My local GGUF",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 65536,
+  maxTokens: 2048,
+  params: {
+    modelPath: "~/Models/my-model.Q4_K_M.gguf",
+    contextSize: 65536,
+  },
+  compat: { supportsTools: true },
+}
+```
+
+`modelPath` accepts local paths, cache-relative filenames, full `hf:` file
+URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
+cache is `~/.openclaw/models/llama.cpp`; a configured `modelCacheDir` remains
+authoritative for managed setup.
+
+## Existing llama-server
+
+Choose **Existing llama-server** when another terminal, container, service
+manager, or machine owns the process.
+
+<Steps>
+  <Step title="Start llama-server">
+    Give the model a stable alias:
+
+    ```bash
+    llama-server \
+      --model /path/to/model.gguf \
+      --alias my-model \
+      --host 127.0.0.1 \
+      --port 8080
+    ```
+
+  </Step>
+  <Step title="Configure OpenClaw">
+    Run `openclaw onboard`, choose **Existing llama-server**, and enter the
+    endpoint. Enable API-key authentication only when the server or proxy
+    requires it.
+
+  </Step>
+  <Step title="Select the model">
+    ```bash
+    openclaw models list --provider llama-cpp
+    openclaw models set llama-cpp/my-model
+    ```
+  </Step>
+</Steps>
+
+OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
+`/props`. Router property probes use `autoload=false`; discovery never loads,
+wakes, unloads, downloads, or reloads models. Explicit configured model rows
+remain authoritative over discovered rows with the same ID.
+
+Refreshing a configured external server reports authentication rejection or
+unavailability when discovery fails. Previously discovered models remain visible
+only while their endpoint and credentials are unchanged. A successful empty list
+removes discovered rows; explicit configured models remain. Restore the server or
+correct its credentials, then refresh again to recover the live inventory.
+
+### Authentication and endpoint replacement
+
+Existing endpoints support no auth, API keys, SecretRefs, auth profiles, and
+explicit authorization headers. An explicit `Authorization` header wins over
+ambient API-key discovery unless setup receives a new key. Choosing no API key
+removes the default llama.cpp auth profile and stale inline key fields while
+preserving an explicit `Authorization` header and unrelated headers. Endpoint
+URLs containing a username or password are rejected.
+
+```bash
+export LLAMA_SERVER_API_KEY="<API_KEY>"
+openclaw onboard
+```
+
+When the endpoint changes, setup does not send the old endpoint's environment,
+profile, configured key, or header credentials to the replacement. Switching
+from managed mode also removes `localService`, managed model/cache parameters,
+and the managed request timeout before discovery.
+
+For non-interactive setup:
+
+```bash
+openclaw onboard \
+  --non-interactive \
+  --accept-risk \
+  --auth-choice llama-cpp-existing-server \
+  --custom-base-url http://127.0.0.1:8080/v1 \
+  --custom-model-id my-model
+```
+
+Use `--llama-server-api-key <API_KEY>` when a replacement endpoint requires a
+new credential. `LLAMA_SERVER_API_KEY` remains available for initial setup and
+unchanged endpoints.
+
+### Manual configuration
+
+Guided setup is recommended because it verifies discovery. The minimal manual
+shape is:
 
 ```json5
 {
@@ -58,45 +248,29 @@ URI in `params.modelPath`:
     mode: "merge",
     providers: {
       "llama-cpp": {
-        baseUrl: "local://llama-cpp",
+        baseUrl: "http://127.0.0.1:8080/v1",
         api: "openai-completions",
-        params: {
-          modelCacheDir: "~/.node-llama-cpp/models",
-        },
-        models: [
-          {
-            id: "my-local-model",
-            name: "My local GGUF",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 8192,
-            maxTokens: 2048,
-            params: {
-              modelPath: "~/Models/my-model.Q4_K_M.gguf",
-              contextSize: 8192,
-            },
-            compat: { supportsTools: true },
-          },
-        ],
+        request: { allowPrivateNetwork: true },
+        models: [],
       },
-    },
-  },
-  agents: {
-    defaults: {
-      model: { primary: "llama-cpp/my-local-model" },
     },
   },
 }
 ```
 
-Inference never downloads a missing model implicitly. For a custom `hf:` URI,
-download the GGUF into `modelCacheDir` first. Discovery uses node-llama-cpp's
-own read-only cache resolver, including repository, branch, and split-file naming.
+Custom provider IDs may also point at llama-server through the generic
+OpenAI-compatible path. They remain custom providers and should declare the
+`llamacpp` tool-schema profile explicitly; see [custom provider capability
+declarations](/gateway/config-tools#custom-provider-capability-declarations).
 
-## Memory embedding configuration
+## Requests and local embeddings
 
-Set `memory.search.provider` to `local`:
+Both ownership choices use OpenClaw's normal chat, image, streaming, and tool
+transport. The llama.cpp compatibility family cleans unsupported tool-schema
+constraints, maps thinking-off requests to the Qwen chat-template flag, and
+adapts JSON Schema requests for older llama-server builds.
+
+Local memory embeddings require managed mode:
 
 ```json5
 {
@@ -111,43 +285,28 @@ Set `memory.search.provider` to `local`:
 }
 ```
 
-`local.modelPath` defaults to the `hf:` URI shown above (`embeddinggemma-300m-qat-Q8_0.gguf`).
-Point it at a different `hf:` URI or a local `.gguf` file to use another
-model. Cache placement and embedding context sizing are managed by the
-llama.cpp provider; `memory.search.local` exposes only `modelPath`.
-
-## Native runtime
-
-Use Node 24 for the smoothest native install path. Source checkouts using
-pnpm may need to approve and rebuild the native dependency:
-
-```bash
-pnpm approve-builds
-pnpm rebuild node-llama-cpp
-```
-
-## Memory runtime diagnostics
-
-Run `openclaw memory status --deep` after the provider has loaded to inspect
-the selected backend and build, device names, GPU offloaded layers, requested
-context size, and the last observed VRAM or unified-memory snapshot. The VRAM
-values include an observation timestamp because passive status reads do not
-reload the model or poll the device.
-
-The same last-known facts can appear in `openclaw doctor` when the running
-Gateway has already used the local provider. A normal status or doctor command
-does not load a model just to collect diagnostics.
+The plugin preserves the historical `local` embedding provider and index
+identity. Run `openclaw memory status --index` after intentionally changing the
+embedding model.
 
 ## Troubleshooting
 
-If `node-llama-cpp` is missing or fails to load, OpenClaw reports the failure
-with:
+- Managed setup: run `openclaw doctor` and `openclaw memory status --deep`.
+- Existing server: inspect `/health`, `/models`, and `/props`; HTTP 503 means
+  the model is still loading.
+- Missing tools: verify both tool capability flags in `/props` and use a
+  tool-capable Jinja chat template.
+- Managed Linux builds require glibc 2.34 on x64 or 2.38 on arm64. Windows
+  builds require the Microsoft Visual C++ 2015-2022 Redistributable.
+- A model that replies to a simple prompt but fails the setup tool check is
+  not selected as the default. Retry after reviewing its tool support or choose
+  another model.
+- Platforms without a verified managed build should use an existing server.
 
-1. Install the plugin: `openclaw plugins install @openclaw/llama-cpp-provider`.
-2. Use Node 24 for native installs/updates.
-3. From a pnpm source checkout: `pnpm approve-builds`, then `pnpm rebuild node-llama-cpp`.
+OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 
-For local inference without an in-process native dependency, use the Ollama or
-LM Studio provider instead. For lower-friction local embeddings, set
-`memory.search.provider` to a remote embedding provider such as `lmstudio`,
-`ollama`, `openai`, or `voyage` instead.
+## Related
+
+- [Local model services](/gateway/local-model-services)
+- [Model providers](/concepts/model-providers)
+- [LM Studio](/providers/lmstudio)

@@ -2,34 +2,27 @@
 
 OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation.
 
-### Current App Surface
+### App features
 
-- [x] New 4-step onboarding flow
-- [x] Connect tab with `Setup Code` + `Manual` modes
-- [x] Encrypted persistence for gateway setup/auth state
-- [x] Chat UI restyled
-- [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
-- [x] QR code scanning in onboarding
-- [x] Performance improvements
-- [x] Streaming support in chat UI
-- [x] Dedicated per-device Android chat session created/adopted on connect without resetting history
-- [x] Request camera/location and other permissions in onboarding/settings flow
-- [x] Push notifications for gateway/chat status updates
-- [x] Security hardening (biometric lock, token handling, safer defaults)
-- [x] Authenticated background presence beacons
-- [x] Voice tab full functionality
-- [x] Foreground on-device Voice Wake with Gateway-synced wake words
-- [x] Screen tab full functionality
-- [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
-- [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
-- [x] Per-app language selection for translated resources follows Android system settings and persistence
-- [x] Cron job settings support details, run history, run now, edits, enable/disable, and deletion with admin-scoped Gateway access
-- [x] Wear OS companion proxies sessions, transcripts, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch
+- Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
+- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The compact composer keeps one control row; tap the model name for permissions and usage details, or the effort dial for Fast mode. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
+- Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
+- Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
+- Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
+- Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
+- Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
+- Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
+- View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
+- Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
+- Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
 ## Open in Android Studio
 
-- Run `pnpm install` from the repository root so native Canvas resources can be generated.
 - Open the folder `apps/android`.
+
+## Session colors
+
+Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
 ## Wear OS companion
 
@@ -44,7 +37,12 @@ cd apps/android
 
 ## Build / Run
 
+Install the repository's Node.js and pnpm dependencies before building. Gradle
+builds the shared Mermaid renderer automatically and packages its local assets
+with the app; no CDN or Gateway renderer is needed.
+
 ```bash
+pnpm install
 cd apps/android
 ./gradlew :app:assemblePlayDebug
 ./gradlew :app:installPlayDebug
@@ -62,19 +60,33 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
+## Mermaid diagrams
+
+Chat renders completed `mermaid` code blocks inline. Tap a diagram for a
+full-screen view with pinch-to-zoom and panning. The corner menu switches to
+source or retries a temporary failure, and the copy button copies the original
+Mermaid source. Incomplete streaming blocks remain readable code.
+
+The renderer shares its pinned Mermaid version, sandbox, and SVG sanitizer with
+the Control UI. Android keeps bounded bitmap previews in memory and retains the
+sanitized SVG for zooming. Math and diagrams share the render queue and lifecycle
+owner, with separate lazy WebViews and resource limits. See
+[`packages/mermaid-renderer`](../../packages/mermaid-renderer/README.md) for the
+shared runtime and build contract.
+
 Repository-backed debug Gradle invocations, including `pnpm android:run` and
 `pnpm android:screenshots`, stamp the full checkout commit and capture one UTC
 build timestamp shared by every debug variant in that invocation. Release
 tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
-Android release archives use the pinned version in `apps/android/version.json`. Update it with:
+Prepare and finalize Android release metadata through the shared mobile cutter:
 
 ```bash
-pnpm android:version
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm android:version:check
-pnpm android:version:pin -- --from-gateway
-pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
 ```
 
 Release-owner signing sync:
@@ -164,7 +176,7 @@ cd apps/android
 ./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
-`gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
+Set `ANDROID_HOME` to your installed Android SDK, or set `sdk.dir` in the local `apps/android/local.properties` file. For Homebrew's command-line tools, the SDK may be at `/opt/homebrew/share/android-commandlinetools`.
 
 ## Macrobenchmark (Startup + Frame Timing)
 
@@ -202,15 +214,15 @@ Hotspot script behavior:
 
 ## Run on a Real Android Phone (USB)
 
-1) On phone, enable **Developer options** + **USB debugging**.
-2) Connect by USB and accept the debugging trust prompt on phone.
-3) Verify ADB can see the device:
+1. On phone, enable **Developer options** + **USB debugging**.
+2. Connect by USB and accept the debugging trust prompt on phone.
+3. Verify ADB can see the device:
 
 ```bash
 adb devices -l
 ```
 
-4) Install + launch debug build:
+4. Install + launch debug build:
 
 ```bash
 pnpm android:install
@@ -235,11 +247,11 @@ Terminal B (USB tunnel):
 adb reverse tcp:18789 tcp:18789
 ```
 
-Then in app **Connect → Manual**:
+Then open **Settings → Gateway → Manual Gateway** (or **Set up manually** during first-run setup):
 
 - Host: `127.0.0.1`
 - Port: `18789`
-- TLS: off
+- Connection security: **Unencrypted**
 
 ## Hot Reload / Fast Iteration
 
@@ -248,22 +260,23 @@ This app is native Kotlin + Jetpack Compose.
 - For Compose UI edits: use Android Studio **Live Edit** on a debug build (works on physical devices; project `minSdk=31` already meets API requirement).
 - For many non-structural code/resource changes: use Android Studio **Apply Changes**.
 - For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
-- Canvas web content already supports live reload when loaded from Gateway `__openclaw__/canvas/` (see `docs/platforms/android.md`).
 
 ## Connect / Pair
 
-1) Start the gateway (on your main machine):
+1. Start the gateway (on your main machine):
 
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-2) In the Android app:
+2. In the Android app:
 
-- Open the **Connect** tab.
-- Use **Setup Code** or **Manual** mode to connect.
+- Follow the first-run connection screen, or open **Settings → Gateway** to change a saved connection.
+- Scan a QR code, paste a setup code, or enter the Gateway manually.
 
-3) Approve pairing (on the gateway machine):
+Gateway credentials and setup codes are masked and accept paste. The app requests password input with autocorrection disabled; this does not guarantee how a keyboard stores or learns from input.
+
+3. Approve pairing (on the gateway machine):
 
 ```bash
 openclaw devices list
@@ -335,15 +348,12 @@ This suite assumes setup is already done manually. It does **not** install/run/p
 
 Pre-req checklist:
 
-1) Gateway is running and reachable from the Android app.
-2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
-3) App stays unlocked and in foreground for the whole run.
-4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
-5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
-6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device for remote Canvas checks (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
-8) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node uses its bundled app-owned A2UI page for message application.
+1. Gateway is running and reachable from the Android app.
+2. Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
+3. App stays unlocked and in foreground for the whole run.
+4. Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
+5. No interactive system dialogs should be pending before test start.
+6. Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
 
 ```bash
 openclaw devices list
@@ -377,10 +387,6 @@ Common failure quick-fixes:
 
 - `pairing required` before tests start:
   - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
-- `A2UI host not reachable` / `A2UI_HOST_UNAVAILABLE`:
-  - keep the app foregrounded on the **Screen** tab and rerun. A2UI commands use the bundled app-owned A2UI page; the Gateway Canvas host is still needed for remote Canvas checks, but not for A2UI message application.
-- `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
-  - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 
 ## Contributions
 

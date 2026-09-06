@@ -8,17 +8,14 @@ import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "../harness/selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "../harness/support.js";
+import { projectPreparedModelProvider } from "../harness/support.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "../model-auth.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import {
   providerUsesCredentialScopedModelMetadata,
@@ -32,8 +29,31 @@ import {
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   resolveCompactionHarnessRuntime,
+  resolveCompactionTargetRuntime,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+
+export function projectCodexHostTranscriptBytePreflightConfig(
+  config: OpenClawConfig | undefined,
+  active: boolean,
+): OpenClawConfig | undefined {
+  const compaction = config?.agents?.defaults?.compaction;
+  if (
+    !active ||
+    !compaction ||
+    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+  ) {
+    return config;
+  }
+  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
+    },
+  };
+}
 
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionRuntimeSelection(params: {
@@ -43,18 +63,22 @@ export function resolveCompactionRuntimeSelection(params: {
   authProfileId?: string | null;
   modelSelectionLocked?: boolean;
   sandboxSessionKey?: string | null;
+  sandboxAgentId?: string;
   sessionKey?: string | null;
   agentId?: string;
   boundHarnessRuntime?: string | null;
   preparedRuntimePlan?: AgentRuntimePlan;
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
   selectedHarnessRuntime?: string;
+  allowPluginNormalization?: boolean;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }) {
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey ?? undefined;
   const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+    params.sandboxAgentId ??
+    (params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
-      : params.agentId;
+      : params.agentId);
   const policyTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
@@ -63,6 +87,8 @@ export function resolveCompactionRuntimeSelection(params: {
     modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   const policyProvider = policyTarget.provider ?? DEFAULT_PROVIDER;
   const policyModelId = policyTarget.model ?? DEFAULT_MODEL;
@@ -89,19 +115,21 @@ export function resolveCompactionRuntimeSelection(params: {
       provider: policyProvider,
       modelId: policyModelId,
     });
-  const target = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    harnessRuntime: selectedHarnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const target = {
+    ...policyTarget,
+    ...resolveCompactionTargetRuntime(policyTarget.provider, selectedHarnessRuntime),
+  };
   const provider = target.provider ?? DEFAULT_PROVIDER;
   const modelId = target.model ?? DEFAULT_MODEL;
+  const selectedRuntime = normalizeOptionalAgentRuntimeId(selectedHarnessRuntime);
+  const attemptNativeHarnessCompaction = Boolean(
+    selectedRuntime &&
+    selectedRuntime !== "auto" &&
+    selectedRuntime !== "openclaw" &&
+    (!isOpenAIProvider(provider) || target.nativeHarnessCompaction === true),
+  );
   return {
+    attemptNativeHarnessCompaction,
     runtimePolicySessionKey,
     runtimePolicyAgentId,
     boundHarnessRuntime,
@@ -118,27 +146,6 @@ export function resolveCompactionRuntimeSelection(params: {
     runtimeProvider: target.runtimeProvider ?? provider,
     contextConfigProvider: target.contextProvider ?? provider,
     modelId,
-  };
-}
-
-function buildCompactionHarnessModelProvider(params: {
-  model?: ProviderRuntimeModel;
-  plan?: AgentRuntimeAuthPlan;
-  attempt?: PreparedAgentRuntimeAuthAttempt;
-}): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  return {
-    api: route?.api ?? params.model?.api,
-    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
-          }),
-        }
-      : {}),
   };
 }
 
@@ -167,10 +174,12 @@ export async function prepareCompactionHarnessAuth(params: {
 }> {
   const runtimeAuthProfileStore = isOpenAIProvider(params.provider)
     ? ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
     : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
   const selectPreparedHarness = (attempts: readonly PreparedAgentRuntimeAuthAttempt[]) =>
@@ -178,7 +187,11 @@ export async function prepareCompactionHarnessAuth(params: {
       provider: params.provider,
       modelId: params.modelId,
       modelProviders: attempts.map((attempt) =>
-        buildCompactionHarnessModelProvider({ model: params.model, plan: attempt.plan, attempt }),
+        projectPreparedModelProvider({
+          model: params.model,
+          plan: attempt.plan,
+          attemptKind: attempt.kind,
+        }),
       ),
       config: params.config,
       agentId: params.runtimePolicyAgentId,
@@ -191,7 +204,7 @@ export async function prepareCompactionHarnessAuth(params: {
     : selectAgentHarness({
         provider: params.provider,
         modelId: params.modelId,
-        modelProvider: buildCompactionHarnessModelProvider({ model: params.model }),
+        modelProvider: projectPreparedModelProvider({ model: params.model }),
         config: params.config,
         agentId: params.runtimePolicyAgentId,
         sessionKey: params.runtimePolicySessionKey ?? undefined,

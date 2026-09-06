@@ -1,21 +1,21 @@
 import { resolveStateDir } from "../config/paths.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { loadNodeHostConfig } from "./config.js";
+import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 
-const localNodeIdByStateDir = new Map<string, Promise<string | null>>();
+const localNodeIdByStateDir = new Map<string, string>();
 
-/**
- * Resolve the same-install node host from canonical shared SQLite state.
- * Node-host config changes require restart, so this fact stays process-stable.
- */
+// Keep successful primary identity reads process-stable, without creating credentials.
+// Misses remain retryable because a node may create its identity after Gateway startup.
 export async function resolveLocalNodeId(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | null> {
   const stateDir = resolveStateDir(env);
-  return await getOrCreatePromise(
-    localNodeIdByStateDir,
-    stateDir,
-    async () => (await loadNodeHostConfig(env))?.nodeId ?? null,
-    { cacheRejections: false },
-  );
+  const cached = localNodeIdByStateDir.get(stateDir);
+  if (cached) {
+    return cached;
+  }
+  const nodeId = loadDeviceIdentityIfPresent({ env })?.deviceId ?? null;
+  if (nodeId) {
+    localNodeIdByStateDir.set(stateDir, nodeId);
+  }
+  return nodeId;
 }

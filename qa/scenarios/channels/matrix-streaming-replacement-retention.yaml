@@ -1,0 +1,24 @@
+title: Matrix streaming replacement retention
+scenario:
+  id: matrix-streaming-replacement-retention
+  surface: channels
+  coverage:
+    primary:
+      - matrix.conversation-routing-and-delivery
+  docsRefs:
+    - docs/channels/matrix.md
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        streaming: partial
+        textChunkLimit: 160
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runStreamingReplacementRetentionScenario
+  args:
+    - expr: "scenarioContext"

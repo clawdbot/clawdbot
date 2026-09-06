@@ -8,7 +8,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
 const UNPACKED_MANIFEST_LOCATION = 4;
 const OWNED_COPY_MARKER = ".openclaw-owned.json";
-const SECURE_PREFERENCES_MAX_BYTES = 32 * 1024 * 1024;
+const PREFERENCES_MAX_BYTES = 32 * 1024 * 1024;
 
 export type ChromeProduct = "chrome" | "chrome-for-testing" | "chromium";
 export type ChromeProductRoot = {
@@ -22,9 +22,15 @@ export type DiscoveredChromeExtension = {
   browser: string;
   userDataDir: string;
   profile: string;
+  /** Source backing file, either Preferences or Secure Preferences. */
   securePreferencesPath: string;
   extensionId: string;
   extensionPath: string;
+};
+export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "extensionPath"> & {
+  /** Chrome's recorded state is not proof of an authenticated relay connection. */
+  enabled: boolean;
+  awaitingApproval: boolean;
 };
 export type ExtensionInstallDeps = {
   platform?: NodeJS.Platform;
@@ -310,12 +316,14 @@ async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
   return [...new Set(resolved.filter((value): value is string => value !== null))];
 }
 
-/** Discover unpacked OpenClaw IDs from exact Secure Preferences path records. */
+/** Discover exact Store identity separately from approved unpacked path records. */
 export async function discoverChromeExtensionIds(params: {
   approvedDirs: readonly string[];
+  storeExtensionId?: string;
   deps?: ExtensionInstallDeps;
 }): Promise<{
   discovered: DiscoveredChromeExtension[];
+  storeDiscovered: DiscoveredChromeStoreExtension[];
   issues: string[];
   identityMismatches: string[];
 }> {
@@ -325,6 +333,7 @@ export async function discoverChromeExtensionIds(params: {
     (await approvedRealpaths(params.approvedDirs)).map((value) => comparablePath(value, platform)),
   );
   const discovered: DiscoveredChromeExtension[] = [];
+  const storeDiscovered: DiscoveredChromeStoreExtension[] = [];
   const issues: string[] = [];
   const identityMismatches: string[] = [];
   for (const root of chromeProductRoots(deps)) {
@@ -349,63 +358,100 @@ export async function discoverChromeExtensionIds(params: {
         continue;
       }
       const profileDir = path.join(root.userDataDir, profileEntry.name);
-      const securePreferencesPath = path.join(profileDir, "Secure Preferences");
-      const secureInfo = await pathInfo(securePreferencesPath);
-      if (!secureInfo) {
-        continue;
-      }
-      try {
-        await assertOwnedPath(profileDir, "directory");
-        await assertOwnedPath(securePreferencesPath, "file");
-        if (secureInfo.size > SECURE_PREFERENCES_MAX_BYTES) {
-          throw new Error("Secure Preferences exceeds the 32 MiB inspection limit");
-        }
-        const preferences: unknown = JSON.parse(await fs.readFile(securePreferencesPath, "utf8"));
-        const settings = (preferences as { extensions?: { settings?: unknown } })?.extensions
-          ?.settings;
-        if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      // Chromium partitions extension settings by enforcement policy across both stores.
+      for (const filename of ["Preferences", "Secure Preferences"]) {
+        const preferencesPath = path.join(profileDir, filename);
+        const preferencesInfo = await pathInfo(preferencesPath);
+        if (!preferencesInfo) {
           continue;
         }
-        for (const [extensionId, rawEntry] of Object.entries(settings)) {
-          if (
-            !EXTENSION_ID_PATTERN.test(extensionId) ||
-            !rawEntry ||
-            typeof rawEntry !== "object"
-          ) {
+        try {
+          await assertOwnedPath(profileDir, "directory");
+          await assertOwnedPath(preferencesPath, "file");
+          if (preferencesInfo.size > PREFERENCES_MAX_BYTES) {
+            throw new Error(`${filename} exceeds the 32 MiB inspection limit`);
+          }
+          const preferences: unknown = JSON.parse(await fs.readFile(preferencesPath, "utf8"));
+          const settings = (preferences as { extensions?: { settings?: unknown } })?.extensions
+            ?.settings;
+          if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
             continue;
           }
-          const entry = rawEntry as { location?: unknown; path?: unknown };
-          if (entry.location !== UNPACKED_MANIFEST_LOCATION || typeof entry.path !== "string") {
-            continue;
+          for (const [extensionId, rawEntry] of Object.entries(settings)) {
+            if (
+              !EXTENSION_ID_PATTERN.test(extensionId) ||
+              !rawEntry ||
+              typeof rawEntry !== "object"
+            ) {
+              continue;
+            }
+            const entry = rawEntry as {
+              from_webstore?: unknown;
+              location?: unknown;
+              path?: unknown;
+              state?: unknown;
+              disable_reasons?: unknown;
+            };
+            if (
+              extensionId === params.storeExtensionId &&
+              entry.from_webstore === true &&
+              entry.location !== UNPACKED_MANIFEST_LOCATION
+            ) {
+              // Current Chrome stores a reason list; older profiles used a bitmask
+              // plus state (ENABLED = 1). External-install approval is bit 13.
+              const reasons = entry.disable_reasons;
+              const enabled =
+                (entry.state === undefined || entry.state === 1) &&
+                (reasons === undefined ||
+                  reasons === 0 ||
+                  (Array.isArray(reasons) && reasons.length === 0));
+              const awaitingApproval = Array.isArray(reasons)
+                ? reasons.includes(8_192)
+                : typeof reasons === "number" && (reasons & 8_192) !== 0;
+              storeDiscovered.push({
+                product: root.product,
+                browser: root.label,
+                userDataDir: root.userDataDir,
+                profile: profileEntry.name,
+                securePreferencesPath: preferencesPath,
+                extensionId,
+                enabled,
+                awaitingApproval,
+              });
+              continue;
+            }
+            if (entry.location !== UNPACKED_MANIFEST_LOCATION || typeof entry.path !== "string") {
+              continue;
+            }
+            const recordedPath = path.isAbsolute(entry.path)
+              ? entry.path
+              : path.join(profileDir, "Extensions", entry.path);
+            const canonicalPath = await fs.realpath(recordedPath).catch(() => null);
+            if (!canonicalPath || !approved.has(comparablePath(canonicalPath, platform))) {
+              continue;
+            }
+            const predictedId = generateChromeExtensionIdForPath(canonicalPath, platform);
+            if (extensionId !== predictedId) {
+              const issue = `${root.label} profile ${profileEntry.name}: unpacked extension ID ${extensionId} does not match predicted ID ${predictedId} for ${canonicalPath}`;
+              issues.push(issue);
+              identityMismatches.push(issue);
+              continue;
+            }
+            discovered.push({
+              product: root.product,
+              browser: root.label,
+              userDataDir: root.userDataDir,
+              profile: profileEntry.name,
+              securePreferencesPath: preferencesPath,
+              extensionId,
+              extensionPath: canonicalPath,
+            });
           }
-          const recordedPath = path.isAbsolute(entry.path)
-            ? entry.path
-            : path.join(profileDir, "Extensions", entry.path);
-          const canonicalPath = await fs.realpath(recordedPath).catch(() => null);
-          if (!canonicalPath || !approved.has(comparablePath(canonicalPath, platform))) {
-            continue;
-          }
-          const predictedId = generateChromeExtensionIdForPath(canonicalPath, platform);
-          if (extensionId !== predictedId) {
-            const issue = `${root.label} profile ${profileEntry.name}: unpacked extension ID ${extensionId} does not match predicted ID ${predictedId} for ${canonicalPath}`;
-            issues.push(issue);
-            identityMismatches.push(issue);
-            continue;
-          }
-          discovered.push({
-            product: root.product,
-            browser: root.label,
-            userDataDir: root.userDataDir,
-            profile: profileEntry.name,
-            securePreferencesPath,
-            extensionId,
-            extensionPath: canonicalPath,
-          });
+        } catch (error) {
+          issues.push(
+            `${root.label} profile ${profileEntry.name} (${filename}): ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-      } catch (error) {
-        issues.push(
-          `${root.label} profile ${profileEntry.name}: ${error instanceof Error ? error.message : String(error)}`,
-        );
       }
     }
   }
@@ -415,8 +461,19 @@ export async function discoverChromeExtensionIds(params: {
       entry,
     ]),
   );
+  const uniqueStore = new Map(
+    storeDiscovered.map((entry) => [
+      `${entry.product}\0${entry.profile}\0${entry.extensionId}`,
+      entry,
+    ]),
+  );
   return {
     discovered: [...unique.values()].toSorted((a, b) =>
+      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
+        `${b.product}/${b.profile}/${b.extensionId}`,
+      ),
+    ),
+    storeDiscovered: [...uniqueStore.values()].toSorted((a, b) =>
       `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
         `${b.product}/${b.profile}/${b.extensionId}`,
       ),

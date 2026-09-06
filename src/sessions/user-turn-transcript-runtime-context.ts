@@ -33,12 +33,11 @@ export function attachRuntimeUserTurnTranscriptContext(
 export function takeRuntimeUserTurnTranscriptContext(
   runtimeMessage: AgentMessage,
 ): RuntimeUserTurnTranscriptContext | undefined {
-  const record = runtimeMessage as unknown as Record<PropertyKey, unknown>;
-  const context = record[RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT] as
+  const context = Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT) as
     | RuntimeUserTurnTranscriptContext
     | undefined;
   if (context) {
-    delete record[RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT];
+    Reflect.deleteProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT);
   }
   return context;
 }
@@ -55,15 +54,29 @@ export function attachRuntimeUserTurnTranscriptRecorder(
   return runtimeMessage;
 }
 
+function readRuntimeUserTurnTranscriptRecorder(
+  runtimeMessage: AgentMessage,
+): UserTurnTranscriptRecorder | undefined {
+  return Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER) as
+    | UserTurnTranscriptRecorder
+    | undefined;
+}
+
+/** A steered message retains its own live custody while another turn owns the runtime. */
+export function withRuntimeUserTurnTranscriptRecorder<T>(
+  runtimeMessage: AgentMessage,
+  append: () => T,
+): T {
+  const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
+  return recorder?.withPendingInput ? recorder.withPendingInput(append) : append();
+}
+
 export function takeRuntimeUserTurnTranscriptRecorder(
   runtimeMessage: AgentMessage,
 ): UserTurnTranscriptRecorder | undefined {
-  const record = runtimeMessage as unknown as Record<PropertyKey, unknown>;
-  const recorder = record[RUNTIME_USER_TURN_TRANSCRIPT_RECORDER] as
-    | UserTurnTranscriptRecorder
-    | undefined;
+  const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
   if (recorder) {
-    delete record[RUNTIME_USER_TURN_TRANSCRIPT_RECORDER];
+    Reflect.deleteProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER);
   }
   return recorder;
 }

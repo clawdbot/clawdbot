@@ -1,6 +1,21 @@
 /**
  * Runtime SDK subpath for approval handler adapters and approval view text helpers.
  */
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeApprovalRequest } from "../infra/approval-types.js";
+import type { ApprovalRequestInput } from "../infra/approval-types.js";
+import type {
+  ExpiredApprovalView,
+  ResolvedApprovalView,
+} from "../infra/approval-view-model.types.js";
+import type { ExecApprovalResolved } from "../infra/exec-approvals.js";
+import {
+  buildPluginApprovalExpiredMessage,
+  buildPluginApprovalResolvedMessage,
+  type PluginApprovalResolved,
+} from "../infra/plugin-approvals.js";
+import type { SystemAgentApprovalResolved } from "../infra/system-agent-approvals.js";
+import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 export {
   createChannelApprovalHandler,
   createChannelApprovalNativeRuntimeAdapter,
@@ -31,23 +46,11 @@ export {
   type PluginApprovalResolvedView,
   type ResolvedApprovalView,
 } from "../infra/approval-handler-runtime.js";
+export type { ChannelApprovalKind } from "../infra/approval-handler-runtime-types.js";
 export { resolveApprovalOverGateway } from "./approval-gateway-runtime.js";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import type {
-  ExpiredApprovalView,
-  ResolvedApprovalView,
-} from "../infra/approval-view-model.types.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import {
-  buildPluginApprovalExpiredMessage,
-  buildPluginApprovalResolvedMessage,
-  type PluginApprovalRequest,
-  type PluginApprovalResolved,
-} from "../infra/plugin-approvals.js";
-import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
+type ApprovalRequest = ApprovalRequestInput;
+type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved | SystemAgentApprovalResolved;
 
 /** Builds channel-visible resolved approval text for exec and plugin approvals. */
 export function buildChannelApprovalResolvedText(params: {
@@ -55,6 +58,17 @@ export function buildChannelApprovalResolvedText(params: {
   resolved: ApprovalResolved;
   view: ResolvedApprovalView;
 }): string {
+  if (params.view.approvalKind === "system-agent") {
+    return params.view.terminalStatus === "cancelled"
+      ? "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry."
+      : params.resolved.decision === "deny"
+        ? "❌ OpenClaw change denied. No change was made."
+        : params.view.applicationStatus === "applied"
+          ? `✅ OpenClaw change approved and applied: ${params.view.operationSummary}`
+          : params.view.applicationStatus === "not-applied"
+            ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
+            : `✅ OpenClaw change approved. Applying: ${params.view.operationSummary}`;
+  }
   if (params.view.approvalKind === "plugin") {
     return buildPluginApprovalResolvedMessage(params.resolved as PluginApprovalResolved);
   }
@@ -74,10 +88,14 @@ export function buildChannelApprovalExpiredText(params: {
   request: ApprovalRequest;
   view: ExpiredApprovalView;
 }): string {
-  if (params.view.approvalKind === "plugin") {
-    return buildPluginApprovalExpiredMessage(params.request as PluginApprovalRequest);
+  const request = normalizeApprovalRequest(params.request);
+  if (request.approvalKind === "system-agent") {
+    return "⏱️ OpenClaw change expired. No change was made.";
   }
-  return `⏱️ Exec approval expired. ID: ${params.request.id}`;
+  if (request.approvalKind === "plugin") {
+    return buildPluginApprovalExpiredMessage(request);
+  }
+  return `⏱️ Exec approval expired. ID: ${request.id}`;
 }
 
 /** Resolves the account id prepared for approval routing with planned/context fallback order. */

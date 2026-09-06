@@ -60,7 +60,7 @@ type OnboardingWelcome = {
  * auth), not just a model: a model-only config would otherwise get the
  * ready-guide welcome while the gate stays locked, stranding the page.
  */
-export async function loadAuthoredSetupConfig(params: {
+async function loadAuthoredSetupConfig(params: {
   configExists: boolean;
   configValid: boolean;
 }): Promise<{
@@ -95,6 +95,7 @@ export async function loadAuthoredSetupConfig(params: {
 export async function buildOnboardingWelcome(params: {
   engine: SystemAgentChatEngine;
   workspace?: string;
+  agentName?: string;
   /** Only the local terminal can finish the machine-owned Gateway installation. */
   localRecovery?: true;
 }): Promise<OnboardingWelcome> {
@@ -145,7 +146,11 @@ export async function buildOnboardingWelcome(params: {
     pendingSetup?.workspace || requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE,
   );
 
-  params.engine.propose({ kind: "setup", workspace });
+  params.engine.propose({
+    kind: "setup",
+    workspace,
+    ...(params.agentName ? { agentName: params.agentName } : {}),
+  });
   const welcome = [
     "## Hi, I'm OpenClaw — let's hatch your agent.",
     "",
@@ -158,7 +163,7 @@ export async function buildOnboardingWelcome(params: {
     "Say **yes** and I'll set all of that up now.",
     "",
     "Heads up: your agent gets real access to this machine — https://docs.openclaw.ai/security",
-    "Afterwards: `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list), then `talk to agent` to meet your agent.",
+    "Afterwards: `talk to agent` to meet your agent right here. Channels are optional: use `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list) if you want to chat from another service.",
   ].join("\n");
   params.engine.noteAssistantMessage(welcome);
   return { text: welcome, question: SETUP_WELCOME_QUESTION };

@@ -3,12 +3,14 @@ import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
-import { z } from "zod";
+import type { z } from "zod";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyConfigTierHints } from "./schema.tiers.js";
+import { walkConfigSchema } from "./schema.walk.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -19,10 +21,12 @@ const GROUP_HINTS = [
   ["update", "Update", 25],
   ["cli", "CLI", 26],
   ["diagnostics", "Diagnostics", 27],
+  ["telemetry", "Telemetry", 28],
   ["logging", "Logging", 900],
   ["gateway", "Gateway", 30],
   ["nodeHost", "Node Host", 35],
   ["cloudWorkers", "Cloud Workers", 37],
+  ["desktop", "Desktop", 38],
   ["agents", "Agents", 40],
   ["tools", "Tools", 50],
   ["bindings", "Bindings", 55],
@@ -32,7 +36,7 @@ const GROUP_HINTS = [
   ["commands", "Commands", 85],
   ["session", "Session", 90],
   ["cron", "Automations", 100],
-  ["worktrees", "Worktrees", 105],
+  ["worktreeRoot", "Worktree Root", 105],
   ["hooks", "Hooks", 110],
   ["ui", "UI", 120],
   ["browser", "Browser", 130],
@@ -49,7 +53,7 @@ const GROUP_HINTS = [
 const SECTION_DOCS_URLS = {
   accessGroups: "https://docs.openclaw.ai/channels/access-groups",
   messages: "https://docs.openclaw.ai/concepts/messages",
-  tts: "https://docs.openclaw.ai/tts",
+  tts: "https://docs.openclaw.ai/tools/tts",
   commands: "https://docs.openclaw.ai/tools/slash-commands",
   hooks: "https://docs.openclaw.ai/automation/hooks",
   cron: "https://docs.openclaw.ai/automation/cron-jobs",
@@ -73,6 +77,7 @@ const SECTION_DOCS_URLS = {
   env: "https://docs.openclaw.ai/help/environment",
   auth: "https://docs.openclaw.ai/concepts/oauth",
   update: "https://docs.openclaw.ai/install/updating",
+  telemetry: "https://docs.openclaw.ai/gateway/telemetry",
   logging: "https://docs.openclaw.ai/logging",
   diagnostics: "https://docs.openclaw.ai/gateway/diagnostics",
   cli: "https://docs.openclaw.ai/cli",
@@ -85,15 +90,12 @@ const SECTION_DOCS_URLS = {
   voicewake: "https://docs.openclaw.ai/nodes/voicewake",
   presence: "https://docs.openclaw.ai/concepts/presence",
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
-  worktrees: "https://docs.openclaw.ai/concepts/managed-worktrees",
+  desktop: "https://docs.openclaw.ai/gateway/configuration",
+  worktreeRoot: "https://docs.openclaw.ai/concepts/managed-worktrees",
   proxy: "https://docs.openclaw.ai/security/network-proxy",
   transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
   surfaces: "https://docs.openclaw.ai/concepts/messages",
 } as const satisfies Record<string, string>;
-
-// Root sections without beginner-worthy pages stay explicit. Adding a root config key
-// requires choosing a docsUrl or listing it here.
-const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.publicOrigin": "https://gateway.example.com",
@@ -102,6 +104,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.sshTarget": "user@host",
   "gateway.remote.sshHostKeyPolicy": "strict",
   "gateway.controlUi.basePath": "/openclaw",
+  "gateway.controlUi.environment.label": "edge",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
@@ -110,15 +113,15 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
-const CHANNEL_KERNEL_HINT_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
 function isKernelOwnedChannelHintPath(path: string): boolean {
   if (path === "channels") {
     return true;
   }
-  return CHANNEL_KERNEL_HINT_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
+  const channelKey = path.startsWith(CHANNEL_NAMESPACE_PREFIX)
+    ? path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0]
+    : undefined;
+  return channelKey !== undefined && isKernelOwnedChannelConfigKey(channelKey);
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
@@ -152,6 +155,12 @@ export function buildBaseHints(): ConfigUiHints {
         hints[path] = { ...hints[path], [field]: value };
       }
     }
+  }
+  for (const path of ["agents.defaults.models.*", "agents.entries.*.models.*"]) {
+    const runtimePath = `${path}.agentRuntime`;
+    const codeModePath = `${path}.codeMode`;
+    hints[runtimePath] = { ...hints[runtimePath], order: -2 };
+    hints[codeModePath] = { ...hints[codeModePath], order: -1, placeholder: "Default" };
   }
   return applyDerivedTags(applyConfigTierHints(hints));
 }
@@ -197,82 +206,9 @@ export function applySensitiveUrlHints(
   return next;
 }
 
-/** Walk a Zod schema and collect concrete/wildcard paths accepted by `matchesPath`. */
-export function collectMatchingSchemaPaths(
-  schema: z.ZodType,
-  path: string,
-  matchesPath: (path: string) => boolean,
-  paths: Set<string> = new Set(),
-): Set<string> {
-  let currentSchema = schema;
-
-  while (isUnwrappable(currentSchema)) {
-    currentSchema = currentSchema.unwrap();
-  }
-
-  if (path && matchesPath(path)) {
-    paths.add(path);
-  }
-
-  if (currentSchema instanceof z.ZodPipe) {
-    collectMatchingSchemaPaths(currentSchema.out as unknown as z.ZodType, path, matchesPath, paths);
-  } else if (currentSchema instanceof z.ZodObject) {
-    const shape = currentSchema.shape;
-    for (const key in shape) {
-      const nextPath = path ? `${path}.${key}` : key;
-      collectMatchingSchemaPaths(shape[key], nextPath, matchesPath, paths);
-    }
-    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
-    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
-      const nextPath = path ? `${path}.*` : "*";
-      collectMatchingSchemaPaths(catchallSchema, nextPath, matchesPath, paths);
-    }
-  } else if (currentSchema instanceof z.ZodArray) {
-    const nextPath = path ? `${path}[]` : "[]";
-    collectMatchingSchemaPaths(currentSchema.element as z.ZodType, nextPath, matchesPath, paths);
-  } else if (currentSchema instanceof z.ZodRecord) {
-    const nextPath = path ? `${path}.*` : "*";
-    collectMatchingSchemaPaths(
-      currentSchema["_def"].valueType as z.ZodType,
-      nextPath,
-      matchesPath,
-      paths,
-    );
-  } else if (
-    currentSchema instanceof z.ZodUnion ||
-    currentSchema instanceof z.ZodDiscriminatedUnion
-  ) {
-    for (const option of currentSchema.options) {
-      collectMatchingSchemaPaths(option as z.ZodType, path, matchesPath, paths);
-    }
-  } else if (currentSchema instanceof z.ZodIntersection) {
-    collectMatchingSchemaPaths(currentSchema["_def"].left as z.ZodType, path, matchesPath, paths);
-    collectMatchingSchemaPaths(currentSchema["_def"].right as z.ZodType, path, matchesPath, paths);
-  }
-
-  return paths;
-}
-
-// Seems to be the only way tsgo accepts us to check if we have a ZodClass
-// with an unwrap() method. And it's overly complex because oxlint and
-// tsgo are each forbidding what the other allows.
-interface ZodDummy {
-  unwrap: () => z.ZodType;
-}
-function isUnwrappable(object: unknown): object is ZodDummy {
-  if (!object || typeof object !== "object") {
-    return false;
-  }
-  return (
-    "unwrap" in object &&
-    typeof (object as Record<string, unknown>).unwrap === "function" &&
-    !(object instanceof z.ZodArray)
-  );
-}
-
 /**
  * Traverses the Zod schema tree and returns a copy of `hints` with every
- * sensitive path marked.
+ * sensitive path marked and credential-bearing URL paths tagged.
  */
 export function mapSensitivePaths(
   schema: z.ZodType,
@@ -280,59 +216,19 @@ export function mapSensitivePaths(
   hints: ConfigUiHints,
 ): ConfigUiHints {
   const next = { ...hints };
-  mapSensitivePathsMut(schema, path, next);
-  return next;
-}
-
-function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHints): void {
-  let currentSchema = schema;
-  let isSensitive = sensitive.has(currentSchema);
-
-  while (isUnwrappable(currentSchema)) {
-    currentSchema = currentSchema.unwrap();
-    isSensitive ||= sensitive.has(currentSchema);
-  }
-
-  if (isSensitive) {
-    hints[path] = { ...hints[path], sensitive: true };
-  }
-
-  if (currentSchema instanceof z.ZodPipe) {
-    mapSensitivePathsMut(currentSchema.out as unknown as z.ZodType, path, hints);
-  } else if (currentSchema instanceof z.ZodObject) {
-    const shape = currentSchema.shape;
-    for (const key in shape) {
-      const nextPath = path ? `${path}.${key}` : key;
-      mapSensitivePathsMut(shape[key], nextPath, hints);
+  const urlPaths = new Set<string>();
+  walkConfigSchema(schema, path, (fieldSchema, fieldPath) => {
+    if (sensitive.has(fieldSchema)) {
+      next[fieldPath] = { ...next[fieldPath], sensitive: true };
     }
-    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
-    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
-      const nextPath = path ? `${path}.*` : "*";
-      mapSensitivePathsMut(catchallSchema, nextPath, hints);
+    if (fieldPath && isSensitiveUrlConfigPath(fieldPath)) {
+      urlPaths.add(fieldPath);
     }
-  } else if (currentSchema instanceof z.ZodArray) {
-    const nextPath = path ? `${path}[]` : "[]";
-    mapSensitivePathsMut(currentSchema.element as z.ZodType, nextPath, hints);
-  } else if (currentSchema instanceof z.ZodRecord) {
-    const nextPath = path ? `${path}.*` : "*";
-    mapSensitivePathsMut(currentSchema["_def"].valueType as z.ZodType, nextPath, hints);
-  } else if (
-    currentSchema instanceof z.ZodUnion ||
-    currentSchema instanceof z.ZodDiscriminatedUnion
-  ) {
-    for (const option of currentSchema.options) {
-      mapSensitivePathsMut(option as z.ZodType, path, hints);
-    }
-  } else if (currentSchema instanceof z.ZodIntersection) {
-    mapSensitivePathsMut(currentSchema["_def"].left as z.ZodType, path, hints);
-    mapSensitivePathsMut(currentSchema["_def"].right as z.ZodType, path, hints);
-  }
+  });
+  return applySensitiveUrlHints(next, urlPaths);
 }
 
 /** @internal */
 export const testApi = {
-  collectMatchingSchemaPaths,
-  mapSensitivePaths,
   SECTION_DOCS_URLS,
-  SECTIONS_WITHOUT_DOCS,
 };

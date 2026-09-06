@@ -5,10 +5,10 @@ import {
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
+import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
@@ -16,6 +16,14 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { channelTargetSchema, stringEnum } from "../schema/typebox.js";
 import { readToolStringParam } from "./common.js";
 import { normalizeEscapedLineBreaksForVisibleText } from "./message-tool-visible-content.js";
+
+function sourceReplyPolicyError(message: string): MessageActionDeniedError {
+  return new MessageActionDeniedError(
+    message,
+    "message_source_reply_policy_denied",
+    "message-source-reply:current-conversation",
+  );
+}
 export const SOURCE_REPLY_ONLY_MESSAGE_SCHEMA = Type.Object({
   action: stringEnum(["send"], {
     description: "Send a text reply to the current source conversation.",
@@ -33,26 +41,20 @@ const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]
 const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
   Type.Boolean({
     description:
-      "Set false for progress. Set true, or omit, for the completed current-source reply.",
+      "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
   }),
 );
 
-export function addSourceReplyFinalControl<T extends TObject>(
-  schema: T,
-  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined,
-): T | TObject {
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return schema;
-  }
+export function addSourceReplyFinalControl(schema: TObject): TObject {
   return Type.Object({ ...schema.properties, final: SOURCE_REPLY_FINAL_PROPERTY });
 }
 
 export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknown>): void {
   if (typeof args.message !== "string" || !args.message.trim()) {
-    throw new Error("Completion source replies require non-empty visible text.");
+    throw sourceReplyPolicyError("Completion source replies require non-empty visible text.");
   }
   // Use the outbound owner's parser: sanitization can assemble directives that
-  // change routes, attach local files, deliver audio, or perform reactions.
+  // change routes, attach local files, or deliver audio.
   const message = normalizeEscapedLineBreaksForVisibleText(args.message);
   const withoutCitationMarkers = stripUnsupportedCitationControlMarkers(message);
   for (const normalized of new Set([
@@ -65,10 +67,11 @@ export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknow
       directives.replyToTag ||
       directives.audioAsVoice ||
       directives.mediaUrls?.length ||
-      directives.reaction ||
       directives.isSilent
     ) {
-      throw new Error("Completion source replies cannot contain non-text or silent directives.");
+      throw sourceReplyPolicyError(
+        "Completion source replies cannot contain non-text or silent directives.",
+      );
     }
   }
 }
@@ -87,7 +90,11 @@ export function enforceTrustedTurnExplicitAccount(params: {
   }
   const trustedCurrentChannel = normalizeMessageChannel(params.trustedCurrentChannel);
   if (!trustedCurrentChannel) {
-    throw new Error("Trusted current account is missing its channel identity.");
+    throw new MessageActionDeniedError(
+      "Trusted current account is missing its channel identity.",
+      "message_trusted_account_context_missing",
+      "message-account:trusted-turn",
+    );
   }
   const includesTrustedCurrentChannel = params.selectedChannels.some(
     (channel) => normalizeMessageChannel(channel) === trustedCurrentChannel,
@@ -96,7 +103,11 @@ export function enforceTrustedTurnExplicitAccount(params: {
     return;
   }
   if (normalizeOptionalAccountId(params.trustedRequesterAccountId) !== params.explicitAccountId) {
-    throw new Error("Explicit account does not match the trusted current account.");
+    throw new MessageActionDeniedError(
+      "Explicit account does not match the trusted current account.",
+      "message_account_mismatch",
+      "message-account:trusted-turn",
+    );
   }
 }
 
@@ -112,14 +123,16 @@ export function enforceSourceReplyOnlyMessageAction(params: {
   trustedTurnContext?: AgentRuntimeMessageActionContext;
 }): void {
   if (params.action !== "send") {
-    throw new Error(`Completion source replies permit only action "send", not "${params.action}".`);
+    throw sourceReplyPolicyError(
+      `Completion source replies permit only action "send", not "${params.action}".`,
+    );
   }
   for (const name of Object.keys(params.args)) {
     if (
       !Object.hasOwn(SOURCE_REPLY_ONLY_MESSAGE_SCHEMA.properties, name) &&
       !SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES.has(name)
     ) {
-      throw new Error(`Completion source replies cannot use the "${name}" argument.`);
+      throw sourceReplyPolicyError(`Completion source replies cannot use the "${name}" argument.`);
     }
   }
   enforceSourceReplyOnlyTextDirectives(params.args);
@@ -132,12 +145,14 @@ export function enforceSourceReplyOnlyMessageAction(params: {
       .filter((target): target is string => Boolean(target)),
   );
   if (!sourceChannel || sourceTargets.length === 0) {
-    throw new Error("Completion source replies require an authoritative current conversation.");
+    throw sourceReplyPolicyError(
+      "Completion source replies require an authoritative current conversation.",
+    );
   }
 
   const requestedChannel = readToolStringParam(params.args, "channel");
   if (requestedChannel && normalizeMessageChannel(requestedChannel) !== sourceChannel) {
-    throw new Error("Completion source replies cannot target another channel.");
+    throw sourceReplyPolicyError("Completion source replies cannot target another channel.");
   }
 
   const requestedAccountId = readToolStringParam(params.args, "accountId");
@@ -148,13 +163,13 @@ export function enforceSourceReplyOnlyMessageAction(params: {
     requestedAccountId &&
     normalizeOptionalAccountId(requestedAccountId) !== normalizeOptionalAccountId(sourceAccountId)
   ) {
-    throw new Error("Completion source replies cannot use another channel account.");
+    throw sourceReplyPolicyError("Completion source replies cannot use another channel account.");
   }
 
   const sourceThreadId = normalizeOptionalString(sourceContext.currentThreadTs);
   const requestedThreadId = normalizeOptionalStringifiedId(params.args.threadId);
   if (requestedThreadId && requestedThreadId !== sourceThreadId) {
-    throw new Error("Completion source replies cannot target another thread.");
+    throw sourceReplyPolicyError("Completion source replies cannot target another thread.");
   }
 
   const requestedReplyTo = readToolStringParam(params.args, "replyTo");
@@ -164,7 +179,9 @@ export function enforceSourceReplyOnlyMessageAction(params: {
     requestedReplyTo !== sourceMessageId &&
     requestedReplyTo !== sourceThreadId
   ) {
-    throw new Error("Completion source replies cannot reply outside the current thread.");
+    throw sourceReplyPolicyError(
+      "Completion source replies cannot reply outside the current thread.",
+    );
   }
 
   const explicitTargets = uniqueValues(
@@ -191,7 +208,9 @@ export function enforceSourceReplyOnlyMessageAction(params: {
         ),
       )
     ) {
-      throw new Error("Completion source replies cannot target another conversation or thread.");
+      throw sourceReplyPolicyError(
+        "Completion source replies cannot target another conversation or thread.",
+      );
     }
   }
 }

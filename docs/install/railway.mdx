@@ -28,8 +28,8 @@ Deploy OpenClaw on Railway with a one-click template and access it through the w
 
     - `OPENCLAW_GATEWAY_PORT=8080` (required -- must match the port in Public Networking)
     - `OPENCLAW_GATEWAY_TOKEN` (required; treat as an admin secret)
-    - `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
-    - `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
+    - `OPENCLAW_STATE_DIR=/data/.openclaw` (required for persistent state)
+    - `OPENCLAW_WORKSPACE_DIR=/data/workspace` (required for a persistent workspace)
 
   </Step>
 
@@ -45,10 +45,16 @@ Deploy OpenClaw on Railway with a one-click template and access it through the w
   </Step>
 </Steps>
 
+From the Railway shell, run the read-only deployment preflight:
+
+```bash
+openclaw doctor --json
+```
+
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
-- Persistent storage via the Railway Volume (`/data`), so `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions, and workspace survive redeploys
+- Persistent storage via the Railway Volume (`/data`), so `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions, and workspace survive redeploys
 
 ## Connect a channel
 
@@ -64,9 +70,12 @@ Export your state, config, auth profiles, and workspace:
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
-This creates a portable backup archive with OpenClaw state plus any configured workspace. See [Backup](/cli/backup) for details.
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## Next steps
 

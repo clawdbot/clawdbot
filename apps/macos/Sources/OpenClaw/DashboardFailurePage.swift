@@ -5,8 +5,10 @@ import Foundation
 /// so the controller stays focused on window/navigation behavior.
 enum DashboardFailurePage {
     static func html(title: String, message: String, detail: String?, url: URL?) -> String {
+        let connectionTitle = self.htmlEscape(String(localized: "Connection Settings…"))
         let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
-        let urlHTML = url.map { "<code>\(self.htmlEscape($0.absoluteString))</code>" } ?? ""
+        let urlHTML = url
+            .map { "<code>\(self.htmlEscape(GatewayEndpointStore.diagnosticURLString(for: $0)))</code>" } ?? ""
         return """
         <!doctype html>
         <html>
@@ -72,6 +74,16 @@ enum DashboardFailurePage {
               overflow-wrap: anywhere;
               font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
             }
+            button {
+              margin-top: 22px;
+              padding: 9px 14px;
+              border: 1px solid currentColor;
+              border-radius: 8px;
+              background: transparent;
+              color: inherit;
+              font: inherit;
+              cursor: pointer;
+            }
             @media (prefers-color-scheme: light) {
               body { background: #f5f6f8; color: rgba(0,0,0,.86); }
               main {
@@ -97,6 +109,8 @@ enum DashboardFailurePage {
             <p>\(self.htmlEscape(message))</p>
             \(detailHTML)
             \(urlHTML)
+            <button type="button" onclick="window.webkit.messageHandlers.openclawDeviceSettings
+              .postMessage({type:'open',panel:'connection'})">\(connectionTitle)</button>
           </main>
         </body>
         </html>

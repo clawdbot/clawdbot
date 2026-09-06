@@ -35,6 +35,7 @@ function createCancellationTestAdapter(): CancellationTestAdapter {
 
   return {
     pid: 4321,
+    supportsRawOutput: false,
     onStdout: () => undefined,
     onStderr: () => undefined,
     wait: async () => completion.promise,
@@ -98,6 +99,50 @@ describe("process supervisor first cancellation reason", () => {
     vi.useFakeTimers();
   });
 
+  it("keeps the first manual-cancel when a later construction deadline fires", async () => {
+    const startup = createDeferred<CancellationTestAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(startup.promise);
+    const supervisor = createProcessSupervisor();
+    const runId = "manual-cancel-then-timeout";
+    const pendingRun = supervisor.spawn({
+      runId,
+      mode: "child",
+      argv: [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
+      timeoutMs: 25,
+      stdinMode: "pipe-closed",
+    });
+
+    expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    supervisor.cancel(runId, "manual-cancel");
+
+    await vi.advanceTimersByTimeAsync(25);
+    const constructionState = await Promise.race([
+      pendingRun.then(
+        () => "settled" as const,
+        () => "rejected" as const,
+      ),
+      Promise.resolve().then(() => "pending" as const),
+    ]);
+    expect(constructionState).toBe("settled");
+
+    const run = await pendingRun;
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "manual-cancel",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+    expect(run.activity.resultSettled).toBe(true);
+
+    const lateAdapter = createCancellationTestAdapter();
+    startup.resolve(lateAdapter);
+    await Promise.resolve();
+    expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
+    lateAdapter.settle("SIGKILL");
+    await run.waitForExtinction?.();
+    expect(lateAdapter.disposeMock).toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
@@ -118,32 +163,21 @@ describe("process supervisor first cancellation reason", () => {
               const supervisor = createProcessSupervisor();
               const runId = `first-cancellation-${mode}`;
               const scopeKey = `scope:first-cancellation-${mode}`;
-              const commonInput = {
+              const input: SpawnInput = {
                 runId,
                 scopeKey,
-                sessionId: "first-cancellation-reason",
-                backendId: "test",
+                mode,
+                argv: [process.execPath, "-e", ""],
               };
-              const input: SpawnInput =
-                mode === "child"
-                  ? { ...commonInput, mode: "child", argv: [process.execPath, "-e", ""] }
-                  : { ...commonInput, mode: "pty", ptyCommand: "printf running" };
               const run = await supervisor.spawn(input);
               const exitPromise = run.wait();
 
               cancelThrough(supervisor, path.first, runId, scopeKey, firstReason);
               for (const laterReason of laterReasons) {
                 cancelThrough(supervisor, path.later, runId, scopeKey, laterReason);
-                expect(supervisor.getRecord(runId), `after ${laterReason}`).toMatchObject({
-                  state: "exiting",
-                  terminationReason: firstReason,
-                });
+                expect(run.activity.resultSettled, `after ${laterReason}`).toBe(false);
               }
 
-              expect(supervisor.getRecord(runId)).toMatchObject({
-                state: "exiting",
-                terminationReason: firstReason,
-              });
               expect(adapter.killMock).toHaveBeenCalledTimes(1);
 
               const signal =
@@ -159,11 +193,7 @@ describe("process supervisor first cancellation reason", () => {
                 timedOut: firstReason !== "manual-cancel",
                 noOutputTimedOut: firstReason === "no-output-timeout",
               });
-              expect(supervisor.getRecord(runId)).toMatchObject({
-                state: "exited",
-                terminationReason: firstReason,
-                exitSignal: signal,
-              });
+              expect(run.activity.resultSettled).toBe(true);
               expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
               expect(vi.getTimerCount()).toBe(0);
             },

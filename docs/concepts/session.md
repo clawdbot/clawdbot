@@ -20,13 +20,20 @@ DM channels, with group activity and background work flowing into it — see
 
 ## How messages are routed
 
-| Source          | Behavior                  |
-| --------------- | ------------------------- |
-| Direct messages | Shared session by default |
-| Group chats     | Isolated per group        |
-| Rooms/channels  | Isolated per room         |
-| Cron jobs       | Fresh session per run     |
-| Webhooks        | Isolated per hook         |
+| Source          | Behavior                      |
+| --------------- | ----------------------------- |
+| Direct messages | Shared session by default     |
+| Group chats     | Isolated per group by default |
+| Rooms/channels  | Isolated per room by default  |
+| Cron jobs       | Fresh session per run         |
+| Webhooks        | Isolated per hook             |
+
+With `session.scope: "global"`, the selected agent still owns its session.
+The shared key `global` does not merge different agents' conversations:
+commands, skills, replies, and background task notifications retain the
+agent selected by the route or explicit request.
+Session lists, model filters, previews, and sharing controls also retain the
+stored conversation's agent, rather than the aggregate view's default agent.
 
 ## DM isolation
 
@@ -56,20 +63,62 @@ visible to Bob.
 | `per-channel-peer`         | Isolate by channel + sender (recommended)                |
 | `per-account-channel-peer` | Isolate by account + channel + sender                    |
 
+Slack Agent View and Assistant View DMs are the exception: each visible root gets
+its own `:thread:<rootTs>` session on top of the base that `dmScope` selects, so
+those conversations stay isolated even under `main`. See
+[Agent View DMs](/channels/slack#agent-view-dms).
+
 <Tip>
 If the same person contacts you from multiple channels, use
 `session.identityLinks` to map their identities to one canonical peer id so
 they share a session.
 </Tip>
 
-### Dock linked channels
-
-Dock commands move the current direct-chat session's reply route to another
-linked channel without starting a new session. See
-[Channel docking](/concepts/channel-docking) for examples, config, and
-troubleshooting.
-
 Verify your setup with `openclaw security audit`.
+
+## Retired channel docking
+
+Channel docking and manual cross-channel reply focus have been removed. The
+`/dock-*` commands no longer move a session's reply destination to another
+channel.
+
+Use `session.identityLinks` to associate a person's identities for DM session
+routing, or [thread-bound sessions](/tools/subagents#thread-bound-sessions) to
+keep a supported conversation attached to a subagent. These are separate
+features; neither restores manual cross-channel docking.
+
+## Group and room routing
+
+`session.groupScope` controls where non-direct peers store conversation
+context:
+
+| Value                 | Behavior                                                                                  |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `per-group` (default) | Keep each group, room, or channel in its existing channel-scoped session                  |
+| `main`                | Route groups, rooms, and channels into the agent's [main session](/concepts/main-session) |
+
+A route binding can override the global value. This is useful when only a
+named team room should join the main conversation:
+
+```json5
+{
+  bindings: [
+    {
+      agentId: "main",
+      match: {
+        channel: "slack",
+        peer: { kind: "channel", id: "C0123TEAM" },
+      },
+      session: { groupScope: "main" },
+    },
+  ],
+}
+```
+
+Use `peer.kind: "group"` for providers that classify the room as a group.
+The binding override wins over global `session.groupScope`. This setting
+changes session-key selection only: DM routing, mention gating, delivery
+context, and replies to the source room remain unchanged.
 
 ## Incognito sessions
 
@@ -89,7 +138,7 @@ adds an optional retrieval step across that agent's other private
 conversations; it does not combine their transcripts.
 
 Private direct and persistent explicit UI conversations can supply relevant
-context to one another. Groups and channels stay separate in both directions:
+context to one another. Under default `session.groupScope: "per-group"`, groups and channels stay separate in both directions:
 their transcripts are not private recall sources, and replies in those
 conversations do not receive private transcript context. The current
 conversation is also excluded because its history is already loaded.
@@ -149,9 +198,23 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 `resetByType` supports `direct`, `group`, and `thread`. Doctor migrates legacy `dm` entries to `direct` and `session.idleMinutes` to `session.reset.idleMinutes`; the schema rejects both retired forms.
 
+## Gateway restart recovery
+
+When a Gateway restart interrupts an active turn, OpenClaw tries to continue
+the existing session automatically. Three attempts that fail to start a backend
+turn exhaust the recovery budget. Once a real backend turn starts,
+the budget refreshes, so a later Gateway restart does not consume the old allowance.
+Accepting, queueing, or preparing a resume request alone does not refresh it.
+CLI backends that do not report turn acceptance refresh the budget only after
+observed assistant output or tool activity; silent startup does not refresh it.
+
+If automatic recovery is exhausted, the transcript remains available. Use
+**Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
+to start a replacement session.
+
 ## Where state lives
 
-- **Runtime session rows:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- **Runtime session rows and transcripts:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` by default
 - **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 
@@ -163,15 +226,18 @@ timestamps:
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 
-During migration from older installs, gateway startup and `openclaw doctor
---fix` import legacy `sessions.json` rows and hot transcript JSONL history into
-SQLite automatically. Rows without `sessionStartedAt` are resolved from the
+To import legacy `sessions.json` rows and hot transcript JSONL history from an
+older installation, stop the Gateway, back up its state, and run
+`openclaw doctor --fix` before restarting it. Gateway and local CLI startup use
+SQLite without importing, restoring, or rewriting legacy session files.
+If startup finds a legacy store, it refuses readiness and prints the Doctor
+command for the active profile instead of silently starting with empty history.
+During Doctor import, rows without `sessionStartedAt` are resolved from the
 legacy transcript JSONL session header when available. If an older row also
 lacks `lastInteractionAt`, idle freshness falls back to that session start time,
 not to later bookkeeping writes. Use `openclaw doctor --session-sqlite inspect
 --session-sqlite-all-agents` and the [Doctor migration
-sequence](/cli/doctor#session-sqlite-migration) when you want explicit
-inspection or validation evidence.
+sequence](/cli/doctor#session-sqlite-migration) for inspection and validation.
 
 ## Session maintenance
 
@@ -184,7 +250,9 @@ shown:
     maintenance: {
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
+      archiveDashboardAfter: "7d", // false or 0 disables
       maxEntries: 500,
+      preserveRecent: "7d", // optional; false or omitted disables
     },
   },
 }
@@ -195,6 +263,14 @@ high-water buffer and clean back down to the configured cap in batches.
 Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
+
+`maxEntries` caps unarchived session rows. Archived rows do not consume the cap.
+When pressure exceeds the cap, cleanup archives the oldest eligible ordinary
+sessions instead of deleting their transcripts. Synthetic runtime sessions such
+as cron, hooks, heartbeat, ACP, and sub-agents remain disposable and may be
+removed. Pinned sessions, active or admitted work, model-locked sessions, and
+durable external conversation pointers are protected; the unarchived total can
+therefore remain above the cap when protected rows alone exceed it.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -207,10 +283,24 @@ Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
 
-Archived sessions are user-shelved and exempt from every automatic maintenance
-path, including age pruning, entry caps, model-run cleanup, and disk-budget
-eviction. They remain archived until you unarchive them or explicitly delete
-them.
+Shared or high-volume installations can set `preserveRecent` to protect
+recently active interactive sessions and every SQLite history generation owned
+by those sessions. The option is disabled when omitted or set to `false`, so
+personal installations keep the normal oldest-first policy. Synthetic
+model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible
+for bounded cleanup. Protection can temporarily keep the store above its entry
+or disk target; it expires after the configured inactivity window.
+
+Recent-session protection does not change managed-worktree garbage collection;
+durable dashboard sessions auto-archive after 7 days of inactivity by default,
+while other session types still require an explicit archive action.
+
+Pinned sessions and manual, legacy, stale-dashboard, or recovery archives are
+user-protected and exempt from automatic maintenance. Sessions archived because
+`maxEntries` was reached record that reason and remain searchable/restorable
+until physical usage exceeds `maxDiskBytes`; disk-budget cleanup may then delete
+the oldest cap archives after cheaper artifacts and unreferenced history are
+exhausted. Sessions without a recorded archive reason remain protected.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

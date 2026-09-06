@@ -38,6 +38,37 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
 
+export function createIngressSettleOwner<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+  removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,
+): (fn: () => Promise<void>) => Promise<void> {
+  let settlePromise: Promise<void> | undefined;
+  let settled = false;
+  return async (fn) => {
+    if (settled) {
+      return;
+    }
+    if (settlePromise) {
+      await settlePromise;
+      return;
+    }
+    settlePromise = (async () => {
+      // Only mark settled after the tombstone/fail/release write commits.
+      // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
+      await fn();
+      settled = true;
+      state.phase = "settled";
+      removeActive(state);
+    })();
+    try {
+      await settlePromise;
+    } catch (err) {
+      settlePromise = undefined;
+      throw err;
+    }
+  };
+}
+
 export function activeClaimKey<TPayload, TMetadata>(
   claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
 ): string {

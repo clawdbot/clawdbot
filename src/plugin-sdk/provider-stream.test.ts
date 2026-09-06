@@ -1,6 +1,7 @@
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/core";
+import type { Model } from "openclaw/plugin-sdk/llm";
 // Provider stream tests cover shared stream-wrapper families and payload compatibility.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { VERSION } from "../version.js";
@@ -25,6 +26,8 @@ import {
   TOOL_STREAM_DEFAULT_ON_HOOKS,
 } from "./provider-stream.js";
 
+type StreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
+
 function requireWrapStreamFn(
   wrapStreamFn: ReturnType<typeof buildProviderStreamFamilyHooks>["wrapStreamFn"],
 ) {
@@ -44,6 +47,32 @@ function requireStreamFn(streamFn: StreamFn | null | undefined) {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
+
+const streamTestModel = {
+  id: "test-model",
+  name: "Test Model",
+  api: "openai-completions",
+  provider: "test",
+  baseUrl: "https://example.test/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8_192,
+  maxTokens: 1_024,
+} satisfies Model<"openai-completions">;
+
+function streamTestMessage(text: string) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: streamTestModel.api,
+    provider: streamTestModel.provider,
+    model: streamTestModel.id,
+    usage: createZeroUsageFixture(),
+    stopReason: "stop" as const,
+    timestamp: 1,
+  };
+}
 
 function requirePayload(payload: Record<string, unknown> | undefined): Record<string, unknown> {
   if (!payload) {
@@ -224,7 +253,8 @@ describe("composeProviderStreamWrappers", () => {
 
   it("applies wrappers left to right", () => {
     const order: string[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, _options) => {
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      expect(options?.maxRetries).toBe(0);
       order.push("base");
       return {} as never;
     };
@@ -234,7 +264,7 @@ describe("composeProviderStreamWrappers", () => {
       (streamFn: StreamFn | undefined): StreamFn =>
       (model, context, options) => {
         order.push(`${label}:before`);
-        const result = (streamFn ?? baseStreamFn)(model, context, options);
+        const result = (streamFn ?? baseStreamFn)(model, context, { ...options, maxRetries: 0 });
         order.push(`${label}:after`);
         return result;
       };
@@ -607,7 +637,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     };
     const wrapped = requireStreamFn(createPlainTextToolCallCompatWrapper(baseStreamFn));
     const output = wrapped(
-      {} as never,
+      streamTestModel,
       { tools: [{ name: "read" }] } as never,
       {},
     ) as AsyncIterable<unknown>;
@@ -618,7 +648,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       type: "text_delta",
       contentIndex: 0,
       delta: "final answer starts here",
-      partial: { role: "assistant", content: "final answer starts here" },
     } as never);
 
     const firstResult = await Promise.race([
@@ -632,10 +661,12 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       done: false,
       value: { type: "text_delta", delta: "final answer starts here" },
     });
+    expect(firstResult).not.toHaveProperty("value.partial");
 
     pushSourceEvent?.({
       type: "done",
-      message: { role: "assistant", content: "final answer starts here" },
+      reason: "stop",
+      message: streamTestMessage("final answer starts here"),
     } as never);
     await iterator.next();
   });

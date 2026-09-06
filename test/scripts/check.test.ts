@@ -1,7 +1,7 @@
 // Check tests cover check script behavior.
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { runCommand } from "../../scripts/check.mts";
+import { PREFLIGHT_CHECKS, runCommand } from "../../scripts/check.mts";
 
 describe("scripts/check", () => {
   function runCheck(...args: string[]) {
@@ -45,5 +45,24 @@ describe("scripts/check", () => {
     expect(calls).toEqual([{ args: ["lint"], bin: "pnpm" }]);
     expect(result).toMatchObject({ name: "lint", status: 0 });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("keeps script policy guards in the aggregate preflight", () => {
+    expect(PREFLIGHT_CHECKS).not.toContainEqual({
+      name: "environment variable count ratchet",
+      args: ["check:env-var-count"],
+    });
+    expect(PREFLIGHT_CHECKS).toContainEqual({
+      name: "max-lines suppression ratchet",
+      args: ["check:max-lines-ratchet"],
+    });
+    expect(PREFLIGHT_CHECKS).toContainEqual({
+      name: "assertion SAFETY comment ratchet",
+      args: ["check:assertion-safety"],
+    });
+    expect(PREFLIGHT_CHECKS).toContainEqual({
+      name: "script TypeScript erasability",
+      args: ["check:script-erasability"],
+    });
   });
 });

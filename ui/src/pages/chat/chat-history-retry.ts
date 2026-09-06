@@ -21,17 +21,6 @@ export function isRetryableStartupUnavailable(
   return typeof detailMethod !== "string" || detailMethod === method;
 }
 
-export function isUnknownGatewayMethodError(
-  err: unknown,
-  method: string,
-): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    err.gatewayCode === "INVALID_REQUEST" &&
-    err.message.includes(`unknown method: ${method}`)
-  );
-}
-
 export function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
   const retryAfterMs = typeof err.retryAfterMs === "number" ? err.retryAfterMs : DEFAULT_RETRY_MS;
   return Math.min(Math.max(retryAfterMs, 100), MAX_RETRY_MS);

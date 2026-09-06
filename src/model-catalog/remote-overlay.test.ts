@@ -1,9 +1,10 @@
+import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRemoteModelCatalogOverlay, getRemoteModelCatalogPricing } from "./remote-overlay.js";
 import {
-  resetRemoteModelCatalogOverlayForTest,
-  setRemoteModelCatalogOverlaySourcesForTest,
-} from "./remote-overlay.test-support.js";
+  getRemoteModelCatalogPricing,
+  getRemoteModelCatalogProviderOverlay,
+} from "./remote-overlay.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
 
 const mocks = {
   builtAt: vi.fn<() => number | undefined>(),
@@ -20,7 +21,6 @@ const bundle = {
 };
 
 beforeEach(() => {
-  resetRemoteModelCatalogOverlayForTest();
   mocks.builtAt.mockReset().mockReturnValue(100);
   mocks.read.mockReset().mockReturnValue({
     bundle_json: JSON.stringify(bundle),
@@ -34,13 +34,12 @@ beforeEach(() => {
 
 afterEach(() => {
   setRemoteModelCatalogOverlaySourcesForTest();
-  resetRemoteModelCatalogOverlayForTest();
 });
 
 describe("remote model catalog overlay", () => {
   it("loads a newer compatible bundle once", () => {
-    expect(getRemoteModelCatalogOverlay({})).toHaveProperty("anthropic");
-    expect(getRemoteModelCatalogOverlay({})).toHaveProperty("anthropic");
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
     expect(getRemoteModelCatalogPricing({})?.["openai/gpt-external"]).toEqual({
       input: 2.5,
       output: 10,
@@ -48,29 +47,91 @@ describe("remote model catalog overlay", () => {
     expect(mocks.read).toHaveBeenCalledOnce();
   });
 
+  it("keeps startup rows and prices when the configured source changes", () => {
+    const overlay = getRemoteModelCatalogProviderOverlay({}, "anthropic");
+    const pricing = getRemoteModelCatalogPricing({});
+    mocks.read.mockReturnValue({
+      bundle_json: JSON.stringify({
+        ...bundle,
+        generatedAt: 300,
+        providers: { anthropic: { models: [{ id: "downloaded" }] } },
+        pricing: { "openai/gpt-external": { input: 5, output: 20 } },
+      }),
+      source_url: "https://mirror.example.test/catalog.json",
+    });
+    expect(
+      getRemoteModelCatalogProviderOverlay(
+        { models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } } },
+        "anthropic",
+      ),
+    ).toBeUndefined();
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(overlay);
+    expect(getRemoteModelCatalogPricing({})).toEqual(pricing);
+  });
+
+  it("keeps invalid startup metadata absent after a successful download", () => {
+    const valid = mocks.read();
+    mocks.read.mockReturnValue({ ...valid, bundle_json: "{" });
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    mocks.read.mockReturnValue(valid);
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    expect(getRemoteModelCatalogPricing({})).toBeUndefined();
+  });
+
+  it("passes the same startup rows and prices to later workers", async () => {
+    const expected = {
+      overlay: getRemoteModelCatalogProviderOverlay({}, "anthropic"),
+      pricing: getRemoteModelCatalogPricing({}),
+    };
+    mocks.read.mockReturnValue(undefined);
+    const worker = new Worker(new URL("./remote-overlay.worker.test-support.ts", import.meta.url), {
+      execArgv: ["--import", "tsx"],
+    });
+    try {
+      const actual = await new Promise((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+      });
+      expect(actual).toEqual(expected);
+    } finally {
+      await worker.terminate();
+    }
+  });
+
   it("fails closed when disabled, stale, or missing a build stamp", () => {
     expect(
-      getRemoteModelCatalogOverlay({ models: { catalogRefresh: { enabled: false } } }),
+      getRemoteModelCatalogProviderOverlay(
+        { models: { catalogRefresh: { enabled: false } } },
+        "anthropic",
+      ),
     ).toBeUndefined();
     expect(mocks.read).not.toHaveBeenCalled();
-    resetRemoteModelCatalogOverlayForTest();
     mocks.builtAt.mockReturnValue(200);
-    expect(getRemoteModelCatalogOverlay({})).toBeUndefined();
-    resetRemoteModelCatalogOverlayForTest();
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: mocks.builtAt,
+      readStoredCatalog: mocks.read,
+    });
     mocks.builtAt.mockReturnValue(undefined);
-    expect(getRemoteModelCatalogOverlay({})).toBeUndefined();
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
   });
 
   it("does not reuse a cached overlay after disablement or a URL change", () => {
-    expect(getRemoteModelCatalogOverlay({})).toHaveProperty("anthropic");
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
     expect(
-      getRemoteModelCatalogOverlay({ models: { catalogRefresh: { enabled: false } } }),
+      getRemoteModelCatalogProviderOverlay(
+        { models: { catalogRefresh: { enabled: false } } },
+        "anthropic",
+      ),
     ).toBeUndefined();
     expect(
-      getRemoteModelCatalogOverlay({
-        models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
-      }),
+      getRemoteModelCatalogProviderOverlay(
+        {
+          models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
+        },
+        "anthropic",
+      ),
     ).toBeUndefined();
-    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(mocks.read).toHaveBeenCalledOnce();
   });
 });

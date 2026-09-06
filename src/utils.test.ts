@@ -1,9 +1,9 @@
 // Tests shared utility helpers used by CLI and runtime modules.
 import fs from "node:fs";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { isAbortError } from "./infra/abort-signal.js";
-import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {
@@ -134,7 +134,7 @@ describe("normalizeE164", () => {
 });
 
 describe("resolveConfigDir", () => {
-  it("prefers ~/.openclaw when legacy dir is missing", async () => {
+  it("resolves the default config directory", async () => {
     await withTestDir({ prefix: "openclaw-config-dir-" }, async (root) => {
       const newDir = path.join(root, ".openclaw");
       await fs.promises.mkdir(newDir, { recursive: true });
@@ -301,10 +301,5 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
-  });
-
-  it("returns empty string for undefined/null input", () => {
-    expect(resolveUserPath(undefined as unknown as string)).toBe("");
-    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });

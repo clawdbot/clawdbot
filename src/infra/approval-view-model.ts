@@ -1,14 +1,15 @@
 // Builds approval prompt view models from request and resolution events.
-import { resolveApprovalRequestKind } from "./approval-types.js";
+import { summarizeApprovalScope } from "./approval-scope.js";
+import { normalizeApprovalRequest, type ApprovalRequestInput } from "./approval-types.js";
 import type {
   ApprovalMetadataView,
-  ApprovalRequest,
   ApprovalResolved,
   ExecApprovalViewBase,
   ExpiredApprovalView,
   PendingApprovalView,
   PluginApprovalViewBase,
   ResolvedApprovalView,
+  SystemAgentApprovalViewBase,
 } from "./approval-view-model.types.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { buildTypedApprovalActionDescriptors } from "./exec-approval-reply.js";
@@ -18,10 +19,12 @@ import {
 } from "./exec-approvals.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import {
+  SYSTEM_AGENT_APPROVAL_DECISIONS,
+  type SystemAgentApprovalRequest,
+} from "./system-agent-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
-
-export { resolveApprovalRequestKind } from "./approval-types.js";
 
 function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[] {
   const metadata: ApprovalMetadataView[] = [];
@@ -36,6 +39,9 @@ function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[]
   }
   if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
     metadata.push({ label: "Env Overrides", value: request.request.envKeys.join(", ") });
+  }
+  if (request.request.scope) {
+    metadata.push({ label: "Scope", value: summarizeApprovalScope(request.request.scope) });
   }
   return metadata;
 }
@@ -55,6 +61,9 @@ function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataVi
   }
   if (request.request.agentId) {
     metadata.push({ label: "Agent", value: request.request.agentId });
+  }
+  if (request.request.scope) {
+    metadata.push({ label: "Scope", value: summarizeApprovalScope(request.request.scope) });
   }
   return metadata;
 }
@@ -81,6 +90,7 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     envKeys: request.request.envKeys ?? undefined,
     host: request.request.host ?? null,
     nodeId: request.request.nodeId ?? null,
+    ...(request.request.scope ? { scope: request.request.scope } : {}),
     sessionKey: request.request.sessionKey ?? null,
   };
 }
@@ -98,68 +108,110 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
     metadata: buildPluginMetadata(request),
     agentId: request.request.agentId ?? null,
     pluginId: request.request.pluginId ?? null,
+    ...(request.request.scope ? { scope: request.request.scope } : {}),
     toolName: request.request.toolName ?? null,
     severity: request.request.severity ?? "warning",
   };
 }
 
+function buildSystemAgentViewBase<TPhase extends ApprovalPhase>(
+  request: SystemAgentApprovalRequest,
+  phase: TPhase,
+): SystemAgentApprovalViewBase & { phase: TPhase } {
+  return {
+    approvalId: request.id,
+    approvalKind: "system-agent",
+    phase,
+    title: phase === "pending" ? "OpenClaw change requires approval" : "OpenClaw change",
+    description: request.request.description,
+    metadata: request.request.agentId ? [{ label: "Agent", value: request.request.agentId }] : [],
+    agentId: request.request.agentId ?? null,
+    commandText: request.request.description,
+    commandPreview: request.request.description,
+    cwd: null,
+    host: "gateway",
+    nodeId: null,
+    sessionKey: request.request.sessionKey ?? null,
+    operationSummary: request.request.description,
+  };
+}
+
 /** Builds the presentation model for an unresolved exec or plugin approval. */
-export function buildPendingApprovalView(request: ApprovalRequest): PendingApprovalView {
-  const approvalKind = resolveApprovalRequestKind(request);
-  if (approvalKind === "plugin") {
-    const pluginRequest = request as PluginApprovalRequest;
+export function buildPendingApprovalView(request: ApprovalRequestInput): PendingApprovalView {
+  const normalizedRequest = normalizeApprovalRequest(request);
+  if (normalizedRequest.approvalKind === "system-agent") {
     return {
-      ...buildPluginViewBase(pluginRequest, "pending"),
+      ...buildSystemAgentViewBase(normalizedRequest, "pending"),
       actions: buildTypedApprovalActionDescriptors({
-        approvalCommandId: pluginRequest.id,
-        approvalKind,
-        allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
-          pluginRequest.request,
-        ),
+        approvalCommandId: normalizedRequest.id,
+        approvalKind: normalizedRequest.approvalKind,
+        allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
       }),
-      expiresAtMs: pluginRequest.expiresAtMs,
+      expiresAtMs: normalizedRequest.expiresAtMs,
     };
   }
-  const execRequest = request as ExecApprovalRequest;
+  if (normalizedRequest.approvalKind === "plugin") {
+    return {
+      ...buildPluginViewBase(normalizedRequest, "pending"),
+      actions: buildTypedApprovalActionDescriptors({
+        approvalCommandId: normalizedRequest.id,
+        approvalKind: normalizedRequest.approvalKind,
+        allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+          normalizedRequest.request,
+        ),
+      }),
+      expiresAtMs: normalizedRequest.expiresAtMs,
+    };
+  }
   return {
-    ...buildExecViewBase(execRequest, "pending"),
+    ...buildExecViewBase(normalizedRequest, "pending"),
     actions: buildTypedApprovalActionDescriptors({
-      approvalCommandId: execRequest.id,
-      approvalKind,
-      ask: execRequest.request.ask,
-      allowedDecisions: resolveExecApprovalRequestAllowedDecisions(execRequest.request),
+      approvalCommandId: normalizedRequest.id,
+      approvalKind: normalizedRequest.approvalKind,
+      ask: normalizedRequest.request.ask,
+      allowedDecisions: resolveExecApprovalRequestAllowedDecisions(normalizedRequest.request),
     }),
-    expiresAtMs: execRequest.expiresAtMs,
+    expiresAtMs: normalizedRequest.expiresAtMs,
   };
 }
 
 /** Builds the presentation model for an approval after a decision was recorded. */
 export function buildResolvedApprovalView(
-  request: ApprovalRequest,
+  request: ApprovalRequestInput,
   resolved: ApprovalResolved,
 ): ResolvedApprovalView {
-  const approvalKind = resolveApprovalRequestKind(request);
-  if (approvalKind === "plugin") {
-    const pluginRequest = request as PluginApprovalRequest;
+  const normalizedRequest = normalizeApprovalRequest(request);
+  if (normalizedRequest.approvalKind === "system-agent") {
     return {
-      ...buildPluginViewBase(pluginRequest, "resolved"),
+      ...buildSystemAgentViewBase(normalizedRequest, "resolved"),
+      decision: resolved.decision,
+      resolvedBy: resolved.resolvedBy,
+      applicationStatus: resolved.applicationStatus,
+      terminalStatus: resolved.terminalStatus,
+    };
+  }
+  if (normalizedRequest.approvalKind === "plugin") {
+    return {
+      ...buildPluginViewBase(normalizedRequest, "resolved"),
       decision: resolved.decision,
       resolvedBy: resolved.resolvedBy,
     };
   }
-  const execRequest = request as ExecApprovalRequest;
   return {
-    ...buildExecViewBase(execRequest, "resolved"),
+    ...buildExecViewBase(normalizedRequest, "resolved"),
     decision: resolved.decision,
     resolvedBy: resolved.resolvedBy,
   };
 }
 
 /** Builds the presentation model shown when an approval can no longer be acted on. */
-export function buildExpiredApprovalView(request: ApprovalRequest): ExpiredApprovalView {
-  const approvalKind = resolveApprovalRequestKind(request);
-  if (approvalKind === "plugin") {
-    return buildPluginViewBase(request as PluginApprovalRequest, "expired");
+export function buildExpiredApprovalView(request: ApprovalRequestInput): ExpiredApprovalView {
+  const normalizedRequest = normalizeApprovalRequest(request);
+  if (normalizedRequest.approvalKind === "system-agent") {
+    return buildSystemAgentViewBase(normalizedRequest, "expired");
   }
-  return buildExecViewBase(request as ExecApprovalRequest, "expired");
+  if (normalizedRequest.approvalKind === "plugin") {
+    return buildPluginViewBase(normalizedRequest, "expired");
+  }
+  return buildExecViewBase(normalizedRequest, "expired");
 }

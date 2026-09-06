@@ -36,7 +36,9 @@ function createGatewayHarness() {
       return snapshot;
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     subscribe: vi.fn((listener: (value: ApplicationGatewaySnapshot) => void) => {
       listeners.add(listener);
       return () => {
@@ -108,6 +110,26 @@ describe("session viewer presence store", () => {
       sessionKeys: [],
     });
     expect(harness.unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("threads the selected owner for a bare global viewer identity", async () => {
+    const harness = createGatewayHarness();
+    harness.setSnapshot({
+      ...harness.gateway.snapshot,
+      assistantAgentId: "work",
+      hello: createHello("global"),
+    });
+    const store = sessionViewerPresenceForGateway(harness.gateway);
+    const owner = {};
+    store.watch(owner, ["global"]);
+    await flushSync();
+
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      agentId: "work",
+      sessionKeys: ["global"],
+    });
+    store.unwatch(owner);
+    await flushSync();
   });
 
   it("declares empty while hidden and restores the set when visible", async () => {

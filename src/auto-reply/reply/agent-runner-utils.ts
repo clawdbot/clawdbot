@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -27,11 +28,11 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
-export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
+export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 type EmbeddedReplyRoute = Pick<
@@ -42,6 +43,7 @@ type EmbeddedReplyRoute = Pick<
   | "originatingChatType"
   | "originatingThreadId"
   | "originatingReplyToId"
+  | "originatingReplyToMode"
 >;
 
 /** Selects the freshest runtime config usable by queued reply execution. */
@@ -73,7 +75,7 @@ export async function resolveQueuedReplyExecutionConfig(
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    targetIds: getAgentRuntimeCommandSecretTargetIds({ config: runtimeConfig }),
     optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
   });
   const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
@@ -106,9 +108,6 @@ export async function resolveQueuedReplyExecutionConfig(
   return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
-/**
- * Build provider-specific threading context for tool auto-injection.
- */
 /** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
@@ -127,14 +126,12 @@ export function buildThreadingToolContext(params: {
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
   });
-  const originTo = resolveOriginMessageTo({
-    originatingTo: sessionCtx.OriginatingTo,
-    to: sessionCtx.To,
-  });
+  const originTo = sessionCtx.OriginatingTo ?? sessionCtx.To;
   if (!config) {
     return {
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
     };
   }
   const rawProvider = normalizeOptionalLowercaseString(originProvider);
@@ -142,6 +139,7 @@ export function buildThreadingToolContext(params: {
     return {
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
     };
   }
   const provider = normalizeChatChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
@@ -153,6 +151,7 @@ export function buildThreadingToolContext(params: {
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
       hasRepliedRef,
     };
   }
@@ -184,6 +183,7 @@ export function buildThreadingToolContext(params: {
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
     currentSourceTurnId,
+    replyToMode: context.replyToMode ?? sessionCtx.ReplyToMode,
   };
 }
 
@@ -201,6 +201,23 @@ export const formatBunFetchSocketError = (message: string) => {
     "```",
   ].join("\n");
 };
+
+/** Remaps the original inline request without reusing a queued model's clamped level. */
+export function resolveRunThinkingLevelForFallbackCandidate(
+  params: Omit<Parameters<typeof resolveCandidateThinkingLevel>[0], "level"> & {
+    run: FollowupRun["run"];
+  },
+) {
+  const { run, ...candidate } = params;
+  return resolveCandidateThinkingLevel({
+    ...candidate,
+    // Reset and inherited choices already resolved defaults when this turn was admitted.
+    level:
+      run.thinkLevelOverride === "default"
+        ? run.thinkLevel
+        : (run.thinkLevelOverride ?? run.thinkLevel),
+  });
+}
 
 /** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
@@ -262,6 +279,7 @@ function buildEmbeddedContextFromTemplate(params: {
       params.run.chatType,
     MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
+    ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
   };
   return {
     sessionId: params.run.sessionId,
@@ -274,10 +292,8 @@ function buildEmbeddedContextFromTemplate(params: {
     }),
     ...(sessionCtx.ChatType ? { chatType: sessionCtx.ChatType } : {}),
     agentAccountId: sessionCtx.AccountId,
-    messageTo: resolveOriginMessageTo({
-      originatingTo: sessionCtx.OriginatingTo,
-      to: sessionCtx.To,
-    }),
+    conversationRoutePeerId: params.run.conversationRoutePeerId,
+    messageTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
@@ -313,7 +329,7 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
 }
 
 /** Builds execution-specific embedded run params for queued reply dispatch. */
-export function buildEmbeddedRunExecutionParams(params: {
+export async function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
@@ -332,7 +348,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     hasRepliedRef: params.hasRepliedRef,
   });
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
-  const runBaseParams = buildEmbeddedRunBaseParams({
+  const runBaseParams = await buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,
     model: params.model,

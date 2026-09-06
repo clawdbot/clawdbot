@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { createZeroUsage } from "../usage.test-support.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   type OpenAICompletionsOutput,
@@ -25,15 +26,8 @@ describe("openai completions stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
+      usage: createZeroUsage(),
+      stopReason: "stop" as const,
       timestamp: Date.now(),
     };
 
@@ -99,15 +93,8 @@ describe("openai completions stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
+      usage: createZeroUsage(),
+      stopReason: "stop" as const,
       timestamp: Date.now(),
     };
 
@@ -287,15 +274,8 @@ describe("openai completions stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
+      usage: createZeroUsage(),
+      stopReason: "stop" as const,
       timestamp: Date.now(),
     };
 
