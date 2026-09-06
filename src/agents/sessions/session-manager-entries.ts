@@ -1,4 +1,5 @@
 import {
+  inspectRuntimeTranscriptEventsSync,
   readActiveTranscriptEntryAnchor,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
@@ -24,6 +25,7 @@ import type {
   CompactionEntry,
   CustomEntry,
   CustomMessageEntry,
+  FileEntry,
   LabelEntry,
   ModelChangeEntry,
   ResetEntry,
@@ -87,10 +89,13 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       // Preserve the prepared parent so storage can distinguish a descendant tail from an
       // unrelated branch. Assistant replies may follow only a descendant tail with no newer
       // user turn; reset boundaries and reentrant assistant writes remain compatible.
-      this.reloadPersistedTranscript();
-      if (preparedAssistant && !this.canRebasePreparedAssistant(canonicalEntry.parentId)) {
+      if (
+        preparedAssistant &&
+        !this.canRebasePreparedAssistantAgainstPersistedTranscript(canonicalEntry.parentId)
+      ) {
         throw error;
       }
+      this.reloadPersistedTranscript();
       persistenceResult = this.persist(canonicalEntry, persistenceOptions);
     }
     if (persistenceResult?.adoptedMessageId) {
@@ -133,6 +138,25 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       // Detached managers append locally; only the storage owner supplies a durable anchor.
       appended: persistenceResult?.appended ?? true,
     };
+  }
+
+  /** Checks durable history without mutating the live manager when a stale assistant is rejected. */
+  private canRebasePreparedAssistantAgainstPersistedTranscript(
+    preparedParentId: string | null,
+  ): boolean {
+    if (!this.persistenceTarget) {
+      return false;
+    }
+    const inspected = inspectRuntimeTranscriptEventsSync(this.persistenceTarget);
+    const persisted = new SessionManagerEntries(
+      this.cwd,
+      undefined,
+      // SAFETY: Runtime transcript inspection returns the persisted file-entry codec consumed here.
+      inspected.events as FileEntry[],
+      undefined,
+      inspected.snapshot.transcriptUpdatedAt,
+    );
+    return persisted.canRebasePreparedAssistant(preparedParentId);
   }
 
   private canRebasePreparedAssistant(preparedParentId: string | null): boolean {
