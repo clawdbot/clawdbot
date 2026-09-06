@@ -382,7 +382,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.compactionCount).toBe(1);
     // Once OpenClaw rewrites the transcript, external CLI resume ids are stale
     // and must be cleared so the next turn starts from the compacted prompt.
-    expect(updatedEntry?.cliSessionBindings?.["claude-cli"]).toEqual({ historyAuthUnknown: true });
+    expect(updatedEntry?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
   });
@@ -1060,11 +1060,9 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).not.toHaveBeenCalled();
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
     expect(updatedEntry?.compactionCount).toBeUndefined();
-    expect(updatedEntry?.cliSessionBindings?.codex).toEqual({ historyAuthUnknown: true });
+    expect(updatedEntry?.cliSessionBindings?.codex).toBeUndefined();
     expect(updatedEntry?.cliSessionIds?.codex).toBeUndefined();
-    expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toEqual({
-      historyAuthUnknown: true,
-    });
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
   });
 

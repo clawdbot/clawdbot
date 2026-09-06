@@ -96,12 +96,10 @@ export function resolveManualCompactionCliTarget(params: {
 }): ManualCompactionCliTarget {
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
   const runtimeConfig =
-    runtimeOverride && getCliSessionBinding(params.entry, runtimeOverride)?.sessionId
-      ? params.cfg
-      : undefined;
+    runtimeOverride && getCliSessionBinding(params.entry, runtimeOverride) ? params.cfg : undefined;
   const historicalRuntime = normalizeOptionalAgentRuntimeId(params.entry?.agentHarnessId);
   const historicalRuntimeConfig =
-    historicalRuntime && getCliSessionBinding(params.entry, historicalRuntime)?.sessionId
+    historicalRuntime && getCliSessionBinding(params.entry, historicalRuntime)
       ? params.cfg
       : undefined;
   const selectedRuntime = resolveSessionRuntimeOverrideForProvider({
@@ -148,7 +146,7 @@ export function resolveManualCompactionCliTarget(params: {
     const binding = compatibleRuntime
       ? getCliSessionBinding(params.entry, compatibleRuntime)
       : undefined;
-    return compatibleRuntime && binding?.sessionId ? [{ runtime: compatibleRuntime, binding }] : [];
+    return compatibleRuntime && binding ? [{ runtime: compatibleRuntime, binding }] : [];
   });
   const compatibleBinding = compatibleBindings.length === 1 ? compatibleBindings[0] : undefined;
   if (!compatibleBinding) {

@@ -979,10 +979,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     | undefined;
   expect(storedEntry?.compactionCount).toBe(1);
   expect(storedEntry?.compactionCheckpoints).toHaveLength(1);
-  expect(storedEntry?.cliSessionBindings).toEqual({
-    "claude-cli": { historyAuthUnknown: true },
-    "codex-cli": { historyAuthUnknown: true },
-  });
+  expect(storedEntry?.cliSessionBindings).toBeUndefined();
   expect(storedEntry?.cliSessionIds).toBeUndefined();
   expect(storedEntry?.claudeCliSessionId).toBeUndefined();
   expect(storedEntry?.inputTokens).toBeUndefined();
@@ -2030,10 +2027,7 @@ test("sessions.compact maxLines trims SQLite transcript rows without creating a 
   await expect(fs.readdir(dir)).resolves.not.toContain("sess-main.jsonl");
   const trimmedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(trimmedEntry?.cliSessionIds).toBeUndefined();
-  expect(trimmedEntry?.cliSessionBindings).toEqual({
-    "claude-cli": { historyAuthUnknown: true },
-    "codex-cli": { historyAuthUnknown: true },
-  });
+  expect(trimmedEntry?.cliSessionBindings).toBeUndefined();
   expect(trimmedEntry?.claudeCliSessionId).toBeUndefined();
 
   // No active run present, so the interrupt guard short-circuits without aborting.

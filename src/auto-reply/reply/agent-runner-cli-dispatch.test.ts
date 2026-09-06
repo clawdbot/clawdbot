@@ -778,13 +778,13 @@ describe("clearCliSessionInStore", () => {
       await clear;
 
       for (const entry of [activeEntry, storedEntry]) {
-        expect(entry.cliSessionBindings?.["claude-cli"]).toEqual({ historyAuthUnknown: true });
+        expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
         expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
         expect(entry.claudeCliSessionId).toBeUndefined();
         expect(entry.updatedAt).toBeGreaterThan(1);
       }
       const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
-      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({ historyAuthUnknown: true });
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
       expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
       expect(persisted?.claudeCliSessionId).toBeUndefined();
     },

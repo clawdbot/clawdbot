@@ -611,7 +611,7 @@ describe("cli-session helpers", () => {
     setCliSessionBinding(entry, "codex-cli", { sessionId: "codex-session" });
 
     clearCliSession(entry, "codex-cli");
-    expect(getCliSessionBinding(entry, "codex-cli")).toMatchObject({ historyAuthUnknown: true });
+    expect(getCliSessionBinding(entry, "codex-cli")).toBeUndefined();
     expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe("claude-session");
 
     clearAllCliSessions(entry);
@@ -619,94 +619,6 @@ describe("cli-session helpers", () => {
     expect(entry.cliSessionIds).toBeUndefined();
     expect(entry.claudeCliSessionId).toBeUndefined();
   });
-
-  it.each([
-    {
-      name: "same account",
-      profile: "account-a",
-      epoch: "epoch-a",
-      mode: "none",
-      reason: undefined,
-    },
-    {
-      name: "changed account",
-      profile: "account-b",
-      epoch: "epoch-b",
-      mode: "invalidate",
-      reason: "auth-profile",
-    },
-    {
-      name: "changed credential",
-      profile: "account-a",
-      epoch: "epoch-b",
-      mode: "invalidate",
-      reason: "auth-epoch",
-    },
-  ])(
-    "retains the history boundary after repeated clears: $name",
-    ({ profile, epoch, mode, reason }) => {
-      const entry: SessionEntry = { sessionId: "local", updatedAt: 1 };
-      setCliSessionBinding(entry, "claude-cli", {
-        sessionId: "native",
-        authProfileId: "account-a",
-        authEpoch: "epoch-a",
-        authEpochVersion: 1,
-      });
-      clearCliSession(entry, "claude-cli");
-      clearCliSession(entry, "claude-cli");
-      const persisted = structuredClone(entry);
-      const binding = getCliSessionBinding(persisted, "claude-cli");
-      expect(binding?.sessionId).toBeUndefined();
-      expect(persisted.claudeCliSessionId).toBeUndefined();
-      expect(
-        resolveCliSessionReuse({
-          binding,
-          authProfileId: profile,
-          authEpoch: epoch,
-          authEpochVersion: 1,
-        }),
-      ).toEqual(reason ? { mode, invalidatedReason: reason } : { mode });
-      setCliSessionBinding(persisted, "claude-cli", {
-        sessionId: "replacement",
-        authProfileId: profile,
-        authEpoch: epoch,
-        authEpochVersion: 1,
-      });
-      expect(getCliSessionBinding(persisted, "claude-cli")?.sessionId).toBe("replacement");
-    },
-  );
-
-  it("refuses unknown legacy history after clearing its only native handle", () => {
-    const entry: SessionEntry = { sessionId: "local", updatedAt: 1, claudeCliSessionId: "legacy" };
-    clearCliSession(entry, "claude-cli");
-    clearCliSession(entry, "claude-cli");
-    expect(
-      resolveCliSessionReuse({
-        binding: getCliSessionBinding(entry, "claude-cli"),
-        authEpochVersion: 1,
-      }),
-    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-unknown" });
-  });
-
-  it.each([undefined, 0])(
-    "does not trust a cleared history fingerprint from version %s",
-    (authEpochVersion) => {
-      const entry: SessionEntry = { sessionId: "local", updatedAt: 1 };
-      setCliSessionBinding(entry, "claude-cli", {
-        sessionId: "native",
-        authEpoch: "old",
-        authEpochVersion,
-      });
-      clearCliSession(entry, "claude-cli");
-      expect(
-        resolveCliSessionReuse({
-          binding: getCliSessionBinding(entry, "claude-cli"),
-          authEpoch: "new",
-          authEpochVersion: 1,
-        }),
-      ).toEqual({ mode: "invalidate", invalidatedReason: "auth-unknown" });
-    },
-  );
 
   it("hashes trimmed extra system prompts consistently", () => {
     expect(hashCliSessionText("  keep this  ")).toBe(hashCliSessionText("keep this"));

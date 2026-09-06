@@ -128,10 +128,7 @@ export type SessionDiffBaseline = {
 };
 
 export type CliSessionBinding = {
-  /** Absent after invalidation; authentication metadata still guards history reseeding. */
-  sessionId?: string;
-  /** A legacy binding was cleared without a recorded authentication identity. */
-  historyAuthUnknown?: true;
+  sessionId: string;
   /** Last successful assistant boundary accepted by the backend's resume contract. */
   resumeCheckpointId?: string;
   /** Resume with the backend's fork argument once, then clear before process start. */
@@ -623,6 +620,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Transcript-wide account provenance; native binding replacement must not replace it. */
+  cliHistoryBoundary?: import("./cli-history-boundary.js").CliHistoryBoundary;
   /** Explicit world-readable publication, bound to one transcript generation. */
   publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
