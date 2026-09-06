@@ -1701,6 +1701,7 @@
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/poolside",
                   "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",

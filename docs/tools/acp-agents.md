@@ -107,6 +107,7 @@ With the `acpx` backend, use these ids as `/acp spawn <id>` or
 | `kiro`       | Kiro CLI                                       | Adapter availability and model control depend on the installed CLI.                 |
 | `mux`        | Mux CLI ACP adapter                            | Fetched on demand with `npx`.                                                       |
 | `opencode`   | OpenCode ACP adapter                           | Requires OpenCode CLI/provider auth.                                                |
+| `pool`       | Poolside Agent ACP adapter                     | Requires the Poolside CLI and provider auth.                                        |
 | `openclaw`   | OpenClaw Gateway bridge through `openclaw acp` | Lets an ACP-aware harness talk back to an OpenClaw Gateway session.                 |
 | `qoder`      | Qoder CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
 | `qwen`       | Qwen Code / Qwen CLI                           | Requires Qwen-compatible auth on the host.                                          |
