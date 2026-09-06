@@ -1949,6 +1949,9 @@ CREATE TABLE IF NOT EXISTS node_worker_prepared_workspaces (
   preparation_key TEXT NOT NULL PRIMARY KEY CHECK (
     length(preparation_key) = 64 AND preparation_key NOT GLOB '*[^0-9a-f]*'
   ),
+  cache_key TEXT NOT NULL CHECK (
+    length(cache_key) = 64 AND cache_key NOT GLOB '*[^0-9a-f]*'
+  ),
   gateway_namespace TEXT NOT NULL CHECK (length(gateway_namespace) > 0),
   workspace_dir TEXT NOT NULL UNIQUE CHECK (length(workspace_dir) > 0),
   home_dir TEXT NOT NULL CHECK (length(home_dir) > 0),

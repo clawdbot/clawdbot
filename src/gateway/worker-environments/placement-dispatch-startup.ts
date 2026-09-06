@@ -415,6 +415,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           sessionId: request.sessionId,
           sessionKey: request.sessionKey,
           preparationKey: preparation.key,
+          cacheKey: preparation.cacheKey,
           signal: params.signal,
           assertCurrent: assertAttachmentCurrent,
         });

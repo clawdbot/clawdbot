@@ -27,6 +27,7 @@ const Target = z
 const Preparation = z
   .object({
     key: Digest,
+    cacheKey: Digest,
     contractVersion: z.literal(1),
     setupRecipe: z
       .string()
@@ -80,22 +81,29 @@ export function createWorkerProjectPreparationIdentity(params: {
   };
   // Source root is transport location only: linked worktrees share Git identity.
   // The explicit contract version also invalidates Gateway-owned setup semantics.
-  const key = createHash("sha256")
-    .update(
-      stableStringify({
-        ...facts,
-        namespace: params.namespace,
-        providerId: params.providerId,
-        profileId: params.profileId,
-        profile: {
-          ...params.profileSnapshot,
-          machineClass: facts.target.machineClass,
-          executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
-        },
-        project: { key: params.project.key, baseCommit: params.project.baseCommit },
-        workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
-      }),
-    )
-    .digest("hex");
-  return { key, ...facts };
+  const compatibility = {
+    ...facts,
+    namespace: params.namespace,
+    providerId: params.providerId,
+    profileId: params.profileId,
+    profile: {
+      ...params.profileSnapshot,
+      machineClass: facts.target.machineClass,
+      executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
+    },
+    project: { key: params.project.key },
+    workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+  };
+  const digest = (value: unknown) =>
+    createHash("sha256").update(stableStringify(value)).digest("hex");
+  // An older checkout can accelerate preparation, but only the exact commit may
+  // advertise readiness. Keep its physical cache identity separate from that claim.
+  return {
+    key: digest({
+      ...compatibility,
+      project: { ...compatibility.project, baseCommit: params.project.baseCommit },
+    }),
+    cacheKey: digest(compatibility),
+    ...facts,
+  };
 }

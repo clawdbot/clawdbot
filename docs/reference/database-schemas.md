@@ -500,7 +500,11 @@ the metadata. This retention does not delay physical machine teardown.
 
 Dedicated nodes register their fixed build paths in the first-use
 `node_worker_prepared_workspaces` table before advertising readiness. Registration
-records the exact environment; binding adds the session and owner epoch once.
+records the exact environment and completed `preparation_key`, with a separate
+required `cache_key` for compatible project/runtime contents and fixed workspace
+and HOME paths. The cache key excludes the commit; preparation remains an exact
+commit match. Binding adds the session and owner epoch once, and retirement uses
+the stored cache identity to remove the same physical directory.
 Retirement preserves that binding until machine teardown. Ordinary database open
 and migration leave this node-only table absent. Per-agent schemas do not change.
 

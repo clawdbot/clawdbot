@@ -40,7 +40,13 @@ const allocations = {
     phase: "enrolled",
   },
 };
-const unknownPreparation = { preparationKey: null, demandAtMs: null, imageGeneration: null };
+const unknownPreparation = {
+  preparationKey: null,
+  cacheKey: null,
+  purpose: null,
+  demandAtMs: null,
+  imageGeneration: null,
+};
 const migratedAllocations = {
   cbx_cold: { ...allocations.cbx_cold, ...unknownPreparation },
   cbx_prepared: { ...allocations.cbx_prepared, ...unknownPreparation },
@@ -123,7 +129,13 @@ describe("Crabbox warm-profile Doctor migration", () => {
       resetPluginStateStoreForTests();
       expect(openCrabboxWarmImageStore(env).lookup("profile")).toEqual({
         version: 3,
-        image: { ...metadata, lastDemandAtMs: null, preparationKey: null },
+        image: {
+          ...metadata,
+          lastDemandAtMs: null,
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+        },
         allocations: format === "v2" ? migratedAllocations : {},
         ...(format === "v2" ? { projectKey: "project-owned" } : {}),
         ...(operation ? { operation } : {}),
@@ -132,6 +144,62 @@ describe("Crabbox warm-profile Doctor migration", () => {
       expect(await migration.migrateLegacyState(input())).toEqual({ changes: [], warnings: [] });
     });
   });
+
+  it.each(["capture", "retirement", "ordinary", "pending"] as const)(
+    "preserves prior v3 demand and exact image pins during %s migration",
+    async (kind) => {
+      const { lastUsedAtMs: _lastUsedAtMs, ...metadata } = image;
+      const preparationKey = kind === "ordinary" || kind === "pending" ? null : "d".repeat(64);
+      const operation =
+        kind === "capture" || kind === "pending"
+          ? {
+              type: "capture",
+              id: "capture-owned",
+              startedAtMs: 40,
+              leaseId: "cbx_prepared",
+              provider: "machine0",
+              phase: "creating",
+            }
+          : kind === "retirement"
+            ? { type: "retire", checkpointId: "chk_previous" }
+            : undefined;
+      const source = {
+        version: 3,
+        projectKey: "project-owned",
+        image: {
+          ...metadata,
+          ...(kind === "pending" ? { checkpointId: "", kind: "", state: "pending" } : {}),
+          preparationKey,
+          lastDemandAtMs: kind === "pending" ? null : 20,
+        },
+        allocations: {
+          cbx_prepared: {
+            ...allocations.cbx_prepared,
+            preparationKey,
+            demandAtMs: 30,
+            imageGeneration: { checkpointId: "chk_chosen", createdAtMs: 5 },
+          },
+        },
+        ...(operation ? { operation } : {}),
+      };
+      await legacyImages().register("profile", source);
+      expect(() => openCrabboxWarmImageStore(env).lookup("profile")).toThrow("doctor --fix");
+      expect(await migration.detectLegacyState(input())).not.toBeNull();
+      expect(await legacyImages().lookup("profile")).toEqual(source);
+
+      expect((await migration.migrateLegacyState(input())).warnings).toEqual([]);
+      resetPluginStateStoreForTests();
+      expect(openCrabboxWarmImageStore(env).lookup("profile")).toEqual({
+        ...source,
+        image: { ...source.image, cacheKey: null, purpose: null },
+        allocations: {
+          cbx_prepared: { ...source.allocations.cbx_prepared, cacheKey: null, purpose: null },
+        },
+      });
+      expect(await migration.detectLegacyState(input())).toBeNull();
+      expect(await migration.migrateLegacyState(input())).toEqual({ changes: [], warnings: [] });
+    },
+  );
 
   it("preserves fixed allocation choices without requiring a current image", async () => {
     await legacyImages().register("profile", { version: 2, allocations });
@@ -207,6 +275,18 @@ describe("Crabbox warm-profile Doctor migration", () => {
         },
       },
       { version: 4, allocations: {} },
+      {
+        version: 3,
+        allocations: {
+          cbx_owned: {
+            ...allocations.cbx_cold,
+            preparationKey: "d".repeat(64),
+            demandAtMs: 30,
+            imageGeneration: null,
+            unrecognizedCleanupObligation: "preserve",
+          },
+        },
+      },
     ];
     const store = legacyImages();
     for (const [index, row] of rows.entries()) {

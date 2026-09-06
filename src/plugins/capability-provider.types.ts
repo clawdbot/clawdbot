@@ -269,7 +269,12 @@ export type WorkerProvider = {
       project?: {
         key: string;
         baseCommit: string;
-        preparation?: { key: string; demandAtMs: number };
+        preparation?: {
+          key: string;
+          cacheKey: string;
+          purpose: "session" | "reserve";
+          demandAtMs: number;
+        };
         signal: AbortSignal;
         assertCurrent: () => void;
         /** Bound to this provision attempt; retained callbacks reject after it closes. */
@@ -286,6 +291,7 @@ export type WorkerProvider = {
           cacheHit: boolean;
           preparedWorkspace?: {
             preparationKey: string;
+            cacheKey: string;
             workspaceDir: string;
             homeDir: string;
             sourceManifestRef: string;

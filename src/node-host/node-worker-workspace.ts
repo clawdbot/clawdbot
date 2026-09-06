@@ -612,7 +612,7 @@ export class NodeWorkerWorkspaceRuntime {
       if (isProtected()) {
         continue;
       }
-      const ownerRoot = path.join(this.preparedRoot, row.gateway_namespace, row.preparation_key);
+      const ownerRoot = path.join(this.preparedRoot, row.gateway_namespace, row.cache_key);
       await serializeNodeWorkerWorkspace(ownerRoot, async () => {
         params.signal?.throwIfAborted();
         if (isProtected()) {

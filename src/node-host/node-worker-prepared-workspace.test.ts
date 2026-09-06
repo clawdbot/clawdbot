@@ -32,11 +32,13 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 afterEach(() => vi.restoreAllMocks());
 const preparationKey = "a".repeat(64);
+const cacheKey = "c".repeat(64);
 const binding: NodeWorkerPreparedWorkspaceBinding = {
   action: "bind",
   gatewayNamespace: "gateway-prepared",
   environmentId: "environment-prepared",
   preparationKey,
+  cacheKey,
   sessionId: "session-prepared",
   sessionKey: "agent:main:prepared",
   ownerEpoch: 2,
@@ -49,7 +51,7 @@ async function fixture() {
     ".openclaw-worker",
     "prepared",
     binding.gatewayNamespace,
-    preparationKey,
+    cacheKey,
   );
   const workspaceDir = path.join(ownerRoot, "workspace");
   const homeDir = path.join(ownerRoot, "home");
@@ -93,6 +95,7 @@ async function fixture() {
     gatewayNamespace: binding.gatewayNamespace,
     environmentId: binding.environmentId,
     preparationKey,
+    cacheKey,
     workspaceDir,
     homeDir,
     sourceManifestRef,
@@ -268,10 +271,24 @@ describe("prepared node workspace ownership", () => {
     const f = await fixture();
     const registered = await f.runtime.prepare(f.registration);
     await expect(f.runtime.prepare(f.registration)).resolves.toEqual(registered);
+    await expect(
+      f.runtime.prepare({ ...f.registration, cacheKey: "d".repeat(64) }),
+    ).rejects.toThrow("escaped");
+    await expect(f.runtime.prepare({ ...binding, cacheKey: "d".repeat(64) })).rejects.toThrow(
+      "does not match",
+    );
     expect(() => f.runtime.acquireManagedWorkspace(f.request)).toThrow("does not own");
     const bound = await f.runtime.prepare(binding);
     await expect(f.runtime.prepare(binding)).resolves.toEqual(bound);
     const restarted = new NodeWorkerWorkspaceRuntime(f.options);
+    expect(
+      new NodeWorkerPreparedWorkspaceStore({ env: f.env }).find(binding.environmentId),
+    ).toMatchObject({
+      cache_key: cacheKey,
+      preparation_key: preparationKey,
+      workspace_dir: f.workspaceDir,
+      home_dir: f.homeDir,
+    });
     const result = await restarted.exec(f.command);
     expect(result).toMatchObject({
       workspaceDir: f.workspaceDir,
@@ -294,6 +311,9 @@ describe("prepared node workspace ownership", () => {
     }
     await expect(restarted.prepare({ ...binding, sessionId: "second-session" })).rejects.toThrow(
       "consumed",
+    );
+    await expect(restarted.prepare({ ...binding, preparationKey: "b".repeat(64) })).rejects.toThrow(
+      "does not match",
     );
     await expect(restarted.prepare(f.registration)).rejects.toThrow("already owns");
     await expect(restarted.exec({ ...f.command, resetWorkspace: true })).rejects.toThrow(
@@ -355,6 +375,8 @@ describe("prepared node workspace ownership", () => {
       new NodeWorkerPreparedWorkspaceStore({ env: f.env }).find(binding.environmentId),
     ).toMatchObject({
       state: "retired",
+      cache_key: cacheKey,
+      preparation_key: preparationKey,
       session_id: binding.sessionId,
       session_key: binding.sessionKey,
       owner_epoch: binding.ownerEpoch,

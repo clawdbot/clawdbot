@@ -360,6 +360,8 @@ describe("Crabbox warm-image lifecycle ownership", () => {
           state: "available",
           createdAtMs: now,
           preparationKey: null,
+          cacheKey: null,
+          purpose: null,
           lastDemandAtMs: now - (index === 42 ? 1_000 : 0),
         },
       });

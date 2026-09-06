@@ -169,6 +169,8 @@ export function createWorkerProviderProvisioner(options: WorkerProviderProvision
             ? {
                 preparation: {
                   key: preparation.key,
+                  cacheKey: preparation.cacheKey,
+                  purpose: record.preparation ? "reserve" : "session",
                   demandAtMs: record.preparation?.demandAtMs ?? record.createdAtMs,
                   setupRecipe: preparation.setupRecipe,
                 },

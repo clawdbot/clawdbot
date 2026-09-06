@@ -64,12 +64,10 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
+  resolveCrabboxWarmImageCaptureTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
-import {
-  createCrabboxWarmImageManager,
-  resolveCrabboxWarmImageCaptureTimeoutMs,
-} from "./crabbox-worker-warm-image.js";
+import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
@@ -514,6 +512,8 @@ export function createCrabboxWorkerProvider(
           });
           project.assertCurrent();
           warmImages.markPrepared(leaseId, project.baseCommit);
+          // The owner skips foreground restore capture but still checks unresolved
+          // capture custody here; bypassing this call could admit enrollment too early.
           captured = await warmImages.capture(
             {
               ...context,

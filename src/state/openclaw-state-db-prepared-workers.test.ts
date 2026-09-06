@@ -252,13 +252,18 @@ describe("prepared worker schema migration", () => {
     setPreparation.run(preparationKey, 10, 100, 20);
     ensureNodeWorkerPreparedWorkspaceSchema(db);
     db.prepare(`INSERT INTO node_worker_prepared_workspaces (
-      preparation_key, gateway_namespace, workspace_dir, home_dir, source_manifest_ref,
+      preparation_key, cache_key, gateway_namespace, workspace_dir, home_dir, source_manifest_ref,
       state, environment_id, session_id, session_key, owner_epoch, created_at_ms, bound_at_ms
-    ) VALUES (?, 'gateway', '/prepared/workspace', '/prepared/home', ?,
+    ) VALUES (?, ?, 'gateway', '/prepared/workspace', '/prepared/home', ?,
       'bound', 'environment', 'session', 'agent:main:fixture', 2, 10, 20)`).run(
       preparationKey,
+      "c".repeat(64),
       `sha256:${preparationKey}`,
     );
+    const setCacheKey = db.prepare("UPDATE node_worker_prepared_workspaces SET cache_key = ?");
+    for (const invalid of [null, "", "c".repeat(63), "C".repeat(64)]) {
+      expect(() => setCacheKey.run(invalid)).toThrow(/constraint failed/);
+    }
     expect(() => db.exec("UPDATE node_worker_prepared_workspaces SET state = 'available'")).toThrow(
       /CHECK constraint failed/,
     );

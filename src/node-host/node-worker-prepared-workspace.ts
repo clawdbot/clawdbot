@@ -24,7 +24,8 @@ export async function prepareNodeWorkerWorkspace(
   hashMemos: Map<string, WorkspaceHashMemo>,
   signal?: AbortSignal,
 ): Promise<NodeWorkerPreparedWorkspaceResult> {
-  const ownerRoot = path.join(root, input.gatewayNamespace, input.preparationKey);
+  // Compatible snapshots keep absolute build paths; exact preparation stays in the binding row.
+  const ownerRoot = path.join(root, input.gatewayNamespace, input.cacheKey);
   return await serializeNodeWorkerWorkspace(ownerRoot, async () => {
     signal?.throwIfAborted();
     let row: NodeWorkerPreparedWorkspaceRow;
@@ -69,7 +70,7 @@ export async function prepareNodeWorkerWorkspace(
       }
       assertNodePreparedWorkspacePaths(root, {
         gatewayNamespace: existing.gateway_namespace,
-        preparationKey: existing.preparation_key,
+        cacheKey: existing.cache_key,
         workspaceDir: existing.workspace_dir,
         homeDir: existing.home_dir,
       });
@@ -84,6 +85,7 @@ export async function prepareNodeWorkerWorkspace(
     }
     return {
       preparationKey: row.preparation_key,
+      cacheKey: row.cache_key,
       environmentId: row.environment_id,
       gatewayNamespace: row.gateway_namespace,
       workspaceDir: row.workspace_dir,

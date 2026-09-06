@@ -25,6 +25,7 @@ type PoolOptions = {
     profileId: string,
     options: {
       projectPath: string;
+      projectCommit: string;
       machineClass?: string;
       executionMode?: "worker-turn" | "remote-exec";
       setupAuthorized?: boolean;
@@ -136,6 +137,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         const preparation = readWorkerProjectPreparation(record.profileSnapshot.project)!;
         const intent = await options.prepareIntent(record.profileId, {
           projectPath: project.root,
+          projectCommit: project.baseCommit,
           ...(typeof record.profileSnapshot.machineClass === "string"
             ? { machineClass: record.profileSnapshot.machineClass }
             : {}),

@@ -24,6 +24,8 @@ const expiredImage = (id: string): WarmProfileRecord => ({
     state: "available",
     createdAtMs: Date.now() - RETENTION_MS,
     preparationKey: null,
+    cacheKey: null,
+    purpose: null,
     lastDemandAtMs: Date.now() - RETENTION_MS,
   },
 });
@@ -40,6 +42,8 @@ describe("Crabbox idle image maintenance", () => {
       machineClass: "standard",
       phase: "pending",
       preparationKey: null,
+      cacheKey: null,
+      purpose: null,
       demandAtMs: null,
       imageGeneration: null,
     };

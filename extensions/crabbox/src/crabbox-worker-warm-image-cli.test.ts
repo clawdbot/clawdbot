@@ -42,6 +42,8 @@ function pendingCapture(): WarmProfileRecord {
       state: "available",
       createdAtMs: now - 86_400_000,
       preparationKey: null,
+      cacheKey: null,
+      purpose: null,
       lastDemandAtMs: now,
     },
     operation: {
@@ -70,6 +72,16 @@ describe("Crabbox warm-image CLI", () => {
       demandAtMs: 1,
       imageGeneration: { checkpointId: "chk_retained", createdAtMs: -1 },
     },
+    { preparationKey: null, demandAtMs: 1, imageGeneration: null, cacheKey: undefined },
+    { preparationKey: null, demandAtMs: 1, imageGeneration: null, purpose: undefined },
+    { preparationKey: null, demandAtMs: 1, imageGeneration: null, purpose: "reserve" },
+    {
+      preparationKey: null,
+      demandAtMs: 1,
+      imageGeneration: null,
+      cacheKey: "c".repeat(64),
+      purpose: "session",
+    },
   ])(
     "rejects incomplete preparation metadata without rewriting retained ownership: %j",
     async (metadata) => {
@@ -81,12 +93,16 @@ describe("Crabbox warm-image CLI", () => {
       const record = {
         version: 3,
         allocations: {
-          cbx_retained: {
-            choice: { kind: "checkpoint", checkpointId: "chk_retained" },
-            machineClass: "standard",
-            phase: "pending",
-            ...metadata,
-          },
+          cbx_retained: Object.fromEntries(
+            Object.entries({
+              choice: { kind: "checkpoint", checkpointId: "chk_retained" },
+              machineClass: "standard",
+              phase: "pending",
+              cacheKey: null,
+              purpose: null,
+              ...metadata,
+            }).filter(([, value]) => value !== undefined),
+          ),
         },
       };
       raw.register("profile", record);
@@ -139,6 +155,8 @@ describe("Crabbox warm-image CLI", () => {
           state: "available",
           createdAtMs: record.image!.createdAtMs,
           preparationKey: null,
+          cacheKey: null,
+          purpose: null,
           lastDemandAtMs: record.image!.lastDemandAtMs,
           allocations: {},
           capture: {

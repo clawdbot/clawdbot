@@ -26,7 +26,7 @@ const BASE_COMMIT = "b".repeat(40);
 function projectOptions(
   events: string[],
   controller = new AbortController(),
-  preparation?: { key: string; demandAtMs: number },
+  preparation?: NonNullable<NonNullable<ProvisionOptions["project"]>["preparation"]>,
 ) {
   let enrollmentStarted = false;
   const observe = ({ argv }: CommandCall) => {
@@ -78,6 +78,99 @@ function projectOptions(
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it.each(["aws", "machine0", "daytona"])(
+    "reuses A→B→A project caches on %s while only a reserve captures the replacement",
+    async (backend) => {
+      const profile = { ...PROFILE, provider: backend };
+      const events: string[] = [];
+      const now = Date.now();
+      const preparation = {
+        key: "a".repeat(64),
+        cacheKey: "c".repeat(64),
+        purpose: "session" as const,
+        demandAtMs: now,
+      };
+      let current = projectOptions(events, new AbortController(), preparation);
+      current.options.project.baseCommit = "a".repeat(40);
+      let captures = 0;
+      const { provider, calls } = createWarmProvider((call) => {
+        current.observe(call);
+        return call.argv[2] === "create"
+          ? checkpointResult(
+              ++captures === 1 ? CHECKPOINT_ID : "chk_commit_b",
+              call.argv[call.argv.indexOf("--id") + 1]!,
+              "available",
+            )
+          : undefined;
+      });
+      await provider.provision(profile, "commit-a-source", current.options);
+      expect(captures).toBe(1);
+
+      const next = { ...preparation, key: "b".repeat(64), demandAtMs: now + 1_000 };
+      events.length = 0;
+      calls.length = 0;
+      current = projectOptions(events, new AbortController(), next);
+      const foreground = await provider.provision(profile, "commit-b-session", current.options);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+      expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
+      expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+      await provider.notePreparedDemand!(
+        { leaseId: foreground.leaseId, profile },
+        { preparationKey: next.key, demandAtMs: now + 2_000 },
+      );
+      expect(listCrabboxWarmImages()[0]?.lastDemandAtMs).toBe(now + 2_000);
+      await provider.provision(profile, "commit-b-session", current.options);
+      expect(captures).toBe(1);
+
+      // Interrupted enrollment leaves a prepared allocation for destroy replay;
+      // that cleanup must not turn the foreground checkout into a new image.
+      current = projectOptions(events, new AbortController(), next);
+      current.options.beginNodeEnrollment.mockRejectedValueOnce(
+        new DOMException("Enrollment owner closed", "AbortError"),
+      );
+      await expect(
+        provider.provision(profile, "commit-b-interrupted", current.options),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      await provider.destroy({ leaseId: operationLeaseId("commit-b-interrupted"), profile });
+      expect(captures).toBe(1);
+
+      current = projectOptions(events, new AbortController(), { ...next, purpose: "reserve" });
+      events.length = 0;
+      const reserve = await provider.provision(profile, "commit-b-reserve", current.options);
+      expect(captures).toBe(2);
+      expect(events.indexOf("capture")).toBeLessThan(events.indexOf("enrollment-begun"));
+      expect(listCrabboxWarmImages()[0]).toMatchObject({
+        checkpointId: "chk_commit_b",
+        preparationKey: next.key,
+        cacheKey: next.cacheKey,
+        purpose: "reserve",
+        retirement: { checkpointId: CHECKPOINT_ID },
+      });
+      calls.length = 0;
+      current = projectOptions(events, new AbortController(), next);
+      await provider.provision(profile, "commit-b-session", current.options);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+      await provider.notePreparedDemand!(
+        { leaseId: foreground.leaseId, profile },
+        { preparationKey: next.key, demandAtMs: now + 3_000 },
+      );
+      expect(listCrabboxWarmImages()[0]?.lastDemandAtMs).toBe(next.demandAtMs);
+      await provider.destroy({ leaseId: foreground.leaseId, profile });
+      expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
+      await provider.destroy({ leaseId: reserve.leaseId, profile });
+      expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual([
+        CHECKPOINT_ID,
+      ]);
+
+      calls.length = 0;
+      current = projectOptions(events, new AbortController(), preparation);
+      current.options.project.baseCommit = "a".repeat(40);
+      await provider.provision(profile, "commit-a-return", current.options);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe("chk_commit_b");
+      expect(captures).toBe(2);
+    },
+  );
+
   it("shares each freshly selected command budget with its script factory", async () => {
     const { options } = projectOptions([]);
     const timeoutMs = vi
@@ -120,7 +213,12 @@ describe("Crabbox project snapshot provisioning", () => {
     const events: string[] = [];
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const preparation = { key: "c".repeat(64), demandAtMs: now };
+    const preparation = {
+      key: "c".repeat(64),
+      cacheKey: "d".repeat(64),
+      purpose: "session" as const,
+      demandAtMs: now,
+    };
     const profile = { ...PROFILE, setup: "synthetic-profile-setup" };
     let current = projectOptions(events, new AbortController(), preparation);
     const { provider, calls } = createWarmProvider((call) => current.observe(call));
@@ -129,7 +227,7 @@ describe("Crabbox project snapshot provisioning", () => {
     expect(cold.slice(cold.indexOf("--target"))).toEqual(["--target", "linux", "--arch", "amd64"]);
     clock.mockReturnValue(now + 60_000);
     calls.length = 0;
-    current = projectOptions(events, new AbortController(), preparation);
+    current = projectOptions(events, new AbortController(), { ...preparation, purpose: "reserve" });
     const reserve = await provider.provision(profile, "prepared-reserve", current.options);
     const fork = calls.find(({ argv }) => argv[2] === "fork")!.argv;
     expect(fork.slice(fork.indexOf("--target"), -1)).toEqual([

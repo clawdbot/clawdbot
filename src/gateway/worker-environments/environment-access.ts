@@ -90,6 +90,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       request.signal?.throwIfAborted();
       request.assertCurrent();
       const record = store.get(request.environmentId);
+      const preparation = record && readWorkerProjectPreparation(record.profileSnapshot.project);
       if (
         options.isStopping() ||
         record?.state !== "attached" ||
@@ -98,7 +99,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         record.attachedSessionIds[0] !== request.sessionId ||
         record.destroyRequestedAtMs !== null ||
         record.sharedHost !== false ||
-        readWorkerProjectPreparation(record.profileSnapshot.project)?.key !== request.preparationKey
+        preparation?.key !== request.preparationKey ||
+        preparation.cacheKey !== request.cacheKey
       ) {
         throw new Error("Prepared workspace lost its exact attached environment owner");
       }

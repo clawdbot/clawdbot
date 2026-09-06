@@ -1,6 +1,26 @@
 import { createHash } from "node:crypto";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { parseCrabboxProfile } from "./crabbox-worker-profile.js";
+
+export function resolveCrabboxWarmImageProfileKey(
+  profile: ReturnType<typeof parseCrabboxProfile>,
+  projectKey?: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        backendProvider: profile.provider,
+        setup: profile.setup ?? "",
+        setupEnvKeys: [...(profile.setupEnv ?? [])].toSorted(),
+        desktop: profile.desktop ?? false,
+        // Exact class is intentionally conservative; cross-class reuse comes later.
+        machineClass: profile.class,
+        ...(projectKey ? { projectKey } : {}),
+      }),
+    )
+    .digest("hex");
+}
 
 export type WarmImageRecord = {
   checkpointId: string;
@@ -8,6 +28,8 @@ export type WarmImageRecord = {
   state: "pending" | "available";
   createdAtMs: number;
   preparationKey: string | null;
+  cacheKey: string | null;
+  purpose: "session" | "reserve" | null;
   lastDemandAtMs: number | null;
   baseCommit?: string;
 };
@@ -17,6 +39,8 @@ export type WarmAllocationRecord = {
   machineClass: string;
   phase: "pending" | "prepared" | "enrolled";
   preparationKey: string | null;
+  cacheKey: string | null;
+  purpose: "session" | "reserve" | null;
   demandAtMs: number | null;
   imageGeneration: { checkpointId: string; createdAtMs: number } | null;
   baseCommit?: string;
@@ -88,18 +112,26 @@ function requireCanonicalProfile(record: WarmProfileRecord | undefined) {
     value === null || (typeof value === "string" && /^[a-f0-9]{64}$/u.test(value));
   const demandAtMs = (value: unknown) =>
     value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
+  const cacheIdentity = (value: { preparationKey: unknown; cacheKey: unknown; purpose: unknown }) =>
+    preparationKey(value.cacheKey) &&
+    (value.cacheKey === null
+      ? value.purpose === null
+      : value.preparationKey !== null &&
+        (value.purpose === "session" || value.purpose === "reserve"));
   if (
     record &&
     (!isRecord(record.allocations) ||
       (record.image &&
         (!isRecord(record.image) ||
           !preparationKey(record.image.preparationKey) ||
+          !cacheIdentity(record.image) ||
           !demandAtMs(record.image.lastDemandAtMs) ||
           (record.image.preparationKey !== null && record.image.lastDemandAtMs === null))) ||
       Object.values(record.allocations).some(
         (allocation) =>
           !isRecord(allocation) ||
           !preparationKey(allocation.preparationKey) ||
+          !cacheIdentity(allocation) ||
           !demandAtMs(allocation.demandAtMs) ||
           (allocation.preparationKey !== null && allocation.demandAtMs === null) ||
           (allocation.imageGeneration !== null &&
@@ -218,6 +250,7 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       if (
         !owner ||
         owner.preparationKey !== preparation.preparationKey ||
+        owner.cacheKey === null ||
         !generation ||
         !Number.isSafeInteger(preparation.demandAtMs) ||
         preparation.demandAtMs < 0
@@ -228,9 +261,11 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       // selected or produced, never a replacement published while it waited ready.
       canonical.update(owner.key, (record) =>
         record?.image &&
-        record.image.preparationKey === owner.preparationKey &&
+        record.image.cacheKey === owner.cacheKey &&
         sameCrabboxWarmImageGeneration(record.image, generation) &&
         record.allocations[id]?.preparationKey === owner.preparationKey &&
+        record.allocations[id]?.cacheKey === owner.cacheKey &&
+        record.allocations[id]?.purpose === owner.purpose &&
         sameCrabboxWarmImageGeneration(record.allocations[id]?.imageGeneration, generation)
           ? {
               ...record,
@@ -286,6 +321,8 @@ export function listCrabboxWarmImages(env?: NodeJS.ProcessEnv) {
       state: value.image?.state ?? "no-image",
       createdAtMs: value.image?.createdAtMs,
       preparationKey: value.image?.preparationKey,
+      cacheKey: value.image?.cacheKey,
+      purpose: value.image?.purpose,
       lastDemandAtMs: value.image?.lastDemandAtMs,
       baseCommit: value.image?.baseCommit,
       allocations: value.allocations,

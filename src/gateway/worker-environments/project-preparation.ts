@@ -56,7 +56,13 @@ export function readWorkerProjectSnapshot(value: unknown): WorkerProjectSnapshot
 export function createWorkerProjectPreparation(params: {
   project: WorkerProjectSnapshot;
   namespace: string;
-  preparation?: { key: string; demandAtMs: number; setupRecipe?: string };
+  preparation?: {
+    key: string;
+    cacheKey: string;
+    purpose: "session" | "reserve";
+    demandAtMs: number;
+    setupRecipe?: string;
+  };
   setupAuthorized?: boolean;
   requireCurrent: () => void;
   signal?: AbortSignal;
@@ -72,6 +78,7 @@ export function createWorkerProjectPreparation(params: {
   if (
     preparation &&
     (!/^[a-f0-9]{64}$/u.test(preparation.key) ||
+      !/^[a-f0-9]{64}$/u.test(preparation.cacheKey) ||
       !Number.isSafeInteger(preparation.demandAtMs) ||
       preparation.demandAtMs < 0 ||
       (preparation.setupRecipe !== undefined &&
@@ -101,7 +108,7 @@ export function createWorkerProjectPreparation(params: {
     if (!preparation) {
       throw new Error("Project preparation did not request a prepared workspace");
     }
-    const suffix = `/.openclaw-worker/prepared/${params.namespace}/${preparation.key}`;
+    const suffix = `/.openclaw-worker/prepared/${params.namespace}/${preparation.cacheKey}`;
     if (
       !isRecord(prepared) ||
       typeof prepared.workspaceDir !== "string" ||
@@ -117,6 +124,7 @@ export function createWorkerProjectPreparation(params: {
     }
     return Object.freeze({
       preparationKey: preparation.key,
+      cacheKey: preparation.cacheKey,
       workspaceDir: prepared.workspaceDir,
       homeDir: prepared.homeDir,
       sourceManifestRef: prepared.sourceManifestRef,
@@ -129,7 +137,13 @@ export function createWorkerProjectPreparation(params: {
       seedKey,
       baseCommit: params.project.baseCommit,
       ...(preparation
-        ? { preparation: { preparationKey: preparation.key, setupRecipe: preparation.setupRecipe } }
+        ? {
+            preparation: {
+              preparationKey: preparation.key,
+              cacheKey: preparation.cacheKey,
+              setupRecipe: preparation.setupRecipe,
+            },
+          }
         : {}),
     };
     const inspection: unknown = JSON.parse(
@@ -149,6 +163,16 @@ export function createWorkerProjectPreparation(params: {
       };
     }
     const directory = inspection.directory;
+    const retainedCommit = inspection.retainedCommit;
+    if (
+      retainedCommit !== undefined &&
+      (!preparation ||
+        typeof retainedCommit !== "string" ||
+        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(retainedCommit) ||
+        retainedCommit.length !== params.project.baseCommit.length)
+    ) {
+      throw new Error("Project preparation returned an invalid retained Git base");
+    }
     if (
       typeof directory !== "string" ||
       directory.length > 4096 ||
@@ -166,6 +190,7 @@ export function createWorkerProjectPreparation(params: {
       const pack = await prepareWorkerWorkspaceGitPack({
         root: params.project.root,
         baseCommit: params.project.baseCommit,
+        ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
         temporaryRoot,
         signal,
       });
@@ -185,7 +210,12 @@ export function createWorkerProjectPreparation(params: {
         await transport.runScript(
           createProjectSeedScript({
             ...scriptInput,
-            pack: { directory, bytes, sha256: hash.digest("hex") },
+            pack: {
+              directory,
+              bytes,
+              sha256: hash.digest("hex"),
+              ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+            },
           }),
           signal,
         ),
@@ -223,6 +253,7 @@ export function createWorkerProjectPreparation(params: {
             namespace: params.namespace,
             seedKey,
             preparationKey: preparation.key,
+            cacheKey: preparation.cacheKey,
             baseCommit: params.project.baseCommit,
             setupRecipe: preparation.setupRecipe,
             timeoutMs,
@@ -240,7 +271,14 @@ export function createWorkerProjectPreparation(params: {
       key: params.project.key,
       baseCommit: params.project.baseCommit,
       ...(preparation
-        ? { preparation: { key: preparation.key, demandAtMs: preparation.demandAtMs } }
+        ? {
+            preparation: {
+              key: preparation.key,
+              cacheKey: preparation.cacheKey,
+              purpose: preparation.purpose,
+              demandAtMs: preparation.demandAtMs,
+            },
+          }
         : {}),
       signal,
       assertCurrent: requireCurrent,

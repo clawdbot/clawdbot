@@ -314,6 +314,8 @@ describe("Crabbox plugin generation lifecycle", () => {
         state: "available",
         createdAtMs: old,
         preparationKey: null,
+        cacheKey: null,
+        purpose: null,
         lastDemandAtMs: old,
       },
     });

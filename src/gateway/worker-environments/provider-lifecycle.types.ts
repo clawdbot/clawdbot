@@ -75,6 +75,7 @@ export type WorkerProviderLifecycleInputOptions = {
     sessionId: string;
     sessionKey: string;
     preparationKey: string;
+    cacheKey: string;
     signal?: AbortSignal;
     assertCurrent: () => void;
   }) => Promise<void>;

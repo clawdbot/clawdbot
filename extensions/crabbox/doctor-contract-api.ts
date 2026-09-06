@@ -6,18 +6,27 @@ import type {
   WarmProfileRecord,
 } from "./src/crabbox-worker-warm-image-store.js";
 
-type LegacyWarmImageRecord = Omit<WarmImageRecord, "lastDemandAtMs" | "preparationKey"> & {
+type LegacyWarmImageRecord = Omit<
+  WarmImageRecord,
+  "lastDemandAtMs" | "preparationKey" | "cacheKey" | "purpose"
+> & {
   lastUsedAtMs: number;
   operation?: WarmProfileRecord["operation"];
 };
 type LegacyWarmAllocationRecord = Omit<
   WarmAllocationRecord,
-  "preparationKey" | "demandAtMs" | "imageGeneration"
+  "preparationKey" | "demandAtMs" | "imageGeneration" | "cacheKey" | "purpose"
 >;
 type LegacyWarmProfileRecord = Omit<WarmProfileRecord, "version" | "image" | "allocations"> & {
   version: 2;
   image?: LegacyWarmImageRecord;
   allocations: Record<string, LegacyWarmAllocationRecord>;
+};
+type PriorPreparedImage = Omit<WarmImageRecord, "cacheKey" | "purpose">;
+type PriorPreparedAllocation = Omit<WarmAllocationRecord, "cacheKey" | "purpose">;
+type PriorPreparedProfile = Omit<WarmProfileRecord, "image" | "allocations"> & {
+  image?: PriorPreparedImage;
+  allocations: Record<string, PriorPreparedAllocation>;
 };
 
 const imageFields = new Set([
@@ -33,6 +42,17 @@ const captureFields = new Set(["type", "id", "startedAtMs", "leaseId", "provider
 const retirementFields = new Set(["type", "checkpointId"]);
 const profileFields = new Set(["version", "projectKey", "image", "allocations", "operation"]);
 const allocationFields = new Set(["choice", "machineClass", "phase", "baseCommit"]);
+const preparedImageFields = new Set([
+  ...[...imageFields].filter((field) => field !== "lastUsedAtMs" && field !== "operation"),
+  "preparationKey",
+  "lastDemandAtMs",
+]);
+const preparedAllocationFields = new Set([
+  ...allocationFields,
+  "preparationKey",
+  "demandAtMs",
+  "imageGeneration",
+]);
 const nonempty = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 const timestamp = (value: unknown): value is number =>
@@ -65,31 +85,38 @@ function isLegacyOperation(value: unknown): value is WarmProfileRecord["operatio
   );
 }
 
+function isImageMetadata(value: unknown) {
+  const image = asOptionalRecord(value);
+  return Boolean(
+    image &&
+    typeof image.checkpointId === "string" &&
+    typeof image.kind === "string" &&
+    (image.state === "pending" || image.state === "available") &&
+    timestamp(image.createdAtMs) &&
+    (image.baseCommit === undefined || nonempty(image.baseCommit)) &&
+    (image.checkpointId
+      ? nonempty(image.checkpointId) && nonempty(image.kind)
+      : image.kind === "" && image.state === "pending"),
+  );
+}
+
 function isLegacyImage(value: unknown): value is LegacyWarmImageRecord {
   const image = asOptionalRecord(value);
   return Boolean(
     image &&
     Object.keys(image).every((key) => imageFields.has(key)) &&
-    typeof image.checkpointId === "string" &&
-    typeof image.kind === "string" &&
-    (image.state === "pending" || image.state === "available") &&
-    timestamp(image.createdAtMs) &&
+    isImageMetadata(image) &&
     timestamp(image.lastUsedAtMs) &&
-    (image.baseCommit === undefined || nonempty(image.baseCommit)) &&
-    (image.checkpointId
-      ? nonempty(image.checkpointId) && nonempty(image.kind)
-      : image.kind === "" && image.state === "pending") &&
     isLegacyOperation(image.operation),
   );
 }
 
-function isLegacyAllocation(value: unknown): value is LegacyWarmAllocationRecord {
+function isAllocationMetadata(value: unknown) {
   const allocation = asOptionalRecord(value);
   const choice = asOptionalRecord(allocation?.choice);
   return Boolean(
     allocation &&
     choice &&
-    Object.keys(allocation).every((key) => allocationFields.has(key)) &&
     nonempty(allocation.machineClass) &&
     (allocation.phase === "pending" ||
       allocation.phase === "prepared" ||
@@ -100,6 +127,74 @@ function isLegacyAllocation(value: unknown): value is LegacyWarmAllocationRecord
       : choice.kind === "checkpoint" &&
         Object.keys(choice).every((key) => key === "kind" || key === "checkpointId") &&
         nonempty(choice.checkpointId)),
+  );
+}
+
+function isLegacyAllocation(value: unknown): value is LegacyWarmAllocationRecord {
+  const allocation = asOptionalRecord(value);
+  return Boolean(
+    allocation &&
+    Object.keys(allocation).every((key) => allocationFields.has(key)) &&
+    isAllocationMetadata(allocation),
+  );
+}
+
+function needsCacheMigration(value: unknown): boolean {
+  const profile = asOptionalRecord(value);
+  const image = asOptionalRecord(profile?.image);
+  const allocations = asOptionalRecord(profile?.allocations);
+  return Boolean(
+    profile?.version === 3 &&
+    ((image && (image.cacheKey === undefined || image.purpose === undefined)) ||
+      (allocations &&
+        Object.values(allocations).some((entry) => {
+          const allocation = asOptionalRecord(entry);
+          return (
+            allocation && (allocation.cacheKey === undefined || allocation.purpose === undefined)
+          );
+        }))),
+  );
+}
+
+function isPriorPreparedProfile(value: unknown): value is PriorPreparedProfile {
+  const profile = asOptionalRecord(value);
+  const image = asOptionalRecord(profile?.image);
+  const allocations = asOptionalRecord(profile?.allocations);
+  const digest = (entry: unknown) =>
+    entry === null || (typeof entry === "string" && /^[a-f0-9]{64}$/u.test(entry));
+  const demand = (entry: unknown) =>
+    entry === null || (typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0);
+  return Boolean(
+    profile?.version === 3 &&
+    Object.keys(profile).every((key) => profileFields.has(key)) &&
+    (profile.projectKey === undefined || nonempty(profile.projectKey)) &&
+    isLegacyOperation(profile.operation) &&
+    (profile.image === undefined ||
+      (image &&
+        Object.keys(image).every((key) => preparedImageFields.has(key)) &&
+        isImageMetadata(image) &&
+        digest(image.preparationKey) &&
+        demand(image.lastDemandAtMs) &&
+        (image.preparationKey === null || image.lastDemandAtMs !== null))) &&
+    allocations &&
+    Object.values(allocations).every((entry) => {
+      const allocation = asOptionalRecord(entry);
+      const generation = asOptionalRecord(allocation?.imageGeneration);
+      return (
+        allocation &&
+        Object.keys(allocation).every((key) => preparedAllocationFields.has(key)) &&
+        isAllocationMetadata(allocation) &&
+        digest(allocation.preparationKey) &&
+        demand(allocation.demandAtMs) &&
+        (allocation.preparationKey === null || allocation.demandAtMs !== null) &&
+        (allocation.imageGeneration === null ||
+          (generation &&
+            Object.keys(generation).length === 2 &&
+            nonempty(generation.checkpointId) &&
+            Number.isSafeInteger(generation.createdAtMs) &&
+            Number(generation.createdAtMs) >= 0))
+      );
+    }),
   );
 }
 
@@ -125,7 +220,7 @@ function migrateImage({
   ...image
 }: LegacyWarmImageRecord): WarmImageRecord {
   // Legacy use includes background forks, so it proves neither demand nor preparation identity.
-  return { ...image, lastDemandAtMs: null, preparationKey: null };
+  return { ...image, lastDemandAtMs: null, preparationKey: null, cacheKey: null, purpose: null };
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -143,14 +238,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           overflowPolicy: "reject-new",
         })
         .entries();
-      const pending = images.filter(({ value }) => asOptionalRecord(value)?.version !== 3).length;
+      const pending = images.filter(
+        ({ value }) => asOptionalRecord(value)?.version !== 3 || needsCacheMigration(value),
+      ).length;
       const leases = listCrabboxLegacyWarmLeases(env);
       return pending || leases.length
         ? {
             preview: [
               ...(pending
                 ? [
-                    `- ${pending} Crabbox warm-image row(s) require preparation-record migration or manual repair.`,
+                    `- ${pending} Crabbox warm-image row(s) require preparation/cache-record migration or manual repair.`,
                   ]
                 : []),
               ...leases.map(
@@ -175,11 +272,24 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         overflowPolicy: "reject-new",
       });
       for (const { key, value } of await store.entries()) {
-        if (asOptionalRecord(value)?.version === 3) {
+        if (asOptionalRecord(value)?.version === 3 && !needsCacheMigration(value)) {
           continue;
         }
         let migrated: WarmProfileRecord;
-        if (isLegacyProfile(value)) {
+        if (isPriorPreparedProfile(value)) {
+          // An opaque exact fingerprint cannot recover cache compatibility or allocation purpose.
+          const { image, allocations, ...profile } = value;
+          migrated = {
+            ...profile,
+            ...(image ? { image: { ...image, cacheKey: null, purpose: null } } : {}),
+            allocations: Object.fromEntries(
+              Object.entries(allocations).map(([id, allocation]) => [
+                id,
+                { ...allocation, cacheKey: null, purpose: null },
+              ]),
+            ),
+          };
+        } else if (isLegacyProfile(value)) {
           const { image, allocations, ...profile } = value;
           migrated = {
             ...profile,
@@ -191,6 +301,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
                 {
                   ...allocation,
                   preparationKey: null,
+                  cacheKey: null,
+                  purpose: null,
                   demandAtMs: null,
                   imageGeneration: null,
                 },
@@ -230,7 +342,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           );
           if (changed) {
             changes.push(
-              `Migrated Crabbox warm profile ${key}, preserving resource obligations without inventing preparation or demand.`,
+              `Migrated Crabbox warm profile ${key}, preserving resource obligations without inventing preparation, cache identity, purpose or demand.`,
             );
           } else {
             warnings.push(

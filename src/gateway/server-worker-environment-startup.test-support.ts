@@ -93,6 +93,7 @@ async function createPreparedNodeAcknowledgement(root: string, reserveRemainingM
     }
     const namespace = options.projectNamespace;
     const preparationKey = "a".repeat(64);
+    const cacheKey = "c".repeat(64);
     const seedKey = "b".repeat(64);
     const seed = path.join(home, ".openclaw-worker", "git-seeds", namespace, seedKey);
     await fs.mkdir(seed, { recursive: true });
@@ -112,7 +113,10 @@ async function createPreparedNodeAcknowledgement(root: string, reserveRemainingM
     const baseCommit = (await requireGit(seed, ["rev-parse", "HEAD"])).trim();
     const output = execFileSync(
       "sh",
-      ["-c", createProjectSetupScript({ namespace, seedKey, preparationKey, baseCommit })],
+      [
+        "-c",
+        createProjectSetupScript({ namespace, seedKey, preparationKey, cacheKey, baseCommit }),
+      ],
       {
         env: { ...process.env, HOME: home },
         encoding: "utf8",
@@ -126,6 +130,7 @@ async function createPreparedNodeAcknowledgement(root: string, reserveRemainingM
       gatewayNamespace: namespace,
       environmentId,
       preparationKey,
+      cacheKey,
     });
     if (!prepared) {
       throw new Error("Project setup did not produce a valid workspace");
@@ -274,6 +279,7 @@ async function createPreparedNodeAcknowledgement(root: string, reserveRemainingM
         deviceId: nodeId,
         workspace: {
           preparationKey,
+          cacheKey,
           workspaceDir: prepared.workspaceDir,
           homeDir: prepared.homeDir,
           sourceManifestRef: prepared.sourceManifestRef,
@@ -308,6 +314,7 @@ async function createPreparedNodeAcknowledgement(root: string, reserveRemainingM
     const binding = {
       environmentId,
       preparationKey,
+      cacheKey,
       ownerEpoch: 1,
       sessionId: "prepared-session",
       sessionKey: "agent:main:prepared",

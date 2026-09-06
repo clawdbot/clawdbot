@@ -34,8 +34,8 @@ describe("worker preparation identity", () => {
       machineClass: "small",
     };
     equivalent.artifacts.enabledPluginIds.reverse();
-    expect(createWorkerProjectPreparationIdentity(equivalent).key).toBe(
-      createWorkerProjectPreparationIdentity(input).key,
+    expect(createWorkerProjectPreparationIdentity(equivalent)).toEqual(
+      createWorkerProjectPreparationIdentity(input),
     );
   });
 
@@ -100,11 +100,17 @@ describe("worker preparation identity", () => {
         value.artifacts.protocolFeatures.push("worker-computer-v1");
       },
     ],
-  ] as const)("invalidates a changed %s before allocation", (_label, change) => {
+  ] as const)("invalidates a changed %s before allocation", (label, change) => {
     const changed = structuredClone(input);
     change(changed);
-    expect(createWorkerProjectPreparationIdentity(changed).key).not.toBe(
-      createWorkerProjectPreparationIdentity(input).key,
-    );
+    const original = createWorkerProjectPreparationIdentity(input);
+    const next = createWorkerProjectPreparationIdentity(changed);
+    expect(next.key).not.toBe(original.key);
+    expect(next.cacheKey).toMatch(/^[a-f0-9]{64}$/u);
+    if (label === "commit") {
+      expect(next.cacheKey).toBe(original.cacheKey);
+    } else {
+      expect(next.cacheKey).not.toBe(original.cacheKey);
+    }
   });
 });

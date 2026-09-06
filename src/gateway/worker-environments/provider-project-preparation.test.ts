@@ -291,6 +291,106 @@ describe("worker provider project preparation ownership", () => {
     expect(support.testState.store.list()[0]?.profileSnapshot).toEqual(snapshot);
   });
 
+  it("refills the admitted commit and recipe after the source checkout advances", async () => {
+    const git = await repository("refill-source");
+    const recipePath = path.join(git.root, ".openclaw", "worktree-setup.sh");
+    await fs.mkdir(path.dirname(recipePath));
+    await fs.writeFile(recipePath, "#!/bin/sh\nprintf 'approved B'\n", { mode: 0o755 });
+    await requireGit(git.root, ["add", "."]);
+    await requireGit(git.root, ["update-index", "--chmod=+x", ".openclaw/worktree-setup.sh"]);
+    await requireGit(git.root, ["commit", "--quiet", "-m", "approved recipe B"]);
+    const admittedCommit = await requireGit(git.root, ["rev-parse", "HEAD"]);
+    const admittedRecipe = await requireGit(git.root, [
+      "rev-parse",
+      "HEAD:.openclaw/worktree-setup.sh",
+    ]);
+    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+      throw new Error("fixture reached reserve allocation");
+    });
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      requiresNodeEnrollment: true,
+      supportsProjectPreparation: () => true,
+      resolvePreparationTarget: () => ({ machineClass: "small", platform: "linux", arch: "x64" }),
+      resolvePreparedIdleTimeoutMs: () => 60_000,
+      provision,
+    });
+    const service = createWorkerEnvironmentService({
+      store: support.testState.store,
+      getConfig: () => support.testState.config,
+      resolveProvider: () => provider,
+      projectNamespace: "gateway",
+      prepareInstallation: support.testState.prepareInstallation,
+      bootstrapWorker: support.testState.bootstrapWorker,
+      prepareNodeArtifacts: async () => ({
+        artifacts: {
+          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
+          workerBundleHash: support.BUNDLE_HASH,
+          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
+          protocolFeatures: [],
+        },
+        assertCurrent: () => {},
+      }),
+      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
+      now: () => support.testState.nowMs,
+      prepareNodeEnrollment: async () => {
+        throw new Error("fixture never enrolls a reserve");
+      },
+    });
+    support.testState.service = service;
+    const intent = await service.prepareProjectIntent("development", {
+      projectPath: git.root,
+      executionMode: "worker-turn",
+      setupAuthorized: true,
+    });
+    const preparation = expectDefined(
+      readWorkerProjectPreparation(intent.profileSnapshot.project),
+      "approved project preparation",
+    );
+    expect(preparation.setupRecipe).toBe(admittedRecipe);
+    const reserve = support.testState.store.createIntent({
+      environmentId: "admitted-refill",
+      providerId: provider.id,
+      profileId: "development",
+      provisionOperationId: "admitted-refill-operation",
+      profileSnapshot: intent.profileSnapshot,
+      preparation: {
+        key: preparation.key,
+        demandAtMs: support.testState.nowMs,
+        expiresAtMs: support.testState.nowMs + 60_000,
+      },
+    });
+    await fs.writeFile(recipePath, "#!/bin/sh\nprintf 'unapproved C'\n");
+    await requireGit(git.root, ["commit", "--quiet", "-am", "later recipe C"]);
+    expect(await requireGit(git.root, ["rev-parse", "HEAD"])).not.toBe(admittedCommit);
+    expect(await requireGit(git.root, ["rev-parse", "HEAD:.openclaw/worktree-setup.sh"])).not.toBe(
+      admittedRecipe,
+    );
+
+    service.schedulePreparedRefill();
+    await support.waitForFast(() => expect(provision).toHaveBeenCalledOnce());
+    expect(provision.mock.calls[0]?.[2]?.project).toMatchObject({
+      baseCommit: admittedCommit,
+      preparation: { key: preparation.key, cacheKey: preparation.cacheKey, purpose: "reserve" },
+    });
+    expect(support.testState.store.get(reserve.environmentId)).toMatchObject({
+      destroyRequestedAtMs: null,
+      profileSnapshot: {
+        project: {
+          baseCommit: admittedCommit,
+          preparation: {
+            key: preparation.key,
+            cacheKey: preparation.cacheKey,
+            setupRecipe: admittedRecipe,
+          },
+        },
+      },
+    });
+    await service.stop();
+  });
+
   it.each([true, false])(
     "a fresh inherited allocation uses only its current project (has project=%s)",
     async (hasProject) => {

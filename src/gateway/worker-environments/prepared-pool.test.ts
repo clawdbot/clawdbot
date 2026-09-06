@@ -97,6 +97,7 @@ describe("prepared worker reserve lifecycle", () => {
         baseCommit: "d".repeat(40),
         preparation: {
           key: preparationKey,
+          cacheKey: "9".repeat(64),
           contractVersion: 1,
           target: { machineClass: "standard", platform: "linux", arch: "x64" },
           artifacts: {
@@ -141,19 +142,18 @@ describe("prepared worker reserve lifecycle", () => {
     };
   }
 
-  function ready(record: WorkerEnvironmentRecord) {
-    const environmentId = record.environmentId;
+  function ready({ environmentId }: WorkerEnvironmentRecord) {
     store.transition({ environmentId, from: "requested", to: "provisioning" });
     return store.transition({
-      environmentId: record.environmentId,
+      environmentId,
       from: "provisioning",
       to: "ready",
       patch: {
-        leaseId: `lease:${record.environmentId}`,
-        nodeDeviceId: `node:${record.environmentId}`,
+        leaseId: `lease:${environmentId}`,
+        nodeDeviceId: `node:${environmentId}`,
         sharedHost: false,
         bootstrapReceipt: RECEIPT,
-        credential: credential(record.environmentId, null),
+        credential: credential(environmentId, null),
       },
     });
   }

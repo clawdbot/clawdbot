@@ -87,6 +87,7 @@ export class NodeWorkerPreparedWorkspaceStore {
           if (
             existing.state !== "available" ||
             existing.preparation_key !== input.preparationKey ||
+            existing.cache_key !== input.cacheKey ||
             existing.gateway_namespace !== input.gatewayNamespace ||
             existing.environment_id !== input.environmentId ||
             existing.workspace_dir !== input.workspaceDir ||
@@ -99,6 +100,7 @@ export class NodeWorkerPreparedWorkspaceStore {
         }
         const row = {
           preparation_key: input.preparationKey,
+          cache_key: input.cacheKey,
           gateway_namespace: input.gatewayNamespace,
           environment_id: input.environmentId,
           workspace_dir: input.workspaceDir,
@@ -129,6 +131,7 @@ export class NodeWorkerPreparedWorkspaceStore {
         const row = selectRow(db, input.preparationKey);
         if (
           !row ||
+          row.cache_key !== input.cacheKey ||
           row.gateway_namespace !== input.gatewayNamespace ||
           row.environment_id !== input.environmentId
         ) {

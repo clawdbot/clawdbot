@@ -70,6 +70,7 @@ function preparedHarness(
         root: "/gateway/workspace",
         preparation: {
           key: PREPARATION_KEY,
+          cacheKey: "a".repeat(64),
           contractVersion: 1,
           target: { machineClass: "standard", platform: "linux", arch: "x64" },
           artifacts: {

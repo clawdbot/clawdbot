@@ -445,6 +445,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       registered.gatewayNamespace !== input.gatewayNamespace ||
       registered.environmentId !== input.environmentId ||
       registered.preparationKey !== input.preparationKey ||
+      registered.cacheKey !== input.cacheKey ||
       (input.action === "register" &&
         (registered.workspaceDir !== input.workspaceDir ||
           registered.homeDir !== input.homeDir ||

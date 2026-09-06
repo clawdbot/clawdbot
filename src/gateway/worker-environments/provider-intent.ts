@@ -39,6 +39,7 @@ type WorkerProviderIntentPreparationOptions = {
   machineClass?: string;
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
+  projectCommit?: string;
   signal?: AbortSignal;
   setupAuthorized?: boolean;
 };
@@ -158,6 +159,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       const project = await prepareWorkerProjectSnapshot({
         localPath: projectPath,
         namespace: options.projectNamespace,
+        baseCommit: createOptions.projectCommit,
         signal,
       });
       signal?.throwIfAborted();

@@ -280,6 +280,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           lease.sharedHost !== false ||
           !preparedWorkspace ||
           preparedWorkspace.preparationKey !== preparation.key ||
+          preparedWorkspace.cacheKey !== preparation.cacheKey ||
           !options.registerPreparedWorkspace
         ) {
           throw new Error("Prepared worker requires its dedicated registered workspace");

@@ -188,6 +188,8 @@ describe("Crabbox warm-image doctor", () => {
           state: "available",
           createdAtMs: now,
           preparationKey: null,
+          cacheKey: null,
+          purpose: null,
           lastDemandAtMs: now,
         },
         ...(operation

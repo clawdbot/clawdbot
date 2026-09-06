@@ -122,7 +122,8 @@ async function fixture() {
     },
   });
   const preparationKey = preparation.key;
-  const ownerRoot = path.join(nodeHome, ".openclaw-worker", "prepared", NAMESPACE, preparationKey);
+  const cacheKey = preparation.cacheKey;
+  const ownerRoot = path.join(nodeHome, ".openclaw-worker", "prepared", NAMESPACE, cacheKey);
   const workspaceDir = path.join(ownerRoot, "workspace");
   const homeDir = path.join(ownerRoot, "home");
   await fs.mkdir(homeDir, { recursive: true });
@@ -146,6 +147,7 @@ async function fixture() {
     environmentId: ENVIRONMENT_ID,
     gatewayNamespace: NAMESPACE,
     preparationKey,
+    cacheKey,
     workspaceDir,
     homeDir,
     sourceManifestRef: manifestRef,
@@ -428,6 +430,7 @@ async function fixture() {
     gatewayNamespace: NAMESPACE,
     environmentId: ENVIRONMENT_ID,
     preparationKey,
+    cacheKey,
     ownerEpoch: attached.ownerEpoch,
   });
   const starting = placements.transition({

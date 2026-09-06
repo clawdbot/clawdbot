@@ -43,7 +43,7 @@ describe("prepared node registration ownership", () => {
       await requireGit(repository, ["add", "."]);
       await requireGit(repository, ["commit", "--quiet", "-m", "source"]);
       const release = createDeferredCore();
-      const provision = vi.fn(async () => {
+      const provision = vi.fn<WorkerProvider["provision"]>(async () => {
         throw new Error("allocation boundary reached");
       });
       const resolveAllocation = vi.fn(async () => {
@@ -122,6 +122,9 @@ describe("prepared node registration ownership", () => {
           expect(store.get(reserve.environmentId)?.lastError).not.toBeNull(),
         );
         expect(provision).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
+        if (change === "unchanged") {
+          expect(provision.mock.calls[0]?.[2]?.project?.preparation?.purpose).toBe("reserve");
+        }
         expect(store.get(reserve.environmentId)).toMatchObject({
           state: change === "unchanged" ? "provisioning" : "requested",
           destroyRequestedAtMs: change === "unchanged" ? null : support.testState.nowMs,
@@ -199,6 +202,7 @@ describe("prepared node registration ownership", () => {
     const deviceId = "registering-node";
     const gatewayNamespace = "gateway-test";
     const preparationKey = "a".repeat(64);
+    const cacheKey = "e".repeat(64);
     store.createIntent({
       environmentId,
       providerId: "fake",
@@ -212,6 +216,7 @@ describe("prepared node registration ownership", () => {
           baseCommit: "b".repeat(40),
           preparation: {
             key: preparationKey,
+            cacheKey,
             contractVersion: 1,
             target: { machineClass: "small", platform: "linux", arch: "x64" },
             artifacts: {
@@ -308,6 +313,7 @@ describe("prepared node registration ownership", () => {
       undefined,
       {
         preparationKey,
+        cacheKey,
         workspaceDir: "/prepared/workspace",
         homeDir: "/prepared/home",
         sourceManifestRef: `sha256:${"d".repeat(64)}`,
@@ -554,7 +560,8 @@ describe("prepared node registration ownership", () => {
           if (!project?.preparation || !options?.beginNodeEnrollment) {
             throw new Error("Expected admitted project and node enrollment");
           }
-          const base = `/home/worker/.openclaw-worker/prepared/gateway/${project.preparation.key}`;
+          expect(project.preparation.purpose).toBe("session");
+          const base = `/home/worker/.openclaw-worker/prepared/gateway/${project.preparation.cacheKey}`;
           const runScript = vi
             .fn()
             .mockResolvedValueOnce(JSON.stringify({ ready: true }))
@@ -663,6 +670,7 @@ describe("prepared node registration ownership", () => {
     async (phase) => {
       const store = support.testState.store;
       const key = "a".repeat(64);
+      const cacheKey = "e".repeat(64);
       const deviceId = "fresh-prepared-node";
       const environmentId = "prepared-registration";
       store.createIntent({
@@ -678,6 +686,7 @@ describe("prepared node registration ownership", () => {
             baseCommit: "b".repeat(40),
             preparation: {
               key,
+              cacheKey,
               contractVersion: 1,
               target: { machineClass: "small", platform: "linux", arch: "x64" },
               artifacts: {
@@ -756,6 +765,7 @@ describe("prepared node registration ownership", () => {
         undefined,
         {
           preparationKey: key,
+          cacheKey,
           workspaceDir: "/prepared/workspace",
           homeDir: "/prepared/home",
           sourceManifestRef: `sha256:${"d".repeat(64)}`,

@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -58,8 +59,10 @@ async function fixture(setup?: string, symlink = false) {
     }),
   );
   const upload = vi.fn(async (source: string, destination: string) => {
+    uploadBytes.push((await fs.stat(source)).size);
     await fs.copyFile(source, destination);
   });
+  const uploadBytes: number[] = [];
   const operation = (requireCurrent = () => {}) =>
     createWorkerProjectPreparation({ project, namespace: "gateway", requireCurrent });
   const seed = path.join(
@@ -69,18 +72,25 @@ async function fixture(setup?: string, symlink = false) {
     "gateway",
     workerProjectSeedKey(project),
   );
-  const preparedOperation = async (requireCurrent = () => {}) =>
-    createWorkerProjectPreparation({
-      project,
+  const preparedOperation = async (
+    requireCurrent = () => {},
+    options: { project?: typeof project; key?: string; cacheKey?: string } = {},
+  ) => {
+    const snapshot = options.project ?? project;
+    return createWorkerProjectPreparation({
+      project: snapshot,
       namespace: "gateway",
       preparation: {
-        key: "a".repeat(64),
+        key: options.key ?? "a".repeat(64),
+        cacheKey: options.cacheKey ?? "c".repeat(64),
+        purpose: "session",
         demandAtMs: 1,
-        setupRecipe: await readWorkerProjectSetupRecipe(project),
+        setupRecipe: await readWorkerProjectSetupRecipe(snapshot),
       },
       setupAuthorized: true,
       requireCurrent,
     });
+  };
   return {
     repository,
     home,
@@ -93,6 +103,7 @@ async function fixture(setup?: string, symlink = false) {
       return this.runScript(createScript(30_000));
     },
     upload,
+    uploadBytes,
   };
 }
 
@@ -257,9 +268,10 @@ printf 'setup\\n' >> "$HOME/count"
     first.close();
     const prepared = result.preparedWorkspace!;
     expect(first.getPreparedWorkspace()).toEqual(prepared);
-    const directory = path.join(f.home, ".openclaw-worker", "prepared", "gateway", "a".repeat(64));
+    const directory = path.join(f.home, ".openclaw-worker", "prepared", "gateway", "c".repeat(64));
     expect(prepared).toMatchObject({
       preparationKey: "a".repeat(64),
+      cacheKey: "c".repeat(64),
       workspaceDir: path.join(directory, "workspace"),
       homeDir: path.join(directory, "home"),
     });
@@ -294,6 +306,139 @@ printf 'setup\\n' >> "$HOME/count"
     expect(await fs.readFile(path.join(f.seed, "input.txt"), "utf8")).toBe("prepared base\n");
   });
 
+  it("updates A to B to A with thin transfers and stable build and HOME paths", async () => {
+    const f = await fixture(`#!/bin/sh
+set -eu
+mkdir -p build
+test -e build/original-path || printf '%s' "$PWD" > build/original-path
+test -e "$HOME/cached" || printf retained > "$HOME/cached"
+cat input.txt >> "$HOME/count"
+`);
+    await fs.writeFile(path.join(f.repository, "bulk.bin"), randomBytes(2 * 1024 * 1024));
+    await requireGit(f.repository, ["add", "."]);
+    await requireGit(f.repository, ["commit", "--quiet", "-m", "bulk A"]);
+    const snapshot = async () =>
+      (await prepareWorkerProjectSnapshot({ localPath: f.repository, namespace: "gateway" }))!;
+    const a = await snapshot();
+    const first = await f.preparedOperation(undefined, { project: a });
+    const preparedA = (await first.project.prepare(f)).preparedWorkspace!;
+    first.close();
+    await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
+    await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
+    const b = await snapshot();
+    const second = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
+    const preparedB = (await second.project.prepare(f)).preparedWorkspace!;
+    second.close();
+    expect(preparedB).toMatchObject({
+      workspaceDir: preparedA.workspaceDir,
+      homeDir: preparedA.homeDir,
+      cacheKey: preparedA.cacheKey,
+    });
+    expect(preparedB.preparationKey).not.toBe(preparedA.preparationKey);
+    expect(preparedB.sourceManifestRef).not.toBe(preparedA.sourceManifestRef);
+    expect(await requireGit(preparedB.workspaceDir, ["rev-parse", "HEAD"])).toBe(b.baseCommit);
+    expect(await fs.readFile(path.join(preparedB.workspaceDir, "input.txt"), "utf8")).toBe(
+      "changed B\n",
+    );
+    expect(f.uploadBytes).toHaveLength(2);
+    expect(f.uploadBytes[0]).toBeGreaterThan(2 * 1024 * 1024);
+    expect(f.uploadBytes[1]).toBeLessThan(f.uploadBytes[0]! / 100);
+    const third = await f.preparedOperation(undefined, { project: a });
+    expect((await third.project.prepare(f)).preparedWorkspace).toEqual(preparedA);
+    third.close();
+    expect(f.uploadBytes).toHaveLength(2);
+    expect(await fs.readFile(path.join(preparedA.homeDir, "count"), "utf8")).toBe(
+      "prepared base\nchanged B\nprepared base\n",
+    );
+    expect(await fs.readFile(path.join(preparedA.homeDir, "cached"), "utf8")).toBe("retained");
+    expect(
+      await fs.readFile(path.join(preparedA.workspaceDir, "build/original-path"), "utf8"),
+    ).toBe(preparedA.workspaceDir);
+    expect(await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests"))).toEqual(
+      [`${preparedA.sourceManifestRef.slice(7)}.json`],
+    );
+    await fs.rename(f.repository, `${f.repository}-offline`);
+    await fs.rename(
+      path.join(f.home, ".openclaw-worker", "git-seeds"),
+      path.join(f.home, "seeds-offline"),
+    );
+    expect(await requireGit(preparedA.workspaceDir, ["remote"])).toBe("");
+    await requireGit(preparedA.workspaceDir, [
+      "fsck",
+      "--full",
+      "--strict",
+      "--no-reflogs",
+      a.baseCommit,
+    ]);
+    expect(await fs.readFile(path.join(preparedA.workspaceDir, "input.txt"), "utf8")).toBe(
+      "prepared base\n",
+    );
+  });
+
+  it.each(["missing", "corrupt"])(
+    "refuses a %s retained object store before transferring B",
+    async (damage) => {
+      const f = await fixture();
+      const first = await f.preparedOperation();
+      const prepared = (await first.project.prepare(f)).preparedWorkspace!;
+      first.close();
+      await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
+      await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
+      const b = (await prepareWorkerProjectSnapshot({
+        localPath: f.repository,
+        namespace: "gateway",
+      }))!;
+      const packs = path.join(prepared.workspaceDir, ".git", "objects", "pack");
+      const pack = path.join(
+        packs,
+        (await fs.readdir(packs)).find((file) => file.endsWith(".pack"))!,
+      );
+      if (damage === "missing") {
+        await fs.rm(pack);
+      } else {
+        const bytes = await fs.readFile(pack);
+        bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 1, bytes.length - 1);
+        await fs.chmod(pack, 0o600);
+        await fs.writeFile(pack, bytes);
+      }
+      const second = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
+      await expect(second.project.prepare(f)).rejects.toThrow(
+        "Prepared project Git verification failed",
+      );
+      second.close();
+      expect(f.upload).toHaveBeenCalledTimes(1);
+      expect(second.getPreparedWorkspace()).toBeUndefined();
+    },
+  );
+
+  it("invalidates completed A before a failed B setup and refuses both retries", async () => {
+    const f = await fixture(`#!/bin/sh
+printf 'setup\\n' >> "$HOME/count"
+! grep -q failure input.txt
+`);
+    const first = await f.preparedOperation();
+    const prepared = (await first.project.prepare(f)).preparedWorkspace!;
+    first.close();
+    await fs.writeFile(path.join(f.repository, "input.txt"), "failure B\n");
+    await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
+    const b = (await prepareWorkerProjectSnapshot({
+      localPath: f.repository,
+      namespace: "gateway",
+    }))!;
+    const second = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
+    await expect(second.project.prepare(f)).rejects.toThrow("Prepared project setup failed");
+    second.close();
+    for (const project of [b, f.project]) {
+      const retry = await f.preparedOperation(undefined, { project });
+      await expect(retry.project.prepare(f)).rejects.toThrow();
+      retry.close();
+    }
+    expect(await fs.readFile(path.join(prepared.homeDir, "count"), "utf8")).toBe("setup\nsetup\n");
+    expect(await fs.readdir(path.join(prepared.homeDir, ".openclaw-worker", "manifests"))).toEqual(
+      [],
+    );
+  });
+
   it("settles successful setup descendants before publishing the prepared workspace", async () => {
     const f = await fixture(`#!/bin/sh
 sleep 300 &
@@ -305,7 +450,7 @@ printf '%s' "$!" > "$HOME/setup-child"
       ".openclaw-worker",
       "prepared",
       "gateway",
-      "a".repeat(64),
+      "c".repeat(64),
       "home",
       "setup-child",
     );
@@ -387,6 +532,7 @@ ${action}
         namespace: "gateway",
         seedKey: workerProjectSeedKey(f.project),
         preparationKey: "a".repeat(64),
+        cacheKey: "c".repeat(64),
         baseCommit: f.project.baseCommit,
         setupRecipe: await readWorkerProjectSetupRecipe(f.project),
         timeoutMs,
@@ -399,7 +545,7 @@ ${action}
         ".openclaw-worker",
         "prepared",
         "gateway",
-        input.preparationKey,
+        input.cacheKey,
         "home",
       );
       const files = await fs.readdir(home);
@@ -457,7 +603,12 @@ ${action}
     const operation = createWorkerProjectPreparation({
       project: f.project,
       namespace: "gateway",
-      preparation: { key: "a".repeat(64), demandAtMs: 1 },
+      preparation: {
+        key: "a".repeat(64),
+        cacheKey: "c".repeat(64),
+        purpose: "session",
+        demandAtMs: 1,
+      },
       requireCurrent: () => {},
     });
     expect(operation.getPreparedWorkspace()).toBeUndefined();
@@ -491,7 +642,7 @@ ${failure === "failed recipe" ? "exit 17" : "printf changed > input.txt"}
         ".openclaw-worker",
         "prepared",
         "gateway",
-        "a".repeat(64),
+        "c".repeat(64),
         "home",
       );
       expect(await fs.readFile(path.join(home, "count"), "utf8")).toBe("setup\n");
@@ -507,7 +658,13 @@ ${failure === "failed recipe" ? "exit 17" : "printf changed > input.txt"}
       createWorkerProjectPreparation({
         project: f.project,
         namespace: "gateway",
-        preparation: { key: "a".repeat(64), demandAtMs: 1, setupRecipe },
+        preparation: {
+          key: "a".repeat(64),
+          cacheKey: "c".repeat(64),
+          purpose: "session",
+          demandAtMs: 1,
+          setupRecipe,
+        },
         requireCurrent: () => {},
       }),
     ).toThrow("operator.admin");

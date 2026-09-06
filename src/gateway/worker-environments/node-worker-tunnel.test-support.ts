@@ -56,6 +56,7 @@ export function preparedEnvironment(): WorkerEnvironmentRecord {
       project: {
         preparation: {
           key: "b".repeat(64),
+          cacheKey: "d".repeat(64),
           contractVersion: 1,
           target: { machineClass: "test", platform: "linux", arch: "x64" },
           artifacts: {

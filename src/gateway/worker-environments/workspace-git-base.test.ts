@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,9 +11,9 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function createRepository(root: string) {
+async function createRepository(root: string, format = "sha1") {
   await fs.mkdir(root);
-  await requireGit(root, ["init", "--quiet"]);
+  await requireGit(root, ["init", "--quiet", `--object-format=${format}`]);
   await requireGit(root, ["config", "user.name", "Project Test"]);
   await requireGit(root, ["config", "user.email", "project@example.invalid"]);
   await fs.writeFile(path.join(root, "input.txt"), "committed input\n");
@@ -39,6 +40,20 @@ describe("prepared worker projects", () => {
     expect(updated?.key).toBe(original?.key);
     expect(updated?.baseCommit).not.toBe(original?.baseCommit);
     expect(updated?.baseCommit).toBe(await requireGit(worktree, ["rev-parse", "HEAD"]));
+    expect(
+      await prepareWorkerProjectSnapshot({
+        localPath: worktree,
+        namespace: "gateway-one",
+        baseCommit: original!.baseCommit,
+      }),
+    ).toEqual({ ...original, root: worktree });
+    await expect(
+      prepareWorkerProjectSnapshot({
+        localPath: worktree,
+        namespace: "gateway-one",
+        baseCommit: "f".repeat(40),
+      }),
+    ).rejects.toThrow();
     expect((await prepare(worktree, "gateway-two"))?.key).not.toBe(original?.key);
 
     const unrelated = path.join(root, "unrelated");
@@ -55,6 +70,66 @@ describe("prepared worker projects", () => {
     await requireGit(root, ["add", "."]);
     expect(await prepare()).toBeUndefined();
   });
+
+  it.each(["sha1", "sha256"])(
+    "transfers A to B to A against a standalone shallow %s base",
+    async (format) => {
+      const root = await fs.realpath(tempDirs.make("worker-project-delta-"));
+      const repository = path.join(root, "repository");
+      await createRepository(repository, format);
+      const ancestor = await requireGit(repository, ["rev-parse", "HEAD"]);
+      await fs.writeFile(path.join(repository, "input.txt"), "snapshot A\n");
+      await fs.writeFile(path.join(repository, "bulk.bin"), randomBytes(1024 * 1024));
+      await requireGit(repository, ["add", "."]);
+      await requireGit(repository, ["commit", "--quiet", "-m", "A"]);
+      const a = await requireGit(repository, ["rev-parse", "HEAD"]);
+      await fs.writeFile(path.join(repository, "input.txt"), "snapshot B\n");
+      await requireGit(repository, ["commit", "--quiet", "-am", "B"]);
+      const b = await requireGit(repository, ["rev-parse", "HEAD"]);
+      const receiver = path.join(root, "receiver");
+      await fs.mkdir(receiver);
+      await requireGit(receiver, ["init", "--quiet", `--object-format=${format}`]);
+      await fs.writeFile(path.join(receiver, ".git", "shallow"), `${a}\n${b}\n`);
+      const sizes = [];
+      for (const [index, [baseCommit, retainedCommit]] of [
+        [a, undefined],
+        [b, a],
+        [a, b],
+      ].entries()) {
+        const temporaryRoot = path.join(root, `pack-${index}`);
+        await fs.mkdir(temporaryRoot);
+        const pack = await prepareWorkerWorkspaceGitPack({
+          root: repository,
+          baseCommit: baseCommit!,
+          retainedCommit,
+          temporaryRoot,
+          signal: new AbortController().signal,
+        });
+        sizes.push((await fs.stat(pack)).size);
+        await requireGit(receiver, ["index-pack", "--stdin", "--fix-thin"], {
+          input: await fs.readFile(pack),
+        });
+        await requireGit(receiver, ["fsck", "--full", "--strict", "--no-reflogs", baseCommit!]);
+        await requireGit(receiver, ["checkout", "--quiet", "--detach", baseCommit!]);
+        expect(await requireGit(receiver, ["write-tree"])).toBe(
+          await requireGit(repository, ["rev-parse", `${baseCommit}^{tree}`]),
+        );
+        expect(await fs.readFile(path.join(receiver, "input.txt"), "utf8")).toBe(
+          baseCommit === a ? "snapshot A\n" : "snapshot B\n",
+        );
+      }
+      expect(sizes[1]).toBeLessThan(sizes[0]! / 100);
+      expect(sizes[2]).toBeLessThan(sizes[0]! / 100);
+      await fs.rename(repository, `${repository}-offline`);
+      expect((await runGit(receiver, ["cat-file", "-e", ancestor])).code).not.toBe(0);
+      await requireGit(receiver, ["fsck", "--full", "--strict", "--no-reflogs", a, b]);
+      expect(
+        await fs
+          .stat(path.join(receiver, ".git", "objects", "info", "alternates"))
+          .catch(() => undefined),
+      ).toBeUndefined();
+    },
+  );
 
   it("packs only the pinned commit and tree without local credentials, overlays, or history", async () => {
     const root = await fs.realpath(tempDirs.make("worker-project-pack-"));

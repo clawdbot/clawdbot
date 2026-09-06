@@ -17,6 +17,7 @@ import {
 
 type PreparedWorkspace = {
   preparationKey: string;
+  cacheKey: string;
   workspaceDir: string;
   homeDir: string;
   sourceManifestRef: string;

@@ -905,6 +905,7 @@ export interface NodeWorkerLaunches {
 
 export interface NodeWorkerPreparedWorkspaces {
   bound_at_ms: number | null;
+  cache_key: string;
   created_at_ms: number;
   environment_id: string;
   gateway_namespace: string;

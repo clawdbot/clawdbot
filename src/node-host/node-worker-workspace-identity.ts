@@ -11,15 +11,15 @@ export function assertNodePreparedWorkspacePaths(
   root: string,
   request: {
     gatewayNamespace: string;
-    preparationKey: string;
+    cacheKey: string;
     workspaceDir: string;
     homeDir: string;
   },
 ): void {
-  const ownerRoot = path.join(root, request.gatewayNamespace, request.preparationKey);
+  const ownerRoot = path.join(root, request.gatewayNamespace, request.cacheKey);
   if (
     !GATEWAY_NAMESPACE_PATTERN.test(request.gatewayNamespace) ||
-    !/^[a-f0-9]{64}$/u.test(request.preparationKey)
+    !/^[a-f0-9]{64}$/u.test(request.cacheKey)
   ) {
     throw new Error("INVALID_REQUEST: invalid prepared workspace identity");
   }
@@ -59,7 +59,7 @@ export function resolveNodePreparedWorkspaceIdentity(
   }
   assertNodePreparedWorkspacePaths(root, {
     gatewayNamespace: row.gateway_namespace,
-    preparationKey: row.preparation_key,
+    cacheKey: row.cache_key,
     workspaceDir: row.workspace_dir,
     homeDir: row.home_dir,
   });
