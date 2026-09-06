@@ -32,7 +32,6 @@ function proposal(options: {
     ageLabel: "now",
     supportFiles: [],
     bodyLoaded: true,
-    isNew: false,
   };
 }
 

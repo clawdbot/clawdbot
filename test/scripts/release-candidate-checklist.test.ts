@@ -92,14 +92,20 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 
 describe("release candidate checklist", () => {
   it.each([
-    { tag: "v2026.9.1", pin: "2026.9.1", expected: "passed" },
-    { tag: "v2026.9.1", pin: "2026.7.4", expected: "warning" },
-    { tag: "v2026.9.1-1", pin: "2026.9.1", expected: "passed" },
-    { tag: "v2026.9.1-beta.1", pin: "2026.7.4", expected: undefined },
-    { tag: "v2026.9.1-alpha.1", pin: "2026.7.4", expected: undefined },
+    { tag: "v2026.9.1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
+    { tag: "v2026.9.1", pin: "2026.7.4", expected: "warning", failedRegistry: "" },
+    { tag: "v2026.9.1-1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
+    { tag: "v2026.9.1-beta.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
+    { tag: "v2026.9.1-alpha.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
+    ...["npm", "clawhub"].map((failedRegistry) => ({
+      tag: "v2026.9.1",
+      pin: "2026.9.1",
+      expected: "passed",
+      failedRegistry,
+    })),
   ])(
-    "records advisory Android pin evidence for $tag ($pin): $expected",
-    async ({ tag, pin, expected }) => {
+    "preflights registries ($failedRegistry) before validation and records Android evidence for $tag ($pin)",
+    async ({ tag, pin, expected, failedRegistry }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
         "apps/android/version.json": JSON.stringify({ version: pin, versionCode: 2026070401 }),
@@ -126,6 +132,10 @@ describe("release candidate checklist", () => {
           ? ["--workflow-ref", "tideclaw/alpha/2026-09-01-1200Z"]
           : ["--publish-workflow-ref", publishWorkflowRef]),
       ]);
+      if (failedRegistry) {
+        options.fullReleaseRunId = "";
+        options.skipDispatch = false;
+      }
       options.outputDir = join(targetRoot, "evidence");
       mkdirSync(join(options.outputDir, "npm-preflight"), { recursive: true });
       writeFileSync(join(options.outputDir, "npm-preflight", "openclaw.tgz"), "fixture");
@@ -134,6 +144,7 @@ describe("release candidate checklist", () => {
       const android =
         source.match(/^function checkCandidateAndroidVersion\([\s\S]*?^\}/mu)?.[0] ?? "";
       const log = vi.fn();
+      const stages: string[] = [];
       const toolingSha = "b".repeat(40);
       const npmManifest = {
         tarballName: "openclaw.tgz",
@@ -143,7 +154,7 @@ describe("release candidate checklist", () => {
         pluginSdkApi: {},
       };
       // Run the real coordinator and evidence writers; unrelated remote release gates are fixtures.
-      await runInNewContext(stripTypeScriptTypes(`${android}\n${main}\nmain();`), {
+      const completion = runInNewContext(stripTypeScriptTypes(`${android}\n${main}\nmain();`), {
         process: { argv: [], cwd: () => targetRoot, env: {} },
         console: { log, warn: log },
         TOOLING_ROOT: "/trusted/tooling",
@@ -175,10 +186,20 @@ describe("release candidate checklist", () => {
         validateCandidateReleaseNotes: () => ({ status: "passed" }),
         validateCandidateChangelogProvenance: () => ({ status: "passed", shippedBaselines: [] }),
         runLocalGeneratedCheckIfNeeded: () => ({ status: "skipped" }),
-        waitForSuccessfulRun: async () => ({
-          run: { headSha: targetSha, runAttempt: 1 },
-          source: { workflowRef: options.workflowRef },
-        }),
+        releaseBranchForTag,
+        fullReleaseTrustedWorkflowFields: () => ({}),
+        readFileSync: () => "fixture workflow",
+        dispatchWorkflow: () => {
+          stages.push("dispatch");
+          return "111";
+        },
+        waitForSuccessfulRun: async () => {
+          stages.push("wait");
+          return {
+            run: { headSha: targetSha, runAttempt: 1 },
+            source: { workflowRef: options.workflowRef },
+          };
+        },
         downloadArtifact: () => {},
         readJson: (file: string) => (file.endsWith("preflight-manifest.json") ? npmManifest : {}),
         validateFullReleaseValidationEvidence: () => ({ source: "direct" }),
@@ -193,7 +214,13 @@ describe("release candidate checklist", () => {
         preflightDependencyTarballs,
         runParallelsIfNeeded: async () => ({ status: "skipped" }),
         runTelegramIfNeeded: async () => ({ status: "skipped" }),
-        collectPluginPlanWithRetry: async () => ({ all: [] }),
+        collectPluginPlanWithRetry: async (script: string) => {
+          stages.push(script);
+          if (failedRegistry && script === `scripts/plugin-${failedRegistry}-release-plan.ts`) {
+            throw new Error(`${failedRegistry} registry unavailable`);
+          }
+          return { all: [] };
+        },
         buildPublishCommand,
         formatJsonValue: String,
         formatShippedBaselineExclusions: () => "",
@@ -204,6 +231,20 @@ describe("release candidate checklist", () => {
         mkdirSync,
         writeFileSync,
       });
+      if (failedRegistry) {
+        await expect(completion).rejects.toThrow(`${failedRegistry} registry unavailable`);
+        expect(stages).not.toContain("dispatch");
+        expect(stages).not.toContain("wait");
+        expect(existsSync(join(options.outputDir, "release-candidate-evidence.json"))).toBe(false);
+        expect(log.mock.calls.flat().join("\n")).not.toContain("publish command:");
+        return;
+      }
+      await completion;
+      expect(stages.slice(0, 3)).toEqual([
+        "scripts/plugin-npm-release-plan.ts",
+        "scripts/plugin-clawhub-release-plan.ts",
+        "wait",
+      ]);
       const evidence = JSON.parse(
         readFileSync(join(options.outputDir, "release-candidate-evidence.json"), "utf8"),
       );

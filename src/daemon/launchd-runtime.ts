@@ -221,10 +221,10 @@ export function parseLaunchAgentEnabled(output: string, label: string): boolean 
       continue;
     }
     const state = entry.slice(labelPrefix.length).trim();
-    if (state === "=> enabled") {
+    if (state === "=> enabled" || state === "=> false") {
       return true;
     }
-    if (state === "=> disabled") {
+    if (state === "=> disabled" || state === "=> true") {
       return false;
     }
     throw new Error(`launchctl print-disabled returned an unrecognized state for ${label}`);
@@ -396,9 +396,7 @@ export async function waitForLaunchAgentStopped(
     if (probe.state === "stopped" || probe.state === "not-loaded") {
       return probe;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
+    await sleep(100);
   }
   return lastProbe;
 }

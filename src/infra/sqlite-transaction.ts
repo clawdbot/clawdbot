@@ -1,5 +1,6 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -367,4 +368,55 @@ export function runSqliteImmediateTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   return runSqliteTransactionSync(db, operation, "immediate", options);
+}
+
+/** Prepare outside the transaction; yield for admission without replaying admitted writes. */
+export async function runSqliteImmediateTransaction<T>(
+  db: DatabaseSync,
+  prepare: () => Promise<(() => T) | undefined>,
+  options?: SqliteTransactionOptions,
+): Promise<T | undefined> {
+  assertTransactionUsable(db);
+  if (db.isTransaction) {
+    throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
+  }
+  const deadline = performance.now() + readSqliteBusyTimeout(db);
+  let entered = false;
+  while (true) {
+    const operation = await prepare();
+    assertTransactionUsable(db);
+    if (db.isTransaction) {
+      throw new Error("SQLite preparation left a transaction open");
+    }
+    if (!operation) {
+      return undefined;
+    }
+    try {
+      return runWithSqliteBusyTimeout(
+        db,
+        0,
+        (restore) =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              entered = true;
+              restore();
+              return operation();
+            },
+            options,
+          ),
+        { lockFailureReporting: "suppress" },
+      );
+    } catch (error) {
+      if (entered || !isSqliteLockError(error) || performance.now() >= deadline) {
+        throw error;
+      }
+      // The synchronous helper restored connection policy and left no transaction.
+      await sleep(Math.min(25, Math.max(0, deadline - performance.now())));
+      assertTransactionUsable(db);
+      if (performance.now() >= deadline) {
+        throw error;
+      }
+    }
+  }
 }

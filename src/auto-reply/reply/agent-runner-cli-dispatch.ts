@@ -21,6 +21,7 @@ import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agent
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
+import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-channel-summary.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
@@ -270,12 +271,13 @@ export function createCliToolSummaryTracker(params: {
   shouldEmitToolOutput: () => boolean;
   deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
 }) {
-  const toolByCallId = new Map<string, { meta?: string; commandBearing: boolean }>();
+  const toolByCallId = new Map<string, { name: string; meta?: string; commandBearing: boolean }>();
   return {
     noteToolEvent: async (payload: CliToolEventPayload): Promise<boolean> => {
       if (payload.phase === "start") {
         if (payload.toolCallId && payload.name) {
           toolByCallId.set(payload.toolCallId, {
+            name: payload.name,
             meta: inferToolMetaFromArgsCore(payload.name, payload.args, {
               detailMode: params.detailMode ?? "explain",
             }),
@@ -288,15 +290,19 @@ export function createCliToolSummaryTracker(params: {
         return false;
       }
       const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
+      const toolName = payload.name ?? storedTool?.name;
       const meta =
         params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
+      if (payload.isError !== true && isAgentPlanProgressToolName(toolName)) {
+        return false;
+      }
       if (!params.shouldEmitToolResult()) {
         return storedTool?.commandBearing === true;
       }
-      const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
+      const aggregate = formatToolAggregate(toolName, meta ? [meta] : undefined, {
         markdown: true,
       });
       let text = aggregate;

@@ -13,6 +13,7 @@ import {
 } from "./sqlite-post-commit.js";
 import {
   runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
 
@@ -162,7 +163,7 @@ describe("runSqliteImmediateTransactionSync", () => {
     expect(readEntries(db)).toEqual(["inner", "outer"]);
   });
 
-  it("preserves SQLITE_FULL and prevents caught nested failures from committing later writes", () => {
+  it("preserves SQLITE_FULL and prevents caught nested failures from committing later writes", async () => {
     const tempDir = tempDirs.make("openclaw-sqlite-full-");
     const databasePath = path.join(tempDir, "full.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
@@ -242,6 +243,9 @@ describe("runSqliteImmediateTransactionSync", () => {
       reuseError = error;
     }
     expect(reuseError).toBe(primaryError);
+    const prepare = vi.fn(async () => () => undefined);
+    await expect(runSqliteImmediateTransaction(db, prepare)).rejects.toBe(primaryError);
+    expect(prepare).not.toHaveBeenCalled();
 
     const reopened = new DatabaseSync(databasePath);
     openDatabases.push(reopened);
@@ -573,5 +577,178 @@ describe("runSqliteImmediateTransactionSync", () => {
         db.prepare("INSERT INTO entries(id) VALUES (?)").run("after-timeout");
       }),
     ).not.toThrow();
+  });
+});
+
+describe("runSqliteImmediateTransaction", () => {
+  it.each([true, false])(
+    "preserves a failed nested rollback caught during preparation (write prepared: %s)",
+    async (writePrepared) => {
+      const db = createDatabase();
+      db.exec("PRAGMA max_page_count=3");
+      const write = vi.fn();
+      let primaryError: unknown;
+      const prepare = vi.fn(async () => {
+        await Promise.resolve();
+        try {
+          runSqliteImmediateTransactionSync(db, () =>
+            runSqliteImmediateTransactionSync(db, () =>
+              db.prepare("INSERT INTO entries VALUES ('full', zeroblob(65536))").run(),
+            ),
+          );
+        } catch (error) {
+          primaryError = error;
+        }
+        return writePrepared ? write : undefined;
+      });
+      let reportedError: unknown;
+      try {
+        await runSqliteImmediateTransaction(db, prepare);
+      } catch (error) {
+        reportedError = error;
+      }
+      expect(primaryError).toMatchObject({ errcode: 13 });
+      expect(reportedError).toBe(primaryError);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.isOpen).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "preserves a failed rollback during admission yield (deadline expired: %s)",
+    async (expireDeadline) => {
+      const dir = tempDirs.make("openclaw-sqlite-admission-abort-");
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(path.join(dir, "index.sqlite"));
+      const writer = new DatabaseSync(path.join(dir, "index.sqlite"));
+      openDatabases.push(db, writer);
+      const busyTimeoutMs = expireDeadline ? 100 : 1000;
+      db.exec(`CREATE TABLE entries(id INTEGER PRIMARY KEY, value BLOB);
+        PRAGMA max_page_count=2; PRAGMA busy_timeout=${busyTimeoutMs}`);
+      writer.exec("BEGIN IMMEDIATE");
+      let primaryError: unknown;
+      let reportedError: unknown;
+      let faultScheduled = false;
+      let faultDone = Promise.resolve();
+      const write = vi.fn(() =>
+        db.prepare("INSERT INTO entries(value) VALUES ('unexpected')").run(),
+      );
+      const prepare = vi.fn(async () => {
+        db.prepare("SELECT COUNT(*) FROM entries").get();
+        if (!faultScheduled) {
+          faultScheduled = true;
+          faultDone = new Promise<void>((resolve) => {
+            setImmediate(() => {
+              try {
+                writer.exec("ROLLBACK");
+                runSqliteImmediateTransactionSync(db, () =>
+                  runSqliteImmediateTransactionSync(db, () =>
+                    db.prepare("INSERT INTO entries(value) VALUES (zeroblob(65536))").run(),
+                  ),
+                );
+              } catch (error) {
+                primaryError = error;
+              } finally {
+                // Keep the admission timer from resuming until its real deadline expires.
+                if (expireDeadline) {
+                  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, busyTimeoutMs + 20);
+                }
+                resolve();
+              }
+            });
+          });
+        }
+        return write;
+      });
+      try {
+        await runSqliteImmediateTransaction(db, prepare);
+      } catch (error) {
+        reportedError = error;
+      }
+      await faultDone;
+      expect(primaryError).toMatchObject({ errcode: 13 });
+      expect(reportedError).toBe(primaryError);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.isOpen).toBe(false);
+      expect(writer.prepare("SELECT id FROM entries").all()).toEqual([]);
+    },
+  );
+
+  it("repeats preparation and can decline a write while another writer remains active", async () => {
+    const dir = tempDirs.make("openclaw-sqlite-preparation-");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(dir, "index.sqlite"));
+    const writer = new DatabaseSync(path.join(dir, "index.sqlite"));
+    openDatabases.push(db, writer);
+    db.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; CREATE TABLE entries(id TEXT PRIMARY KEY);",
+    );
+    writer.exec("BEGIN IMMEDIATE");
+    let eligible = true;
+    let preparations = 0;
+    const write = vi.fn(() => db.prepare("INSERT INTO entries VALUES ('unexpected')").run());
+    const pending = runSqliteImmediateTransaction(db, async () => {
+      preparations += 1;
+      expect(db.isTransaction).toBe(false);
+      return eligible ? write : undefined;
+    });
+    void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(preparations).toBeGreaterThan(1));
+      eligible = false;
+      await expect(pending).resolves.toBeUndefined();
+      expect(writer.isTransaction).toBe(true);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.prepare("SELECT id FROM entries").all()).toEqual([]);
+      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+    } finally {
+      writer.exec("ROLLBACK");
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it.each(["existing", "preparation"])(
+    "rejects a transaction from %s before admitting writes",
+    async (owner) => {
+      const db = createDatabase();
+      const write = vi.fn();
+      const prepare = vi.fn(async () => {
+        db.exec("BEGIN");
+        return write;
+      });
+      if (owner === "existing") {
+        db.exec("BEGIN");
+      }
+      await expect(runSqliteImmediateTransaction(db, prepare)).rejects.toThrow(/transaction/);
+      expect(prepare).toHaveBeenCalledTimes(owner === "existing" ? 0 : 1);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.isTransaction).toBe(true);
+      db.exec("ROLLBACK");
+    },
+  );
+
+  it("prepares without holding a transaction and never replays an admitted write", async () => {
+    const db = createDatabase();
+    db.exec("PRAGMA busy_timeout = 50");
+    const lockError = Object.assign(new Error("database is locked"), { errcode: 5 });
+    let calls = 0;
+    await expect(
+      runSqliteImmediateTransaction(db, async () => {
+        await Promise.resolve();
+        expect(db.isTransaction).toBe(false);
+        return () => {
+          calls += 1;
+          expect(db.isTransaction).toBe(true);
+          expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(50);
+          db.prepare("INSERT INTO entries(id, value) VALUES ('aborted', 'value')").run();
+          throw lockError;
+        };
+      }),
+    ).rejects.toBe(lockError);
+    expect(calls).toBe(1);
+    expect(readEntries(db)).toEqual([]);
+    expect(db.isTransaction).toBe(false);
   });
 });

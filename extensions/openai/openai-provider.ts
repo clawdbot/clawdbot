@@ -238,6 +238,18 @@ type OpenAILiveProviderCatalog = {
   outcome?: ProviderCatalogOutcome;
 };
 
+function buildOpenAIStaticPlatformProviderConfig(
+  apiKey?: string,
+  baseUrl = resolveOpenAIDefaultBaseUrl(),
+): ModelProviderConfig {
+  return {
+    baseUrl,
+    api: "openai-responses",
+    ...(apiKey ? { apiKey } : {}),
+    models: buildOpenAIManifestModelsForBaseUrl(baseUrl),
+  };
+}
+
 function scopeOpenAICatalogOutcome(
   catalog: OpenAILiveProviderCatalog,
   profileId: string | undefined,
@@ -254,13 +266,8 @@ async function buildOpenAILiveProviderConfig(
 ): Promise<OpenAILiveProviderCatalog> {
   const baseUrl =
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
-  const models = buildOpenAIManifestModelsForBaseUrl(baseUrl);
-  const fallback: ModelProviderConfig = {
-    baseUrl,
-    api: "openai-responses",
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
-    models,
-  };
+  const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
+  const models = fallback.models;
   if (!shouldFetchOpenAILiveModels(baseUrl)) {
     return { provider: fallback };
   }
@@ -931,53 +938,109 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        try {
-          const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
-            await import("openclaw/plugin-sdk/provider-auth-runtime");
-          const runtimeAuth = await resolveApiKeyForProvider({
-            provider: PROVIDER_ID,
-            cfg: ctx.config,
-            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-            ...(auth.profileId
-              ? {
-                  profileId: auth.profileId,
-                  lockedProfile: true,
-                }
-              : {}),
-          });
-          if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
-            const metadata = resolveProviderAuthProfileMetadata({
+        const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
+          await import("openclaw/plugin-sdk/provider-auth-runtime");
+        let runtimeAuth: Awaited<ReturnType<typeof resolveApiKeyForProvider>> | undefined;
+        if (auth.profileId || auth.mode === "none") {
+          try {
+            runtimeAuth = await resolveApiKeyForProvider({
               provider: PROVIDER_ID,
               cfg: ctx.config,
               ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-              ...((runtimeAuth.profileId ?? auth.profileId)
-                ? { profileId: runtimeAuth.profileId ?? auth.profileId }
+              ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+              ...(auth.profileId
+                ? {
+                    profileId: auth.profileId,
+                    lockedProfile: true,
+                  }
                 : {}),
             });
-            const catalog = scopeOpenAICatalogOutcome(
-              await buildOpenAICodexLiveProviderConfig({
-                discoveryApiKey: runtimeAuth.apiKey,
-                accountId: metadata.accountId,
-              }),
-              runtimeAuth.profileId ?? auth.profileId,
-            );
+          } catch {
+            runtimeAuth = undefined;
+          }
+        }
+        if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
+          const metadata = resolveProviderAuthProfileMetadata({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...((runtimeAuth.profileId ?? auth.profileId)
+              ? { profileId: runtimeAuth.profileId ?? auth.profileId }
+              : {}),
+          });
+          const catalog = scopeOpenAICatalogOutcome(
+            await buildOpenAICodexLiveProviderConfig({
+              discoveryApiKey: runtimeAuth.apiKey,
+              accountId: metadata.accountId,
+            }),
+            runtimeAuth.profileId ?? auth.profileId,
+          );
+          return {
+            providers: { [PROVIDER_ID]: catalog.provider },
+            ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+          };
+        }
+        if (!auth.profileId && isCodexCatalogAuthMode(auth.mode) && auth.apiKey) {
+          const discoveryApiKey =
+            auth.discoveryApiKey ??
+            (isNonSecretApiKeyMarker(auth.apiKey) ? undefined : auth.apiKey);
+          if (!discoveryApiKey) {
             return {
-              providers: { [PROVIDER_ID]: catalog.provider },
-              ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+              providers: { [PROVIDER_ID]: buildOpenAICodexStaticProviderConfig() },
+              outcomes: [{ provider: PROVIDER_ID, status: "unavailable" }],
             };
           }
-        } catch {
-          // OAuth discovery is advisory; fall through so configured API-key
-          // auth can still publish the standard OpenAI catalog.
+          const catalog = await buildOpenAICodexLiveProviderConfig({
+            discoveryApiKey,
+          });
+          return {
+            providers: { [PROVIDER_ID]: catalog.provider },
+            ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+          };
+        }
+        if (auth.profileId && isCodexCatalogAuthMode(auth.mode)) {
+          return {
+            providers: { [PROVIDER_ID]: buildOpenAICodexStaticProviderConfig() },
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                profileId: auth.profileId,
+                status: "unavailable",
+              },
+            ],
+          };
         }
         if (auth.mode === "api_key" && auth.apiKey) {
+          const discoveryApiKey =
+            auth.discoveryApiKey ??
+            (runtimeAuth?.mode === "api-key" ? runtimeAuth.apiKey : undefined);
+          if (!discoveryApiKey && isNonSecretApiKeyMarker(auth.apiKey)) {
+            return {
+              providers: {
+                [PROVIDER_ID]: buildOpenAIStaticPlatformProviderConfig(
+                  auth.apiKey,
+                  resolveOpenAICatalogBaseUrl(ctx),
+                ),
+              },
+              outcomes: [
+                {
+                  provider: PROVIDER_ID,
+                  ...(auth.profileId ? { profileId: auth.profileId } : {}),
+                  rejectionScope: "catalog",
+                  status: "unavailable",
+                },
+              ],
+            };
+          }
           const catalog = scopeOpenAICatalogOutcome(
             await buildOpenAILiveProviderConfig({
               apiKey: auth.apiKey,
               baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-              discoveryApiKey: auth.discoveryApiKey,
-              rejectionScope: resolveOpenAICatalogRejectionScope(auth),
+              discoveryApiKey,
+              rejectionScope: resolveOpenAICatalogRejectionScope({
+                apiKey: auth.apiKey,
+                discoveryApiKey,
+              }),
             }),
             auth.profileId,
           );
@@ -986,20 +1049,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
             ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
           };
         }
-        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
-        if (!apiKey.apiKey) {
-          return null;
-        }
-        const catalog = await buildOpenAILiveProviderConfig({
-          apiKey: apiKey.apiKey,
-          baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-          discoveryApiKey: apiKey.discoveryApiKey,
-          rejectionScope: resolveOpenAICatalogRejectionScope(apiKey),
-        });
-        return {
-          providers: { [PROVIDER_ID]: catalog.provider },
-          ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
-        };
+        return null;
       },
     },
     staticCatalog: {

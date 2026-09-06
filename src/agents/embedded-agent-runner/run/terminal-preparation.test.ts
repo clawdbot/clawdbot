@@ -2,6 +2,7 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   markCoreTtsAttemptResult,
   markCoreTtsToolResult,
@@ -29,14 +30,7 @@ function assistantMessage(stopReason: AssistantMessage["stopReason"] = "stop"): 
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     role: "assistant",
     content: [
       {
