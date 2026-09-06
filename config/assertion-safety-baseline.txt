@@ -521,7 +521,6 @@ extensions/google/index.ts	1
 extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/onboard.ts	3
-extensions/google/provider-catalog.ts	2
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	6
 extensions/google/transport-stream.ts	15
