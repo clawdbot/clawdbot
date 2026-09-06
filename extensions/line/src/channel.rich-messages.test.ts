@@ -211,9 +211,7 @@ describe("LINE rich-message boundaries", () => {
         },
       });
       const flex = (prepared.channelData?.line as { flexMessage?: { contents?: unknown } })
-        ?.flexMessage?.contents as
-        | { body?: { contents?: Array<{ text?: string }> } }
-        | undefined;
+        ?.flexMessage?.contents as { body?: { contents?: Array<{ text?: string }> } } | undefined;
       return flex?.body?.contents?.map((entry) => entry.text).find((text) => text?.includes("\n"));
     };
 
