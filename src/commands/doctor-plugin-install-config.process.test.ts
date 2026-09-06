@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   readPersistedInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
@@ -91,6 +92,8 @@ describe("Doctor retired plugin install config", () => {
             kind === "empty-included" ? {} : { enabled: false },
           );
         }
+        // Child Doctor writes cannot invalidate the parent process cache.
+        clearLoadInstalledPluginIndexInstallRecordsCache();
         expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual(
           empty ? { existing: durable } : { existing: durable, imported: legacy },
         );
@@ -139,6 +142,7 @@ describe("Doctor retired plugin install config", () => {
     const repaired = JSON.parse(fs.readFileSync(configPath, "utf8"));
     expect(repaired.plugins, result.stderr).not.toHaveProperty("installs");
     expect(repaired).not.toHaveProperty("unknownKey");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({
       imported: legacy,
     });
@@ -205,6 +209,7 @@ describe("Doctor retired plugin install config", () => {
       JSON.parse(fs.readFileSync(path.join(root, "first-write.json"), "utf8")).plugins,
       result.stderr,
     ).not.toHaveProperty("installs");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({});
     expect(JSON.parse(fs.readFileSync(configPath, "utf8")).plugins).not.toHaveProperty("installs");
   }, 90_000);
@@ -256,6 +261,7 @@ describe("Doctor retired plugin install config", () => {
     const repaired = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
     expect(repaired.plugins, output).not.toHaveProperty("installs");
     expect(repaired.plugins?.entries?.["migration-proof-plugin"], output).toEqual(entry);
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     expect(
       (await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env }))?.[
         "migration-proof-plugin"
