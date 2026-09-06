@@ -5,11 +5,29 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, vi } from "vitest";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
-const workspace = vi.hoisted(() => ({ rootDir: "" }));
-vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
-  resolvePreferredOpenClawTmpDir: () => workspace.rootDir,
+const workspace = vi.hoisted(() => ({
+  rootDir: "",
+  afterWrite: undefined as (() => Promise<void>) | undefined,
 }));
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>();
+  return {
+    ...actual,
+    resolvePreferredOpenClawTmpDir: () => workspace.rootDir,
+    // The receive owner must observe leave before its awaited WAV write returns.
+    tempWorkspace: async (options: Parameters<typeof actual.tempWorkspace>[0]) => {
+      const temporary = await actual.tempWorkspace(options);
+      return {
+        ...temporary,
+        write: async (...args: Parameters<typeof temporary.write>) => {
+          const filePath = await temporary.write(...args);
+          await workspace.afterWrite?.();
+          return filePath;
+        },
+      };
+    },
+  };
+});
 
 defineDiscordVoiceTests(
   ({
@@ -25,6 +43,7 @@ defineDiscordVoiceTests(
     loggerWarnMock,
   }) => {
     beforeEach(async () => {
+      workspace.afterWrite = undefined;
       workspace.rootDir = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-wav-lifetime-")),
       );
@@ -110,13 +129,9 @@ defineDiscordVoiceTests(
       } else if (reason === "short audio") {
         decodeOpusStreamMock.mockReset().mockResolvedValueOnce(Buffer.alloc(960));
       } else if (reason === "left during write") {
-        const audio = await import("./audio.js");
-        const writeWav = audio.writeVoiceWavFile;
-        vi.spyOn(audio, "writeVoiceWavFile").mockImplementationOnce(async (pcm) => {
-          const wav = await writeWav(pcm);
+        workspace.afterWrite = async () => {
           await f.manager.leave({ guildId: "g1" });
-          return wav;
-        });
+        };
       }
       try {
         await handleSpeakingStart(f.manager, f.entry, "guest");
@@ -127,6 +142,10 @@ defineDiscordVoiceTests(
             { guildId: "g1", channelId: "1001" },
             { transcripts: { sessionId: "replacement", onUtterance: vi.fn() } },
           );
+        }
+        if (reason === "left during write") {
+          expect(f.manager.status()).toEqual([]);
+          expect(await fs.readdir(workspace.rootDir)).toEqual([]);
         }
         blocked.resolve();
         await f.entry.processingQueue;

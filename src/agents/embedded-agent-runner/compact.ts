@@ -18,7 +18,6 @@ import {
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import { hasMeaningfulConversationContent } from "../compaction-real-conversation.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -39,7 +38,6 @@ import type {
 } from "./compact.types.js";
 import {
   containsRealConversationMessages,
-  hasRealConversationContent,
   resolveCompactionProviderStream,
 } from "./compaction-diagnostics.js";
 import {
@@ -545,8 +543,6 @@ export async function compactEmbeddedAgentSessionDirect(
 
 export const testing = {
   compactNativeCliSession,
-  hasRealConversationContent,
-  hasMeaningfulConversationContent,
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,

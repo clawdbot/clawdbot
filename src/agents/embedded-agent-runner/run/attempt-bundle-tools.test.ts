@@ -41,6 +41,7 @@ vi.mock("../effective-tool-policy.js", () => ({
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
@@ -68,9 +69,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runtimePlan: {},
         sessionId: "session",
       },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
+      setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
@@ -81,7 +80,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         toolsEnabled: true,
         toolsRaw,
       },
-      sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
 
@@ -192,7 +190,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       config: input.attempt.config,
       manifestRegistry: registry,
     });
-    input.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
+    input.setup.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
     mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "chrome-dev__click" }, { name: "chrome-dev-2__click" }],
@@ -448,9 +446,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runtimePlan: {},
         sessionId: "session",
       },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
+      setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
@@ -460,7 +456,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         toolsEnabled: true,
         toolsRaw: [],
       },
-      sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
     await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
