@@ -52,21 +52,27 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
 
   it("passes step progress to the updater and stops the spinner when the update throws", async () => {
     const stop = vi.fn();
-    const progress = {};
+    const progress = { onStepStart: vi.fn(), onStepComplete: vi.fn() };
     mocks.createUpdateProgress.mockReturnValue({ progress, stop });
     mockGitCheckout();
-    mocks.runGatewayUpdate.mockRejectedValue(new Error("update exploded"));
+    const step = { name: "fetch", command: "git fetch", index: 1, total: 1 };
+    mocks.runGatewayUpdate.mockImplementation(async ({ progress: forwarded }) => {
+      forwarded?.onStepStart?.(step);
+      forwarded?.onStepComplete?.({ ...step, durationMs: 1, exitCode: 0 });
+      throw new Error("update exploded");
+    });
 
     const confirm = vi.fn().mockResolvedValue(true);
     await expect(runOffer({ root: "/repo/link", confirm })).rejects.toThrow("update exploded");
 
     expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        progress,
         allowGatewayServiceRepair: false,
         allowGatewayActivation: false,
       }),
     );
+    expect(progress.onStepStart).toHaveBeenCalledWith(step);
+    expect(progress.onStepComplete).toHaveBeenCalledWith({ ...step, durationMs: 1, exitCode: 0 });
     expect(mocks.createUpdateProgress).toHaveBeenCalledWith(true);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).not.toHaveBeenCalled();
@@ -246,7 +252,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
           config: {},
         }),
       );
-      expect(mocks.runUpdateInferenceProbe).toHaveBeenCalledTimes(outcome === "healthy" ? 1 : 0);
+      expect(mocks.verifyUpdateServing).toHaveBeenCalledTimes(outcome === "healthy" ? 1 : 0);
       expect(mocks.doctorCommand).not.toHaveBeenCalled();
       if (outcome === "healthy") {
         expect(runtime.exit).not.toHaveBeenCalled();
