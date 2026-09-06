@@ -23,7 +23,7 @@ export default defineSingleProviderPluginEntry({
     },
     catalog: {
       discoveryMode: "strict",
-      buildProvider: buildKilocodeProviderWithDiscovery,
+      buildProvider: () => buildKilocodeProviderWithDiscovery({ discoveryMode: "strict" }),
       buildStaticProvider: buildKilocodeProvider,
     },
     augmentModelCatalog: ({ config }) =>

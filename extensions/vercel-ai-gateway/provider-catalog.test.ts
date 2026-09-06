@@ -48,6 +48,21 @@ afterEach(() => {
 });
 
 describe("vercel ai gateway provider catalog", () => {
+  it.each([503, 200])(
+    "preserves the public advisory builder for HTTP %s with no rows",
+    async (status) => {
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: jsonResponse({ data: [] }, { status }),
+        release,
+      });
+      await expect(buildVercelAiGatewayProvider()).resolves.toEqual(
+        buildStaticVercelAiGatewayProvider(),
+      );
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
   it("exposes the static fallback model catalog", () => {
     expect(getStaticVercelAiGatewayModelCatalog().map((model) => model.id)).toStrictEqual(
       STATIC_MODEL_IDS,
@@ -147,7 +162,7 @@ describe("vercel ai gateway provider catalog", () => {
         finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
       });
 
-      await expect(discoverVercelAiGatewayModels()).resolves.toEqual([]);
+      await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).resolves.toEqual([]);
     }
   });
 
@@ -169,7 +184,7 @@ describe("vercel ai gateway provider catalog", () => {
       release,
       finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
     });
-    await expect(discoverVercelAiGatewayModels()).rejects.toThrow(error);
+    await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).rejects.toThrow(error);
     expect(release).toHaveBeenCalledOnce();
   });
 

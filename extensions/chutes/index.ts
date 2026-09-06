@@ -185,7 +185,7 @@ export default definePluginEntry({
             profileId: discoveryApiKey ? profileId : undefined,
             run: async () => ({
               provider: {
-                ...(await buildChutesProvider(discoveryApiKey)),
+                ...(await buildChutesProvider(discoveryApiKey, { discoveryMode: "strict" })),
                 apiKey,
               },
             }),

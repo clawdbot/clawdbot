@@ -25,7 +25,7 @@ export default defineSingleProviderPluginEntry({
     },
     catalog: {
       discoveryMode: "strict",
-      buildProvider: buildVercelAiGatewayProvider,
+      buildProvider: () => buildVercelAiGatewayProvider({ discoveryMode: "strict" }),
       buildStaticProvider: buildStaticVercelAiGatewayProvider,
     },
     resolveDynamicModel: ({ modelId }) => resolveVercelAiGatewayModel(modelId),
