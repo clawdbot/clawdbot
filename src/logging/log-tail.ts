@@ -110,13 +110,18 @@ async function readLogSlice(params: {
   }
   try {
     let lastResult: Omit<LogTailReadPayload, "file"> | undefined;
+    let retryParams = params;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const stat = (await handle.stat({ bigint: true })) as LogFileStat;
-      const result = await readLogSliceAttempt(params, handle, stat);
+      const result = await readLogSliceAttempt(retryParams, handle, stat);
       lastResult = result;
       const finalStat = (await handle.stat({ bigint: true })) as LogFileStat;
       if (isSameLogFileStat(stat, finalStat)) {
         return result;
+      }
+      if (result.reset && result.skippedBytes === undefined) {
+        // Preserve a shrink/rotation re-anchor if the file grows again before the retry.
+        retryParams = { ...params, cursor: undefined, forceReset: true };
       }
     }
     return lastResult as Omit<LogTailReadPayload, "file">;
@@ -142,6 +147,7 @@ async function readLogSliceAttempt(
     limit: LogTailLimit;
     maxBytes: number;
     filter?: (line: string) => boolean;
+    forceReset?: boolean;
   },
   handle: Awaited<ReturnType<typeof fs.open>>,
   stat: LogFileStat,
@@ -153,7 +159,7 @@ async function readLogSliceAttempt(
     typeof params.cursor === "number" && Number.isFinite(params.cursor)
       ? Math.max(0, Math.floor(params.cursor))
       : undefined;
-  let reset = false;
+  let reset = params.forceReset === true;
   let skippedBytes: number | undefined;
   let truncated = false;
   let start;

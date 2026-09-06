@@ -187,6 +187,40 @@ describe("readConfiguredLogTail", () => {
     expect(fileShrink.skippedBytes).toBeUndefined();
   });
 
+  it("keeps a shrink re-anchored when a replacement grows during the retry", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const oldContent = `${"old".repeat(333)}\n`;
+    await fs.writeFile(file, oldContent);
+    setLoggerOverride({ file });
+    const initial = await readConfiguredLogTail();
+
+    const replacement = "new-first\nnew-second\n";
+    const appended = `${"new-third".repeat(120)}\n`;
+    await fs.writeFile(file, replacement);
+    const realOpen = fs.open.bind(fs);
+    let mutated = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+        const result = await realRead(...readArgs);
+        if (!mutated) {
+          mutated = true;
+          await fs.appendFile(file, appended);
+        }
+        return result;
+      });
+      return handle;
+    });
+
+    const result = await readConfiguredLogTail({ cursor: initial.cursor });
+
+    expect(result.reset).toBe(true);
+    expect(result.lines).toEqual(["new-first", "new-second", appended.trimEnd()]);
+  });
+
   it("keeps the first line when the byte window starts exactly after a newline", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
