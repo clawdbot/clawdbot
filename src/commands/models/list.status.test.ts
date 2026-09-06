@@ -1523,12 +1523,24 @@ describe("modelsStatusCommand auth overview", () => {
       },
     );
 
-    expect(routeInputs.find((input) => input.modelId === "Reader")?.observedRoutes).toEqual([
-      { api: upperRoute.api, baseUrl: upperRoute.baseUrl },
-    ]);
-    expect(routeInputs.find((input) => input.modelId === "reader")?.observedRoutes).toEqual([
-      { api: lowerRoute.api, baseUrl: lowerRoute.baseUrl },
-    ]);
+    const upperInputs = routeInputs.filter(
+      (input) => input.modelId === "Reader" && input.observedRoutes,
+    );
+    const lowerInputs = routeInputs.filter(
+      (input) => input.modelId === "reader" && input.observedRoutes,
+    );
+    expect(upperInputs.length).toBeGreaterThan(0);
+    expect(lowerInputs.length).toBeGreaterThan(0);
+    for (const input of upperInputs) {
+      expect(input.observedRoutes).toEqual([
+        { api: upperRoute.api, baseUrl: upperRoute.baseUrl },
+      ]);
+    }
+    for (const input of lowerInputs) {
+      expect(input.observedRoutes).toEqual([
+        { api: lowerRoute.api, baseUrl: lowerRoute.baseUrl },
+      ]);
+    }
   });
 
   it("keeps API-key SecretRef profiles usable for a concrete OpenAI route", async () => {
