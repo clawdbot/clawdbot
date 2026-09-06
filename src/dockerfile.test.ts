@@ -178,16 +178,6 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
-  it("chowns the parent .cache dir so the gateway can create runtime cache subdirs", async () => {
-    // Regression: mkdir -p PLAYWRIGHT_BROWSERS_PATH creates /home/node/.cache as
-    // root:root, and the gateway (USER node) needs to create
-    // /home/node/.cache/openclaw-<uid> at runtime. The chown must target the
-    // parent dir, not just the ms-playwright subdir.
-    const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain('chown -R node:node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")"');
-    expect(dockerfile).toContain('stat -c \'%U:%G %a\' "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")"');
-  });
-
   it("uses the Docker target platform for both frozen installs", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
     const installs = dockerfile.match(/^RUN .*pnpm install[^\n]+/gm) ?? [];

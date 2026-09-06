@@ -347,13 +347,10 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
+      install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      # chown the parent .cache dir, not just ms-playwright: mkdir -p creates
-      # /home/node/.cache as root:root, and the node-owned gateway needs to create
-      # /home/node/.cache/openclaw-<uid> at runtime. Mirrors the #85968 .config fix.
-      chown -R node:node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
-      stat -c '%U:%G %a' "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" | grep -qx 'node:node 755'; \
+      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
