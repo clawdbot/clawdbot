@@ -9,6 +9,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
+import { releaseAnnounceCompletionHandoffForChildRun } from "../announce/subagent-announce-completion-handoff-retention.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { getDeliveryLastError } from "./subagent-delivery-state.js";
@@ -166,6 +167,11 @@ export function suspendPendingFinalDelivery(
   },
 ): void {
   const params = context.options;
+  // Deadline expiry / permanent failure stop announce replay — release retained handoff keys.
+  releaseAnnounceCompletionHandoffForChildRun({
+    childSessionKey: args.entry.childSessionKey,
+    childRunId: args.entry.runId,
+  });
   const committed = blockSubagentCompletionDelivery({
     subagent: args.entry,
     taskId: params.resolveSubagentTask(args.entry).task?.taskId ?? "",

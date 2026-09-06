@@ -18,7 +18,10 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import {
+  buildAnnounceIdempotencyKey,
+  buildRequesterSettleAnnounceId,
+} from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   countActiveDescendantRuns,
@@ -394,14 +397,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     modelRouteChange,
     preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
   });
-  const wakeKeyBase = [
-    `requester-settle:${requesterAgentId ?? "unknown"}:${requesterSessionKey}:${batchRunIds.join(",")}`,
-    selectedState.rearmGeneration === undefined
-      ? undefined
-      : `yield-${selectedState.rearmGeneration}`,
-  ]
-    .filter(Boolean)
-    .join(":");
+  const wakeKeyBase = buildRequesterSettleAnnounceId({
+    requesterAgentId,
+    requesterSessionKey,
+    batchRunIds,
+    rearmGeneration: selectedState.rearmGeneration,
+  });
   const activeBatchIsClosed = activeRequesterSettleWakeBatches.get(wakeKeyBase);
   if (activeBatchIsClosed && !activeBatchIsClosed()) {
     return false;
@@ -436,6 +437,46 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       deferBatch(state);
       return false;
     }
+
+    const scheduleSameKeyReplay = (
+      lastError: string,
+      exhaustedOutcome?: SubagentAnnounceDeliveryResult,
+    ): boolean => {
+      const replayCount = (state.replayCount ?? 0) + 1;
+      const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
+      if (
+        replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
+        retryDelayMs === undefined
+      ) {
+        completeBatch(
+          settledBatch,
+          state.rearmGeneration,
+          exhaustedOutcome ?? {
+            delivered: false,
+            path: "none",
+            error: lastError,
+          },
+        );
+        return false;
+      }
+      const nextAttemptAt = Date.now() + retryDelayMs;
+      state = {
+        status: "dispatching",
+        attemptCount: state.attemptCount,
+        replayCount,
+        nextAttemptAt,
+        batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
+        lastError,
+      };
+      params.transitionBatch(settledBatch, state);
+      logWarn(
+        `requester settle wake same-key replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
+      );
+      return false;
+    };
 
     let attemptIndex: number;
     if (state.status === "dispatching") {
@@ -482,7 +523,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
         directIdempotencyKey: buildAnnounceIdempotencyKey(
-          attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
+          buildRequesterSettleAnnounceId({
+            requesterAgentId,
+            requesterSessionKey,
+            batchRunIds,
+            rearmGeneration: selectedState.rearmGeneration,
+            attemptIndex,
+          }),
         ),
         signal: params.signal,
         resolveGatewayContext,
@@ -491,36 +538,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
       const lastError = error instanceof Error ? error.message : String(error);
-      const replayCount = (state.replayCount ?? 0) + 1;
-      const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
-      if (
-        replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
-        retryDelayMs === undefined
-      ) {
-        completeBatch(settledBatch, state.rearmGeneration, {
-          delivered: false,
-          path: "none",
-          error: lastError,
-        });
-        return false;
-      }
-      const nextAttemptAt = Date.now() + retryDelayMs;
-      state = {
-        status: "dispatching",
-        attemptCount: state.attemptCount,
-        replayCount,
-        nextAttemptAt,
-        batchRunIds,
-        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
-        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
-        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
-        lastError,
-      };
-      params.transitionBatch(settledBatch, state);
-      logWarn(
-        `requester settle wake transport replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
-      );
-      return false;
+      return scheduleSameKeyReplay(lastError);
     }
     if (delivery.delivered) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
@@ -534,6 +552,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     ) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
       return false;
+    }
+    // In-flight handoff must keep the dispatching attempt key so a replay joins
+    // the original synthesis turn instead of rotating to :retry-N.
+    if (delivery.reason === "completion_handoff_pending") {
+      const lastError = delivery.error ?? delivery.reason ?? "completion_handoff_pending";
+      return scheduleSameKeyReplay(lastError, {
+        ...delivery,
+        error: lastError,
+      });
     }
 
     const attemptCount = attemptIndex + 1;
