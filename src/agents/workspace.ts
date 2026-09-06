@@ -1353,6 +1353,32 @@ const NON_PRIVATE_ROOT_PROFILE_FILENAMES = new Set([
   DEFAULT_MEMORY_FILENAME,
 ]);
 
+const ROOT_MEMORY_ONLY = new Set([DEFAULT_MEMORY_FILENAME]);
+
+function filterRootMemoryOnlyBootstrapFiles(
+  files: WorkspaceBootstrapFile[],
+  workspaceRoot?: string,
+): WorkspaceBootstrapFile[] {
+  if (!workspaceRoot) {
+    return files.filter((file) => !ROOT_MEMORY_ONLY.has(file.name));
+  }
+  const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
+  const rootMemoryPaths = new Set(
+    [...ROOT_MEMORY_ONLY].map((name) => path.join(resolvedWorkspaceRoot, name)),
+  );
+  return files.filter((file) => {
+    if (typeof file.path !== "string") return true;
+    const filePath = file.path.trim();
+    if (!filePath) return true;
+    const resolvedPath = path.isAbsolute(filePath)
+      ? path.resolve(filePath)
+      : filePath.startsWith("~")
+        ? resolveUserPath(filePath)
+        : path.resolve(resolvedWorkspaceRoot, filePath);
+    return !rootMemoryPaths.has(resolvedPath);
+  });
+}
+
 function filterNonPrivateRootProfileBootstrapFiles(
   files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
@@ -1389,11 +1415,13 @@ export function filterBootstrapFilesForSession(
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
   const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  const isNonPrivate =
-    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
-  const privacyFilteredFiles = isNonPrivate
+  const isSharedContext = effectiveChatType === "group" || effectiveChatType === "channel";
+  const isNonPrivate = isSubagent || isCron || isSharedContext;
+  const privacyFilteredFiles = isSharedContext
     ? filterNonPrivateRootProfileBootstrapFiles(files, workspaceDir)
-    : files;
+    : isNonPrivate
+      ? filterRootMemoryOnlyBootstrapFiles(files, workspaceDir)
+      : files;
   if (isSubagent) {
     return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }

@@ -146,3 +146,18 @@ describe("filterBootstrapFilesForSession privacy", () => {
     },
   );
 });
+
+it("preserves USER.md for private cron sessions", () => {
+  const cronFiles: WorkspaceBootstrapFile[] = [
+    { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
+    { name: "MEMORY.md", path: "/w/MEMORY.md", content: "", missing: false },
+    { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
+    { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
+  ];
+  const result = filterBootstrapFilesForSession(cronFiles, "agent:default:cron:daily-check");
+  expect(result).toStrictEqual([
+    { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
+    { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
+    { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
+  ]);
+});
