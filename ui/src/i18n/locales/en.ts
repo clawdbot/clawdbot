@@ -2407,7 +2407,7 @@ export const en: TranslationMap & {
     custodian: "System setup and care.",
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
-    communications: "Messages and text-to-speech settings.",
+    communications: "Messages, text-to-speech, and meeting capture settings.",
     appearance: "Theme and UI settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
@@ -2428,6 +2428,11 @@ export const en: TranslationMap & {
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
     plugin: "Plugin-provided panel.",
+  },
+  meetingCapture: {
+    title: "Meeting capture",
+    description: "Choose which sources can save meeting notes on this Gateway.",
+    sources: "Auto-start sources",
   },
   cloudWorkersPage: {},
   portalsPage: {

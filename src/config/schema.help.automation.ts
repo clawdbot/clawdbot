@@ -124,7 +124,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "transcripts.autoStart[].whenOccupied":
     "Start a fresh transcript session each time humans are present in the source and stop it (generating notes) after the last human leaves. Requires a provider that reports occupancy, such as discord-voice. Default: false (capture continuously from gateway start).",
   "transcripts.autoStart[].title":
-    "Optional human-readable title stored with the transcript session and shown in transcript listings. Use concise meeting names that help operators identify the captured source.",
+    "Optional title for future transcript captures. Changing only titles keeps current captures running and does not rename their admitted title or saved notes. Other source changes retain their normal restart handling.",
   "transcripts.autoStart[].accountId":
     "Optional provider account or workspace identifier for transcript sources that need account disambiguation. Use the provider's documented account id format.",
   "transcripts.autoStart[].guildId":
