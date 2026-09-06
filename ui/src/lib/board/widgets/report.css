@@ -1,0 +1,142 @@
+openclaw-report-widget {
+  display: block;
+  min-width: 0;
+}
+
+.board-report {
+  display: grid;
+  gap: 20px;
+  padding: 18px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+
+  h3,
+  figcaption,
+  caption {
+    margin: 0 0 10px;
+    color: var(--text-strong);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+  }
+
+  p,
+  dl,
+  dd,
+  figure {
+    margin: 0;
+  }
+
+  dt {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+}
+
+.board-report__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.board-report__metrics,
+.board-report__values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+  gap: 12px;
+}
+
+.board-report__metrics > div {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+
+  dd {
+    margin: 4px 0;
+    color: var(--text-strong);
+    font-size: 24px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  .board-report__metric-detail {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: normal;
+  }
+}
+
+.board-report__table {
+  min-width: 0;
+  overflow-x: auto;
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th,
+  td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  th {
+    color: var(--text-strong);
+    font-weight: 600;
+  }
+}
+
+.board-report__chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 10px;
+}
+
+.board-report__axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.board-report__line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.board-report__bar,
+.board-report__point {
+  fill: var(--accent);
+}
+
+.board-report__values dd {
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-report__links {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    overflow-wrap: anywhere;
+  }
+
+  span {
+    display: block;
+    color: var(--muted);
+  }
+}

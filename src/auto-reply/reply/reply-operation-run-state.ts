@@ -16,11 +16,22 @@ type ReplyOperationAdmissionSnapshot =
         | "question-response-refused";
     };
 
+// Rejection diagnostics carry owner-selected codes, never user-facing error text.
+export type ReplyPreRunRejectionCode =
+  | "model-scope-conflict"
+  | "model-scope-not-authorized"
+  | "model-selection-locked"
+  | "model-runtime-invalid"
+  | "model-selection-rejected"
+  | "model-selection-conflict"
+  | "session-directive-rejected";
+
 export type ReplyOperationRunState = {
   admission?: ReplyOperationAdmissionSnapshot;
   messageInjectionAborted?: true;
   agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
+  preRunRejection?: ReplyPreRunRejectionCode;
 };
 
 // Carries this invocation's admission decision through reply option spreads so
@@ -47,6 +58,15 @@ export function recordReplyOperationAgentTurn(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );
     state.agentTurnOwner = owner;
+  }
+}
+
+export function recordReplyPreRunRejection(
+  state: ReplyOperationRunState | undefined,
+  rejection: ReplyPreRunRejectionCode | undefined,
+): void {
+  if (state && rejection) {
+    state.preRunRejection ??= rejection;
   }
 }
 

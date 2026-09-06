@@ -461,6 +461,26 @@ export function renderComposerDictationStatus(dictation?: ComposerDictationContr
   `;
 }
 
+export function renderChatAbortAction(
+  props: Pick<ChatRunControlsProps, "canAbort" | "onAbort" | "onPrimaryActionPointerDown">,
+) {
+  return props.canAbort
+    ? html`
+        <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+          <button
+            class="chat-send-btn chat-send-btn--stop"
+            @pointerdown=${props.onPrimaryActionPointerDown}
+            @click=${props.onAbort}
+            aria-label=${t("chat.runControls.stopGenerating")}
+          >
+            ${icons.stop}
+            <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+}
+
 export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const steersActiveRun = props.followUpMode === "steer";
@@ -497,21 +517,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     : activeRunActionLabel;
   // Preserve the click identity without mistaking it for a follow-up mode.
   const send = (event: Event) => props.onSend(event);
-  const abortAction = props.canAbort
-    ? html`
-        <openclaw-tooltip .content=${t("chat.runControls.stop")}>
-          <button
-            class="chat-send-btn chat-send-btn--stop"
-            @pointerdown=${props.onPrimaryActionPointerDown}
-            @click=${props.onAbort}
-            aria-label=${t("chat.runControls.stopGenerating")}
-          >
-            ${icons.stop}
-            <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
+  const abortAction = renderChatAbortAction(props);
 
   // Transports keep the session active while reporting status "error"; the
   // alert row above the composer owns the error message, so the control keeps

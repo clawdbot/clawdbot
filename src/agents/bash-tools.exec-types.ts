@@ -48,6 +48,7 @@ export type ExecToolDefaults = {
   autoReviewer?: ExecAutoReviewer;
   agentId?: string;
   backgroundMs?: number;
+  cleanupMs?: number;
   timeoutSec?: number;
   approvalWarningText?: string;
   approvalFollowupText?: string;

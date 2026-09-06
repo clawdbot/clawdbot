@@ -121,7 +121,15 @@ describe("Gateway startup lifetime", () => {
         expect(await startupOutcome).toBe(startupError);
         const outcome = await closeOutcome;
         if (cleanup === "failed") {
-          expect(outcome).toMatchObject({ errors: [{ cause: cleanupError }] });
+          expect(outcome).toMatchObject({
+            errors: [
+              {
+                message: expect.stringContaining("gateway lifetime sidecars"),
+                cause: cleanupError,
+              },
+              { message: expect.stringContaining("late sidecar cleanup"), cause: cleanupError },
+            ],
+          });
         } else {
           expect(outcome).toBeUndefined();
         }

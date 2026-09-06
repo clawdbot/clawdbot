@@ -31,29 +31,24 @@ describe("emitJsonc — round-trip", () => {
 });
 
 describe("emitJsonc — render mode", () => {
-  it("re-stringifies the structural tree (no comments)", () => {
-    const { ast } = parseJsonc('{ /* drop me */ "x": 1, "y": [2, 3] }');
+  it("renders nested values with spaced containers and preserves entry order", () => {
+    const { ast } = parseJsonc(
+      '{ /* drop me */ "2": 2, "1": 1, "2": 3, "values": [{}, [], {"scalars": [true, false, null, -1.5, "text"]}] }',
+    );
     const out = emitJsonc(ast, { mode: "render" });
-    expect(out).not.toContain("drop me");
-    expect(JSON.parse(out)).toEqual({ x: 1, y: [2, 3] });
+    expect(out).toBe(
+      '{ "2": 2, "1": 1, "2": 3, "values": [ {  }, [  ], { "scalars": [ true, false, null, -1.5, "text" ] } ] }',
+    );
   });
 
-  it("throws OcEmitSentinelError when a leaf string is the sentinel", () => {
-    const ast = parseJsonc('{ "x": "ok" }').ast;
-    const tampered = {
-      ...ast,
-      root: {
-        kind: "object" as const,
-        entries: [
-          {
-            key: "x",
-            line: 1,
-            value: { kind: "string" as const, value: REDACTED_SENTINEL },
-          },
-        ],
-      },
-    };
-    expect(() => emitJsonc(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
+  it("reports the nested path when a leaf string is the sentinel", () => {
+    const { ast } = parseJsonc(`{"outer":[{"token":"${REDACTED_SENTINEL}"}]}`);
+    expect(() => emitJsonc(ast, { mode: "render", fileNameForGuard: "config" })).toThrow(
+      expect.objectContaining({
+        code: "OC_EMIT_SENTINEL",
+        path: "oc://config/outer/0/token",
+      }),
+    );
   });
 
   it("throws when a leaf string EMBEDS the sentinel (prefix/suffix wrap)", () => {

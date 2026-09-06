@@ -21,7 +21,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
 async function expectPathExists(filePath: string) {
-  await expect(fs.access(filePath)).resolves.toBeUndefined();
+  await fs.access(filePath);
 }
 
 async function expectPathMissing(filePath: string) {
@@ -335,7 +335,7 @@ describe("bundled plugin postinstall", () => {
       if (String(filePath) !== inventoryPath) {
         throw new Error(`unexpected dist JavaScript read: ${String(filePath)}`);
       }
-      return readFileSyncOriginal(filePath, options);
+      return readFileSyncOriginal(filePath, { encoding: options });
     });
 
     expect(

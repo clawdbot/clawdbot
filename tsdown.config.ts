@@ -9,6 +9,7 @@ import {
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -187,6 +188,7 @@ function workerDeployBuildConfig(): UserConfig {
     env,
     define: {
       WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
     },
     alias: {
@@ -436,6 +438,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
+    "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
@@ -810,7 +813,10 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      plugins: [createStateSchemaInlinePlugin()],
+      // Explicit ESM chunks avoid repeated package-format parsing in Node;
+      // named entrypoints retain their public .js paths.
+      outputOptions: { chunkFileNames: "[name]-[hash].mjs" },
+      plugins: [createStateSchemaInlinePlugin(), createGatewayRunChunkMetadataPlugin()],
     },
     false,
   ),

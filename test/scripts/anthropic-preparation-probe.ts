@@ -23,8 +23,25 @@ assert.ok(
   JSON.stringify({ plugins: registry.plugins, diagnostics: registry.diagnostics }),
 );
 const loader = getPluginModuleLoaderStats();
-assert.equal(loader.nativeHits, 1, "the real provider must load its prepared JavaScript");
-assert.equal(loader.sourceTransformForced + loader.sourceTransformFallbacks, 0);
+// The loader deliberately selects Jiti on Bun and native require on Node.
+const isBun = Boolean(process.versions.bun);
+assert.deepEqual(
+  {
+    calls: loader.calls,
+    nativeHits: loader.nativeHits,
+    nativeMisses: loader.nativeMisses,
+    sourceTransformForced: loader.sourceTransformForced,
+    sourceTransformFallbacks: loader.sourceTransformFallbacks,
+  },
+  {
+    calls: 1,
+    nativeHits: isBun ? 0 : 1,
+    nativeMisses: 0,
+    sourceTransformForced: isBun ? 1 : 0,
+    sourceTransformFallbacks: 0,
+  },
+  "prepared provider loading must follow the runtime policy",
+);
 const result = withPluginRuntimeRegistryScope(registry, classify);
 assert.equal(result?.reason, "server_error");
 assert.equal(result?.provider, "anthropic");

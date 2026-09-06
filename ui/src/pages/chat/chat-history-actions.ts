@@ -11,7 +11,12 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { persistChatComposerState } from "./composer-persistence.ts";
+import {
+  captureChatComposerReplacement,
+  loadChatComposerCommittedDraftRevision,
+  persistChatComposerState,
+} from "./composer-persistence.ts";
+import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
@@ -32,6 +37,7 @@ type ClearChatViewOwner = {
 };
 
 type RewindChatHistoryState = ChatState &
+  Parameters<typeof persistChatComposerState>[0] &
   Parameters<typeof scheduleChatScroll>[0] & {
     handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]) => void;
     sessions: Pick<SessionCapability, "rewind">;
@@ -220,6 +226,15 @@ export async function rewindChatHistory(
     state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
   const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
   const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
+  const readComposer = () =>
+    chatAttachmentDraftSignature(
+      state.chatMessage,
+      state.chatAttachments,
+      state.chatGoalDraftMode,
+      state.chatMentions,
+    );
+  const composerSignature = readComposer();
+  const ownsComposer = captureChatComposerReplacement(state, sessionKey, agentParams.agentId);
   try {
     const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
     const editorText = result.editorText ?? "";
@@ -229,23 +244,30 @@ export async function rewindChatHistory(
         agentId: agentParams.agentId,
       });
     }
-    if (connectionIsCurrent()) {
-      persistChatComposerState(state, sessionKey, {
-        agentId: agentParams.agentId,
-        draft: editorText,
-        mentions: [],
-      });
+    if (viewMatches()) {
+      resetChatHistoryProjection(state, agentParams.agentId);
+      await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     }
+    // Rewind commits history independently; only its unchanged composer package
+    // may receive the restored prompt after either round trip.
+    if (!connectionIsCurrent() || !ownsComposer() || readComposer() !== composerSignature) {
+      return null;
+    }
+    persistChatComposerState(state, sessionKey, {
+      agentId: agentParams.agentId,
+      draft: editorText,
+      mentions: [],
+      goalMode: null,
+      expectedDraftRevision: loadChatComposerCommittedDraftRevision(
+        state,
+        sessionKey,
+        agentParams.agentId,
+      ),
+    });
     if (!viewMatches()) {
       return null;
     }
-    resetChatHistoryProjection(state, agentParams.agentId);
-    await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    if (!viewIsCurrent()) {
-      return null;
-    }
-    // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
-    // text-only so large payloads do not enter local storage.
+    state.chatGoalDraftMode = null;
     state.chatAttachments = replaceChatAttachmentsFromEditor(
       state.chatAttachments,
       result.editorAttachments,

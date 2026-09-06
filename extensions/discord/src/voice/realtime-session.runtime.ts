@@ -1,6 +1,7 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
+import type { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
 import {
   DiscordRealtimeSpeakerSession,
   type DiscordRealtimeSessionParams,
@@ -70,7 +71,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.sessions.clear();
   }
 
-  beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
+  beginSpeakerTurn(
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+    recordingInput?: DiscordRealtimeRecordingInput,
+  ): VoiceRealtimeSpeakerTurn {
     if (this.closed) {
       throw new Error("Discord realtime voice session is closed");
     }
@@ -80,7 +85,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       }
     }
     let speaker = this.speakers.get(userId);
-    if (speaker && speaker.transcripts !== this.params.entry.transcripts) {
+    const transcripts = recordingInput?.initialReceipt
+      ? recordingInput.initialReceipt.capture
+      : this.params.entry.transcripts;
+    if (speaker && speaker.transcripts !== transcripts) {
       // Subscription replacement fences transcript delivery, but must not cut a valid spoken
       // answer short. The old connection drains with its original source and receives no new input.
       this.speakers.delete(userId);
@@ -100,7 +108,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       speaker = {
         userId,
         senderIsOwner: context.senderIsOwner,
-        transcripts: this.params.entry.transcripts,
+        transcripts,
         session,
       };
       this.speakers.set(userId, speaker);
@@ -111,7 +119,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         void session.connect().catch((error: unknown) => this.handleSpeakerFailure(session, error));
       }
     }
-    return speaker.session.beginSpeakerTurn(context, userId);
+    return speaker.session.beginSpeakerTurn(context, userId, recordingInput);
   }
 
   handleBargeIn(reason = "barge-in"): void {

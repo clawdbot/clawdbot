@@ -77,6 +77,7 @@ type ChatPaneHeaderProps = {
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
+  publicAccessIndicator?: TemplateResult | typeof nothing;
   placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
   nativeGateways?: NativeGatewaysCapability | null;
@@ -442,6 +443,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
+        ${props.publicAccessIndicator ?? nothing}
         ${
           hasSharingControl
             ? props.sharingControl

@@ -7,7 +7,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serverConstants from "../../gateway/server-constants.js";
-import { readChatHistoryMessageId } from "../../gateway/server-methods/chat-history-pages.js";
+import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";

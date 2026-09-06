@@ -300,7 +300,7 @@ export function normalizeMentions(
   }
   const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let result = text;
+  const replacements = new Map<string, string>();
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
     const replacement =
@@ -309,9 +309,11 @@ export function normalizeMentions(
         : mentionId
           ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
           : `@${mention.name}`;
-    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
+    replacements.set(mention.key, replacement);
   }
-  return result;
+  // Longest keys win; a single pass keeps placeholder-like display names literal.
+  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escaped);
+  return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {

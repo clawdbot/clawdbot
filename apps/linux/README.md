@@ -2,6 +2,10 @@
 
 The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
+Dashboard widgets load inside the app. Sign-in links and external links opened in a new window use your system browser.
+
+The tray's **Stop Gateway** and **Restart Gateway** actions request graceful shutdown. Running work can delay completion; **Start Gateway** brings a stopped local Gateway back online.
+
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
 newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
 Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
@@ -90,15 +94,36 @@ to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 
-After connecting, Model Setup checks existing credentials and verifies a real
-model response before continuing. If no existing credentials work, choose a
-provider and either sign in or enter an API key. The selected Gateway owns the
-provider credentials and model configuration. A working existing model opens
-the normal dashboard; newly configured AI access continues into guided
-onboarding. In-progress model setup and guided onboarding survive Gateway
-restarts. If the app closes while model activation is in progress, reopening it
-resumes the same Gateway, agent, and model without activating the provider
-twice.
+After connecting, Model Setup discovers AI access available to the selected
+Gateway and shows it as a choice. Discovery never imports or copies an account,
+and the companion never selects, tests, installs, or saves a provider until you
+click its action. The list includes supported installed providers and official
+provider plugins available from OpenClaw's managed plugin catalog. Installing a
+provider plugin shows its capabilities for review and continues directly to
+that provider's authentication form. Successful verification may require a
+Gateway restart before the new model becomes available.
+
+The custom endpoint option supports OpenAI- and Anthropic-compatible services.
+For a local Gateway, it opens the canonical guided endpoint setup. For a remote
+Gateway, run `openclaw onboard --auth-choice custom-api-key` on the Gateway host as directed by the setup
+message; custom-provider secrets must be entered on their owning host. The
+desktop companion does not copy remote provider secrets to this computer.
+
+On a fresh install, setup also asks whether existing native Claude and Codex
+conversations should appear in OpenClaw. This is discovery only, not an import
+or copy. The option starts unchecked; declining disables both native session
+catalogs. Existing installations keep their current catalog behavior during an
+upgrade.
+
+Once you choose AI access, Model Setup follows the provider's normal review and
+verification flow. A temporary connection loss resumes the admitted setup
+wizard on the same Gateway and account without repeating installation or the last answer.
+After a completed activation requests a restart, setup can resume verification
+of that same model. If an unfinished wizard is no longer available, setup shows
+a recovery message instead of repeating authentication automatically. **Check again**
+refreshes the current setup; if a model was saved, you can explicitly verify and use it. Gateway
+failures retain their detailed recovery message so setup can identify
+authentication, network, service, or restart problems.
 
 For OpenAI, **ChatGPT Login** uses a ChatGPT or Codex subscription, while
 **OpenAI API Key** uses API billing. When the Gateway runs on another host and
@@ -155,7 +180,7 @@ export XDG_CACHE_HOME="$cache"
 apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
 apps/linux/scripts/tauri-appimage-tools.sh prepare
 apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
-export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+export LDAI_RUNTIME_FILE="$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)"
 (
   cd apps/linux/src-tauri
   GSTREAMER_PLUGINS_DIR="$plugins" \

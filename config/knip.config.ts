@@ -62,6 +62,11 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  "scripts/e2e/lib/fleet-cache/assert-cell.mjs!",
+  "scripts/e2e/lib/fleet-cache/assert-podman-cell.mjs!",
+  "scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs!",
+  "scripts/e2e/lib/fleet-cache/probe-podman-cell.mjs!",
+  "scripts/e2e/lib/fleet-cache/runtime-preflight.mjs!",
   "scripts/e2e/lib/npm-telegram-live/prepare-package.mts!",
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
@@ -133,7 +138,6 @@ const repositoryScriptEntries = [
   "scripts/run-stylelint.mts!",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
-  "scripts/test-projects-child.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
@@ -237,6 +241,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // Required metadata readers load this tsdown entry by computed source/dist path.
+  "src/plugins/plugin-metadata-readers.runtime.ts!",
   // Released Gateways still import this stable entry after an on-disk update.
   "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
@@ -461,7 +467,6 @@ const config = {
     "src/plugins/interactive-registry.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
-    "src/tasks/detached-task-runtime-state.ts": ["exports"],
     // Focused Control UI tests consume these explicit state-machine seams;
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],

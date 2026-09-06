@@ -1,6 +1,12 @@
+import {
+  resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
+
+const modelConfig = { resolveAllowedModelRef, resolveDefaultModelForAgent };
 
 function configWithAllowedModels(models: string[], runtime?: string): OpenClawConfig {
   return {
@@ -17,7 +23,7 @@ function configWithAllowedModels(models: string[], runtime?: string): OpenClawCo
 
 describe("resolveCodexCatalogCreateSession", () => {
   it("advertises the canonical implicit Codex default", () => {
-    expect(resolveCodexCatalogCreateSession({}, "main")).toEqual({
+    expect(resolveCodexCatalogCreateSession(modelConfig, {}, "main")).toEqual({
       model: "openai/gpt-5.6-sol",
       agentRuntime: "codex",
     });
@@ -26,6 +32,7 @@ describe("resolveCodexCatalogCreateSession", () => {
   it("pins the Codex model even when ordinary chats use the direct runtime", () => {
     expect(
       resolveCodexCatalogCreateSession(
+        modelConfig,
         configWithAllowedModels(["openai/gpt-5.6-sol"], "openclaw"),
         "main",
       ),
@@ -37,7 +44,11 @@ describe("resolveCodexCatalogCreateSession", () => {
 
   it("does not advertise creation when the Codex model is outside the allowlist", () => {
     expect(
-      resolveCodexCatalogCreateSession(configWithAllowedModels(["openai/gpt-5.6-terra"]), "main"),
+      resolveCodexCatalogCreateSession(
+        modelConfig,
+        configWithAllowedModels(["openai/gpt-5.6-terra"]),
+        "main",
+      ),
     ).toBeUndefined();
   });
 
@@ -60,14 +71,14 @@ describe("resolveCodexCatalogCreateSession", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(resolveCodexCatalogCreateSession(config, "main")).toEqual({
+    expect(resolveCodexCatalogCreateSession(modelConfig, config, "main")).toEqual({
       model: "openai/gpt-5.6-sol",
       agentRuntime: "codex",
     });
-    expect(resolveCodexCatalogCreateSession(config, "research")).toBeUndefined();
+    expect(resolveCodexCatalogCreateSession(modelConfig, config, "research")).toBeUndefined();
   });
 
   it("does not advertise creation before runtime config is available", () => {
-    expect(resolveCodexCatalogCreateSession(undefined, "main")).toBeUndefined();
+    expect(resolveCodexCatalogCreateSession(modelConfig, undefined, "main")).toBeUndefined();
   });
 });

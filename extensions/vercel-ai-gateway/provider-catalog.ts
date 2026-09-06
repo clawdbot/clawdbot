@@ -49,10 +49,12 @@ export function buildStaticVercelAiGatewayProvider(): ModelProviderConfig {
   };
 }
 
-export async function buildVercelAiGatewayProvider(): Promise<ModelProviderConfig> {
+export async function buildVercelAiGatewayProvider(
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelProviderConfig> {
   return {
     baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
     api: "anthropic-messages",
-    models: await discoverVercelAiGatewayModels(),
+    models: await discoverVercelAiGatewayModels(options),
   };
 }

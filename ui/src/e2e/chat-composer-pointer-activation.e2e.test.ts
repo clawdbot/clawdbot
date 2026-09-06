@@ -174,7 +174,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       expect(runId).not.toBe("");
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await gateway.resolveDeferred("chat.send");
       await gateway.emitGatewayEvent("chat", {
         deltaText: "Working on it.",
         message: {
@@ -257,7 +257,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
           ? String(sendRequest.params.idempotencyKey)
           : "";
       expect(runId).not.toBe("");
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await gateway.resolveDeferred("chat.send");
       await gateway.emitGatewayEvent("chat", {
         deltaText: "Working on it.",
         message: {
@@ -317,7 +317,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
         "idempotencyKey" in sendRequest.params
           ? String(sendRequest.params.idempotencyKey)
           : "";
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await gateway.resolveDeferred("chat.send");
       await gateway.emitGatewayEvent("chat", {
         deltaText: "Working on it.",
         message: {

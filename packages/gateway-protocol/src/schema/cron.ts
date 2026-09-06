@@ -421,27 +421,7 @@ const CronAutoDisabledSchema = closedObject({
   consecutiveErrors: Type.Integer({ minimum: 1 }),
 });
 
-/** Scheduler-maintained state for the latest run/delivery outcome. */
-export const CronJobStateSchema = closedObject({
-  nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
-  scheduleActivatedAtMs: Type.Optional(CronDateTimestampMsSchema),
-  runningAtMs: Type.Optional(CronDateTimestampMsSchema),
-  lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
-  lastRunStatus: Type.Optional(CronRunStatusSchema),
-  lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
-  lastError: Type.Optional(Type.String()),
-  lastDiagnostics: Type.Optional(CronRunDiagnosticsSchema),
-  lastDiagnosticSummary: Type.Optional(Type.String()),
-  lastErrorReason: Type.Optional(FailoverReasonSchema),
-  lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
-  // Report-only scheduler ownership fact; callers cannot patch this field.
-  autoDisabled: Type.Optional(CronAutoDisabledSchema),
-  consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
-  lastDelivered: Type.Optional(Type.Boolean()),
-  lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
-  lastDeliveryError: Type.Optional(Type.String()),
-  deliverySuppressionReason: Type.Optional(Type.String()),
+const CronJobRuntimeFeedbackProperties = {
   lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
   lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
@@ -463,6 +443,30 @@ export const CronJobStateSchema = closedObject({
   streamError: Type.Optional(Type.String()),
   streamConsecutiveFailures: Type.Optional(Type.Integer({ minimum: 0 })),
   streamRestartExhausted: Type.Optional(Type.Boolean()),
+};
+
+/** Scheduler-maintained state for the latest run/delivery outcome. */
+export const CronJobStateSchema = closedObject({
+  nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
+  scheduleActivatedAtMs: Type.Optional(CronDateTimestampMsSchema),
+  runningAtMs: Type.Optional(CronDateTimestampMsSchema),
+  lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
+  lastRunStatus: Type.Optional(CronRunStatusSchema),
+  lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
+  lastError: Type.Optional(Type.String()),
+  lastDiagnostics: Type.Optional(CronRunDiagnosticsSchema),
+  lastDiagnosticSummary: Type.Optional(Type.String()),
+  lastErrorReason: Type.Optional(FailoverReasonSchema),
+  lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Report-only scheduler ownership fact; callers cannot patch this field.
+  autoDisabled: Type.Optional(CronAutoDisabledSchema),
+  consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastDelivered: Type.Optional(Type.Boolean()),
+  lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+  lastDeliveryError: Type.Optional(Type.String()),
+  deliverySuppressionReason: Type.Optional(Type.String()),
+  ...CronJobRuntimeFeedbackProperties,
   // Internal logical-source identity used for cron.run admission fencing. It is
   // reported for diagnostics but intentionally absent from the writable patch
   // schema so external callers cannot spoof source ownership.
@@ -487,27 +491,7 @@ const CronJobStatePatchSchema = closedObject({
   lastDelivered: Type.Optional(Type.Boolean()),
   lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastDeliveryError: Type.Optional(Type.String()),
-  lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
-  lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
-  lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
-  lastFailureAlertAtMs: Type.Optional(CronDateTimestampMsSchema),
-  lastTriggerEvalAtMs: Type.Optional(CronDateTimestampMsSchema),
-  triggerEvalCount: Type.Optional(Type.Integer({ minimum: 0 })),
-  lastTriggerFireAtMs: Type.Optional(CronDateTimestampMsSchema),
-  triggerState: Type.Optional(Type.Unknown()),
-  streamStatus: Type.Optional(
-    Type.Union([
-      Type.Literal("starting"),
-      Type.Literal("running"),
-      Type.Literal("restarting"),
-      Type.Literal("stopped"),
-      Type.Literal("disabled"),
-      Type.Literal("error"),
-    ]),
-  ),
-  streamError: Type.Optional(Type.String()),
-  streamConsecutiveFailures: Type.Optional(Type.Integer({ minimum: 0 })),
-  streamRestartExhausted: Type.Optional(Type.Boolean()),
+  ...CronJobRuntimeFeedbackProperties,
   streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(CronDateTimestampMsSchema),

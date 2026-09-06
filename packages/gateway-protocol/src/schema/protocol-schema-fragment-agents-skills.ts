@@ -114,6 +114,8 @@ export const AgentSkillProtocolSchemas = {
   SkillsCuratorStatusResult: agentsModelsSkills.SkillsCuratorStatusResultSchema,
   SkillsProposalsListParams: agentsModelsSkills.SkillsProposalsListParamsSchema,
   SkillsProposalsListResult: agentsModelsSkills.SkillsProposalsListResultSchema,
+  SkillsWorkshopReadParams: agentsModelsSkills.SkillsWorkshopReadParamsSchema,
+  SkillsWorkshopReadResult: agentsModelsSkills.SkillsWorkshopReadResultSchema,
   SkillsProposalEvaluateParams: agentsModelsSkills.SkillsProposalEvaluateParamsSchema,
   SkillsProposalEvaluateResult: agentsModelsSkills.SkillsProposalEvaluateResultSchema,
   SkillsProposalEventsListParams: agentsModelsSkills.SkillsProposalEventsListParamsSchema,
@@ -141,4 +143,8 @@ export const AgentSkillProtocolSchemas = {
   SkillsUploadCommitParams: agentsModelsSkills.SkillsUploadCommitParamsSchema,
   SkillsInstallParams: agentsModelsSkills.SkillsInstallParamsSchema,
   SkillsUpdateParams: agentsModelsSkills.SkillsUpdateParamsSchema,
+  TranscriptsExportParams: transcripts.TranscriptsExportParamsSchema,
+  TranscriptsExportResult: transcripts.TranscriptsExportResultSchema,
+  TranscriptsStatusParams: transcripts.TranscriptsStatusParamsSchema,
+  TranscriptsStatusResult: transcripts.TranscriptsStatusResultSchema,
 } as const;
