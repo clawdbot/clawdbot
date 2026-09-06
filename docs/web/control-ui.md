@@ -629,6 +629,7 @@ are Gateway settings and remain available in every browser.
 
   </Accordion>
   <Accordion title="Automations panel notes">
+    - Scheduler status, automation lists, and run history pause background refreshes while the browser tab is hidden and catch up when you return. Your current filters and unsaved draft stay in place; saves and runs already submitted continue.
     - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs.
     - Cloning an agent task retains its stored tool allowlist, model fallback list, lightweight-context setting, and external-content setting, including empty lists and explicit `false` values. Fields you change in the copy's form take precedence. The new task is authorized by the current operator; captured execution grants are not copied.
     - Both Run history views show a recorded delivery-suppression reason alongside the delivery status when available. Intentional suppression remains separate from delivery errors; the history does not infer a reason from a successful run.

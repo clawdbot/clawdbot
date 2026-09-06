@@ -198,6 +198,8 @@ export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
+  // Read admission belongs to the page; accepted mutation chains remain independent.
+  canRefresh?: () => boolean;
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
@@ -427,7 +429,7 @@ export async function loadCronStatus(
   opts?: { coalesce?: boolean },
 ): Promise<void> {
   const client = state.client;
-  if (!client || !state.connected) {
+  if (!client || !state.connected || state.canRefresh?.() === false) {
     return;
   }
   const active = activeCronStatusRequests.get(state);
@@ -668,7 +670,7 @@ export async function loadCronJobsPage(
   state: CronState,
   opts?: { append?: boolean; tableFilters?: boolean },
 ) {
-  if (!state.client || !state.connected) {
+  if (!state.client || !state.connected || state.canRefresh?.() === false) {
     return;
   }
   const append = opts?.append === true;
@@ -1437,7 +1439,7 @@ export async function loadCronRuns(
   opts?: { append?: boolean; coalesce?: boolean },
 ): Promise<CronRunsLoadStatus> {
   const client = state.client;
-  if (!client || !state.connected) {
+  if (!client || !state.connected || state.canRefresh?.() === false) {
     return "skipped";
   }
   const scope = state.cronRunsScope;
