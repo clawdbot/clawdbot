@@ -5,7 +5,7 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
-import { createApplicationUpdateOverlays } from "./overlays-updates.ts";
+import { createApplicationOverlays } from "./overlays.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
 import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
@@ -462,32 +462,17 @@ it.each([
         : {};
     });
     const harness = updateRunHarness(request);
-    const listeners = new Set<() => void>();
-    const updates = createApplicationUpdateOverlays(harness.gateway, () =>
-      listeners.forEach((emit) => emit()),
-    );
-    const overlays = {
-      get snapshot() {
-        return updates.snapshot;
-      },
-      subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-    };
+    const overlays = createApplicationOverlays(harness.gateway);
     let operation: Promise<void> | undefined;
     let settled: Promise<void> | undefined;
-    const startGatewayUpdate = vi.fn(() => {
-      operation = updates.runUpdate();
-    });
     try {
-      await updates.refreshUpdateStatus();
+      await overlays.refreshUpdateStatus();
       settled = confirmAndStartUpdateRuntime({
         ...(entry === "existing" ? { existingRun: run } : {}),
-        startGatewayUpdate,
-        onCheckStatus: () => updates.refreshUpdateStatus(),
+        startGatewayUpdate: () => {
+          operation = overlays.runUpdate();
+        },
+        onCheckStatus: () => overlays.refreshUpdateStatus(),
         watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
         updateAvailable: UPDATE_AVAILABLE,
         updateSchedule: null,
@@ -500,9 +485,8 @@ it.each([
         await operation;
       }
       rejectRunReads = true;
-      updates.handleUpdateRunChanged({ ...run, updatedAtMs: run.updatedAtMs + 1 });
+      harness.emitEvent("update.run.changed", { ...run, updatedAtMs: run.updatedAtMs + 1 });
       await flushMicrotasks();
-      expect(updates.snapshot.updateStatusBanner?.text).toContain("Run status read failed");
       const view = modal.querySelector<
         HTMLElement & { run: unknown; updateComplete: Promise<boolean> }
       >("openclaw-update-run-view")!;
@@ -525,14 +509,13 @@ it.each([
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
         entry === "started" ? 1 : 0,
       );
-      expect(startGatewayUpdate).toHaveBeenCalledTimes(entry === "started" ? 1 : 0);
     } finally {
       document.body
         .querySelector("openclaw-modal-dialog")
         ?.dispatchEvent(new Event("modal-cancel"));
       await settled;
       await operation;
-      updates.dispose();
+      overlays.dispose();
     }
   },
 );

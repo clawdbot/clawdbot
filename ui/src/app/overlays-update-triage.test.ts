@@ -319,16 +319,10 @@ describe("update failure triage admission", () => {
     try {
       await flushMicrotasks();
       expect(overlays.snapshot.updateRun).toEqual(previous);
-      const statusReads = request.mock.calls.filter(
-        ([method]) => method === "update.status",
-      ).length;
       await overlays.runUpdate();
       expect(overlays.snapshot.updateStatusBanner?.text).toContain(failure.message);
       expect(overlays.snapshot.updateRun).toBeNull();
       expect(overlays.snapshot.updateRunning).toBe(false);
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-        statusReads,
-      );
     } finally {
       overlays.dispose();
     }

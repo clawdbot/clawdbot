@@ -176,7 +176,6 @@ describe("renderSidebarUpdateSurface", () => {
         if (state === "acknowledged") {
           overlays.acknowledgeUpdateRun();
         }
-        const acknowledge = vi.spyOn(overlays, "acknowledgeUpdateRun");
         const dismissal = resolveSidebarUpdateAttention(context).dismissal;
         const expected = {
           kind: "updateAvailable",
@@ -184,7 +183,6 @@ describe("renderSidebarUpdateSurface", () => {
             state === "visible" ? ["run", run.runId] : ["3.0.0", "fixture-boot"],
           ),
         };
-        expect(dismissal).toEqual(expected);
         const dismiss = vi.fn();
         render(
           renderSidebarUpdateSurface({
@@ -203,7 +201,7 @@ describe("renderSidebarUpdateSurface", () => {
         expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
         container.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!.click();
         expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);
-        expect(acknowledge).not.toHaveBeenCalled();
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
       } finally {
         overlays.dispose();
       }

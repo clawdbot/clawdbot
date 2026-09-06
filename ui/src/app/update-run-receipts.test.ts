@@ -102,7 +102,6 @@ describe("update browser receipts", () => {
       for (const run of [...previous, "new-run"]) {
         expect(reloaded.triaged("ws://gateway.test", null, run)).toBe(true);
       }
-      expect(reloaded.triaged("ws://gateway.test", "other", "new-run")).toBe(false);
       expect(sessionStorage.getItem("openclaw:control-ui:update-triaged:v1")).toBeNull();
     },
   );

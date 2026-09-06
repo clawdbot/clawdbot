@@ -207,6 +207,7 @@ describe("update run response races", () => {
   });
   it.each([
     { baseline: "unknown", discovered: "old", attach: false },
+    { baseline: "unknown", discovered: "old after disconnect", attach: false },
     { baseline: "previous", discovered: "old", attach: false },
     { baseline: "previous", discovered: "new", attach: true },
     { baseline: "empty", discovered: "new", attach: true },
@@ -214,26 +215,26 @@ describe("update run response races", () => {
   ] as const)(
     "reconciles lost admission using $baseline history and $discovered run identity",
     async ({ baseline, discovered, attach }) => {
+      const admission = deferred();
       const previous = updateRunFixture({
         status: "succeeded",
         phase: "finished",
         finishedAtMs: 3_000,
       });
-      let found =
-        discovered === "old"
-          ? previous
-          : updateRunFixture({
-              runId: "00000000-0000-4000-8000-000000000002",
-              ...(discovered === "active"
-                ? {}
-                : { status: "succeeded", phase: "finished", finishedAtMs: 4_000 }),
-            });
+      let found = discovered.startsWith("old")
+        ? previous
+        : updateRunFixture({
+            runId: "00000000-0000-4000-8000-000000000002",
+            ...(discovered === "active"
+              ? {}
+              : { status: "succeeded", phase: "finished", finishedAtMs: 4_000 }),
+          });
       let requested = false;
       const request = vi.fn<RequestFn>(async (method, _params, options) => {
         if (method === "update.run") {
           options?.onSent?.();
           requested = true;
-          throw new Error("Admission reply lost");
+          return admission.promise;
         }
         if (method === "update.runs.get") {
           return { run: found };
@@ -251,10 +252,22 @@ describe("update run response races", () => {
       });
       const harness = updateRunHarness(request);
       const overlays = createApplicationOverlays(harness.gateway);
+      let operation: Promise<void> | undefined;
+      const outcome =
+        discovered === "old after disconnect" ? "outcome is unknown" : "Admission reply lost";
       try {
         await flushMicrotasks();
-        await overlays.runUpdate();
-        expect(requested).toBe(true);
+        operation = overlays.runUpdate();
+        await flushMicrotasks();
+        if (discovered === "old after disconnect") {
+          harness.update({ phase: "reconnecting" });
+        }
+        admission.reject(new Error("Admission reply lost"));
+        if (discovered === "old after disconnect") {
+          harness.update({ phase: "connected" });
+        }
+        await operation;
+        await flushMicrotasks();
         if (attach) {
           expect(overlays.snapshot.updateRun).toEqual(found);
           if (discovered === "active") {
@@ -271,67 +284,26 @@ describe("update run response races", () => {
           }
         } else {
           expect(overlays.snapshot.updateRun).toBeNull();
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain("Admission reply lost");
+          expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
+          expect(overlays.snapshot.updateRunning).toBe(false);
           harness.update({ phase: "reconnecting" });
           harness.update({ phase: "connected" });
           await flushMicrotasks();
           harness.emitEvent("update.run.changed", { ...previous, updatedAtMs: 4_000 });
           await flushMicrotasks();
           expect(overlays.snapshot.updateRun).toBeNull();
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain("Admission reply lost");
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
           await overlays.refreshUpdateStatus();
           expect(overlays.snapshot.updateRun).toBeNull();
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain("Admission reply lost");
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
         }
         expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
       } finally {
+        admission.resolve({});
+        await operation;
         overlays.dispose();
       }
     },
   );
-
-  it("keeps a cold admission uncertain when disconnect precedes its lost reply", async () => {
-    const admission = deferred();
-    const previous = updateRunFixture({
-      status: "succeeded",
-      phase: "finished",
-      finishedAtMs: 3_000,
-    });
-    let historyReady = false;
-    const request = vi.fn<RequestFn>(async (method, _params, options) => {
-      if (method === "update.run") {
-        options?.onSent?.();
-        return admission.promise;
-      }
-      if (method !== "update.status") {
-        return {};
-      }
-      if (!historyReady) {
-        throw new Error("Initial history unavailable");
-      }
-      return { lastRun: previous };
-    });
-    const harness = updateRunHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    let operation: Promise<void> | undefined;
-    try {
-      await flushMicrotasks();
-      operation = overlays.runUpdate();
-      await flushMicrotasks();
-      expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(true);
-      harness.update({ phase: "reconnecting" });
-      admission.reject(new Error("Socket lost"));
-      historyReady = true;
-      harness.update({ phase: "connected" });
-      await operation;
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toBeNull();
-      expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
-      expect(overlays.snapshot.updateRunning).toBe(false);
-    } finally {
-      admission.resolve({});
-      await operation;
-      overlays.dispose();
-    }
-  });
 });
