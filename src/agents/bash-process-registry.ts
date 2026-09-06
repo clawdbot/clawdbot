@@ -6,7 +6,11 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import type { TerminationReason } from "../process/supervisor/types.js";
+import type {
+  ManagedRunStdin,
+  ProcessRunActivity,
+  TerminationReason,
+} from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
@@ -30,18 +34,6 @@ let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_
 /** Lifecycle status recorded for background process sessions. */
 type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
-/** Writable stdin surface prepared by the supervisor for child and PTY sessions. */
-type SessionStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
-  end: () => void;
-  // Child and PTY wrappers both expose destroy today; keep it optional for alternate backends.
-  destroy?: () => void;
-  destroyed?: boolean;
-  writable?: boolean;
-  writableEnded?: boolean;
-  writableFinished?: boolean;
-};
-
 /** Removes one queued notify-on-exit event, if it is still pending. */
 type NotifyOnExitRemoval = () => boolean;
 
@@ -64,31 +56,22 @@ export interface ProcessSession {
   sessionKey?: string;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
-  /** `session.mainKey` from the runtime config, snapshotted at exec start.
-   *  Used by background-exit notifications to remap cron-run keys to the
-   *  agent's main queue without an ambient config load. If config changes
-   *  while the process runs, the exit notification follows the start-time
-   *  session contract. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; required so the cron-run remap
-   *  can route global-scope agents to the literal "global" queue instead
-   *  of an agent-main queue the heartbeat never drains. Snapshotted with
-   *  `mainKey` for the same start-time routing reason. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
-  /** Set when process poll observed the terminal result before notification. */
+  /** Set only after a terminal poll result is delivered or persisted. */
   terminalPollObserved?: boolean;
   notifyOnExitRemoval?: NotifyOnExitRemoval;
   // Deprecated declaration-closure compatibility only; runtime never uses this.
   // ProcessSupervisor owns raw processes. Remove when the public Plugin SDK closure no
   // longer reaches registry types, or at the next compatible boundary change.
   child?: ChildProcessWithoutNullStreams;
-  stdin?: SessionStdin;
+  /** Retain the exact process producer while backend finalization is pending. */
+  processActivity?: ProcessRunActivity;
+  stdin?: ManagedRunStdin;
   pid?: number;
   startedAt: number;
   /** Set only on admission to completed retention; survives index removal. */
@@ -306,6 +289,7 @@ export function markExited(
   // blocked until the process owner reports the actual terminal transition.
   session.terminalStatus = status;
   session.exited = true;
+  delete session.processActivity;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;
@@ -335,11 +319,6 @@ export function markBackgrounded(session: ProcessSession) {
   }
 }
 
-/** Records that a terminal process poll consumed the process result. */
-export function markTerminalPollObserved(session: ProcessSession): void {
-  session.terminalPollObserved = true;
-}
-
 /** Retains the precise completion-event removal handle on its process owner. */
 export function recordNotifyOnExitRemoval(
   session: ProcessSession,
@@ -355,7 +334,9 @@ export function recordNotifyOnExitRemoval(
 /** Acknowledges one completion event without touching unrelated queue entries. */
 export function acknowledgeNotifyOnExit(record: {
   notifyOnExitRemoval?: NotifyOnExitRemoval;
+  terminalPollObserved?: boolean;
 }): void {
+  record.terminalPollObserved = true;
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;

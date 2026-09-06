@@ -1,11 +1,21 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { activeSessions } from "../../transcripts/capture.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
-import { activeSessions } from "./transcripts-tool-runtime.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "../tool-search-catalog.js";
+import { resolveToolSearchConfig } from "../tool-search-config.js";
+import { ToolSearchRuntime } from "../tool-search-runtime.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
@@ -35,6 +45,14 @@ function tool(channel = false) {
 function run(params: Record<string, unknown>, channel = false) {
   return tool(channel).execute("read", params);
 }
+function readThroughCatalog(params: Record<string, unknown>) {
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool()] });
+  const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(), {
+    validateInput: true,
+  });
+  return runtime.callValue("transcripts", params);
+}
 
 beforeEach(async () => {
   stateDir = tempDirs.make("transcripts-read-");
@@ -50,6 +68,72 @@ afterEach(() => {
 });
 
 describe("transcripts read actions", () => {
+  it.each(["active", "stopped"] as const)(
+    "rejects notes rewritten while %s source authorization is pending",
+    async (state) => {
+      const descriptor = {
+        ...session,
+        ...(state === "stopped" ? { stoppedAt: "2026-08-02T15:00:00.000Z" } : {}),
+      };
+      await store.writeSession(descriptor);
+      await store.writeSummary(
+        summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
+        descriptor,
+      );
+      if (state === "active") {
+        activeSessions.set(session.sessionId, {
+          session: descriptor,
+          providerId: "voice",
+          provider: {},
+          phase: "active",
+        });
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
+        async ({ source }) => {
+          if (source.guildId !== "team") {
+            return { ok: false, error: "denied" };
+          }
+          entered.resolve();
+          await release.promise;
+          return { ok: true, value: undefined };
+        },
+      );
+      getProvider.mockReturnValue({
+        id: "voice",
+        accessControl: { channelId: "discord", authorize },
+      });
+      const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
+      const reading = run(params, true);
+      try {
+        await Promise.race([entered.promise, reading]);
+        expect(authorize).toHaveBeenCalledOnce();
+        const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
+        await store.writeSession(rewritten);
+        await store.writeSummary(
+          summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
+          rewritten,
+        );
+        release.resolve();
+        const shown = await reading;
+        expect(shown.details).toMatchObject({
+          sessionId: descriptor.sessionId,
+          selector: params.selector,
+          skipped: true,
+          retryable: true,
+          text: expect.stringContaining("Retry show"),
+        });
+        expect(JSON.stringify(shown)).not.toContain("Other guild notes");
+        await expect(run(params, true)).rejects.toThrow("session not found");
+        expect(await store.readSession(params.selector)).toEqual(rewritten);
+      } finally {
+        release.resolve();
+        await reading.catch(() => undefined);
+      }
+    },
+  );
+
   it("reads across agent ownership without widening mutation authority", async () => {
     await store.appendUtteranceForSession(session, {
       text: "Ship the design",
@@ -85,11 +169,14 @@ describe("transcripts read actions", () => {
       name: "Voice",
       accessControl: { channelId: "discord", authorize },
     });
-    await store.writeSession({
-      ...session,
-      sessionId: "hidden",
-      source: { providerId: "voice", guildId: "other" },
-    });
+    for (const sessionId of ["hidden", "hidden-too"]) {
+      await store.writeSession({
+        ...session,
+        sessionId,
+        source: { providerId: "voice", guildId: "other" },
+        metadata: { providerPrivate: "x".repeat(600_000) },
+      });
+    }
     expect((await run({ action: "list", limit: 1 }, true)).details).toMatchObject({
       sessions: [{ sessionId: "meeting" }],
     });
@@ -113,7 +200,12 @@ describe("transcripts read actions", () => {
         authorize,
       },
     });
-    activeSessions.set(session.sessionId, { session, providerId: "voice", phase: "active" });
+    activeSessions.set(session.sessionId, {
+      session,
+      providerId: "voice",
+      provider: {},
+      phase: "active",
+    });
     await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
     await store.writeSummary(
       summarizeTranscripts({ session, utterances: [{ text: "Other guild notes" }] }),
@@ -141,10 +233,43 @@ describe("transcripts read actions", () => {
     );
   });
 
+  it("closes its read page before awaited source authorization writes and checkpoints state", async () => {
+    getProvider.mockReturnValue({
+      id: "voice",
+      name: "Voice",
+      accessControl: {
+        channelId: "discord",
+        authorize: async () => {
+          await store.appendUtteranceForSession(session, { text: "Written during authorization" });
+          const { db } = openOpenClawStateDatabase({
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          });
+          // A pending SELECT would prevent the provider's committed write from checkpointing.
+          db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          return { ok: true, value: undefined };
+        },
+      },
+    });
+    expect((await run({ action: "list", limit: 1 }, true)).details).toMatchObject({
+      sessions: [{ sessionId: session.sessionId, utteranceCount: 0 }],
+    });
+    expect(await store.readUtterancesForSession(session)).toMatchObject([
+      { text: "Written during authorization" },
+    ]);
+  });
+
   it("bounds model-facing notes and reports active captures without summaries", async () => {
-    activeSessions.set(session.sessionId, { session, providerId: "voice", phase: "active" });
-    expect((await run({ action: "show", sessionId: "meeting" })).details).toMatchObject({
+    activeSessions.set(session.sessionId, {
+      session,
+      providerId: "voice",
+      provider: {},
+      phase: "active",
+    });
+    await expect(
+      readThroughCatalog({ action: "show", sessionId: "meeting" }),
+    ).resolves.toMatchObject({
       active: true,
+      text: "No summary exists yet for this meeting. Capture is active.",
     });
     await store.writeSummary(
       { ...summarizeTranscripts({ session, utterances: [] }), overview: "x".repeat(20000) },
@@ -159,6 +284,11 @@ describe("transcripts read actions", () => {
     expect(text.text).toContain(
       `[truncated; run openclaw transcripts show ${transcriptSessionSelector(session)} for the full notes]`,
     );
+    await expect(
+      readThroughCatalog({ action: "show", sessionId: "meeting" }),
+    ).resolves.toMatchObject({
+      text: text.text,
+    });
     for (let index = 0; index < 50; index++) {
       await store.writeSession({
         ...session,

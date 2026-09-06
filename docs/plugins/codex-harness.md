@@ -103,8 +103,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.153.0`. The plugin ships and manages
-  `@openai/codex` `0.153.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.153.4`. The plugin ships and manages
+  `@openai/codex` `0.153.4` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -259,7 +259,8 @@ node. Run authenticated HTTP on the Gateway, or use an intentionally
 credential-free endpoint. The node process uses a fresh private
 `HOME` and `CODEX_HOME` that are removed after the attempt, and both its launch
 environment and requested child-process environments are sanitized. Completed
-filesystem changes reconcile back into the Gateway-owned managed worktree.
+filesystem changes reconcile into the Gateway-owned managed worktree or, for
+repository-only sessions, an immutable checkpoint retained by the Gateway.
 
 Disconnecting the node, closing the app-server connection, cancelling the turn,
 or retiring the plugin ends that Codex attempt visibly and terminates its remote
@@ -278,17 +279,23 @@ The bundled Crabbox provider supports both OpenClaw `worker-turn` and Codex
 `remote-exec`, so one configured cloud-worker profile is selectable for either
 harness. Choose the same **Cloud · profile** destination in New Session or
 Move Session after selecting a Codex model. Profile placement requires
-`operator.admin` and a managed Gateway worktree.
+`operator.admin`. Start from a GitHub repository URL and optional ref without a
+Gateway checkout, or place an existing Gateway managed-worktree session.
+Repository-only sessions fetch and pin their source on the selected node.
+Repository sessions require a managed node; SSH-only providers cannot create them.
 
-Enable the Codex plugin and explicitly allow
+Enable a trusted Codex plugin installation and explicitly allow
 `codex.exec-server.stdio.v1` on the Gateway, as shown in
 [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
-The cloud image may include the exact-version bundled Codex plugin; otherwise,
-the profile setup or image must install the matching trusted official npm Codex
-plugin and its pinned platform-native Codex binary. Crabbox validates the
-bundled or prepared installation and preserves its provenance in the disposable
-node's isolated state without installing a plugin during enrollment. The Gateway
-checks the cloud node's current pairing and
+Crabbox automatically bootstraps the cloud node from the running Gateway's
+built installation, including the Codex plugin and its pinned native dependency.
+Bootstrap installs dependencies for the cloud machine's operating system and
+CPU, then enables the plugin in the node's isolated state. Keep profile setup
+focused on machine prerequisites and project tools, including a supported
+Node.js release and npm. See [Bundle installation](/gateway/cloud-workers#bundle-installation)
+for build and registry access requirements.
+
+The Gateway checks the cloud node's current pairing and
 effectively invocable command before starting a Codex process. The same
 placement-scoped approval or explicitly selected Full access rules apply,
 including the cloud node's local exec policy and approvals floors.
@@ -298,9 +305,10 @@ outbound connection without starting an OpenClaw worker child or consuming a
 worker slot. Its app-server, model connection, provider authentication, and
 transcript remain Gateway-owned. Process and filesystem access still have the
 node operating-system account's permissions, and only credential-free HTTP is
-forwarded. Workspace changes reconcile to the Gateway-owned worktree. A failed
-or disconnected attempt is terminal and requires a fresh attempt; it never
-resumes the remote process or falls back to Gateway-local or SSH execution.
+forwarded. Workspace changes reconcile to the Gateway-owned worktree or an
+immutable repository checkpoint. A failed or disconnected attempt is terminal
+and requires a fresh attempt; it never resumes the remote process or falls back
+to Gateway-local or SSH execution.
 
 See [Cloud workers](/gateway/cloud-workers) for profile configuration,
 placement lifecycle, and cleanup.
@@ -1166,14 +1174,14 @@ An authorized app can initially appear disabled or non-callable because Codex
 has not yet applied the target thread's restrictive app configuration.
 OpenClaw provisionally admits only explicitly allowed, ownership-proven apps,
 starts the thread with `_default.enabled = false`, and reads `app/installed`
-once with that thread's ID and `forceRefresh: false`. An app is exposed only
-after Codex confirms it is enabled and callable for the actual thread. Missing
-metadata, revoked auth, managed restrictions, workspace policy, and unavailable
-tools remain fail-closed.
+once with that thread's ID and `forceRefresh: false`. Missing, disabled, or
+non-callable apps produce one warning without blocking unrelated chat or
+heartbeat runs. Codex still enforces app/tool permissions, managed restrictions,
+and workspace policy; continuing the conversation does not enable an unavailable app.
 
-The check runs before OpenClaw starts a turn or commits a thread binding. A
-failed persistent provisional thread is deleted; an ephemeral thread is
-unsubscribed. If cleanup cannot be confirmed, OpenClaw retires the app-server
+The check runs before OpenClaw starts a turn or commits a thread binding. If the
+snapshot request fails, a persistent provisional thread is deleted and an
+ephemeral thread is unsubscribed. If cleanup cannot be confirmed, OpenClaw retires the app-server
 connection instead of reusing an unsafe thread.
 
 Account-wide app access never overrides an explicitly disabled configured
@@ -1424,6 +1432,19 @@ reads to finish. OpenClaw coordinates its own lifecycle operations for each
 native thread and preserves that thread's identity across ordinary resumes.
 A closed, replaced, or retired client still cannot complete a stale handoff.
 
+After a completed provider failure, you can continue in the same chat with its
+existing configuration. OpenClaw retains the configured native thread, including
+for `/codex resume` of that chat's already-bound thread. Provider policy refusals
+end the current request without automatic retry or model fallback. A later user
+message is a separate turn; it does not supply a native policy override or user
+confirmation.
+
+With Codex app-server `0.153.4`, first-time adoption or changed configuration of a
+loaded failed thread still requires native unloading. OpenClaw preserves the
+thread and reports missing configuration confirmation instead of assuming the
+changes took effect. Existing active-turn and parent-controlled-thread checks
+still apply.
+
 This coordination does not make native configuration replacement atomic against
 Codex-internal controllers. Native subagent reloads or another native controller
 can operate outside OpenClaw's thread queue. Avoid concurrently reconfiguring the
@@ -1434,7 +1455,8 @@ does not reserve it against a subsequent native reload.
 
 - `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
   `appServer.command` is unset.
-- `OPENCLAW_CODEX_APP_SERVER_ARGS`
+- `OPENCLAW_CODEX_APP_SERVER_ARGS` accepts a quoted argument string; see
+  [argument parsing](/plugins/codex-harness-reference#app-server-transport).
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`

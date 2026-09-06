@@ -237,7 +237,7 @@ describe("models.list native account catalog", () => {
                 snapshot,
                 metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
                 preparedAuthStore: { version: 1, profiles: {} },
-                lockedProfileId: "openai:missing",
+                pinnedProfileId: "openai:missing",
               });
               const locked = await buildModelsListResult({
                 context: {

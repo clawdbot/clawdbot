@@ -26,9 +26,10 @@ import type {
  */
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
-  sendAudio: (audio: Buffer) => void;
+  sendAudio: RealtimeVoiceBridgeCallbacks["onAudio"];
+  getPlaybackState?: RealtimeVoiceBridgeCallbacks["getPlaybackState"];
   clearAudio?: (reason?: RealtimeVoiceAudioClearReason) => void;
-  sendMark?: (markName: string) => void;
+  sendMark?: RealtimeVoiceBridgeCallbacks["onMark"];
 };
 
 /**
@@ -100,6 +101,7 @@ export function createRealtimeVoiceBridgeSession(
 ): RealtimeVoiceBridgeSession {
   const bridgeRef: { current?: RealtimeVoiceBridge } = {};
   const handleDelegationInput = params.handleDelegationInput;
+  const getPlaybackState = params.audioSink.getPlaybackState;
   // Local disposal owns provider cleanup. Only a terminal callback fired before bridge
   // adoption may reopen; adopted bridges own reconnects and stale-event fencing internally.
   let phase: RealtimeVoiceSessionPhase = "admitting";
@@ -201,28 +203,51 @@ export function createRealtimeVoiceBridgeSession(
     autoRespondToAudio: params.autoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
-    onAudio: (audio) => {
+    onAudio: (audio, metadata) => {
       if (canSendAudio()) {
-        params.audioSink.sendAudio(audio);
+        params.audioSink.sendAudio(audio, metadata);
       }
     },
+    ...(getPlaybackState
+      ? {
+          getPlaybackState: () => {
+            if (!canSendAudio()) {
+              return [];
+            }
+            const playback = getPlaybackState();
+            return canSendAudio() ? playback : [];
+          },
+        }
+      : {}),
     onClearAudio: (reason) => {
       if (canSendAudio()) {
         params.audioSink.clearAudio?.(reason);
       }
     },
-    onMark: (markName) => {
+    onMark: (markName, acknowledge) => {
       // Some transports send mark acks, some need immediate provider acks, and some ignore
       // playback marks entirely. Keep that policy centralized at the bridge boundary.
       if (!canSendAudio() || params.markStrategy === "ignore") {
         return;
       }
       if (params.markStrategy === "ack-immediately") {
-        bridgeRef.current?.acknowledgeMark(markName);
+        if (acknowledge) {
+          acknowledge();
+        } else {
+          bridgeRef.current?.acknowledgeMark(markName);
+        }
         return;
       }
       if (params.markStrategy === undefined || params.markStrategy === "transport") {
-        params.audioSink.sendMark?.(markName);
+        if (acknowledge) {
+          params.audioSink.sendMark?.(markName, () => {
+            if (canSendAudio()) {
+              acknowledge();
+            }
+          });
+        } else {
+          params.audioSink.sendMark?.(markName);
+        }
       }
     },
     onTranscript: params.onTranscript,

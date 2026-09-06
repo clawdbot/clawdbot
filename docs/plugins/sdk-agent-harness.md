@@ -307,6 +307,10 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
+Each new isolated completion uses the configuration and agent/workspace directories
+of its admitted runtime generation. Explicit model, auth-profile, and runtime
+selections remain fixed while that generation is prepared.
+
 Host-authorized calls must use the supplied model and credential without substitution.
 Bundled host-authorized harnesses share one host-prepared completion helper that
 preserves the exact route, deadline, sampling options, and empty tool surface.
@@ -528,6 +532,11 @@ middleware, but new result transforms should use the runtime-neutral API. The
 embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
 removed; embedded tool-result transforms must use runtime-neutral middleware.
 
+Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
+before middleware transforms its result, and carry it into the attempt result.
+This confirms a final external source reply and does not depend on destination
+arguments or transcript mirrors.
+
 ### Terminal outcome classification
 
 Native harnesses that own their own protocol projection can use
@@ -692,6 +701,12 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+For native-history recovery, optional `prepareContextMedia({ message, maxChars })`
+reconstructs saved user attachments under that same host authority and current
+media policy. Include its returned text and images in the native context budget;
+do not append them as an unbounded suffix. See the
+[runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
+
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
 and `flush()` operations. The host adds session attribution, bounds and redacts
@@ -732,6 +747,27 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+After the last policy filter, schema quarantine, and native registration
+intersection, call `finalizeAgentToolAvailability(tools, options?)` from
+`openclaw/plugin-sdk/agent-harness-runtime` before snapshotting tool definitions.
+It returns a new array containing the same tool objects and updates only
+host-owned dependent affordances, such as collector spawning when its native
+result reader is callable. It does not add tools, change profiles, replace
+executors, or rebind authorization and approval wrappers.
+
+Pass `options.toolExecutionAllow` when a run retains schemas for tools it cannot
+execute. Omission uses the supplied tool set; an empty list permits no execution.
+The optional synchronous `options.onPrepared(tool)` observer identifies definitions
+whose owner participated, so a harness can refresh their cached schemas and
+prompt text without changing unrelated definitions. Reapply finalization after
+later filtering, and keep the existing attempt-lifecycle guards on every tool.
+Finalization does not update declarations already registered in a native runtime.
+Preserve native-owned catalog bytes and fingerprints; current executor guards
+still reject unavailable modes. New host-owned declarations use the harness's
+existing catalog-registration lifecycle.
+OpenClaw Code Mode's joined `agents.run()` path retains internal waiting; this
+helper does not make raw collector calls available without a native result reader.
 
 ### Paired-device execution
 
@@ -982,6 +1018,9 @@ Report facts from the execution boundary:
 
 - Pass the protocol call id when one exists, the canonical tool name, and the
   arguments that actually reached the tool after preparation or hook rewrites.
+- Pass the original host tool result or thrown error as `result`. Core reads
+  private effect provenance from that object; serialized fields cannot provide
+  this proof. Preserve internal result state when projecting a host result.
 - Set `executionStarted: false` when validation, approval, or another guard
   stopped the call before the tool implementation began. Once dispatch may
   have happened, report `true` conservatively.

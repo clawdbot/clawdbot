@@ -1,4 +1,5 @@
 // Control UI browser proof covers explicit automation ownership across widened page scope.
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
@@ -30,6 +31,80 @@ function cronListResponse(jobs: unknown[]) {
 }
 
 suite.define(() => {
+  it("refreshes model suggestions after catalog changes without replacing the draft", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1_280 },
+        recordVideo: { dir: suite.artifactDir },
+      },
+      async ({ page }) => {
+        const models = (id: string) => ({ models: [{ id, name: id, provider: "fixture" }] });
+        const gateway = await installMockGateway(page, {
+          models: [],
+          methodResponses: {
+            "models.list": models("fixture/old"),
+            "cron.list": cronListResponse([]),
+            "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
+            "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}cron`);
+        await page.locator('[data-test-id="cron-new-task"]').click();
+        await page.locator("#cron-name").fill("Keep this draft");
+        const picker = page.locator("#cron-payload-model-picker");
+        await picker.click();
+        await page.getByRole("option", { name: "fixture/old", exact: true }).waitFor();
+        await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
+        await page.keyboard.press("Escape");
+
+        await gateway.setMethodResponse("models.list", models("fixture/new"));
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+        await expect.poll(() => picker.locator('wa-option[value="fixture/new"]').count()).toBe(1);
+        expect(await picker.locator('wa-option[value="fixture/old"]').count()).toBe(0);
+        await picker.click();
+        await page.getByRole("option", { name: "fixture/new", exact: true }).waitFor();
+        await page.screenshot({ path: path.join(suite.artifactDir, "refreshed.png") });
+        await page.keyboard.press("Escape");
+
+        await gateway.setMethodResponse("models.list", {
+          __mockError: { code: "UNAVAILABLE", message: "Model suggestions unavailable" },
+        });
+        await gateway.emitGatewayEvent("config.changed", {});
+        await page.getByText("Model suggestions unavailable", { exact: true }).waitFor();
+        expect(await picker.locator('wa-option[value="fixture/new"]').count()).toBe(1);
+        await page.screenshot({ path: path.join(suite.artifactDir, "failed-refresh.png") });
+
+        await gateway.setMethodResponse("models.list", { models: [] });
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+        await expect.poll(() => picker.locator('wa-option[value="fixture/new"]').count()).toBe(0);
+        await expect
+          .poll(() => page.getByText("Model suggestions unavailable", { exact: true }).count())
+          .toBe(0);
+        expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
+        const requests = await gateway.getRequests();
+        expect(
+          requests
+            .filter(({ method }) => method === "models.list")
+            .every(({ params }) => requireRecord(params).preparedOnly === true),
+        ).toBe(true);
+        expect(
+          requests.filter(({ method }) =>
+            [
+              "config.set",
+              "config.patch",
+              "cron.add",
+              "cron.update",
+              "cron.run",
+              "sessions.patch",
+            ].includes(method),
+          ),
+        ).toEqual([]);
+      },
+    );
+  });
+
   it("keeps the selected agent as owner while browsing all agents", async () => {
     const createdJob = {
       id: "weekday-report",

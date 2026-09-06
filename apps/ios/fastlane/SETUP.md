@@ -134,7 +134,7 @@ Upload to App Store Connect:
 node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
 pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
 node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-# Review and commit all five cutter outputs.
+# Review all five cutter outputs and commit every changed output.
 pnpm ios:release:upload
 ```
 
@@ -146,11 +146,13 @@ same path.
 
 `iOS Beta Release` is a separate, manual workflow. Dispatch it from trusted
 `main` with a canonical `release/YYYY.M.PATCH-mobile` branch and that branch's
-exact full commit SHA. The workflow accepts only a candidate that descends from
-the workflow SHA and differs in exactly the five generated mobile release
-metadata files. Approval of the `ios-beta-release` environment gates all access
-to signing assets, App Store Connect credentials, and immutable release-ref
-mutation.
+exact full commit SHA. The workflow derives the frozen Code SHA from the release
+branch and the current trusted Tooling SHA. Every later candidate commit must be
+linear and may change only the five generated mobile release metadata files.
+All five target files must byte-match regeneration using current trusted tooling
+and the frozen Code SHA metadata. Approval of the `ios-beta-release` environment
+gates all access to signing assets, App Store Connect credentials, and immutable
+release-ref mutation.
 
 Repository/environment secrets required by name:
 
@@ -209,7 +211,7 @@ pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
 node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-5. Review and commit all five cutter outputs, then upload:
+5. Review all five cutter outputs, commit every changed output, then upload:
 
 ```bash
 pnpm ios:release:upload
@@ -231,7 +233,7 @@ Versioning rules:
 - Fastlane appends one unpadded revision digit: gateway `YYYY.M.PATCH`, revision `R`, becomes `YYYY.M.PATCHR`
 - Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
 - Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
-- Run the shared mobile cutter prepare/plan/finalize flow after changing `## Unreleased`, then review and commit all five outputs
+- Run the shared mobile cutter prepare/plan/finalize flow after changing `## Unreleased`, then review all five outputs and commit every changed output
 - `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched

@@ -64,6 +64,21 @@ export {
   type SessionCatalogNodeHostBindingsOptions,
 } from "../plugins/session-catalog-family.js";
 
+/** Keep a host's publication owned until its callback finishes, even after a fail-soft list. */
+export function publishSessionCatalogHost<T>(
+  params: {
+    onHost?: (host: T) => void;
+    waitUntil?: (completion: Promise<void>) => void;
+  },
+  pendingHost: Promise<T>,
+): void {
+  const { onHost, waitUntil } = params;
+  const published = pendingHost.then((host) => onHost?.(host));
+  // Observe rejection before registration: a closed owner may reject this handoff synchronously.
+  void published.catch(() => undefined);
+  waitUntil?.(published);
+}
+
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 100;
 const MAX_CURSOR_LENGTH = 128;

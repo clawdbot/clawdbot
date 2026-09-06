@@ -150,13 +150,6 @@ function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: str
   );
 }
 
-function requireTransientWorkspaceDir(tempDir: string | undefined): string {
-  if (!tempDir) {
-    throw new Error("Active memory transient workspace was not initialized.");
-  }
-  return tempDir;
-}
-
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
   return `runtime toolsAllow: ${toolsAllow.join(", ")}`;
 }
@@ -351,7 +344,6 @@ export {
   isMissingRegisteredMemoryToolsError,
   normalizeActiveMemoryFastMode,
   normalizePluginConfig,
-  requireTransientWorkspaceDir,
   resetActiveMemoryConfigForTests,
   readActiveMemoryConfig,
   resolvePersistentTranscriptBaseDir,

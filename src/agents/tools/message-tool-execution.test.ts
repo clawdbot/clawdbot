@@ -61,7 +61,7 @@ describe("message tool queued gateway delivery", () => {
         status: "delivery_queued",
         delivered: false,
         message:
-          "Message not delivered: connect ECONNREFUSED. The gateway queued it and will retry automatically. Do not resend it.",
+          "Delivery is pending: connect ECONNREFUSED. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.",
       },
     });
 

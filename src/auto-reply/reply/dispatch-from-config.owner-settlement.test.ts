@@ -3,6 +3,7 @@ import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
@@ -171,6 +172,217 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         runtimePluginMocks.pluginRegistry,
       );
     });
+
+    it.each([
+      "before delivery",
+      "transport failure",
+      "overlapping progress",
+      "subsequent block",
+      "aborted progress",
+      "tool-only reply",
+      "no pending reply",
+    ] as const)(
+      "settles queued presentation after %s through retained callbacks",
+      async (phase) => {
+        type ResolverOptions = import("./get-reply.types.js").InternalGetReplyOptions;
+        let retained: ResolverOptions | undefined;
+        const release = createDeferred();
+        const entered = createDeferred();
+        const secondEntered = createDeferred();
+        const releaseSecond = createDeferred();
+        const resolverEntered = createDeferred();
+        const returnResolver = createDeferred();
+        const failure = new Error("queued transport failed");
+        const onError = vi.fn();
+        const onQueuedFollowupSettled = vi.fn();
+        const abortController = new AbortController();
+        let progress: Promise<unknown> | undefined;
+        const dispatcher = createReplyDispatcher({
+          humanDelay: { mode: "custom", minMs: 1, maxMs: 1 },
+          beforeDeliver: async (payload) => {
+            if (payload.text === "queued reply" && phase === "before delivery") {
+              entered.resolve();
+              await release.promise;
+            }
+            return payload;
+          },
+          deliver: async (payload) => {
+            if (payload.text === "second queued reply") {
+              secondEntered.resolve();
+              await releaseSecond.promise;
+            }
+            if (payload.text === "queued reply" && phase !== "before delivery") {
+              entered.resolve();
+              await release.promise;
+              if (phase === "transport failure") {
+                throw failure;
+              }
+            }
+          },
+          onError,
+        });
+        const dispatch = dispatchReplyFromConfig({
+          ctx: createHookCtx(),
+          cfg: emptyConfig,
+          dispatcher,
+          replyOptions: { onQueuedFollowupSettled, abortSignal: abortController.signal },
+          replyResolver: async (_ctx, opts) => {
+            retained = opts;
+            await opts?.onBlockReply?.({ text: "initial reply" });
+            resolverEntered.resolve();
+            if (phase === "aborted progress") {
+              await returnResolver.promise;
+            }
+            return undefined;
+          },
+        });
+        try {
+          if (phase === "aborted progress") {
+            await resolverEntered.promise;
+          } else {
+            await dispatch;
+          }
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          if (phase !== "no pending reply") {
+            if (phase === "tool-only reply") {
+              dispatcher.sendToolResult({ text: "queued reply" });
+            } else {
+              await retained?.onBlockReply?.({ text: "queued reply" });
+            }
+            await entered.promise;
+          }
+          if (
+            phase === "overlapping progress" ||
+            phase === "subsequent block" ||
+            phase === "aborted progress"
+          ) {
+            progress = Promise.resolve(retained?.onPlanUpdate?.({ phase: "update", steps: [] }));
+            if (phase === "aborted progress") {
+              abortController.abort();
+              await progress;
+            }
+          }
+          if (phase === "subsequent block") {
+            await retained?.onBlockReply?.({ text: "second queued reply" });
+          }
+          const cleanup = retained?.onQueuedFollowupSettled?.();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          const cleanedUpBeforeDelivery = onQueuedFollowupSettled.mock.calls.length;
+          release.resolve();
+          returnResolver.resolve();
+          if (phase === "subsequent block") {
+            await secondEntered.promise;
+            expect(onQueuedFollowupSettled).not.toHaveBeenCalled();
+          }
+          releaseSecond.resolve();
+          await cleanup;
+          await progress;
+          await dispatch;
+          const receipt = await dispatcher.waitForIdle();
+          const noPendingBlock = phase === "no pending reply" || phase === "tool-only reply";
+          expect(cleanedUpBeforeDelivery).toBe(noPendingBlock ? 1 : 0);
+          expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+          expect(receipt?.counts.block.delivered).toBe(
+            noPendingBlock || phase === "transport failure"
+              ? 1
+              : phase === "subsequent block"
+                ? 3
+                : 2,
+          );
+          expect(receipt?.counts.block.failedAfterSend).toBe(phase === "transport failure" ? 1 : 0);
+          if (phase === "transport failure") {
+            expect(onError).toHaveBeenCalledExactlyOnceWith(failure, { kind: "block" });
+          } else {
+            expect(onError).not.toHaveBeenCalled();
+          }
+        } finally {
+          release.resolve();
+          releaseSecond.resolve();
+          returnResolver.resolve();
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          await progress;
+          await dispatch;
+        }
+      },
+    );
+
+    it.each([
+      { phase: "rejected delivery", deliveryFails: true, cleanupFails: false },
+      { phase: "rejected delivery and cleanup", deliveryFails: true, cleanupFails: true },
+      { phase: "rejected cleanup", deliveryFails: false, cleanupFails: true },
+    ])(
+      "runs queued cleanup after $phase and preserves the first failure",
+      async ({ deliveryFails, cleanupFails }) => {
+        type ResolverOptions = import("./get-reply.types.js").InternalGetReplyOptions;
+        let retained: ResolverOptions | undefined;
+        const entered = createDeferred();
+        const release = createDeferred();
+        const deliveryFailure = new PlatformMessageNotDispatchedError("offline before dispatch", {
+          cause: new Error("offline"),
+        });
+        const cleanupFailure = new Error("queued cleanup failed");
+        const onError = vi.fn();
+        const onQueuedFollowupSettled = vi.fn(async () => {
+          if (cleanupFails) {
+            throw cleanupFailure;
+          }
+        });
+        const dispatcher = createReplyDispatcher({
+          propagateRetryableNoSendFailure: true,
+          deliver: async () => {
+            entered.resolve();
+            await release.promise;
+            if (deliveryFails) {
+              throw deliveryFailure;
+            }
+          },
+          onError,
+        });
+        try {
+          await dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyOptions: { onQueuedFollowupSettled },
+            replyResolver: async (_ctx, opts) => {
+              retained = opts;
+              opts?.onDeliberateSilentTerminalReply?.();
+              return undefined;
+            },
+          });
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          await retained?.onBlockReply?.({ text: "queued reply" });
+          await entered.promise;
+          const cleanup = Promise.resolve(retained?.onQueuedFollowupSettled?.()).catch(
+            (error: unknown) => error,
+          );
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(onQueuedFollowupSettled).not.toHaveBeenCalled();
+          release.resolve();
+
+          expect(await cleanup).toBe(deliveryFails ? deliveryFailure : cleanupFailure);
+          expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+          if (deliveryFails) {
+            expect(onError).toHaveBeenCalledExactlyOnceWith(deliveryFailure, { kind: "block" });
+            await expect(dispatcher.waitForIdle()).rejects.toBe(deliveryFailure);
+          } else {
+            expect(onError).not.toHaveBeenCalled();
+            expect((await dispatcher.waitForIdle())?.counts.block.delivered).toBe(1);
+          }
+        } finally {
+          release.resolve();
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle().catch(() => undefined);
+        }
+      },
+    );
 
     it.each(["final delivery", "block receipt callback"] as const)(
       "clears the reply lane but defers follow-up admission until %s settles",

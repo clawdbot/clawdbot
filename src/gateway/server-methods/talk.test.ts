@@ -395,6 +395,33 @@ describe("talk.catalog handler", () => {
     mocks.resolveTtsConfig.mockReturnValue({ timeoutMs: 30_000 });
   });
 
+  it("rejects an ambiguous owner before discovering catalog providers", async () => {
+    const respond = vi.fn();
+    await mocks.listRealtimeTranscriptionProviders.withImplementation(
+      () => {
+        throw new Error("provider discovery failed");
+      },
+      () =>
+        callTalkHandler("talk.catalog", {
+          params: {},
+          respond,
+          context: {
+            getRuntimeConfig: () => ({
+              agents: { ownership: "explicit", entries: { primary: {}, voice: {} } },
+            }),
+          },
+        }),
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: expect.stringContaining("Talk session ownership has no explicit owner"),
+    });
+    expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
+    expect(mocks.listRealtimeTranscriptionProviders).not.toHaveBeenCalled();
+    expect(mocks.listRealtimeVoiceProviders).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["talk.catalog", {}],
     ["talk.client.create", { provider: "openai" }],

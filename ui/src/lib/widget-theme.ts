@@ -82,6 +82,19 @@ export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): v
 }
 
 const widgetThemeObserverWindows = new WeakSet<Window>();
+const widgetThemeFrames = new WeakMap<Window, Map<HTMLIFrameElement, string>>();
+
+/** Explicit registration also reaches widgets inside a chat component's shadow root. */
+export function registerWidgetThemeFrame(frame: HTMLIFrameElement, origin: string): () => void {
+  let frames = widgetThemeFrames.get(window);
+  if (!frames) {
+    frames = new Map();
+    widgetThemeFrames.set(window, frames);
+  }
+  frames.set(frame, origin);
+  installWidgetThemeObserver();
+  return () => frames.delete(frame);
+}
 
 export function installWidgetThemeObserver(): void {
   if (
@@ -97,10 +110,20 @@ export function installWidgetThemeObserver(): void {
   widgetThemeObserverWindows.add(window);
   const root = document.documentElement;
   new MutationObserver(() => {
+    const registered = widgetThemeFrames.get(window);
     for (const frame of document.querySelectorAll<HTMLIFrameElement>(
       ".chat-tool-card__preview-frame, .board-widget__frame",
     )) {
-      postWidgetTheme(frame);
+      if (!registered?.has(frame)) {
+        postWidgetTheme(frame);
+      }
+    }
+    for (const [frame, origin] of registered ?? []) {
+      if (frame.isConnected) {
+        postWidgetTheme(frame, origin);
+      } else {
+        registered?.delete(frame);
+      }
     }
   }).observe(root, {
     attributes: true,

@@ -163,7 +163,7 @@ describe("session accessor seam", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  describe.sequential("session database teardown boundary", () => {
+  describe("session database teardown boundary", { concurrent: false }, () => {
     it("opens cached agent and shared-state handles", async () => {
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
@@ -1259,28 +1259,33 @@ describe("session accessor seam", () => {
     });
   });
 
-  it.each(["global", "main", "agent:main:main"])(
-    "keeps explicit logical owner reads and updates isolated for %s",
-    async (sessionKey) => {
+  it.each([
+    { sessionKey: "global", agentId: "research", global: true },
+    { sessionKey: "main", agentId: "research", global: false },
+    { sessionKey: "agent:main:main", agentId: "research", global: false },
+    { sessionKey: "agent:research:main", agentId: undefined, global: true },
+  ])(
+    "keeps logical owner reads and updates isolated for $sessionKey with owner $agentId",
+    async ({ sessionKey, agentId: requestedAgentId, global }) => {
       const cfg: OpenClawConfig = {
         session: {
           store: path.join(tempDir, "{agentId}.json"),
-          scope: sessionKey === "global" ? "global" : undefined,
+          scope: global ? "global" : undefined,
         },
         agents: { entries: { research: {}, ops: {} } },
       };
-      const canonicalKey = sessionKey === "global" ? "global" : "agent:research:main";
+      const canonicalKey = global ? "global" : "agent:research:main";
       for (const agentId of ["research", "ops"]) {
         await upsertSessionEntryCore(
           {
             agentId,
-            sessionKey: sessionKey === "global" ? "global" : `agent:${agentId}:main`,
+            sessionKey: global ? "global" : `agent:${agentId}:main`,
             storePath: path.join(tempDir, `${agentId}.json`),
           },
           { sessionId: `${agentId}-session`, updatedAt: 1, label: agentId },
         );
       }
-      const scope = { cfg, sessionKey, agentId: "research" };
+      const scope = { cfg, sessionKey, agentId: requestedAgentId };
 
       expect(resolveSessionEntryAccessTarget(scope)).toMatchObject({
         agentId: "research",
@@ -1297,7 +1302,7 @@ describe("session accessor seam", () => {
       expect(
         loadSessionEntry({
           agentId: "ops",
-          sessionKey: sessionKey === "global" ? "global" : "agent:ops:main",
+          sessionKey: global ? "global" : "agent:ops:main",
           storePath: path.join(tempDir, "ops.json"),
         })?.label,
       ).toBe("ops");
@@ -1387,16 +1392,21 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    const created = await createSessionEntryWithTranscript(scope, ({ sessionEntries }) => {
-      expect(sessionEntries).toEqual({});
-      return {
-        ok: true,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: 10,
-        },
-      };
-    });
+    const created = await createSessionEntryWithTranscript(
+      scope,
+      ({ existingEntry, targetEntry, isLabelInUse }) => {
+        expect(existingEntry).toBeUndefined();
+        expect(targetEntry).toBeUndefined();
+        expect(isLabelInUse("unused")).toBe(false);
+        return {
+          ok: true,
+          entry: {
+            sessionId: "session-1",
+            updatedAt: 10,
+          },
+        };
+      },
+    );
 
     expect(created.ok).toBe(true);
     if (!created.ok) {
@@ -3115,6 +3125,7 @@ describe("session accessor seam", () => {
 
     expect(result.removedEntries).toBe(1);
     expect(notify).toHaveBeenCalledWith({
+      agentId: "main",
       kind: "delete",
       previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
     });

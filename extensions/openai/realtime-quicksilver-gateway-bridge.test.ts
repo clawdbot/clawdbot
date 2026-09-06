@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   OpenAIQuicksilverPendingAudio,
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
@@ -607,29 +608,32 @@ describe("GPT-Live gateway relay bridge", () => {
       close: vi.fn(),
     } satisfies OpenAIQuicksilverAudioPeerContract;
     const onClose = vi.fn();
-    const bridge = new OpenAIQuicksilverGatewayBridge({
-      providerConfig: {},
-      model: "gpt-live-1-codex",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onClose: params?.onClose ?? onClose,
-      onError: params?.onError,
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
-      })),
-      createPeer: vi.fn((callbacks) => {
-        peerCallbacks = callbacks;
-        return peerPromise;
-      }),
-      fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
-      webSocketFactory: () => new FakeSocket(),
-    });
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-1-codex",
+        voice: "marin",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose: params?.onClose ?? onClose,
+        onError: params?.onError,
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn((callbacks) => {
+          peerCallbacks = callbacks;
+          return peerPromise;
+        }),
+        fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
+        webSocketFactory: () => new FakeSocket(),
+      },
+      openAIRealtimeHost,
+    );
     const connection = bridge.connect();
     return {
       bridge,
@@ -753,17 +757,20 @@ describe("GPT-Live gateway relay bridge", () => {
   it("closes a sideband that opens in the abort handoff", async () => {
     const controller = new AbortController();
     const socket = new FakeSocket("manual");
-    const connection = connectOpenAIQuicksilverSideband({
-      auth: { type: "api-key", token: "platform-key" },
-      createSocket: () => socket,
-      requestIds: {
-        realtimeSessionId: "realtime-session",
-        sessionId: "session",
-        threadId: "thread",
+    const connection = connectOpenAIQuicksilverSideband(
+      {
+        auth: { type: "api-key", token: "platform-key" },
+        createSocket: () => socket,
+        requestIds: {
+          realtimeSessionId: "realtime-session",
+          sessionId: "session",
+          threadId: "thread",
+        },
+        signal: controller.signal,
+        url: "wss://api.openai.com/v1/live/rtc_test",
       },
-      signal: controller.signal,
-      url: "wss://api.openai.com/v1/live/rtc_test",
-    });
+      openAIRealtimeHost,
+    );
     socket.readyState = 1;
     socket.emit("open");
     controller.abort(new Error("sideband startup stopped"));
@@ -777,20 +784,23 @@ describe("GPT-Live gateway relay bridge", () => {
     const socket = new FakeSocket("manual");
     let socketOptions: Parameters<OpenAIQuicksilverSocketFactory>[1] | undefined;
     socket.once("close", () => controller.abort(new Error("sideband overflow observed")));
-    const connection = connectOpenAIQuicksilverSideband({
-      auth: { type: "api-key", token: "platform-key" },
-      createSocket: (_url, options) => {
-        socketOptions = options;
-        return socket;
+    const connection = connectOpenAIQuicksilverSideband(
+      {
+        auth: { type: "api-key", token: "platform-key" },
+        createSocket: (_url, options) => {
+          socketOptions = options;
+          return socket;
+        },
+        requestIds: {
+          realtimeSessionId: "realtime-session",
+          sessionId: "session",
+          threadId: "thread",
+        },
+        signal: controller.signal,
+        url: "wss://api.openai.com/v1/live/rtc_test",
       },
-      requestIds: {
-        realtimeSessionId: "realtime-session",
-        sessionId: "session",
-        threadId: "thread",
-      },
-      signal: controller.signal,
-      url: "wss://api.openai.com/v1/live/rtc_test",
-    });
+      openAIRealtimeHost,
+    );
 
     expect(socketOptions?.maxPayload).toBe(16 * 1024 * 1024);
     socket.emit("message", Buffer.alloc(512 * 1024), false);
@@ -808,23 +818,26 @@ describe("GPT-Live gateway relay bridge", () => {
       resolvePeer = resolve;
     });
     const closePeer = vi.fn();
-    const bridge = new OpenAIQuicksilverGatewayBridge({
-      providerConfig: {},
-      model: "gpt-live-1-codex",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
-      })),
-      createPeer: vi.fn(() => peerPromise),
-      connectTimeoutMs: 5,
-    });
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-1-codex",
+        voice: "marin",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn(() => peerPromise),
+        connectTimeoutMs: 5,
+      },
+      openAIRealtimeHost,
+    );
 
     await expect(bridge.connect()).rejects.toMatchObject({ name: "TimeoutError" });
     const reservationOwners = Array.from({ length: 8 }, () => ({}));
@@ -872,32 +885,35 @@ describe("GPT-Live gateway relay bridge", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       createCallResponse("v=answer\r\n", "rtc_bridge"),
     );
-    const bridge = new OpenAIQuicksilverGatewayBridge({
-      providerConfig: {},
-      model: "gpt-live-1-codex",
-      voice: "marin",
-      instructions: "Speak briefly.",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio,
-      onClearAudio,
-      onEvent,
-      onReady,
-      onClose,
-      handleDelegationInput,
-      runAgentConsult,
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
-      })),
-      createPeer: vi.fn(async () => peer),
-      fetchImpl,
-      webSocketFactory: () => {
-        socket = new FakeSocket();
-        return socket;
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-1-codex",
+        voice: "marin",
+        instructions: "Speak briefly.",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio,
+        onClearAudio,
+        onEvent,
+        onReady,
+        onClose,
+        handleDelegationInput,
+        runAgentConsult,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn(async () => peer),
+        fetchImpl,
+        webSocketFactory: () => {
+          socket = new FakeSocket();
+          return socket;
+        },
       },
-    });
+      openAIRealtimeHost,
+    );
 
     await bridge.connect();
     if (!socket) {
@@ -980,35 +996,38 @@ describe("GPT-Live gateway relay bridge", () => {
     let socket: FakeSocket | undefined;
     const onClose = vi.fn();
     const onError = vi.fn();
-    const bridge = new OpenAIQuicksilverGatewayBridge({
-      providerConfig: {},
-      model: "gpt-live-1-codex",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onClose,
-      onError,
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
-      })),
-      createPeer: vi.fn(async () => ({
-        createOffer: vi.fn(async () => "v=offer\r\n"),
-        applyAnswer: vi.fn(async () => undefined),
-        adoptPendingAudio: vi.fn(),
-        sendAudio: vi.fn(),
-        close: vi.fn(),
-      })),
-      fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_close")),
-      webSocketFactory: () => {
-        socket = new FakeSocket();
-        return socket;
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-1-codex",
+        voice: "marin",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose,
+        onError,
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn(async () => ({
+          createOffer: vi.fn(async () => "v=offer\r\n"),
+          applyAnswer: vi.fn(async () => undefined),
+          adoptPendingAudio: vi.fn(),
+          sendAudio: vi.fn(),
+          close: vi.fn(),
+        })),
+        fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_close")),
+        webSocketFactory: () => {
+          socket = new FakeSocket();
+          return socket;
+        },
       },
-    });
+      openAIRealtimeHost,
+    );
 
     await bridge.connect();
     if (!socket) {

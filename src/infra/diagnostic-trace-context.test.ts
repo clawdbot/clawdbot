@@ -151,6 +151,12 @@ describe("diagnostic-trace-context", () => {
       });
 
       expect(getActiveDiagnosticTraceContext()).toEqual(outer);
+      await runWithDiagnosticTraceContext(undefined, async () => {
+        expect(getActiveDiagnosticTraceContext()).toBeUndefined();
+        await Promise.resolve();
+        expect(getActiveDiagnosticTraceContext()).toBeUndefined();
+      });
+      expect(getActiveDiagnosticTraceContext()).toEqual(outer);
     });
 
     expect(getActiveDiagnosticTraceContext()).toBeUndefined();

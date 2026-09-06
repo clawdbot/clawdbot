@@ -50,15 +50,15 @@ type DaemonLifecycleOptions = {
   disable?: boolean;
 };
 
-type RestartPostCheckContext = {
+type StartPostCheckContext = {
   json: boolean;
   stdout: Writable;
   warnings: string[];
   warn?: (message: string) => void;
-  fail: (message: string, hints?: string[]) => void;
+  fail: ReturnType<typeof createDaemonActionContext>["fail"];
 };
 
-type StartPostCheckContext = RestartPostCheckContext;
+type RestartPostCheckContext = StartPostCheckContext & { activationAccepted: boolean };
 
 type ServiceRecoveryResult<TResult extends "started" | "stopped" | "restarted"> = {
   result: TResult;
@@ -658,8 +658,9 @@ export async function runServiceRestart(params: {
     }
   }
 
+  let postCheckFailed = false;
   try {
-    let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
+    let restartResult: GatewayServiceRestartResult | undefined;
     if (loaded && !handledRepair) {
       await prepareGatewayRestartIntent();
       try {
@@ -675,7 +676,10 @@ export async function runServiceRestart(params: {
         throw err;
       }
     }
-    let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+    let restartStatus = describeGatewayServiceRestart(
+      params.serviceNoun,
+      restartResult ?? { outcome: "completed" },
+    );
     if (restartStatus.scheduled) {
       return emitScheduledRestart(restartStatus, loaded || recoveredLoadedState === true);
     }
@@ -685,7 +689,12 @@ export async function runServiceRestart(params: {
         stdout,
         warnings,
         warn,
-        fail,
+        // Definition repair alone does not record native activation.
+        activationAccepted: restartResult?.outcome === "completed" || Boolean(handledRecovery),
+        fail: (message, hints, result) => {
+          postCheckFailed = true;
+          fail(message, hints, result);
+        },
       });
       if (postRestartResult) {
         restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
@@ -707,6 +716,10 @@ export async function runServiceRestart(params: {
     }
     return true;
   } catch (err) {
+    // A non-exiting runtime unwinds after emission; never replace that result.
+    if (postCheckFailed) {
+      throw err;
+    }
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
     return false;

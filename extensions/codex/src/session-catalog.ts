@@ -19,6 +19,7 @@ import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+  CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
@@ -31,7 +32,6 @@ import {
   resolveLocalCodexTerminalExecutable,
   startCodexCatalogTerminal,
 } from "./session-catalog-terminal.js";
-import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
   CodexSessionCatalogControlFactory,
   CodexSessionCatalogHost,
@@ -56,6 +56,7 @@ export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNod
       commands: [
         CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+        CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
         CODEX_TERMINAL_RESUME_COMMAND,
         CODEX_TERMINAL_START_COMMAND,
       ],
@@ -209,6 +210,8 @@ function registerCodexSessionCatalog(params: {
         allowProcessHomeFallback,
         listNodes,
         onHost,
+        waitUntil,
+        signal,
         sessionEntries,
         ...gatewayQuery
       } = query;
@@ -233,6 +236,8 @@ function registerCodexSessionCatalog(params: {
           control: params.control,
           query: gatewayQuery,
           listNodes,
+          waitUntil,
+          signal,
           sessionEntries,
           localHomes,
           ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
@@ -241,7 +246,7 @@ function registerCodexSessionCatalog(params: {
     },
     read: async (request) => {
       const { agentId, source, control } = bindRequest(request);
-      const page = await readCodexSessionTranscript({
+      return await readCodexSessionTranscript({
         agentId,
         runtime: params.api.runtime,
         control,
@@ -251,7 +256,6 @@ function registerCodexSessionCatalog(params: {
         limit: request.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
         ...(source ? { source } : {}),
       });
-      return { ...page, items: page.items.map(toGenericTranscriptItem) };
     },
     continueSession: async (request) => {
       const config = params.getRuntimeConfig();

@@ -78,7 +78,6 @@ describe.each([
     const engine = new SystemAgentChatEngine({
       surface,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
         applySetup,

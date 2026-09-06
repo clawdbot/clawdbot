@@ -22,7 +22,29 @@ reference for **what to import** and **what you can register**.
 Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
+## API stability
+
+All OpenClaw plugin APIs are **experimental**. This includes every
+`openclaw/plugin-sdk/*` subpath, registration and runtime APIs, channel and
+provider contracts, hooks, and native Control UI APIs. These contracts can
+change between OpenClaw releases.
+
+Pin the OpenClaw version used to develop and deploy your plugin, and test each
+host version you declare compatible. Set package compatibility ranges from
+those tested versions; do not assume a working build supports future releases.
+Existing [compatibility windows and upgrade migrations](/plugins/compatibility)
+still apply. Experimental status does not remove a documented migration path.
+
+Native UI from user-installed plugins also requires the default-off
+[Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui).
+Backend plugin APIs and ordinary plugin loading do not require that setting.
+
 ## Import convention
+
+For features with native Control UI, use [Feature plugins](/plugins/feature-plugins):
+`feature-contract` defines shared operations, `feature-plugin` registers their
+backend implementations, and `control-ui` exposes browser contribution and
+replacement contracts.
 
 Always import from a specific subpath:
 
@@ -272,6 +294,26 @@ advertised node command.
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
+#### SQLite write admission
+
+`runSqliteImmediateTransaction(db, prepare, options?)` from
+`openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
+the event loop. Its asynchronous `prepare` function may run more than once when
+another writer holds the database. Keep preparation repeatable: read and plan
+there, then return a **synchronous** transaction callback. Revalidate current
+owner and row predicates inside that callback before writing.
+
+Returning `undefined` from preparation skips the write and resolves the helper
+to `undefined`, even while another writer remains active. Otherwise, the helper
+resolves to the transaction callback's result. It rejects an already active
+transaction or preparation that leaves a transaction open. Once admitted, the
+callback runs once; callback and commit failures are never replayed.
+
+Admission retries use the connection's existing `busy_timeout`; this is not a
+total deadline for preparation or transaction execution. `options` supplies the
+same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
+database handle and its owning operation alive until the returned promise settles.
+
 #### Webhook body rejection
 
 Use `readWebhookBodyOrReject` or `readJsonWebhookBodyOrReject` from
@@ -453,6 +495,20 @@ their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
 Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
 not for renderer registration.
 
+For inline rendering, `resources.readPublicResource(path)` can optionally return
+`{ body: Uint8Array, contentType: string }` for the registered resource paths.
+These bytes are public: the isolated sandbox listener serves them with no
+Gateway credentials. Return only static renderer assets, never user data or
+secrets. Unregistered paths and registrations without this callback stay private.
+Opting in reserves every declared path in one global sandbox namespace: no other
+content kind may declare the same path, even without a public reader. Registration
+rejects these collisions regardless of order; only private registrations may
+share paths. Public paths must already be canonical URL pathnames, without dot
+segments, backslashes, query strings, or fragments. The sandbox host endpoint
+`/mcp-app-sandbox` is reserved. These additional path restrictions apply only to
+registrations with `readPublicResource`; private paths retain their capability
+URL encoding.
+
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway
 hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.
@@ -535,6 +591,15 @@ Cron scheduler. Cron owns timing and creates the background task record when the
 turn runs; the Plugin SDK only constrains the target session, plugin-owned
 naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
 turn when the work itself needs durable multi-step Task Flow state.
+
+Within session extensions, `openclaw/plugin-sdk/agent-sessions` provides the host's
+model-selection helpers. Exact provider/model IDs take precedence over case-insensitive
+matches; ambiguous references need exact provider and model IDs. Pass the provider
+separately when distinct identities share a combined reference. Human-name
+matching, alias/date version selection, and case-insensitive glob scopes remain
+available.
+
+Session extension SDK and supported TypeBox imports share the host's modules.
 
 The contracts intentionally split authority:
 

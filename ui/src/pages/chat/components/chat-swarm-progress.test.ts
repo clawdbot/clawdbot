@@ -2,12 +2,19 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SubagentRunReadRecord } from "../../../../../src/agents/subagents/registry/subagent-registry.types.js";
+import { buildSessionSwarmSummary } from "../../../../../src/gateway/session-swarm-summary.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { pt_BR } from "../../../i18n/locales/pt-BR.ts";
+import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import { SwarmRosterHydrator } from "../../../lib/sessions/swarm-roster.ts";
 import { renderChatSwarmProgress } from "./chat-swarm-progress.ts";
 
 const parentSessionKey = "agent:main:parent";
+const parentRunId = "11111111-2222-4333-8444-555555555555";
+const swarmGroupId = `swarm:${parentSessionKey}:${parentRunId}`;
+const childSessionKey = "agent:main:subagent:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 type SwarmTestSession = GatewaySessionRow & {
   swarmLog?: string;
@@ -21,15 +28,49 @@ function session(overrides: Partial<SwarmTestSession>): SwarmTestSession {
     kind: "direct",
     updatedAt: 1,
     parentSessionKey,
-    swarmGroupId: "swarm:agent:main:parent:turn-42",
+    swarmGroupId,
     ...overrides,
   };
+}
+
+function withSummary(sessions: readonly GatewaySessionRow[]): GatewaySessionRow[] {
+  const runs: SubagentRunReadRecord[] = sessions
+    .filter((child) => child.swarmGroupId)
+    .map((child) => ({
+      runId: child.key,
+      childSessionKey: child.key,
+      requesterSessionKey: parentSessionKey,
+      requesterAgentId: "main",
+      swarmRequesterSessionKey: parentSessionKey,
+      collect: true,
+      groupId: child.swarmGroupId,
+      createdAt: child.updatedAt ?? 1,
+      execution: { status: child.status === "queued" ? "queued" : "running" },
+      collectorCompletion:
+        child.status === "done" ||
+        child.status === "failed" ||
+        child.status === "killed" ||
+        child.status === "timeout"
+          ? { status: child.status }
+          : undefined,
+    }));
+  return [
+    {
+      key: parentSessionKey,
+      kind: "direct",
+      swarm: buildSessionSwarmSummary(runs, parentSessionKey, "main", { includeChildren: true }),
+    },
+    ...sessions,
+  ];
 }
 
 function renderProgress(sessions: readonly GatewaySessionRow[]) {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions }), container);
+  render(
+    renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: withSummary(sessions) }),
+    container,
+  );
   return container;
 }
 
@@ -46,6 +87,7 @@ describe("chat Swarm progress", () => {
       labsPage: {
         swarm: {
           title: "Enxame",
+          groupTitle: "Tarefas paralelas",
           progress: "{complete} de {total}",
         },
       },
@@ -60,6 +102,9 @@ describe("chat Swarm progress", () => {
     expect(
       container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
     ).toContain("1 de 2");
+    expect(container.querySelector(".chat-swarm__header strong")?.textContent).toBe(
+      "Tarefas paralelas",
+    );
   });
 
   it("groups live collector children and maps their task states", () => {
@@ -73,16 +118,12 @@ describe("chat Swarm progress", () => {
       session({ key: "running", label: "Running child", status: "running" }),
       session({ key: "done", label: "Done child", status: "done" }),
       session({ key: "failed", label: "Timed out child", status: "timeout" }),
-      session({
-        key: "finished-group",
-        swarmGroupId: "swarm:agent:main:parent:finished",
-        status: "done",
-      }),
     ]);
 
     const group = container.querySelector("[data-swarm-group]");
-    expect(group?.getAttribute("data-swarm-group")).toBe("swarm:agent:main:parent:turn-42");
-    expect(group?.textContent).toContain("turn-42");
+    expect(group?.getAttribute("data-swarm-group")).toBe(swarmGroupId);
+    expect(group?.querySelector(".chat-swarm__header strong")?.textContent).toBe("Parallel tasks");
+    expect(group?.textContent).not.toContain(parentRunId);
     expect(group?.textContent?.replace(/\s+/g, " ")).toContain("2 of 4");
     expect(
       [...container.querySelectorAll(".chat-swarm__task-icon")].map((icon) => icon.className),
@@ -92,6 +133,85 @@ describe("chat Swarm progress", () => {
       "chat-swarm__task-icon chat-swarm__task-icon--done",
       "chat-swarm__task-icon chat-swarm__task-icon--failed",
     ]);
+  });
+
+  it.each([
+    {
+      name: "explicit label",
+      fields: { label: " Review CI ", displayName: "Other name" },
+      expected: "Review CI",
+    },
+    { name: "display name", fields: { displayName: "Review CI" }, expected: "Review CI" },
+    { name: "derived title", fields: { derivedTitle: "Review CI" }, expected: "Review CI" },
+    { name: "unnamed child", fields: {}, expected: "Subagent:" },
+    { name: "blank names", fields: { label: " ", displayName: "\t" }, expected: "Subagent:" },
+    {
+      name: "key-shaped names",
+      fields: { label: childSessionKey, displayName: childSessionKey },
+      expected: "Subagent:",
+    },
+  ])("names a single child from $name without exposing identifiers", ({ fields, expected }) => {
+    const container = renderProgress([
+      session({ key: childSessionKey, status: "running", ...fields }),
+    ]);
+    const heading = container.querySelector(".chat-swarm__header strong");
+    expect(heading?.textContent).toBe(expected);
+    expect(heading?.getAttribute("title")).toBe(expected);
+    expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe(expected);
+    expect(container.textContent).not.toContain(parentRunId);
+    expect(container.textContent).not.toContain(childSessionKey);
+    expect(container.querySelector("[data-swarm-group]")?.getAttribute("data-swarm-group")).toBe(
+      swarmGroupId,
+    );
+  });
+
+  it("updates the same group heading through live rows, hydration, and a second child", async () => {
+    vi.useFakeTimers();
+    const child = session({ key: childSessionKey, status: "running" });
+    const hydrated = { ...child, label: "Review CI", updatedAt: 2 };
+    let currentRows = [child];
+    const hydrator = new SwarmRosterHydrator();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const params = {
+      sessions: {
+        canonicalListRevision: 1,
+        list: vi.fn(async () => ({ sessions: [hydrated], hasMore: false })),
+      } as unknown as SessionCapability,
+      parentKey: parentSessionKey,
+      readParent: async () => ({ key: parentSessionKey, kind: "direct" as const }),
+      sourceEpoch: 1,
+      currentRows: () => currentRows,
+      onRows: (sessions: GatewaySessionRow[]) =>
+        render(
+          renderChatSwarmProgress({
+            sessionKey: parentSessionKey,
+            sessions: withSummary(sessions),
+          }),
+          container,
+        ),
+    };
+    try {
+      hydrator.update(params);
+      const group = container.querySelector("[data-swarm-group]");
+      expect(group?.querySelector("strong")?.textContent).toBe("Subagent:");
+      await vi.runAllTimersAsync();
+      expect(group?.querySelector("strong")?.textContent).toBe("Review CI");
+      currentRows = [
+        hydrated,
+        session({ key: "agent:main:subagent:second", label: "Check types", status: "running" }),
+      ];
+      hydrator.update(params);
+      expect(container.querySelectorAll("[data-swarm-group]")).toHaveLength(1);
+      expect(group?.getAttribute("data-swarm-group")).toBe(swarmGroupId);
+      expect(group?.querySelector("strong")?.textContent).toBe("Parallel tasks");
+      expect(
+        [...group!.querySelectorAll(".chat-swarm__task-name")].map((el) => el.textContent),
+      ).toEqual(["Review CI", "Check types"]);
+      expect(container.textContent).not.toContain(parentRunId);
+    } finally {
+      hydrator.dispose();
+    }
   });
 
   it("renders every child beyond the ordinary 50-row session page", () => {
@@ -112,7 +232,7 @@ describe("chat Swarm progress", () => {
       session({ key: "running", status: "running" }),
     ]);
 
-    expect(container.querySelectorAll(".chat-swarm__task")).toHaveLength(256);
+    expect(container.querySelectorAll(".chat-swarm__task")).toHaveLength(64);
     expect(container.querySelector(".chat-swarm__task-icon--running")).not.toBeNull();
     expect(
       container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
@@ -133,7 +253,7 @@ describe("chat Swarm progress", () => {
     expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
   });
 
-  it("keeps registry-active terminal workers completed and hides finished groups", () => {
+  it("keeps completed and failed child outcomes visible after the group finishes", () => {
     const running = session({ key: "running", status: "running" });
     const completed = session({ key: "completed", status: "done", hasActiveRun: true });
     const failed = session({ key: "failed", status: "failed", hasActiveRun: true });
@@ -144,10 +264,15 @@ describe("chat Swarm progress", () => {
     expect(container.querySelectorAll(".chat-swarm__task-icon--failed")).toHaveLength(1);
 
     render(
-      renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: [completed, failed] }),
+      renderChatSwarmProgress({
+        sessionKey: parentSessionKey,
+        sessions: withSummary([completed, failed]),
+      }),
       container,
     );
-    expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
+    expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
+    expect(container.textContent).toContain("1 completed · 1 failed");
+    expect(container.textContent).toContain("Check the conversation for the final response");
   });
 
   it("keeps tasks from every phase in the compact detail", () => {
@@ -236,4 +361,35 @@ describe("chat Swarm progress", () => {
       { label: "Done", duration: "7s" },
     ]);
   });
+  it.each(["global", "unknown"])(
+    "keeps raw %s owners separate from ordinary qualified keys",
+    (raw) => {
+      const makeParent = (key: string, agentId: string, done: number): GatewaySessionRow => ({
+        key,
+        agentId,
+        kind: "direct",
+        swarm: {
+          groups: [{ groupId: "custom", createdAt: 1, queued: 0, running: 0, done, failed: 0 }],
+          otherActiveGroups: 0,
+        },
+      });
+      const sessions = [
+        makeParent(raw, "main", 1),
+        makeParent(raw, "research", 2),
+        makeParent(`agent:main:${raw}`, "main", 3),
+      ];
+      const container = document.createElement("div");
+      document.body.append(container);
+      for (const target of [
+        { sessionKey: raw, agentId: "main", count: 1 },
+        { sessionKey: raw, agentId: "research", count: 2 },
+        { sessionKey: `agent:main:${raw}`, agentId: "main", count: 3 },
+      ]) {
+        render(renderChatSwarmProgress({ ...target, sessions }), container);
+        expect(container.textContent).toContain(`${target.count} of ${target.count}`);
+      }
+      render(renderChatSwarmProgress({ sessionKey: raw, sessions }), container);
+      expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
+    },
+  );
 });

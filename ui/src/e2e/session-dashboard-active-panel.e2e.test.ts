@@ -20,7 +20,7 @@ const boardSnapshot = {
 };
 
 suite.define(() => {
-  it("opens an explicitly requested dashboard over the previous side-panel tab", async () => {
+  it("restores the saved main and side selection on ordinary dashboard revisits", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
       const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
       await page.addInitScript(
@@ -41,13 +41,18 @@ suite.define(() => {
                 {
                   id: "side-panel-column",
                   side: "right",
-                  panels: [{ id: "terminal", slot: "terminal" }],
-                  activePanelId: "terminal",
+                  panels: [
+                    { id: "terminal", slot: "terminal" },
+                    { id: "dashboard", slot: "dashboard" },
+                    { id: "conversation", slot: "conversation" },
+                  ],
+                  activePanelId: "dashboard",
                   height: 360,
                   width: 480,
                 },
               ],
               dock: "right",
+              mainPanelId: "terminal",
               open: true,
             },
           };
@@ -64,15 +69,16 @@ suite.define(() => {
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       await page.locator(".board-session-surface").waitFor();
-      const terminal = page.getByRole("tab", { name: "Terminal", exact: true });
+      const terminal = page.locator('[data-panel-slot="terminal"][data-region="main"]');
       const dashboard = page.getByRole("tab", { name: "Dashboard", exact: true });
       await expect.poll(() => dashboard.getAttribute("aria-selected")).toBe("true");
-      await expect.poll(() => terminal.getAttribute("aria-selected")).toBe("false");
+      await terminal.waitFor();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
 
       await page.reload();
       await page.locator(".board-session-surface").waitFor();
       await expect.poll(() => dashboard.getAttribute("aria-selected")).toBe("true");
+      await terminal.waitFor();
     });
   });
 });

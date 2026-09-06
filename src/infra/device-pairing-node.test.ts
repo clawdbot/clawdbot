@@ -31,6 +31,13 @@ import {
   resolveNodePairingGeneration,
   withPairedDeviceRecords,
 } from "./device-pairing.js";
+import {
+  NODE_BROWSER_PROXY_COMMANDS,
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
+  NODE_SYSTEM_RUN_COMMANDS,
+  NODE_TERMINAL_UPLOAD_COMMAND,
+} from "./node-commands.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
 const hostStats: NodeHostStats = {
@@ -545,55 +552,44 @@ describe("node surface approvals", () => {
     });
   });
 
-  test("requires the right scopes to approve node requests", async () => {
+  test.each([
+    ...[
+      ...NODE_SYSTEM_RUN_COMMANDS,
+      ...NODE_BROWSER_PROXY_COMMANDS,
+      ...NODE_EXEC_APPROVALS_COMMANDS,
+      NODE_FS_LIST_DIR_COMMAND,
+      NODE_TERMINAL_UPLOAD_COMMAND,
+    ].map((command) => ({ command, scopes: ["operator.pairing", "operator.admin"] })),
+    { command: "canvas.present", scopes: ["operator.pairing", "operator.write"] },
+    { command: undefined, scopes: ["operator.pairing"] },
+  ])("reports and enforces approval scopes for $command", async ({ command, scopes }) => {
     await withNodePairingDir(async (baseDir) => {
       await seedNodeDevice(baseDir, "node-1");
-      const systemRunRequest = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run"],
-        },
+      const commands = command ? [command] : undefined;
+      const { request } = await requestNodePairing(
+        { nodeId: "node-1", platform: "darwin", commands },
         baseDir,
       );
 
+      expect(request.requiredApproveScopes).toEqual(scopes);
+      expect((await listNodePairing(baseDir)).pending).toEqual([request]);
       await expect(
-        approveNodePairing(
-          systemRunRequest.request.requestId,
-          { callerScopes: ["operator.pairing"] },
-          baseDir,
-        ),
+        approveNodePairing(request.requestId, { callerScopes: scopes.slice(0, -1) }, baseDir),
       ).resolves.toEqual({
         status: "forbidden",
-        missingScope: "operator.admin",
+        missingScope: scopes.at(-1),
       });
       await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
 
-      await seedNodeDevice(baseDir, "node-2");
-      const commandlessRequest = await requestNodePairing(
-        {
-          nodeId: "node-2",
-          platform: "darwin",
-        },
-        baseDir,
-      );
-
-      await expect(
-        approveNodePairing(commandlessRequest.request.requestId, { callerScopes: [] }, baseDir),
-      ).resolves.toEqual({
-        status: "forbidden",
-        missingScope: "operator.pairing",
-      });
       const approved = await approveNodePairing(
-        commandlessRequest.request.requestId,
-        { callerScopes: ["operator.pairing"] },
+        request.requestId,
+        { callerScopes: scopes },
         baseDir,
       );
-      const approvedRecord = requireRecord(approved);
-      const approvedNode = requireRecord(approvedRecord.node);
-      expect(approvedRecord.requestId).toBe(commandlessRequest.request.requestId);
-      expect(approvedNode.nodeId).toBe("node-2");
-      expect(approvedNode.commands).toBeUndefined();
+      expect(approved).toMatchObject({
+        requestId: request.requestId,
+        node: { nodeId: "node-1", commands },
+      });
     });
   });
 

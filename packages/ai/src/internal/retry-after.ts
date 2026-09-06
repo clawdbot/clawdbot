@@ -29,6 +29,83 @@ type HttpDateComponents = {
   seconds: number;
 };
 
+function ownDataValue(value: unknown, key: string): unknown {
+  return value && typeof value === "object"
+    ? Object.getOwnPropertyDescriptor(value, key)?.value
+    : undefined;
+}
+
+/** Reads only retry timing metadata, without invoking provider getters or serialization hooks. */
+export function parseRetryAfterHeadersSeconds(
+  headers: unknown,
+  nowMs = Date.now(),
+): number | undefined {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  try {
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = ["retry-after", "retry-after-ms"].map<[string, unknown]>((key) => [
+        key,
+        Headers.prototype.get.call(headers, key),
+      ]);
+    } catch {
+      entries = Object.getOwnPropertyNames(headers).flatMap<[string, unknown]>((key) => {
+        const name = key.toLowerCase();
+        return name === "retry-after" || name === "retry-after-ms"
+          ? [[name, ownDataValue(headers, key)]]
+          : [];
+      });
+    }
+    let floor: number | undefined;
+    for (const [key, value] of entries) {
+      const text =
+        typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
+      const milliseconds = key === "retry-after-ms";
+      const numeric =
+        typeof value === "number"
+          ? value >= 0 && (milliseconds || Number.isInteger(value) || value === Infinity)
+          : (milliseconds ? /^\d+(?:\.\d+)?$/ : /^\d+$/).test(text);
+      const number = typeof value === "number" ? value : Number(text);
+      const retryAt =
+        !numeric && !milliseconds ? parseRetryAfterHttpDateMs(text, nowMs) : undefined;
+      const seconds = numeric
+        ? Number.isFinite(number) && number <= Number.MAX_SAFE_INTEGER
+          ? number / (milliseconds ? 1000 : 1)
+          : Infinity
+        : retryAt === undefined
+          ? undefined
+          : Math.max(0, (retryAt - nowMs) / 1000);
+      if (seconds !== undefined) {
+        floor = Math.max(floor ?? 0, seconds);
+      }
+    }
+    return floor;
+  } catch {
+    return undefined;
+  }
+}
+
+/** SDK errors carry native response headers separately from their error body. */
+export function parseRetryAfterErrorSeconds(
+  error: unknown,
+  nowMs = Date.now(),
+): number | undefined {
+  try {
+    const direct = parseRetryAfterHeadersSeconds(ownDataValue(error, "headers"), nowMs);
+    const response = parseRetryAfterHeadersSeconds(
+      ownDataValue(ownDataValue(error, "response"), "headers"),
+      nowMs,
+    );
+    return direct === undefined && response === undefined
+      ? undefined
+      : Math.max(direct ?? 0, response ?? 0);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Parses the three HTTP-date forms accepted for Retry-After without Date.parse normalization. */
 export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | undefined {
   const imfFixdate = IMF_FIXDATE_RE.exec(value);

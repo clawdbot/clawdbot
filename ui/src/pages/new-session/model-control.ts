@@ -258,7 +258,6 @@ export class NewSessionModelControl {
       void loadModelCatalog(metadataClient, {
         agentId,
         refreshIfDue: true,
-        rejectOnFailure: true,
       }).catch(() => {
         if (this.metadataClient === metadataClient && this.metadataScope === scope) {
           this.updateMetadataState({ ...this.metadataState, status: "error" });

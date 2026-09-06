@@ -158,6 +158,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  process.exitCode = 0;
   getMemorySearchManager.mockReset();
   forgetMemoryEntries.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
@@ -172,7 +173,7 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  process.exitCode = undefined;
+  process.exitCode = 0;
   setVerbose(false);
 });
 
@@ -790,7 +791,7 @@ describe("memory cli", () => {
     params.beforeExpect?.();
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith("Memory manager close failed: close boom");
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   }
 
   it("prints vector status when available", async () => {
@@ -803,6 +804,13 @@ describe("memory cli", () => {
           files: 2,
           chunks: 5,
           sourceCounts: [{ source: "memory", files: 2, chunks: 5, chunkBytes: 2048 }],
+          storage: {
+            databaseBytes: 1048576,
+            walBytes: 2048,
+            reusableBytes: 524288,
+            embeddingCacheBytes: 4096,
+            embeddingCacheEntries: 123,
+          },
           cache: { enabled: true, entries: 123, maxEntries: 50000 },
           fts: { enabled: true, available: true },
           vector: {
@@ -830,6 +838,8 @@ describe("memory cli", () => {
     expectLogged(log, "FTS: ready");
     expectLogged(log, "2.0 KiB text + embeddings");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
+    expectLogged(log, "Agent database: 1.0 MiB · WAL 2.0 KiB · reusable 512.0 KiB");
+    expectLogged(log, "Stored embedding cache: 4.0 KiB · 123 entries");
     expect(close).toHaveBeenCalled();
   });
 
@@ -1739,7 +1749,7 @@ describe("memory cli", () => {
     expectNotLogged(log, "Memory index complete");
     await expectPathMissing(path.join(workspaceDir, "memory"));
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("reports a truthful no-op when the memory directory is missing", async () => {
@@ -1774,7 +1784,7 @@ describe("memory cli", () => {
     expectNotLogged(log, "Memory index updated");
     await expectPathMissing(path.join(workspaceDir, "memory"));
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("reports the indexed file count and closes the manager after index", async () => {
@@ -1847,7 +1857,7 @@ describe("memory cli", () => {
       "Memory index WARNING (main): chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
     );
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("warns on stderr when index has vector store but no semantic vectors", async () => {
@@ -1882,7 +1892,7 @@ describe("memory cli", () => {
       "Memory index WARNING (main): chunks_vec not updated — semantic vector embeddings unavailable — no vector dimensions resolved. Vector recall degraded.",
     );
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("logs close failures without failing the command", async () => {
@@ -2013,7 +2023,6 @@ describe("memory cli", () => {
           sources: ["memory"],
           store: { vector: { enabled: false } },
           cache: { enabled: false },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
           query: { hybrid: { enabled: true } },
         },
       },
@@ -2105,7 +2114,7 @@ describe("memory cli", () => {
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("prefers --query when positional and flag are both provided", async () => {
@@ -2215,7 +2224,7 @@ describe("memory cli", () => {
 
       expect(log).toHaveBeenCalledWith("No short-term recall candidates.");
       expect(close).toHaveBeenCalled();
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     });
   });
 

@@ -11,6 +11,10 @@ import {
   normalizeAgentRunTerminalReplySnapshot,
 } from "../agent-run-terminal-reply.js";
 import {
+  createAssistantErrorTranscript,
+  type AssistantErrorTranscript,
+} from "../assistant-error-transcript.js";
+import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,
 } from "../harness/context-engine-logical-turn.js";
@@ -38,6 +42,7 @@ import {
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 type RunEntryCandidateOptions = {
+  assistantErrorTranscript: AssistantErrorTranscript;
   classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
@@ -269,19 +274,50 @@ function buildTerminal(params: {
   outcome: EmbeddedAgentRunEntryTerminal["outcome"];
   behavior: RunEntryBehavior;
   runId: string;
+  requested: { provider: string; model: string };
+  sessionId: string;
 }): EmbeddedAgentRunEntryTerminal {
   const meta = params.result.meta;
   const outcome = params.outcome;
+  const internalReply = params.result.messagingToolSourceReplyPayloads?.findLast(
+    (payload) => payload.sourceReplyFinal === true,
+  );
   let terminalReply =
     normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
-    buildAgentRunTerminalReplySnapshot({
-      visibleText: meta.finalAssistantVisibleText,
-      rawText: meta.finalAssistantRawText,
-      terminalReplyKind: meta.terminalReplyKind,
-    });
-  const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(
-    meta.agentMeta?.terminalReceipt,
-  );
+    buildAgentRunTerminalReplySnapshot(
+      // Internal UI delivery still needs forwarding by A2A. Its final payload
+      // owns that reply even when the model subsequently emits NO_REPLY.
+      internalReply
+        ? { visibleText: internalReply.text }
+        : {
+            visibleText: meta.finalAssistantVisibleText,
+            rawText: meta.finalAssistantRawText,
+            terminalReplyKind: meta.terminalReplyKind,
+          },
+    );
+  const agentMeta = meta.agentMeta;
+  const normalizedTerminalReceipt =
+    normalizeAgentRunTerminalReceipt(agentMeta?.terminalReceipt) ??
+    // CLI backends report delivery without an embedded model-turn receipt.
+    // The entry owner supplies run identity; the tool supplied the send fact.
+    (params.result.sourceReplyDelivered && agentMeta?.provider && agentMeta.model
+      ? {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          turnId: params.runId,
+          requested: params.requested,
+          effective: {
+            provider: agentMeta.provider,
+            model: agentMeta.model,
+            responseModel: agentMeta.model,
+          },
+          successfulToolNames: ["message"],
+          sourceReplyDelivered: true as const,
+          rerouted:
+            agentMeta.provider !== params.requested.provider ||
+            agentMeta.model !== params.requested.model,
+        }
+      : undefined);
   const terminalReceipt =
     normalizedTerminalReceipt?.runId === params.runId
       ? {
@@ -341,10 +377,16 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
   const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+    identity: params.identity,
     config: params.selection.cfg,
     agentDir: params.selection.agentDir,
     workspaceDir: params.harness.workspaceDir,
   });
+  const assistantErrorTranscript = createAssistantErrorTranscript({
+    runId: params.identity.runId,
+    config: params.selection.cfg,
+  });
+  let failed = true;
   let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
   let candidateIndex = 0;
   const committedSideEffect =
@@ -357,6 +399,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     model: string;
     agentHarnessRuntimeOverride?: string;
   }) => {
+    assistantErrorTranscript.clear();
     const key = [
       candidate.provider,
       candidate.model,
@@ -475,6 +518,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             }),
           }),
       run: async (provider, model, options) => {
+        assistantErrorTranscript.clear();
         if (!options) {
           throw new Error("Model fallback attempt is missing routing provenance");
         }
@@ -512,6 +556,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           return classified.value;
         };
         const result = await params.runCandidate(provider, model, {
+          assistantErrorTranscript,
           classifyResult,
           allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
           isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
@@ -551,6 +596,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       result: candidateResult,
       fallbackExhausted: outcome === "exhausted",
     });
+    failed = terminalOutcome.status === "error";
     const result = mergeRunEntryExecutionTrace({
       result: candidateResult,
       terminalStatus: terminalOutcome.status,
@@ -570,6 +616,8 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       outcome: terminalOutcome,
       behavior: params.behavior,
       runId: params.identity.runId,
+      requested: { provider: params.selection.provider, model: params.selection.model },
+      sessionId: params.identity.sessionId,
     });
     const acceptedTerminal =
       !params.abortSignal?.aborted &&
@@ -627,6 +675,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
         lease: contextEngineLogicalTurnLease,
       });
     }
-    await contextEngineLogicalTurnLease.dispose();
+    try {
+      await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
+    } finally {
+      await contextEngineLogicalTurnLease.dispose();
+    }
   }
 }

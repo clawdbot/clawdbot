@@ -9,6 +9,7 @@ import {
   formatValidationErrors,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import {
   createChildDiagnosticTraceContext,
   parseDiagnosticTraceparent,
@@ -16,6 +17,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import {
@@ -24,6 +26,7 @@ import {
 } from "../ws-policy-close.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
 import { scheduleGatewayRequestStart } from "./request-start.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
@@ -79,6 +82,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     parsed: unknown,
     client: GatewayWsClient,
     frameBytes: number,
+    admission?: "continuation",
   ): Promise<void> => {
     // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
@@ -94,17 +98,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       return;
     }
     const req = parsed;
+    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
     logWs("in", "req", { connId, id: req.id, method: req.method });
-    for (;;) {
-      const barrier = deviceCredentialMutationBarrier;
-      if (!barrier) {
-        break;
-      }
-      await barrier.catch(() => undefined);
-      if (isClosed()) {
-        return;
-      }
-    }
+    const context = buildRequestContext();
     const hasCurrentClientAuthority = () => {
       if (closeInvalidatedClient(client, req.method)) {
         return false;
@@ -127,9 +123,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
       return true;
     };
-    if (!hasCurrentClientAuthority()) {
-      return;
-    }
     const respond = (
       ok: boolean,
       payload?: unknown,
@@ -137,19 +130,23 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       meta?: Record<string, unknown>,
     ) => {
       if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
+        diagnostics?.response("suppressed");
         return;
       }
       try {
         let responseOk = ok;
         let responseError = error;
-        const sendResult = send({ type: "res", id: req.id, ok, payload, error });
+        let sendResult = send({ type: "res", id: req.id, ok, payload, error });
         if (sendResult.kind === "serialization") {
           const detail = formatForLog(sendResult.error);
           logGateway.error(`response serialization failed method=${req.method}: ${detail}`);
           responseOk = false;
           responseError = errorShape(ErrorCodes.UNAVAILABLE, "response serialization failed");
-          send({ type: "res", id: req.id, ok: responseOk, error: responseError });
+          sendResult = send({ type: "res", id: req.id, ok: responseOk, error: responseError });
         }
+        diagnostics?.response(
+          sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",
+        );
         const unauthorizedRoleError = isUnauthorizedRoleError(responseError);
         let logMeta = meta;
         if (unauthorizedRoleError) {
@@ -192,7 +189,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
     };
 
-    const context = buildRequestContext();
     const agentRuntimeIdentity = client.internal?.agentRuntimeIdentity;
     const hasCurrentRuntimeAuthority = () => {
       if (
@@ -216,11 +212,13 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
     };
     const policyResponse = registerGatewayPolicyResponse(req.method, client, respondWithAuthority);
-    if (!hasCurrentRuntimeAuthority()) {
-      return;
-    }
 
     const executeRequest = async () => {
+      diagnostics?.bindTrace();
+      let entry: GatewayRequestEntry | undefined;
+      // Capture the predecessor before this request publishes its own mutation tail.
+      // Later frames wait on that tail, preserving credential mutation order.
+      const credentialMutationBarrier = deviceCredentialMutationBarrier;
       // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
       // without their requester there is no safe recipient for a late answer.
       const cancelOnDisconnect =
@@ -233,11 +231,39 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       if (requestController) {
         client.socket.once("close", cancelRequest);
       }
+      let dispatchOutcome: "returned" | "threw" = "returned";
       try {
+        entry = context.requestEntryLifetime?.enter({ req, client, context });
+        if (credentialMutationBarrier) {
+          await racePromiseWithAbortSignal(
+            credentialMutationBarrier,
+            context.requestEntryLifetime?.signal,
+          ).catch(() => undefined);
+          // Refuse within the preparation lease so its response settles before the
+          // preparation join; the mutating handler retains its execution owner.
+          if (context.requestEntryLifetime?.signal.aborted) {
+            respondWithAuthority(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, "gateway closing before request dispatch", {
+                retryable: true,
+              }),
+            );
+            return;
+          }
+          if (isClosed()) {
+            return;
+          }
+        }
+        if (!hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
+          return;
+        }
         const { handleGatewayRequest } = await loadGatewayServerMethods();
+        entry?.assertOpen();
         // Node completion traffic retains its native yielding and existing close-drain
         // deadline. Operator requests share bounded starts without serializing completion.
         if (client.connect.role === "operator") {
+          diagnostics?.startQueue();
           const start = scheduleGatewayRequestStart(frameBytes);
           if (!start) {
             respondWithAuthority(
@@ -250,7 +276,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             return;
           }
           await start;
+          diagnostics?.finishQueue();
         }
+        entry?.assertOpen();
         // Waiting never grants authority. Ordinary requests may outlive their socket;
         // only request-owned cancellation and current authority fence their start.
         if (
@@ -261,18 +289,25 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           return;
         }
         await runOutsideGatewayRootWorkAdmission(() =>
-          handleGatewayRequest({
-            req,
-            respond: respondWithAuthority,
-            client,
-            isWebchatConnect: params.isWebchatConnect,
-            extraHandlers,
-            methodRegistry: getMethodRegistry?.(),
-            context,
-            ...(requestController ? { signal: requestController.signal } : {}),
-          }),
+          handleGatewayRequest(
+            {
+              req,
+              respond: respondWithAuthority,
+              client,
+              isWebchatConnect: params.isWebchatConnect,
+              hasCurrentClientAuthority,
+              extraHandlers,
+              methodRegistry: getMethodRegistry?.(),
+              context,
+              ...(admission ? { admission } : {}),
+              requestEntry: entry,
+              ...(requestController ? { signal: requestController.signal } : {}),
+            },
+            diagnostics,
+          ),
         );
       } catch (err) {
+        dispatchOutcome = "threw";
         // Failure diagnostics and responses belong to the same request trace as the handler.
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
         const staleInstall = classifyGatewayStaleInstall(err);
@@ -283,6 +318,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         );
       } finally {
         policyResponse?.finish();
+        diagnostics?.finish(requestController?.signal.aborted ? "cancelled" : dispatchOutcome);
+        entry?.release();
         if (requestController) {
           client.socket.off("close", cancelRequest);
         }
@@ -308,7 +345,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
       deviceCredentialMutationBarrier = barrier;
     }
-    void requestDispatch;
+    await requestDispatch;
   };
 
   return { dispatch };

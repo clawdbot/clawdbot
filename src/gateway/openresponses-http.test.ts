@@ -29,9 +29,13 @@ import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
+import {
+  expectDeclaredHttpOwnerIdentity,
+  expectHttpForeignSessionAuthority,
+  expectSharedSecretHttpOwnerIdentity,
+} from "./http-authority.test-support.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -441,47 +445,132 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it("preserves buffered leading text in official SDK streaming snapshots", async () => {
-    const expected = "<tag>ok</tag>";
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string }).runId;
-      if (!runId) {
-        throw new Error("expected a streaming response run ID");
-      }
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: { text: expected, delta: "tag>ok</tag>" },
+  it.each([
+    {
+      name: "buffered leading text in cumulative assistant snapshots",
+      events: [{ text: "<tag>ok</tag>", delta: "tag>ok</tag>" }],
+      expected: "<tag>ok</tag>",
+    },
+    {
+      name: "identical snapshots from distinct assistant items",
+      events: [
+        { itemId: "answer-1", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo", delta: "Echo" },
+      ],
+      expected: "EchoEcho",
+      resultTexts: ["Echo", "Echo"],
+    },
+    {
+      name: "replayed and growing snapshots across assistant items",
+      events: [
+        { itemId: "answer-1", text: "Echo", delta: "Echo" },
+        { itemId: "answer-1", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo!", delta: "!" },
+      ],
+      expected: "EchoEcho!",
+    },
+    {
+      name: "repeated delta-only text within an assistant item",
+      events: [
+        { itemId: "answer-1", delta: "Echo" },
+        { itemId: "answer-1", delta: "Echo" },
+      ],
+      expected: "EchoEcho",
+    },
+    {
+      name: "text beyond the live display cap",
+      events: [
+        { itemId: "answer-1", text: "x".repeat(500_001), delta: "x".repeat(500_001) },
+        { itemId: "answer-2", text: "tail", delta: "tail" },
+      ],
+      expected: `${"x".repeat(500_001)}tail`,
+    },
+  ])(
+    "preserves $name in official SDK assistant streams",
+    async ({ events, expected, resultTexts }) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        for (const data of events) {
+          emitAgentEvent({ runId, stream: "assistant", data });
+        }
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return { payloads: (resultTexts ?? [expected]).map((text) => ({ text })) };
+      }) as never);
+
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
       });
-      return { payloads: [{ text: expected }] };
-    }) as never);
+      const stream = client.responses.stream({
+        model: "openclaw",
+        input: "Preserve the complete assistant snapshot.",
+      });
+      const deltas: string[] = [];
+      stream.on("response.output_text.delta", (event) => deltas.push(event.delta));
 
-    const client = new OpenAI({
-      apiKey: "test",
-      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-      maxRetries: 0,
-    });
-    const stream = client.responses.stream({
-      model: "openclaw",
-      input: "Preserve the complete assistant snapshot.",
-    });
-    const deltas: string[] = [];
-    stream.on("response.output_text.delta", (event) => deltas.push(event.delta));
-
-    const response = await stream.finalResponse();
-    expect(deltas.join("")).toBe(expected);
-    expect(response.output_text).toBe(expected);
-  });
+      const response = await stream.finalResponse();
+      expect({ deltas: deltas.join(""), outputText: response.output_text }).toEqual({
+        deltas: expected,
+        outputText: expected,
+      });
+    },
+  );
 
   it.each([
     { name: "rewritten", replacementText: "final answer" },
     { name: "shortened", replacementText: "dra" },
     { name: "cleared", replacementText: "" },
+    {
+      name: "replaced by a held provisional item",
+      previousText: "Echo",
+      replacementText: "Replacement",
+      replaceable: true,
+    },
+    {
+      name: "cleared by a held provisional item",
+      previousText: "Echo",
+      replacementText: "",
+      replaceable: true,
+    },
+    {
+      name: "cleared by an explicit empty final result",
+      previousText: "Echo",
+      replacementText: "Echo tail",
+      resultText: "",
+      replaceable: true,
+    },
+    {
+      name: "cleared by held output without a text-bearing result",
+      previousText: "Echo",
+      replacementText: "",
+      noResultText: true,
+      replaceable: true,
+    },
+    {
+      name: "replaced by a held item followed by its native terminal echo",
+      previousText: "Echo",
+      replacementText: "Replacement",
+      replaceable: true,
+      terminalEcho: true,
+    },
   ])(
     "fails an official SDK Responses stream when streamed text is $name",
-    async ({ replacementText }) => {
+    async ({
+      replacementText,
+      previousText = "draft answer",
+      replaceable,
+      resultText,
+      noResultText,
+      terminalEcho,
+    }) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string }).runId;
@@ -491,16 +580,29 @@ describe("OpenResponses HTTP API (e2e)", () => {
         emitAgentEvent({
           runId,
           stream: "assistant",
-          data: { text: "draft answer", delta: "draft answer" },
+          data: {
+            text: previousText,
+            delta: previousText,
+            ...(replaceable ? { itemId: "answer-1" } : {}),
+          },
         });
         emitAgentEvent({
           runId,
           stream: "assistant",
-          data: { text: replacementText, replace: true, phase: "commentary" },
+          data: {
+            text: replacementText,
+            replace: true,
+            ...(replaceable
+              ? { itemId: "answer-2", delta: "", replaceable: true }
+              : { phase: "commentary" }),
+          },
         });
+        if (terminalEcho) {
+          emitAgentEvent({ runId, stream: "assistant", data: { text: replacementText } });
+        }
         emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
         return {
-          payloads: [{ text: replacementText }],
+          payloads: noResultText ? [] : [{ text: resultText ?? replacementText }],
           meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
         };
       }) as never);
@@ -544,7 +646,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         }
       }
 
-      expect(deltas).toEqual(["draft answer"]);
+      expect(deltas).toEqual([previousText]);
       expect(failures).toEqual([
         {
           status: "failed",
@@ -576,9 +678,88 @@ describe("OpenResponses HTTP API (e2e)", () => {
       replacementDelta: "answer",
       expectedDeltas: "final answer",
     },
+    {
+      name: "a held append-compatible replacement",
+      previousDelta: "Echo",
+      replacementText: "Echo tail",
+      replacementDelta: "",
+      replaceable: true,
+      expectedDeltas: "Echo tail",
+    },
+    {
+      name: "a corrected held replacement",
+      previousDelta: "Echo",
+      intermediateText: "Replacement",
+      replacementText: "Echo tail",
+      replacementDelta: "",
+      replaceable: true,
+      expectedDeltas: "Echo tail",
+    },
+    {
+      name: "an explicit non-provisional recovery",
+      previousDelta: "final ",
+      intermediateText: "incompatible correction",
+      replacementDelta: "answer",
+      expectedDeltas: "final answer",
+    },
+    {
+      name: "a held draft recovered only by the authoritative final result",
+      previousDelta: "Echo",
+      replacementText: "Replacement",
+      replacementDelta: "",
+      resultText: "Echo tail",
+      expectedDeltas: "Echo tail",
+      replaceable: true,
+    },
+    {
+      name: "held text without a text-bearing final payload",
+      previousDelta: "Echo",
+      replacementText: "Echo tail",
+      replacementDelta: "",
+      noResultText: true,
+      expectedDeltas: "Echo tail",
+      replaceable: true,
+    },
+    {
+      name: "an initial held draft cleared by an explicit empty result",
+      replacementText: "Draft",
+      replacementDelta: "",
+      resultText: "",
+      expectedDeltas: "",
+      replaceable: true,
+    },
+    {
+      name: "a held replacement completed by its native terminal echo",
+      previousDelta: "Echo",
+      replacementText: "Echo tail",
+      replacementDelta: "",
+      expectedDeltas: "Echo tail",
+      replaceable: true,
+      terminalEcho: true,
+    },
+    {
+      name: "an incompatible native echo recovered by the final result",
+      previousDelta: "Echo",
+      replacementText: "Replacement",
+      replacementDelta: "",
+      resultText: "Echo tail",
+      expectedDeltas: "Echo tail",
+      replaceable: true,
+      terminalEcho: true,
+    },
   ])(
     "keeps official SDK Responses text consistent for $name",
-    async ({ previousDelta, replacementDelta, expectedDeltas }) => {
+    async ({
+      previousDelta,
+      replacementDelta,
+      expectedDeltas,
+      replacementText = "final answer",
+      replaceable,
+      intermediateText,
+      resultText,
+      noResultText,
+      terminalEcho,
+    }) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string }).runId;
@@ -589,21 +770,45 @@ describe("OpenResponses HTTP API (e2e)", () => {
           emitAgentEvent({
             runId,
             stream: "assistant",
-            data: { text: previousDelta, delta: previousDelta },
+            data: {
+              text: previousDelta,
+              delta: previousDelta,
+              ...(replaceable ? { itemId: "answer-1" } : {}),
+            },
+          });
+        }
+        if (intermediateText !== undefined) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: {
+              text: intermediateText,
+              delta: "",
+              replace: true,
+              ...(replaceable ? { itemId: "answer-2", replaceable: true } : {}),
+            },
           });
         }
         emitAgentEvent({
           runId,
           stream: "assistant",
           data: {
-            text: "final answer",
+            text: replacementText,
             replace: true,
-            phase: "commentary",
+            ...(replaceable
+              ? {
+                  itemId: intermediateText === undefined ? "answer-2" : "answer-3",
+                  replaceable: true,
+                }
+              : { phase: "commentary" }),
             ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
           },
         });
+        if (terminalEcho) {
+          emitAgentEvent({ runId, stream: "assistant", data: { text: replacementText } });
+        }
         emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-        return { payloads: [{ text: "final answer" }] };
+        return { payloads: noResultText ? [] : [{ text: resultText ?? replacementText }] };
       }) as never);
 
       const client = new OpenAI({
@@ -638,8 +843,8 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }
 
       expect(deltas.join("")).toBe(expectedDeltas);
-      expect(doneTexts).toEqual(["final answer"]);
-      expect(completedTexts).toEqual(["final answer"]);
+      expect(doneTexts).toEqual([resultText ?? replacementText]);
+      expect(completedTexts).toEqual([resultText ?? replacementText]);
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
@@ -1562,87 +1767,156 @@ describe("OpenResponses HTTP API (e2e)", () => {
     });
   });
 
-  it("flushes same-turn assistant microtasks before completing an official SDK stream", async () => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce(((opts: unknown) => {
-      const runId = (opts as { runId?: string }).runId;
-      if (!runId) {
-        throw new Error("expected a streaming response run ID");
-      }
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
-      const result = Promise.resolve({ payloads: [{ text: "start finish!" }] });
-      void result.then(() => {
-        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-        void Promise.resolve().then(() => {
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
+  it.each([false, true])(
+    "flushes same-turn assistant microtasks before completing an official SDK stream (held tools=%s)",
+    async (heldTools) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(((opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { delta: "start ", ...(heldTools ? { itemId: "answer-1" } : {}) },
+        });
+        const result = Promise.resolve({
+          payloads: heldTools ? [] : [{ text: "start finish!" }],
+          ...(heldTools
+            ? {
+                meta: {
+                  stopReason: "tool_calls",
+                  pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: "{}" }],
+                },
+              }
+            : {}),
+        });
+        void result.then(() => {
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
           void Promise.resolve().then(() => {
-            emitAgentEvent({ runId, stream: "assistant", data: { delta: "!" } });
+            emitAgentEvent({
+              runId,
+              stream: "assistant",
+              data: heldTools
+                ? {
+                    itemId: "answer-2",
+                    text: "start finish",
+                    delta: "",
+                    replace: true,
+                    replaceable: true,
+                  }
+                : { delta: "finish" },
+            });
+            void Promise.resolve().then(() => {
+              emitAgentEvent({
+                runId,
+                stream: "assistant",
+                data: heldTools
+                  ? { itemId: "answer-2", text: "start finish!", delta: "!", replaceable: true }
+                  : { delta: "!" },
+              });
+            });
           });
         });
-      });
-      return result;
-    }) as never);
+        return result;
+      }) as never);
 
-    const client = new OpenAI({
-      apiKey: "test",
-      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-      maxRetries: 0,
-    });
-    const stream = client.responses.stream({
-      model: "openclaw",
-      input: "Finish the streamed response.",
-    });
-    const deltas: string[] = [];
-    stream.on("response.output_text.delta", (event) => {
-      deltas.push(event.delta);
-    });
-
-    const response = await stream.finalResponse();
-    expect(deltas.join("")).toBe("start finish!");
-    expect(response.status).toBe("completed");
-    expect(response.output_text).toBe("start finish!");
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("flushes post-lifecycle assistant microtasks after usage is already available", async () => {
-    let unsubscribe = () => {};
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce(((opts: unknown) => {
-      const runId = (opts as { runId?: string }).runId;
-      if (!runId) {
-        throw new Error("expected a streaming response run ID");
-      }
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
-      unsubscribe = onAgentEvent((event) => {
-        if (event.runId !== runId || event.stream !== "lifecycle" || event.data?.phase !== "end") {
-          return;
-        }
-        unsubscribe();
-        void Promise.resolve().then(() => {
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
-        });
-      });
-      return Promise.resolve({ payloads: [{ text: "start finish" }] });
-    }) as never);
-
-    try {
       const client = new OpenAI({
         apiKey: "test",
         baseURL: `http://127.0.0.1:${enabledPort}/v1`,
         defaultHeaders: { "x-openclaw-scopes": "operator.write" },
         maxRetries: 0,
       });
-      const response = await client.responses
-        .stream({ model: "openclaw", input: "Flush the final assistant microtask." })
-        .finalResponse();
+      const stream = client.responses.stream({
+        model: "openclaw",
+        input: "Finish the streamed response.",
+      });
+      const deltas: string[] = [];
+      stream.on("response.output_text.delta", (event) => {
+        deltas.push(event.delta);
+      });
 
-      expect(response.output_text).toBe("start finish");
+      const response = await stream.finalResponse();
+      expect(deltas.join("")).toBe("start finish!");
+      expect(response.status).toBe("completed");
+      expect(response.output_text).toBe("start finish!");
+      expect(response.output.map((item) => item.type)).toEqual(
+        heldTools ? ["message", "function_call"] : ["message"],
+      );
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    } finally {
-      unsubscribe();
-    }
-  });
+    },
+  );
+
+  it.each([false, true])(
+    "flushes result-following assistant microtasks before finalization (recovery=%s)",
+    async (recovery) => {
+      const completion = createDeferred<{ payloads: Array<{ text: string }> }>();
+      const created = createDeferred();
+      let runId: string | undefined;
+      let lateEventEmitted = false;
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(((opts: unknown) => {
+        runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
+        if (recovery) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { text: "incompatible correction", replace: true },
+          });
+        }
+        return completion.promise;
+      }) as never);
+
+      try {
+        const client = new OpenAI({
+          apiKey: "test",
+          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+          maxRetries: 0,
+        });
+        const stream = client.responses.stream({
+          model: "openclaw",
+          input: "Flush the final assistant microtask.",
+        });
+        stream.on("response.created", () => created.resolve());
+        const deltas: string[] = [];
+        stream.on("response.output_text.delta", (event) => deltas.push(event.delta));
+        await created.promise;
+        if (!runId) {
+          throw new Error("expected an admitted streaming response run");
+        }
+        const activeRunId = runId;
+        // Register the producer's completion work after the HTTP consumer is
+        // awaiting the result. Its queued recovery must survive that continuation.
+        void completion.promise.then(() => {
+          emitAgentEvent({ runId: activeRunId, stream: "lifecycle", data: { phase: "end" } });
+          queueMicrotask(() => {
+            lateEventEmitted = true;
+            emitAgentEvent({
+              runId: activeRunId,
+              stream: "assistant",
+              data: recovery ? { text: "start finish", replace: true } : { delta: "finish" },
+            });
+          });
+        });
+        completion.resolve({ payloads: [{ text: "start finish" }] });
+        const response = await stream.finalResponse();
+
+        expect(lateEventEmitted).toBe(true);
+        expect(response.status).toBe("completed");
+        expect(deltas.join("")).toBe("start finish");
+        expect(response.output_text).toBe("start finish");
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      } finally {
+        completion.resolve({ payloads: [{ text: "start finish" }] });
+      }
+    },
+  );
 
   it("fails conflicting assistant replacements queued after lifecycle completion", async () => {
     let unsubscribe = () => {};
@@ -2156,132 +2430,45 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
-    const port = enabledPort;
-    for (const stream of [false, true]) {
-      for (const { scopes, senderIsOwner } of [
-        { scopes: "operator.write", senderIsOwner: false },
-        { scopes: "operator.admin, operator.write", senderIsOwner: true },
-      ]) {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-
-        const res = await postResponses(
-          port,
-          { stream, model: "openclaw", input: "hi" },
-          {
-            "x-openclaw-scopes": scopes,
-            "x-openclaw-sender-is-owner": "true",
-          },
-        );
-
-        expect(res.status).toBe(200);
-        const body = await res.text();
+    await expectDeclaredHttpOwnerIdentity({
+      post: (stream, headers) =>
+        postResponses(enabledPort, { stream, model: "openclaw", input: "hi" }, headers),
+      consume: async (response, stream) => {
+        const body = await response.text();
         if (stream) {
           expect(parseSseEvents(body).map((event) => event.event)).toContain("response.completed");
         }
-        expect(agentCommandMock).toHaveBeenCalledTimes(1);
-        expect(firstAgentOpts().senderIsOwner).toBe(senderIsOwner);
-      }
-    }
+      },
+      senderIsOwner: () => firstAgentOpts().senderIsOwner,
+    });
   });
 
   it.each(["trusted-proxy", "token"] as const)(
     "preserves %s authority when mutating another operator response session",
     async (authMethod) => {
-      const sharedSecretOwner = authMethod === "token";
-      await withEnvAsync(
-        { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
-        async () => {
-          const port = await getGatewayTestPort();
+      await expectHttpForeignSessionAuthority({
+        authMethod,
+        ownerEmail: "response-owner@example.test",
+        sessionKey: "agent:main:foreign-openresponses-http",
+        sessionId: "foreign-openresponses-http",
+        closeReason: "openresponses operator role session sharing test done",
+        startServer: async (port, auth) => {
           const { startGatewayServer } = await import("./server.js");
-          let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-          const previousGatewayAuth = testState.gatewayAuth;
-          const trustedProxyAuth = {
-            mode: "trusted-proxy" as const,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              requiredHeaders: ["x-forwarded-proto"],
-              allowLoopback: true,
-            },
-          };
-          const requestAuth = sharedSecretOwner
-            ? { mode: "token" as const, token: "owner-secret" }
-            : trustedProxyAuth;
-          testState.gatewayAuth = requestAuth;
-          try {
-            await writeGatewayConfig({
-              gateway: {
-                auth: requestAuth,
-                trustedProxies: ["127.0.0.1"],
-                roles: {
-                  default: "guest",
-                  definitions: {
-                    guest: {
-                      agents: sharedSecretOwner ? [] : "*",
-                      scopes: ["operator.write"],
-                      sessions: { others: "view" },
-                    },
-                  },
-                },
-              },
-            });
-            resetConfigRuntimeState();
-            server = await startGatewayServer(port, {
-              host: "127.0.0.1",
-              auth: requestAuth,
-              controlUiEnabled: false,
-              openResponsesEnabled: true,
-            });
-
-            const owner = ensureProfileForEmail("response-owner@example.test");
-            const sessionKey = "agent:main:foreign-openresponses-http";
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey },
-              {
-                sessionId: "foreign-openresponses-http",
-                updatedAt: 1,
-                visibility: "shared",
-                createdVia: "operator",
-                createdActor: { type: "human", source: "profile", id: owner.id },
-              },
-            );
-
-            agentCommandMock.mockClear();
-            agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-            const response = await postResponses(
-              port,
-              { model: "openclaw", input: "mutate foreign response session" },
-              {
-                ...(sharedSecretOwner
-                  ? { authorization: "Bearer owner-secret" }
-                  : {
-                      "x-forwarded-for": "198.51.100.42",
-                      "x-forwarded-proto": "https",
-                      "x-forwarded-user": "guest@example.test",
-                    }),
-                "x-openclaw-session-key": sessionKey,
-              },
-            );
-
-            expect(response.status).toBe(sharedSecretOwner ? 200 : 403);
-            if (sharedSecretOwner) {
-              expect(agentCommandMock).toHaveBeenCalledOnce();
-            } else {
-              expect(await response.json()).toMatchObject({
-                error: { type: "forbidden", message: expect.stringContaining("session is shared") },
-              });
-              expect(agentCommandMock).not.toHaveBeenCalled();
-            }
-          } finally {
-            await server?.close({
-              reason: "openresponses operator role session sharing test done",
-            });
-            testState.gatewayAuth = previousGatewayAuth;
-            await writeGatewayConfig({});
-            resetConfigRuntimeState();
-          }
+          return await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth,
+            controlUiEnabled: false,
+            openResponsesEnabled: true,
+          });
         },
-      );
+        writeGatewayConfig,
+        post: (port, headers) =>
+          postResponses(
+            port,
+            { model: "openclaw", input: "mutate foreign response session" },
+            headers,
+          ),
+      });
     },
   );
 
@@ -2474,35 +2661,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const port = await getGatewayTestPort();
       const server = await startSharedSecretServer(port, mode);
       try {
-        for (const stream of [false, true]) {
-          agentCommandMock.mockClear();
-          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-
-          const res = await postResponses(
-            port,
-            { stream, model: "openclaw", input: "hi" },
-            {
-              authorization: "Bearer secret",
-              "x-openclaw-scopes": "operator.approvals",
-              "x-openclaw-sender-is-owner": "false",
-            },
-          );
-
-          expect(res.status).toBe(200);
-          await ensureResponseConsumed(res);
-          expect(agentCommandMock).toHaveBeenCalledTimes(1);
-          expect(firstAgentOpts().senderIsOwner).toBe(true);
-        }
-
-        agentCommandMock.mockClear();
-        const unauthorized = await postResponses(
-          port,
-          { model: "openclaw", input: "hi" },
-          { authorization: "Bearer wrong", "x-openclaw-sender-is-owner": "true" },
-        );
-        expect(unauthorized.status).toBe(401);
-        await ensureResponseConsumed(unauthorized);
-        expect(agentCommandMock).not.toHaveBeenCalled();
+        await expectSharedSecretHttpOwnerIdentity({
+          post: (stream, headers) =>
+            postResponses(
+              port,
+              { ...(stream === undefined ? {} : { stream }), model: "openclaw", input: "hi" },
+              headers,
+            ),
+          consume: ensureResponseConsumed,
+          senderIsOwner: () => firstAgentOpts().senderIsOwner,
+        });
       } finally {
         await server.close({ reason: `openresponses ${mode} auth owner test done` });
       }
@@ -2794,44 +2962,75 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(text).toContain("[DONE]");
   });
 
-  it("emits the tool call when a streaming required tool_choice is satisfied", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "Calling " } });
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "the tool." } });
-      return {
+  it.each(
+    [
+      {
+        name: "the final payload",
         payloads: [{ text: "Calling the tool." }],
-        meta: {
-          stopReason: "tool_calls",
-          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
-        },
-      };
-    }) as never);
+        expected: "Calling the tool.",
+      },
+      {
+        name: "missing final text",
+        payloads: [],
+        expected: "Calling the tool.",
+      },
+      {
+        name: "an explicit empty final payload",
+        payloads: [{ text: "" }],
+        expected: "",
+      },
+    ].flatMap((scenario) => (["required", "pinned"] as const).map((mode) => ({ scenario, mode }))),
+  )(
+    "uses $scenario.name for $mode response tool-stream terminal commentary",
+    async ({ scenario, mode }) => {
+      const port = enabledPort;
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "Calling " } });
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "the tool." } });
+        return {
+          payloads: scenario.payloads,
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
+            ],
+          },
+        };
+      }) as never);
 
-    const res = await postResponses(port, {
-      stream: true,
-      model: "openclaw",
-      input: "check the weather",
-      tools: WEATHER_TOOL,
-      tool_choice: "required",
-    });
+      const res = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "check the weather",
+        tools: WEATHER_TOOL,
+        tool_choice: mode === "required" ? "required" : { type: "function", name: "get_weather" },
+      });
 
-    expect(res.status).toBe(200);
-    const events = parseSseEvents(await res.text());
-    const delta = findSseEvent(events, "response.output_text.delta");
-    expect((parseSseData(delta) as { delta?: string }).delta).toBe("Calling the tool.");
-    const completed = findSseEvent(events, "response.completed");
-    const response = (
-      parseSseData(completed) as {
-        response?: { status?: string; output?: Array<Record<string, unknown>> };
-      }
-    ).response;
-    expect(response?.status).toBe("completed");
-    expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
-    expect(response?.output?.[1]?.name).toBe("get_weather");
-  });
+      expect(res.status).toBe(200);
+      const events = parseSseEvents(await res.text());
+      const text = events
+        .filter((event) => event.event === "response.output_text.delta")
+        .map((event) => (parseSseData(event) as { delta?: string }).delta ?? "")
+        .join("");
+      expect(text).toBe(scenario.expected);
+      const done = findSseEvent(events, "response.output_text.done");
+      expect(parseSseData(done)).toMatchObject({ text: scenario.expected });
+      const completed = findSseEvent(events, "response.completed");
+      const response = (
+        parseSseData(completed) as {
+          response?: { status?: string; output?: Array<Record<string, unknown>> };
+        }
+      ).response;
+      expect(response?.status).toBe("completed");
+      expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+      expect(response?.output?.[1]?.name).toBe("get_weather");
+      expect(response?.output?.[0]?.content).toEqual([
+        { type: "output_text", text: scenario.expected },
+      ]);
+    },
+  );
 
   it.each([
     { name: "an initial replacement", previousDelta: undefined, replacementDelta: undefined },
@@ -2908,49 +3107,75 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it("buffers replaceable assistant events for streaming responses", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+  it.each([
+    {
+      name: "a completed replacement",
+      replacement: { text: "final answer", delta: "", replace: true },
+      finalText: "final answer",
+      expected: "final answer",
+    },
+    {
+      name: "an empty snapshot",
+      replacement: { text: "", delta: "" },
+      finalText: "",
+      expected: "No response from OpenClaw.",
+    },
+    {
+      name: "an empty replacement snapshot",
+      replacement: { text: "", delta: "", replace: true },
+      finalText: "",
+      expected: "No response from OpenClaw.",
+    },
+    {
+      name: "an empty delta without a snapshot",
+      replacement: { delta: "" },
+      finalText: "",
+      expected: "coordination draft",
+    },
+  ])(
+    "buffers replaceable assistant events through $name",
+    async ({ replacement, finalText, expected }) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { ...replacement, replaceable: true },
+        });
+        if (finalText) {
+          emitAgentEvent({ runId, stream: "assistant", data: { text: finalText } });
+        }
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return { payloads: finalText ? [{ text: finalText }] : [] };
+      }) as never);
+
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
       });
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: { text: "final answer", delta: "", replace: true, replaceable: true },
+      const stream = client.responses.stream({
+        model: "openclaw",
+        input: "hi",
       });
-      emitAgentEvent({ runId, stream: "assistant", data: { text: "final answer" } });
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      return { payloads: [{ text: "final answer" }] };
-    }) as never);
+      const deltas: string[] = [];
+      stream.on("response.output_text.delta", (event) => deltas.push(event.delta));
 
-    const res = await postResponses(port, {
-      stream: true,
-      model: "openclaw",
-      input: "hi",
-    });
-
-    expect(res.status).toBe(200);
-    const events = parseSseEvents(await res.text());
-    const deltas = events
-      .filter((event) => event.event === "response.output_text.delta")
-      .map((event) => {
-        const parsed = JSON.parse(event.data) as { delta?: string };
-        return parsed.delta ?? "";
-      })
-      .join("");
-    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
-      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
-    };
-
-    expect(deltas).toBe("final answer");
-    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("final answer");
-    expect(deltas).not.toContain("coordination draft");
-  });
+      const response = await stream.finalResponse();
+      expect({ deltas: deltas.join(""), outputText: response.output_text }).toEqual({
+        deltas: expected,
+        outputText: expected,
+      });
+      expect(response.status).toBe("completed");
+    },
+  );
 
   it("prefers final result text over buffered replaceable response drafts", async () => {
     const port = enabledPort;
@@ -3259,50 +3484,83 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it("reuses the prior session when previous_response_id is provided", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Let me check that." }],
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [
-          {
-            id: "call_1",
-            name: "get_weather",
-            arguments: '{"city":"Taipei"}',
-          },
-        ],
-      },
-    } as never);
+  it.each([
+    { stream: false, output: "" },
+    { stream: true, output: "" },
+    { stream: false, output: " \n " },
+    { stream: true, output: "0" },
+    { stream: false, output: "Sunny, 70F." },
+  ])(
+    "continues a client tool result (stream=$stream, output=$output)",
+    async ({ stream, output }) => {
+      const port = enabledPort;
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${port}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "Let me check that." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      } as never);
 
-    const firstResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      input: "check the weather",
-      tools: WEATHER_TOOL,
-    });
-    expect(firstResponse.status).toBe(200);
-    const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
-    expect(firstJson.id).toMatch(/^resp_/);
-    const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
+      const firstJson = await client.responses.create({
+        stream: false,
+        model: "openclaw",
+        input: "check the weather",
+        tools: [{ ...WEATHER_TOOL[0], parameters: {}, strict: false }],
+      });
+      expect(firstJson.status).toBe("completed");
+      const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
+      expect(firstJson.id).toMatch(/^resp_/);
+      const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "It is sunny." }],
-    } as never);
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "It is sunny." }],
+      } as never);
 
-    const secondResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      previous_response_id: firstJson.id,
-      input: [{ type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." }],
-    });
-    expect(secondResponse.status).toBe(200);
-    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
-    expect(secondOpts?.sessionKey).toBe(firstSessionKey);
-    await ensureResponseConsumed(secondResponse);
-  });
+      const request = {
+        model: "openclaw",
+        previous_response_id: firstJson.id,
+        input: [{ type: "function_call_output" as const, call_id: "call_1", output }],
+      };
+      const secondResponse = stream
+        ? await client.responses.stream(request).finalResponse()
+        : await client.responses.create(request);
+      expect(secondResponse.status).toBe("completed");
+      expect(secondResponse.output_text).toBe("It is sunny.");
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(firstAgentOpts(1)).toMatchObject({
+        sessionKey: firstSessionKey,
+        message: `Tool:call_1: ${output}`,
+      });
+    },
+  );
+
+  it.each([undefined, null, 0, {}, []].map((output) => ({ output })))(
+    "rejects malformed function output: %j",
+    async ({ output }) => {
+      agentCommandMock.mockClear();
+      const response = await postResponses(enabledPort, {
+        model: "openclaw",
+        input: [{ type: "function_call_output", call_id: "call_1", output }],
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("reuses prior sessions across different user values when auth scope matches", async () => {
     const port = enabledPort;

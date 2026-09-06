@@ -44,6 +44,7 @@ import {
 } from "./tools/ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 type ToolExecutionStartEvent = Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">;
 type ToolExecutionEndEvent = Omit<Extract<AgentEvent, { type: "tool_execution_end" }>, "type">;
@@ -245,8 +246,28 @@ function requireString(value: unknown, label: string): string {
 }
 
 describe("progress_card compatibility plan events", () => {
+  it("does not emit a generic argument summary before the authoritative plan event", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.onToolResult = vi.fn();
+    ctx.shouldEmitToolResult = () => true;
+
+    await startTool(ctx, {
+      toolName: "progress_card",
+      toolCallId: "plan-start",
+      args: {
+        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+        plan: [{ step: "Inspect", status: "in_progress" }],
+      },
+    });
+
+    expect(ctx.emitToolSummary).not.toHaveBeenCalled();
+  });
+
   it("emits the typed full plan snapshot after a successful write", async () => {
     const { ctx, onAgentEvent } = createTestContext();
+    ctx.params.onToolResult = vi.fn();
+    ctx.shouldEmitToolResult = () => true;
+    ctx.shouldEmitToolOutput = () => true;
     const emitted: CapturedAgentEvent[] = [];
     const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
     try {
@@ -274,6 +295,7 @@ describe("progress_card compatibility plan events", () => {
           phase: "update",
           title: "Plan updated",
           source: "openclaw",
+          explanation: "1/2 complete",
           steps: [
             { step: "Inspect", status: "completed" },
             { step: "Patch", status: "in_progress" },
@@ -282,22 +304,74 @@ describe("progress_card compatibility plan events", () => {
       };
       expect(onAgentEvent).toHaveBeenCalledWith(expected);
       expect(emitted).toContainEqual(expect.objectContaining(expected));
+      expect(ctx.emitToolSummary).not.toHaveBeenCalled();
+      expect(ctx.emitToolOutput).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
     }
   });
 
-  it("emits an empty snapshot when a successful write clears the plan", async () => {
+  it("keeps failed card writes visible without exposing their arguments", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    ctx.shouldEmitToolOutput = () => true;
+    const result = { content: [{ type: "text", text: "Card write failed" }] };
+    await executeTool(ctx, {
+      toolName: "progress_card",
+      toolCallId: "plan-failed",
+      args: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+      isError: true,
+      result,
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "progress_card",
+      undefined,
+      "Card write failed",
+      result,
+    );
+    expect(onAgentEvent).not.toHaveBeenCalledWith(expect.objectContaining({ stream: "plan" }));
+  });
+
+  it("projects card markdown as safe channel text without exposing progress markup", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
     await executeTool(ctx, {
       toolName: "progress_card",
       toolCallId: "plan-clear",
-      args: { markdown: "Narrative only" },
+      args: {
+        markdown:
+          '<progress aria-label="Browser Use Setup, 2/3" value="2" max="3"></progress>\n\n**Checking** safe candidates.<script>ignored()</script>',
+      },
       isError: false,
       result: {
         content: [{ type: "text", text: "Progress card updated (rev 3)" }],
         details: { revision: 3, steps: null },
+      },
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        explanation: "Progress updated",
+        steps: [],
+      },
+    });
+  });
+
+  it("emits an empty snapshot when a successful write clears the card", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "progress_card",
+      toolCallId: "plan-clear",
+      args: {},
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Progress card cleared" }],
+        details: { revision: null, steps: null },
       },
     });
 
@@ -1397,6 +1471,47 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
       hadPotentialSideEffects: true,
     });
   });
+});
+
+describe("sessions_yield channel progress privacy", () => {
+  it.each(["off", "on", "full"] as const)(
+    "keeps continuation context out of %s verbosity output",
+    async (verboseLevel) => {
+      const { ctx } = createTestContext();
+      const onYield = vi.fn();
+      const args = {
+        message: "SYNTHETIC_PRIVATE_CONTINUATION_MARKER",
+        acknowledgment: "Research started; results will follow.",
+      };
+      ctx.params.onToolResult = vi.fn();
+      ctx.shouldEmitToolResult = () => verboseLevel !== "off";
+      ctx.shouldEmitToolOutput = () => verboseLevel === "full";
+      const tool = createSessionsYieldTool({
+        sessionId: ctx.params.sessionId,
+        claimYield: () => true,
+        onYield,
+      });
+      const toolCallId = "yield-private-context";
+
+      await startTool(ctx, { toolName: tool.name, toolCallId, args });
+      const result = await tool.execute(toolCallId, args);
+      await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
+
+      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment);
+      expect(ctx.emitToolSummary).toHaveBeenCalledTimes(verboseLevel === "off" ? 0 : 1);
+      expect(ctx.emitToolOutput).toHaveBeenCalledTimes(verboseLevel === "full" ? 1 : 0);
+      expect(JSON.stringify(vi.mocked(ctx.emitToolSummary).mock.calls)).not.toContain(args.message);
+      expect(JSON.stringify(vi.mocked(ctx.emitToolOutput).mock.calls)).not.toContain(args.message);
+      if (verboseLevel === "full") {
+        expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+          tool.name,
+          undefined,
+          expect.stringContaining(args.acknowledgment),
+          result,
+        );
+      }
+    },
+  );
 });
 
 describe("handleToolExecutionEnd private result observer", () => {
@@ -3377,31 +3492,27 @@ describe("handleToolExecutionEnd derived tool events", () => {
       args: { command: "yes" },
     });
 
-    updateTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-large-update",
-      partialResult: {
-        details: {
-          status: "running",
-          aggregated: largeOutput,
-        },
-      },
-    });
-    updateTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-large-update",
-      partialResult: {
-        details: {
-          status: "running",
-          aggregated: `${largeOutput}again`,
-        },
-      },
-    });
+    const clock = vi.spyOn(Date, "now");
+    try {
+      for (const elapsed of [0, 249, 250]) {
+        clock.mockReturnValue(1_000 + elapsed);
+        updateTool(ctx, {
+          toolName: "exec",
+          toolCallId: "tool-exec-large-update",
+          partialResult: {
+            details: { status: "running", aggregated: `${largeOutput}${elapsed}` },
+          },
+        });
+      }
+    } finally {
+      clock.mockRestore();
+      resetAgentEventsForTest();
+    }
 
     const updateEvents = events.filter(
       (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
     );
-    expect(updateEvents).toHaveLength(1);
+    expect(updateEvents).toHaveLength(2);
     const partialResult = updateEvents[0]?.data?.partialResult as
       | { details?: { aggregated?: string } }
       | undefined;
@@ -3411,12 +3522,16 @@ describe("handleToolExecutionEnd derived tool events", () => {
     const commandOutputCalls = onAgentEvent.mock.calls
       .map((call) => call[0])
       .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
-    expect(commandOutputCalls).toHaveLength(1);
+    expect(commandOutputCalls).toHaveLength(2);
     const output = (commandOutputCalls[0] as { data?: { output?: string } }).data?.output;
     expect(output).toContain("...(live output truncated)...");
     expect(output?.length).toBeLessThan(largeOutput.length);
 
-    resetAgentEventsForTest();
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "tool" && event.data.phase === "update"),
+    ).toHaveLength(3);
   });
 
   it("caps exec final output before result and command output events", async () => {

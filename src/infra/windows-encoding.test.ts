@@ -172,6 +172,7 @@ describe("windows output encoding", () => {
       expect.any(String),
       ["/d", "/s", "/c", "chcp"],
       {
+        env: expect.any(Object),
         encoding: "utf8",
         killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
@@ -184,6 +185,7 @@ describe("windows output encoding", () => {
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
       {
+        env: expect.any(Object),
         encoding: "utf8",
         killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],

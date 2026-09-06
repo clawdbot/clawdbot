@@ -5,12 +5,10 @@
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import { CODE_MODE_NODES_TOOL_ID } from "./code-mode-bridge.js";
-import {
-  createCodeModeCatalogProjection,
-  type CodeModeCatalogBinding,
-} from "./code-mode-catalog.js";
+import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
+import { createCodeModeCatalogBindings, type CodeModeCatalogBinding } from "./code-mode-catalog.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -21,7 +19,7 @@ import {
 import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
-import { markCodeModePermissionChangeResult } from "./code-mode-repair-provenance.js";
+import { markCodeModePermissionChangeResult } from "./code-mode-permission-change.js";
 import {
   isCodeModeEngagedForModel,
   readCode,
@@ -34,9 +32,8 @@ import {
   CodeModeHeadlessTimeoutError,
 } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { optionalStringEnum } from "./schema/typebox.js";
+import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
-import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
@@ -144,7 +141,7 @@ function createCodeModeExecDescription(
   // A known run catalog with neither MCP nor swarm has no virtual API files.
   const catalogKnown = catalog !== undefined;
   const hasMcp = catalog?.some((entry) => entry.source === "mcp") ?? false;
-  const swarmEnabled = resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled;
+  const swarmEnabled = isCodeModeSwarmAvailable(ctx, catalog);
   const apiGuidance =
     !catalogKnown || hasMcp || swarmEnabled
       ? " Read TypeScript-style declaration files with `API.list(prefix?)` and `API.read(path)`."
@@ -166,12 +163,12 @@ function createCodeModeExecDescription(
     : "";
   const { maxOutputBytes } = config;
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
-  const projection = catalog
-    ? createCodeModeCatalogProjection(catalog.map((entry) => compactToolSearchCatalogEntry(entry)))
+  const bindings = catalog
+    ? createCodeModeCatalogBindings(catalog.map((entry) => compactToolSearchCatalogEntry(entry)))
     : undefined;
-  const catalogIndex = projection ? formatCodeModeCatalogIndex(projection.bindings) : "";
+  const catalogIndex = bindings ? formatCodeModeCatalogIndex(bindings) : "";
   return (
-    `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Tool failures are catchable JavaScript errors; otherwise, use a safe failed result to correct your code or choose another tool. If an action may have started, inspect its outcome without repeating mutations. Never replay actions that already ran. Each nested result is bounded separately to ${maxOutputBytes} bytes. Cumulative output and the final value or error share ${maxOutputBytes} bytes across waits. Model-facing results may use a smaller allowance to preserve complete status and continuation within model context limits. Output/value truncation reports a prefix and omitted bytes of the original normalized JSON; rerun with narrower args. Ordinary output is incremental; unchanged summaries are suppressed, changed cumulative summaries replace earlier ones. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
+    `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Tool failures are catchable JavaScript errors; otherwise, use the failed result to correct your code or choose another tool. If an action may have started, inspect its outcome without repeating mutations. Never replay actions that already ran. Each nested result is bounded separately to ${maxOutputBytes} bytes. Cumulative output and the final value or error share ${maxOutputBytes} bytes across waits. Model-facing results may use a smaller allowance to preserve complete status and continuation within model context limits. Output/value truncation reports a prefix and omitted bytes of the original normalized JSON; rerun with narrower args. Ordinary output is incremental; unchanged summaries are suppressed, changed cumulative summaries replace earlier ones. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
@@ -195,6 +192,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     label: "exec",
     description: createCodeModeExecDescription(ctx, undefined, config),
     parameters: Type.Object({
+      title: executionTitleSchema(),
       // `command` stays runtime-only for hook compatibility. Requiring the sole
       // model-facing field prevents schema-valid empty calls from constrained models.
       code: Type.String({
@@ -296,10 +294,13 @@ export function applyCodeModeCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  toolExecutionAllow?: ToolSearchToolContext["toolExecutionAllow"];
   directToolNames?: Iterable<string>;
   codeModeSkills?: CodeModeToolContext["codeModeSkills"];
 }) {
-  const tools = params.tools.filter(
+  const tools = finalizeAgentToolAvailability(params.tools, {
+    toolExecutionAllow: params.toolExecutionAllow,
+  }).filter(
     (tool) =>
       isCodeModeControlTool(tool) ||
       (tool.name !== TOOL_SEARCH_CODE_MODE_TOOL_NAME &&

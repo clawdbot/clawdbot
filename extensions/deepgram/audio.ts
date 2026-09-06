@@ -3,13 +3,6 @@ import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
-import {
-  assertOkOrThrowHttpError,
-  postTranscriptionRequest,
-  readProviderJsonObjectResponse,
-  resolveProviderHttpRequestConfig,
-  requireTranscriptionText,
-} from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
@@ -48,6 +41,13 @@ function readDeepgramTranscript(payload: Record<string, unknown>): string | unde
 export async function transcribeDeepgramAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
+  const {
+    assertOkOrThrowHttpError,
+    postTranscriptionRequest,
+    readProviderJsonObjectResponse,
+    resolveProviderHttpRequestConfig,
+    requireTranscriptionText,
+  } = await import("openclaw/plugin-sdk/provider-http");
   const fetchFn = params.fetchFn ?? fetch;
   const model = resolveModel(params.model);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =

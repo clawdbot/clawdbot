@@ -19,9 +19,11 @@ import {
   transferManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "../../infra/update-restart-sentinel-payload.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
+import { printResult } from "./progress.js";
 import { resolveNodeRunner, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
@@ -32,6 +34,9 @@ function parsePositivePid(value: unknown): number | null {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return /^\d+$/u.test(trimmed) ? (parseStrictPositiveInteger(trimmed) ?? null) : null;
 }
+
+const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
+  "Run this command from a shell outside the gateway service.";
 
 export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   const gatewayPid = parsePositivePid(pid);
@@ -48,17 +53,29 @@ export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   // because the stop would kill the caller and nothing restarts the gateway.
   return `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).
 Stopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.
-Run this command from a shell outside the gateway service.`;
+${GATEWAY_ANCESTRY_SHELL_GUIDANCE}`;
 }
 
 const ANCESTRY_BLOCK_MARKER = "inside the gateway process tree";
+const UPDATE_CHAT_HANDOFF_GUIDANCE =
+  "From chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.";
+
+function appendUpdateChatHandoffGuidance(blockMessage: string): string {
+  return blockMessage.includes(UPDATE_CHAT_HANDOFF_GUIDANCE)
+    ? blockMessage
+    : `${blockMessage}\n${UPDATE_CHAT_HANDOFF_GUIDANCE}`;
+}
 
 /** Update-specific follow-up for an ancestry block: the chat path hands off to the managed helper. */
 export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
   if (!blockMessage.includes(ANCESTRY_BLOCK_MARKER)) {
     return blockMessage;
   }
-  return `${blockMessage}\nFrom chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.`;
+  const updateBlockMessage = blockMessage
+    .split("\n")
+    .filter((line) => line !== GATEWAY_ANCESTRY_SHELL_GUIDANCE)
+    .join("\n");
+  return appendUpdateChatHandoffGuidance(updateBlockMessage);
 }
 
 export async function handoffUpdateFromGateway(params: {
@@ -106,6 +123,7 @@ export async function handoffUpdateFromGateway(params: {
     );
   }
   const started = await startManagedServiceUpdateHandoff({
+    runId: params.opts.run?.runId,
     root: params.root,
     invocationCwd: params.invocationCwd,
     parentPid,
@@ -119,7 +137,7 @@ export async function handoffUpdateFromGateway(params: {
     tag: params.tag,
     devTarget: params.devTarget,
     acceptCapabilities: params.opts.acceptCapabilities,
-    meta: {},
+    meta: { runId: params.opts.run?.runId },
   });
   if (started.status === "joined") {
     throw new UpdatePreMutationError(
@@ -143,6 +161,7 @@ export async function handoffUpdateFromGateway(params: {
   );
   const guidance = `Update continues outside the Gateway process. Log: ${started.logPath}\nFollow up: ${statusCommand}; ${healthCommand}.`;
   const result: UpdateRunResult = {
+    runId: params.opts.run?.runId,
     status: "skipped",
     mode: params.mode,
     root: started.installRoot,
@@ -163,7 +182,11 @@ export async function handoffUpdateFromGateway(params: {
     await writeRestartSentinel(
       buildUpdateRestartSentinelPayload({
         result,
-        meta: { handoffId: started.handoffId, root: started.installRoot },
+        meta: {
+          runId: params.opts.run?.runId,
+          handoffId: started.handoffId,
+          root: started.installRoot,
+        },
       }),
       env,
     );
@@ -176,9 +199,15 @@ export async function handoffUpdateFromGateway(params: {
     await cancelManagedServiceUpdateHandoff(identity);
     throw error;
   }
-  if (params.opts.json) {
-    defaultRuntime.writeJson(result);
-  } else {
+  if (params.opts.run) {
+    recordUpdateRunStep(
+      params.opts.run.runId,
+      { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
+      { env: params.opts.run.env },
+    );
+  }
+  printResult(result, params.opts);
+  if (!params.opts.json) {
     defaultRuntime.log(guidance);
   }
   return true;

@@ -41,6 +41,7 @@ type Fixture = {
   actionPath: string;
   baseSha: string;
   env: NodeJS.ProcessEnv;
+  gitLog: string;
   ghLog: string;
   outputPath: string;
   platform: Platform;
@@ -56,8 +57,14 @@ type Fixture = {
 };
 
 type FixtureOptions = {
+  baseState?: "android-current" | "prepared";
+  beforeCandidate?: (repository: string) => void;
+  buildCandidate?: (repository: string, baseSha: string) => string;
+  emptyCandidate?: boolean;
+  mutateBase?: (repository: string) => void;
   mutateCandidate?: (repository: string) => void;
   platform?: Platform;
+  realFetch?: boolean;
 };
 
 function command(
@@ -95,6 +102,11 @@ function copyFile(root: string, file: string): void {
 function commit(repository: string, message: string): string {
   git(repository, "add", "-A");
   git(repository, "commit", "-m", message);
+  return git(repository, "rev-parse", "HEAD");
+}
+
+function emptyCommit(repository: string, message: string): string {
+  git(repository, "commit", "--allow-empty", "-m", message);
   return git(repository, "rev-parse", "HEAD");
 }
 
@@ -171,19 +183,21 @@ function createCandidate(repository: string): void {
   );
 }
 
-function writeGitShim(binDir: string): void {
+function writeGitShim(binDir: string, realFetch: boolean): void {
   const shim = path.join(binDir, "git");
   fs.writeFileSync(
     shim,
     `#!/usr/bin/env node
+const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 const gitArgs = args[0] === "-C" ? args.slice(2) : args;
+fs.appendFileSync(process.env.GIT_LOG, JSON.stringify(args) + "\\n");
 if (gitArgs[0] === "remote" && gitArgs[1] === "get-url") {
   process.stdout.write("https://github.com/openclaw/openclaw.git\\n");
   process.exit(0);
 }
-if (gitArgs[0] === "fetch") {
+if (gitArgs[0] === "fetch" && !${JSON.stringify(realFetch)}) {
   process.exit(0);
 }
 const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
@@ -361,30 +375,77 @@ function createFixture(options: FixtureOptions = {}): Fixture {
   copyFile(source, ".github/actions/mobile-release-authority/authority.mjs");
   writeFile(source, `.github/workflows/${platform}-beta-release.yml`, "name: fixture\n");
   writeBaseReleaseFiles(source);
+  if (options.baseState === "android-current") {
+    writeFile(
+      source,
+      "apps/android/version.json",
+      '{\n  "version": "2026.9.2",\n  "versionCode": 2026090201\n}\n',
+    );
+  } else if (options.baseState === "prepared") {
+    applyMobileReleasePlan(
+      planMobileRelease({
+        gatewayVersion: "2026.9.2",
+        phase: "prepare",
+        rootDir: source,
+      }),
+    );
+  }
+  options.mutateBase?.(source);
   const baseSha = commit(source, "base");
+  options.beforeCandidate?.(source);
 
-  createCandidate(source);
-  options.mutateCandidate?.(source);
-  const targetSha = commit(source, "candidate");
+  let targetSha: string;
+  if (options.buildCandidate) {
+    targetSha = options.buildCandidate(source, baseSha);
+  } else if (options.emptyCandidate) {
+    targetSha = emptyCommit(source, "candidate");
+  } else {
+    createCandidate(source);
+    options.mutateCandidate?.(source);
+    targetSha = commit(source, "candidate");
+  }
 
-  git(root, "clone", "--no-local", source, trusted);
+  if (options.realFetch) {
+    git(source, "branch", TARGET_REF, targetSha);
+    git(source, "reset", "--hard", baseSha);
+  }
+  git(
+    root,
+    "clone",
+    "--no-local",
+    ...(options.realFetch ? ["--single-branch", "--branch", "main"] : []),
+    source,
+    trusted,
+  );
   git(trusted, "checkout", "--detach", baseSha);
   git(trusted, "update-ref", "refs/remotes/origin/mobile-authority-main", baseSha);
-  git(trusted, "update-ref", "refs/remotes/origin/mobile-authority-target", targetSha);
-  git(root, "clone", "--no-local", source, workspace);
+  if (!options.realFetch) {
+    git(trusted, "update-ref", "refs/remotes/origin/mobile-authority-target", targetSha);
+  }
+  git(
+    root,
+    "clone",
+    "--no-local",
+    ...(options.realFetch ? ["--branch", TARGET_REF] : []),
+    source,
+    workspace,
+  );
   git(workspace, "checkout", "--detach", targetSha);
 
-  writeGitShim(binDir);
+  writeGitShim(binDir, options.realFetch === true);
   writeGhShim(binDir);
   const actionPath = path.join(trusted, ".github/actions/mobile-release-authority");
   const workflowPath = `.github/workflows/${platform}-beta-release.yml`;
   const workflowFullRef = `${REPOSITORY}/${workflowPath}@refs/heads/main`;
+  const gitLog = path.join(root, "git.log");
   const ghLog = path.join(root, "gh.log");
+  fs.writeFileSync(gitLog, "");
   fs.writeFileSync(ghLog, "");
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    GIT_LOG: gitLog,
     GH_TOKEN: "",
     GH_LOG: ghLog,
     GH_MAIN_REFS: `${baseSha},${baseSha},${baseSha},${baseSha}`,
@@ -422,6 +483,7 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     actionPath,
     baseSha,
     env,
+    gitLog,
     ghLog,
     outputPath,
     platform,
@@ -435,6 +497,40 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     workflowFullRef,
     workflowPath,
   };
+}
+
+function useTrustedWorkflow(fixture: Fixture, workflowSha: string): void {
+  git(fixture.trusted, "fetch", "origin", workflowSha);
+  git(fixture.trusted, "checkout", "--detach", workflowSha);
+  git(fixture.trusted, "update-ref", "refs/remotes/origin/mobile-authority-main", workflowSha);
+  Object.assign(fixture.env, {
+    GH_MAIN_REFS: `${workflowSha},${workflowSha},${workflowSha},${workflowSha}`,
+    GH_ORIGINAL_WORKFLOW_SHA: workflowSha,
+    GITHUB_SHA: workflowSha,
+    MOBILE_WORKFLOW_SHA: workflowSha,
+  });
+}
+
+function advanceTrustedTooling(
+  fixture: Fixture,
+  options: {
+    fromSha?: string;
+    mutate?: (repository: string) => void;
+  } = {},
+): string {
+  git(
+    fixture.source,
+    "checkout",
+    "-b",
+    "trusted-main-after-code-freeze",
+    options.fromSha ?? fixture.baseSha,
+  );
+  options.mutate?.(fixture.source);
+  const workflowSha = git(fixture.source, "status", "--porcelain")
+    ? commit(fixture.source, "advance trusted release tooling")
+    : emptyCommit(fixture.source, "advance trusted release tooling");
+  useTrustedWorkflow(fixture, workflowSha);
+  return workflowSha;
 }
 
 function runAuthority(fixture: Fixture, phase: string, overrides: NodeJS.ProcessEnv = {}) {
@@ -602,6 +698,275 @@ describe("mobile release authority", () => {
     expect(fs.readFileSync(fixture.ghLog, "utf8")).toContain(
       `"--source-digest","${fixture.baseSha}"`,
     );
+  });
+
+  it.each([
+    [
+      "four-file",
+      "android-current",
+      RELEASE_PATHS.filter((file) => file !== "apps/android/version.json").toSorted(),
+    ],
+    ["one-file", "prepared", ["apps/ios/CHANGELOG.md"]],
+  ] as const)(
+    "authorizes a cutter-exact %s release candidate",
+    (_label, baseState, expectedPaths) => {
+      const fixture = createFixture({ baseState });
+      const changedPaths = git(
+        fixture.source,
+        "diff",
+        "--name-only",
+        fixture.baseSha,
+        fixture.targetSha,
+      ).split("\n");
+
+      expect(changedPaths).toEqual(expectedPaths);
+      expect(authorize(fixture)).toMatchObject({
+        approved: "true",
+        gateway_version: "2026.9.2",
+        target_ref: TARGET_REF,
+        target_sha: fixture.targetSha,
+      });
+    },
+  );
+
+  it("authorizes a metadata-only candidate frozen before trusted tooling advances", () => {
+    const fixture = createFixture();
+    const workflowSha = advanceTrustedTooling(fixture);
+
+    const outputs = authorize(fixture);
+    const receipt = JSON.parse(
+      fs.readFileSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios/receipt.json"), "utf8"),
+    ) as Record<string, unknown>;
+
+    expect(outputs.target_sha).toBe(fixture.targetSha);
+    expect(receipt.workflowSha).toBe(workflowSha);
+  });
+
+  it("regenerates from Code SHA metadata with the newer Tooling SHA", () => {
+    const fixture = createFixture();
+    advanceTrustedTooling(fixture, {
+      mutate(repository) {
+        writeFile(
+          repository,
+          "apps/ios/CHANGELOG.md",
+          fs
+            .readFileSync(path.join(repository, "apps/ios/CHANGELOG.md"), "utf8")
+            .replace("Adds guarded mobile beta automation.", "Tooling-only unreleased note."),
+        );
+      },
+    });
+
+    expect(authorize(fixture).target_sha).toBe(fixture.targetSha);
+  });
+
+  it("uses the Tooling SHA cutter implementation with the Code SHA baseline", () => {
+    const fixture = createFixture({
+      mutateBase(repository) {
+        writeFile(repository, "scripts/mobile-release-version.ts", 'throw new Error("stale");\n');
+      },
+    });
+    advanceTrustedTooling(fixture, {
+      mutate(repository) {
+        copyFile(repository, "scripts/mobile-release-version.ts");
+      },
+    });
+
+    expect(authorize(fixture).target_sha).toBe(fixture.targetSha);
+  });
+
+  it("rejects a forbidden code commit hidden by a later revert", () => {
+    const fixture = createFixture({
+      beforeCandidate(repository) {
+        writeFile(repository, "scripts/forged-upload.sh", "forged\n");
+        commit(repository, "add forbidden release code");
+        fs.rmSync(path.join(repository, "scripts/forged-upload.sh"));
+        commit(repository, "revert forbidden release code");
+      },
+    });
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("non-metadata or non-regular change");
+  });
+
+  it.each([
+    ["multiple metadata commits", false],
+    ["an empty intermediate commit", true],
+  ] as const)("authorizes a candidate with %s", (_label, includeEmptyCommit) => {
+    const fixture = createFixture({
+      buildCandidate(repository) {
+        writeFile(
+          repository,
+          "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+          "Intermediate generated notes.\n",
+        );
+        commit(repository, "prepare generated metadata");
+        if (includeEmptyCommit) {
+          emptyCommit(repository, "record release checkpoint");
+        }
+        createCandidate(repository);
+        return commit(repository, "finalize generated metadata");
+      },
+    });
+
+    expect(authorize(fixture).target_sha).toBe(fixture.targetSha);
+  });
+
+  it("rejects a merge commit in the candidate suffix", () => {
+    const fixture = createFixture({
+      buildCandidate(repository, baseSha) {
+        git(repository, "checkout", "-b", "candidate-side", baseSha);
+        emptyCommit(repository, "candidate side");
+        const sideSha = git(repository, "rev-parse", "HEAD");
+        git(repository, "checkout", "-b", "candidate-main", baseSha);
+        createCandidate(repository);
+        commit(repository, "candidate metadata");
+        git(repository, "merge", "--no-ff", "--no-edit", sideSha);
+        return git(repository, "rev-parse", "HEAD");
+      },
+    });
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("bounded linear commit chain");
+  });
+
+  it("rejects an unrelated candidate history", () => {
+    const fixture = createFixture({
+      buildCandidate(repository, baseSha) {
+        git(repository, "checkout", "--orphan", "unrelated-candidate");
+        git(repository, "rm", "-r", "-f", "--quiet", ".");
+        git(repository, "checkout", baseSha, "--", ".");
+        commit(repository, "unrelated root");
+        createCandidate(repository);
+        return commit(repository, "unrelated candidate");
+      },
+    });
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exactly one shared Code SHA");
+  });
+
+  it("rejects ambiguous Code SHA ancestry", () => {
+    let toolingSha = "";
+    const fixture = createFixture({
+      buildCandidate(repository, baseSha) {
+        git(repository, "checkout", "-b", "left", baseSha);
+        const leftSha = emptyCommit(repository, "left");
+        git(repository, "checkout", "-b", "right", baseSha);
+        const rightSha = emptyCommit(repository, "right");
+        git(repository, "checkout", "left");
+        git(repository, "merge", "--no-ff", "--no-edit", rightSha);
+        toolingSha = git(repository, "rev-parse", "HEAD");
+        git(repository, "checkout", "-b", "candidate-criss-cross", rightSha);
+        git(repository, "merge", "--no-ff", "--no-edit", leftSha);
+        createCandidate(repository);
+        return commit(repository, "candidate after criss-cross");
+      },
+    });
+    useTrustedWorkflow(fixture, toolingSha);
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exactly one shared Code SHA");
+  });
+
+  it("rejects a Code SHA reachable only through Tooling SHA second-parent history", () => {
+    let codeSha = "";
+    const fixture = createFixture({
+      buildCandidate(repository) {
+        codeSha = emptyCommit(repository, "code branch");
+        createCandidate(repository);
+        return commit(repository, "candidate metadata");
+      },
+    });
+    git(fixture.source, "checkout", "-b", "trusted-first-parent", fixture.baseSha);
+    emptyCommit(fixture.source, "trusted first parent");
+    git(fixture.source, "merge", "--no-ff", "--no-edit", codeSha);
+    useTrustedWorkflow(fixture, git(fixture.source, "rev-parse", "HEAD"));
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("first-parent history");
+  });
+
+  it("rejects a target equal to the derived Code SHA", () => {
+    const fixture = createFixture();
+    advanceTrustedTooling(fixture, { fromSha: fixture.targetSha });
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("at least one commit after its Code SHA");
+  });
+
+  it("rejects a candidate suffix longer than 32 commits", () => {
+    const fixture = createFixture({
+      buildCandidate(repository) {
+        for (let index = 0; index < 32; index += 1) {
+          emptyCommit(repository, `candidate checkpoint ${index + 1}`);
+        }
+        createCandidate(repository);
+        return commit(repository, "candidate metadata");
+      },
+      realFetch: true,
+    });
+
+    expect(
+      git(fixture.source, "rev-list", "--count", `${fixture.baseSha}..${fixture.targetSha}`),
+    ).toBe("33");
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exactly one shared Code SHA");
+  });
+
+  it("fetches enough real candidate history to authorize exactly 32 commits", () => {
+    const fixture = createFixture({
+      buildCandidate(repository) {
+        for (let index = 0; index < 31; index += 1) {
+          emptyCommit(repository, `candidate checkpoint ${index + 1}`);
+        }
+        createCandidate(repository);
+        return commit(repository, "candidate metadata");
+      },
+      realFetch: true,
+    });
+
+    expect(
+      git(fixture.source, "rev-list", "--count", `${fixture.baseSha}..${fixture.targetSha}`),
+    ).toBe("32");
+    expect(authorize(fixture).target_sha).toBe(fixture.targetSha);
+    const fetches = fs
+      .readFileSync(fixture.gitLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[])
+      .filter((args) => args.includes("fetch"));
+    expect(fetches).toContainEqual([
+      "-C",
+      fixture.trusted,
+      "fetch",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "--depth=33",
+      "origin",
+      `+refs/heads/${TARGET_REF}:refs/remotes/origin/mobile-authority-target`,
+    ]);
+  });
+
+  it("rejects an empty release candidate", () => {
+    const fixture = createFixture({ emptyCandidate: true });
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("raw diff is empty or malformed");
   });
 
   it.each([
@@ -1195,6 +1560,18 @@ describe("mobile release authority", () => {
       expect(workflow.jobs.authorize?.environment).toBeUndefined();
       expect(workflow.jobs.release?.environment).toBe(environment);
       expect(workflow.jobs["recover-record"]?.environment).toBe(environment);
+      const authorityCheckouts = Object.values(workflow.jobs).flatMap((job) =>
+        job.steps.filter(
+          (step) =>
+            typeof step.with?.["sparse-checkout"] === "string" &&
+            step.with["sparse-checkout"].includes(".github/actions/mobile-release-authority"),
+        ),
+      );
+      expect(authorityCheckouts).toHaveLength(5);
+      for (const checkout of authorityCheckouts) {
+        expect(checkout.uses, `${file}:${checkout.name}:uses`).toMatch(/^actions\/checkout@/u);
+        expect(checkout.with?.["fetch-depth"], `${file}:${checkout.name}:fetch-depth`).toBe(0);
+      }
 
       for (const [jobName, job] of Object.entries(workflow.jobs)) {
         if (JSON.stringify(job).includes("GH_APP_PRIVATE_KEY")) {

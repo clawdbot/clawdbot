@@ -213,7 +213,11 @@ export const formatHealthChannelLines = (
             ? "not linked"
             : null;
     if (preProbeState) {
-      lines.push(`${label}: ${preProbeState}`);
+      const error =
+        typeof selectedSummary.lastError === "string"
+          ? sanitizeTerminalText(selectedSummary.lastError)
+          : "";
+      lines.push(`${label}: ${preProbeState}${error ? ` (${error})` : ""}`);
       continue;
     }
 

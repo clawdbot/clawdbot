@@ -1,5 +1,5 @@
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { createUtf8PrefixTruncator, truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "./tool-result-limits.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
 
@@ -71,39 +71,72 @@ export function captureCodeModeOutput(output: unknown[], maxBytes: number): Code
 
 const TRUNCATION_GUIDANCE = "Output truncated; rerun with narrower args.";
 
-function createJsonPrefixFitter<T>(text: string, maxBytes: number, project: (prefix: string) => T) {
+function createJsonPrefixFitter(
+  text: string,
+  maxBytes: number,
+  overhead: (prefixBytes: number) => number,
+) {
   const bytes = Buffer.byteLength(text, "utf8");
-  let prepared: ReturnType<typeof createUtf8PrefixTruncator> | undefined;
-  return (limit: number): T => {
-    let low = 0;
-    let high = Math.min(bytes, limit);
-    // Outer model-budget trials share this bounded encoding; full fits never allocate it.
-    const prefix =
-      high > 0
-        ? (prepared ??= createUtf8PrefixTruncator(text, Math.ceil(Math.min(bytes, maxBytes))))
-        : () => "";
-    // JSON escaping makes serialized bytes cost more than raw prefix bytes.
-    // Measure the complete projection so fitting cannot erase a useful prefix.
-    while (low < high) {
-      const middle = Math.ceil((low + high) / 2);
-      if (jsonUtf8Bytes(project(prefix(middle))) <= limit) {
-        low = middle;
-      } else {
-        high = middle - 1;
-      }
+  let encoded: Buffer | undefined;
+  let completeBytes: number | undefined;
+  return (limit: number): string => {
+    if (limit <= 0) {
+      return "";
     }
-    return project(prefix(low));
+    // Whole fits preserve lone surrogates; partial UTF-8 decoding replaces them.
+    if (bytes <= limit && (completeBytes ??= jsonUtf8Bytes(text)) + overhead(bytes) <= limit) {
+      return text;
+    }
+    encoded ??= Buffer.from(text.slice(0, Math.ceil(Math.min(bytes, maxBytes))));
+    let end = 0;
+    let jsonBytes = 2;
+    while (end < encoded.byteLength) {
+      const byte = encoded[end]!;
+      const width = byte < 0x80 ? 1 : byte < 0xe0 ? 2 : byte < 0xf0 ? 3 : 4;
+      const next = end + width;
+      // A failed whole fit cannot become a different full string by replacing surrogates.
+      if (next >= bytes || next > limit) {
+        break;
+      }
+      jsonBytes +=
+        byte === 34 ||
+        byte === 92 ||
+        byte === 8 ||
+        byte === 9 ||
+        byte === 10 ||
+        byte === 12 ||
+        byte === 13
+          ? 2
+          : byte < 32
+            ? 6
+            : width;
+      if (jsonBytes + overhead(next) > limit) {
+        break;
+      }
+      end = next;
+    }
+    return encoded.subarray(0, end).toString("utf8");
   };
 }
 
 function createTruncationMarker(source: CodeModeJsonSource, maxBytes: number) {
   const originalBytes = sourceBytes(source);
-  return createJsonPrefixFitter(source.json, maxBytes, (prefix) => ({
+  const marker = {
     truncated: true,
-    omittedBytes: originalBytes - Buffer.byteLength(prefix, "utf8"),
+    omittedBytes: originalBytes,
     guidance: TRUNCATION_GUIDANCE,
-    prefix,
-  }));
+    prefix: "",
+  };
+  const fixedBytes = jsonUtf8Bytes(marker) - 2 - String(originalBytes).length;
+  const fit = createJsonPrefixFitter(
+    source.json,
+    maxBytes,
+    (prefixBytes) => fixedBytes + String(originalBytes - prefixBytes).length,
+  );
+  return (limit: number) => {
+    const prefix = fit(limit);
+    return { ...marker, omittedBytes: originalBytes - Buffer.byteLength(prefix, "utf8"), prefix };
+  };
 }
 
 /** Nested bridge markers are ordinary guest data when later emitted or returned. */
@@ -115,7 +148,9 @@ export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
 }
 
 function createErrorFitter(error: string, maxBytes: number) {
-  return createJsonPrefixFitter(error, maxBytes, (prefix) => `${prefix} [error truncated]`);
+  const suffix = " [error truncated]";
+  const fit = createJsonPrefixFitter(error, maxBytes, () => suffix.length);
+  return (limit: number) => `${fit(limit)}${suffix}`;
 }
 
 export function boundCodeModeError(error: string, maxBytes: number): string {

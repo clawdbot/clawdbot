@@ -2,6 +2,12 @@
 
 This directory owns docs authoring, published link rules, and docs i18n policy.
 
+## Source Ownership
+
+- `/clawhub/**` pages are authored in [openclaw/clawhub](https://github.com/openclaw/clawhub/tree/main/docs). `scripts/docs-sync-publish.mjs` replaces the entire publish `docs/clawhub/` tree from that source; do not keep authored copies here.
+- Keep OpenClaw-specific skill and plugin installation, update, verification, removal, and release-trust guidance in the owning OpenClaw docs, such as `docs/cli/skills.md` and `docs/cli/plugins.md`. Standalone ClawHub CLI and publishing reference belongs upstream.
+- For links into `/clawhub/**`, run `pnpm docs:check-links:anchors` with `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` pointing to the actual ClawHub source checkout. Local-only pages cannot prove published ClawHub routes or anchors.
+
 ## Published Link Rules
 
 - Docs are published to `https://docs.openclaw.ai` from the `openclaw/docs` mirror.
@@ -40,7 +46,7 @@ Human overrides must change source state in a PR and explain the reason plus pub
 
 - Foreign-language docs are not maintained in this repo. The generated publish output lives in the separate `openclaw/docs` repo (often cloned locally as `../openclaw-docs`).
 - Do not add or edit localized docs under `docs/<locale>/**` here.
-- Treat English docs in this repo plus glossary files as the source of truth.
+- Treat OpenClaw-owned English docs in this repo plus glossary files as the source of truth; ClawHub English sources follow Source Ownership above.
 - Pipeline: update English docs here, update `docs/.i18n/glossary.<locale>.json` as needed, then let the publish-repo sync and `scripts/docs-i18n` run in `openclaw/docs`.
 - Before rerunning `scripts/docs-i18n`, add glossary entries for any new technical terms, page titles, or short nav labels that must stay in English or use a fixed translation.
 - `pnpm docs:check-i18n-glossary` is the guard for changed English doc titles and short internal doc labels.

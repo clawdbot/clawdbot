@@ -10,6 +10,7 @@ export function readSessionRuntimeOwnership(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  storePath?: string;
   sessionEntry?: Partial<
     Pick<SessionEntry, "sessionId" | "agentHarnessId" | "modelSelectionLocked" | "pluginOwnerId">
   >;
@@ -46,6 +47,7 @@ export function readSessionRuntimeOwnership(params: {
       agentId: params.agentId,
       sessionId,
       sessionKey: params.sessionKey,
+      storePath: params.storePath,
       assertCurrent,
     });
     assertCurrent();

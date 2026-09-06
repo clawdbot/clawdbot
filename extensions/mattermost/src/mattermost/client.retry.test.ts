@@ -276,10 +276,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
   });
 
   it("caps oversized request timeouts before scheduling aborts", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     mockFetch.mockResolvedValueOnce(jsonResponse({ id: "dm-channel-capped" }, 201));
 
     const client = createMockClient();

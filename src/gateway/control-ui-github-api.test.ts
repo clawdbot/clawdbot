@@ -13,6 +13,21 @@ import {
 describe("Control UI GitHub failures", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("keeps the default JSON byte cap when a caller supplies a larger metadata budget", async () => {
+    const body = JSON.stringify({ summary: "x".repeat(256 * 1024) });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(body));
+    const url = "https://api.github.com/repos/owner/repo";
+
+    await expect(fetchGitHubJson(url, fetchImpl)).rejects.toMatchObject({
+      statusCode: 502,
+      message: "GitHub response exceeded the size limit",
+    });
+    await expect(fetchGitHubJson(url, fetchImpl, undefined, 512 * 1024)).resolves.toBeTypeOf(
+      "object",
+    );
+    await expect(fetchGitHubJson(url, fetchImpl)).rejects.toMatchObject({ statusCode: 502 });
+  });
+
   it.each([
     {
       resource: "core",

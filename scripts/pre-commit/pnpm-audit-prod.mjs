@@ -19,6 +19,8 @@ const MIN_SEVERITY = "high";
 const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
 const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
+const BULK_ADVISORY_REQUEST_BUDGET_MS = 240_000;
+const BULK_ADVISORY_MAX_ATTEMPTS = 4;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SEVERITY_RANK = {
   info: 0,
@@ -877,7 +879,7 @@ function validateBulkAdvisoryResponse(body) {
 
 /**
  * @param {{ payload: Record<string, string[]>, fetchImpl?: typeof fetch, registryBaseUrl?: string,
- * responseBodyMaxBytes?: number, timeoutMs?: number, budgetMs?: number }} options
+ * responseBodyMaxBytes?: number, timeoutMs?: number, budgetMs?: number, stderr?: AuditOutput }} options
  */
 export async function fetchBulkAdvisories({
   payload,
@@ -885,27 +887,31 @@ export async function fetchBulkAdvisories({
   registryBaseUrl = resolveRegistryBaseUrl(),
   responseBodyMaxBytes = resolveBulkAdvisoryResponseBodyMaxBytes(),
   timeoutMs = resolveBulkAdvisoryRequestTimeoutMs(),
-  budgetMs,
+  budgetMs = BULK_ADVISORY_REQUEST_BUDGET_MS,
+  stderr = process.stderr,
 }) {
   const url = `${registryBaseUrl}${BULK_ADVISORY_PATH}`;
   const deadline =
-    budgetMs === undefined ? Infinity : performance.now() + clampBulkAdvisoryTimeoutMs(budgetMs);
+    performance.now() +
+    Math.min(clampBulkAdvisoryTimeoutMs(budgetMs), BULK_ADVISORY_REQUEST_BUDGET_MS);
   let budgetFailure = new AdvisoryRequestTimeoutError(
     "Bulk advisory total request budget exhausted",
   );
-  // At the default timeout, three fresh 60s request/body deadlines plus 1–2s / 2–4s
-  // backoff cap a graph at 186s. A caller budget also bounds retries and backoff;
-  // timed-out attempts abort before the next starts.
+  // One deadline bounds requests, body reads, and backoff, even with an oversized
+  // timeout or Retry-After. Each timed-out attempt aborts before the next starts.
   for (let attempt = 0; ; attempt += 1) {
     const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
+      stderr.write("Bulk advisory total request budget exhausted; no clearance was obtained.\n");
       throw budgetFailure;
     }
     let responseStatus;
+    let retryAt = 0;
+    const attemptLabel = `Bulk advisory attempt ${attempt + 1}/${BULK_ADVISORY_MAX_ATTEMPTS}`;
     /** @type {Error | undefined} */
     let permanentHttpError;
     try {
-      return await withAdvisoryRequestTimeout({
+      const advisories = await withAdvisoryRequestTimeout({
         label: "Bulk advisory request",
         timeoutMs: Math.min(timeoutMs, remainingMs),
         run: async ({ signal, timeoutPromise }) => {
@@ -917,6 +923,11 @@ export async function fetchBulkAdvisories({
           });
           responseStatus = response.status;
           if (!response.ok) {
+            const retryAfter = response.headers.get("retry-after") ?? "";
+            const retryAfterMs = /^\d+$/u.test(retryAfter)
+              ? Number(retryAfter) * 1000
+              : Date.parse(retryAfter) - Date.now();
+            retryAt = performance.now() + Math.max(0, retryAfterMs || 0);
             const ErrorType =
               response.status >= 500 || response.status === 408 || response.status === 429
                 ? AdvisoryUnavailableError
@@ -940,6 +951,10 @@ export async function fetchBulkAdvisories({
           });
         },
       });
+      if (attempt > 0) {
+        stderr.write(`${attemptLabel} succeeded.\n`);
+      }
+      return advisories;
     } catch (error) {
       if (permanentHttpError) {
         throw permanentHttpError;
@@ -953,26 +968,29 @@ export async function fetchBulkAdvisories({
       const retryable =
         responseStatus === undefined || responseStatus < 400
           ? error instanceof AdvisoryRequestTimeoutError || error instanceof TypeError
-          : responseStatus >= 500 && responseStatus < 600;
+          : (responseStatus >= 500 && responseStatus < 600) || responseStatus === 429;
       if (!retryable) {
         throw failure;
       }
       budgetFailure = failure;
-      if (attempt === 2) {
+      const waitMs = Math.ceil(
+        Math.max(1000 * 2 ** attempt * (1 + Math.random()), retryAt - performance.now()),
+      );
+      const budgetExhausted = waitMs >= deadline - performance.now();
+      const exhausted = attempt + 1 === BULK_ADVISORY_MAX_ATTEMPTS || budgetExhausted;
+      stderr.write(
+        `${attemptLabel} failed: ${JSON.stringify(failure.message)}; ${exhausted ? "stopping" : `retrying in ${waitMs}ms`}.\n`,
+      );
+      if (exhausted) {
         const ErrorType =
           failure instanceof AdvisoryUnavailableError ? AdvisoryUnavailableError : Error;
         throw new ErrorType(
-          `Bulk advisory request failed after 3 attempts. Check npm registry availability and retry the audit; no clearance was obtained. Last failure: ${failure.message}`,
+          `Bulk advisory request failed after ${attempt + 1} attempts${budgetExhausted ? " (total request budget exhausted)" : ""}. Check npm registry availability and retry the audit; no clearance was obtained. Last failure: ${failure.message}`,
           { cause: failure },
         );
       }
+      await delay(waitMs);
     }
-    await delay(
-      Math.min(
-        1000 * 2 ** attempt * (1 + Math.random()),
-        Math.max(0, deadline - performance.now()),
-      ),
-    );
   }
 }
 
@@ -1003,7 +1021,7 @@ export async function runPnpmAuditProd({
       stdout.write(`${result.reason}\n`);
       return 0;
     }
-    const advisoryResults = await fetchBulkAdvisories({ payload, fetchImpl, budgetMs });
+    const advisoryResults = await fetchBulkAdvisories({ payload, fetchImpl, budgetMs, stderr });
     const findings = filterFindingsBySeverity(
       advisoryResults,
       normalizedMinSeverity,
@@ -1049,7 +1067,6 @@ export async function runPnpmAuditProd({
     }
     result.outcome = "unavailable";
     stderr.write(`Production dependency audit incomplete: ${result.reason}\n`);
-    // Only ordinary CI downgrades this distinct incomplete-coverage outcome.
     return 2;
   } finally {
     if (process.env.GITHUB_STEP_SUMMARY) {

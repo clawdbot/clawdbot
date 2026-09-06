@@ -34,18 +34,30 @@ export async function closeGatewayTestWebSocket(ws: WebSocket): Promise<void> {
 export async function acquireGatewayTestWebSocket(
   ws: WebSocket,
   timeoutMs: number,
+  authenticate?: (ws: WebSocket) => Promise<unknown>,
 ): Promise<WebSocket> {
   let cleanup = () => {};
   let failure: Error | undefined;
+  // Event callbacks own this value; each phase boundary must read the current failure.
+  const throwIfAcquisitionFailed = () => {
+    if (failure) {
+      throw failure;
+    }
+  };
   try {
     await new Promise<void>((resolve, reject) => {
-      const onOpen = () => resolve();
+      const onOpen = () => {
+        clearTimeout(timer);
+        resolve();
+      };
       const onError = (error: Error) => {
         failure ??= error;
         reject(error);
       };
       const onClose = (code: number, reason: Buffer) =>
-        onError(new Error(`gateway websocket closed before open (${code}: ${reason.toString()})`));
+        onError(
+          new Error(`gateway websocket closed during acquisition (${code}: ${reason.toString()})`),
+        );
       const timer = setTimeout(() => onError(new Error("timeout waiting for ws open")), timeoutMs);
       cleanup = () => {
         clearTimeout(timer);
@@ -57,15 +69,18 @@ export async function acquireGatewayTestWebSocket(
       ws.on("error", onError);
       ws.once("close", onClose);
     });
-    // ws can emit open and an error from the same received batch before this handoff.
-    if (failure) {
-      throw failure;
+    // A received batch can open and fail before authentication may start.
+    throwIfAcquisitionFailed();
+    if (authenticate) {
+      // Keep preparation owned through settlement; racing an error would abandon its writes.
+      await authenticate(ws);
     }
+    throwIfAcquisitionFailed();
     return ws;
   } catch (error) {
     await runQaGatewayFixture(
       async () => {
-        throw error;
+        throw failure ?? error;
       },
       () => closeGatewayTestWebSocket(ws),
     );

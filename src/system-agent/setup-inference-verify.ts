@@ -28,10 +28,10 @@ import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js"
 import {
   cleanupSetupInferenceTempDir,
   persistManualAuthProfiles,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import type { SetupInferenceTestPlan } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   hasCurrentSystemAgentOwnerPluginArtifacts,
@@ -214,6 +214,8 @@ export async function resolvePersistentApplyInference(params: {
 /** Live-test a staged default-agent route before any caller persists it. */
 export async function verifySetupInferenceConfig(params: {
   config: OpenClawConfig;
+  /** Interactive candidate activation verifies managed tool-capable models before persistence. */
+  verifyAgentTools?: boolean;
   /** Candidate profiles staged in the isolated probe store, never the real agent store. */
   authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
@@ -377,6 +379,7 @@ export async function verifySetupInferenceConfig(params: {
       deps,
       authProfileStateMode: "read-only",
       requireExecutionOwner: requiresExecutionOwner,
+      verifyAgentTools: params.verifyAgentTools,
     });
     let retained = retainStagedAuthProfiles();
     if (!retained.ok) {
@@ -403,6 +406,7 @@ export async function verifySetupInferenceConfig(params: {
           deps,
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
+          verifyAgentTools: params.verifyAgentTools,
         });
         retained = retainStagedAuthProfiles();
         if (!retained.ok) {

@@ -28,6 +28,25 @@ async function settleGatewayCleanups(cleanups: Array<() => unknown>) {
   }
 }
 
+async function cleanupGateways(instances: GatewayInstance[], clients: GatewayClient[]) {
+  // A failed client join must not strand Gateway processes or release files
+  // their owners may still use. Keep terminal cleanup with the instance owner.
+  let clientsJoined = false;
+  await runQaGatewayFixture(
+    async () => {
+      await settleGatewayCleanups(clients.map((client) => () => client.stopAndWait()));
+      clientsJoined = true;
+    },
+    () =>
+      settleGatewayCleanups(
+        instances.map(
+          (instance) => () =>
+            clientsJoined ? stopGatewayInstance(instance) : instance.stopGateway(),
+        ),
+      ),
+  );
+}
+
 describe("gateway multi-instance e2e", () => {
   const instances: GatewayInstance[] = [];
   const nodeClients: GatewayClient[] = [];
@@ -37,9 +56,7 @@ describe("gateway multi-instance e2e", () => {
     // Promise.all can reject while its siblings still acquire owners. Join the
     // original acquisitions before reading either retained cleanup collection.
     await Promise.allSettled(acquisitions);
-    // An unjoined client still owns its instance's identity/state files.
-    await settleGatewayCleanups(nodeClients.map((client) => () => client.stopAndWait()));
-    await settleGatewayCleanups(instances.map((inst) => () => stopGatewayInstance(inst)));
+    await cleanupGateways(instances, nodeClients);
   });
 
   it(
@@ -182,10 +199,7 @@ try {
           });
           expect(after.state).toEqual(before.state);
         },
-        async () => {
-          await managerClient?.stopAndWait();
-          await manager.cleanup();
-        },
+        () => cleanupGateways([manager], managerClient ? [managerClient] : []),
       );
     },
   );

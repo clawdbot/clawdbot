@@ -66,7 +66,10 @@ before the call settles.
   compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries; callable `catalog.search(...)` results are
-  the fallback.
+  the fallback. Input hints retain integer and numeric bounds as comments, such
+  as `offset?: number /* integer, >= 1 */`. Other validation details remain in
+  the full schema available through `describe()`; these hints do not change
+  tool validation or output contracts.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent
@@ -265,43 +268,21 @@ one from an unawaited call or timer callback, fails the cell instead of silently
 reporting success. Handlers attached after a suspension still handle their
 original promises.
 
-JavaScript syntax errors, TypeScript transform errors, and tool failures proven
-to occur before execution become failed `exec` results that the model can read
-and correct across successive turns. A failed `exec` or `wait` does not automatically
-end the agent run when OpenClaw's host execution record proves that no potentially
-mutating nested action started, including before a suspended run resumed.
+JavaScript syntax errors, TypeScript transform errors, and uncaught nested tool
+failures become failed `exec` or `wait` results. The model can read the error,
+correct its code, inspect the current state, and continue with the normal tool
+surface. A failed cell does not impose a separate recovery mode or mutation budget.
 
-An exec host-policy rejection can carry this proof even after hooks, approval
-resolution, and tool implementation entry: the host owns the narrower fact that
-no command process or remote dispatch started. A corrected call runs the ordinary
-hooks and approvals again. Consumed voice confirmations stay consumed; recovery
-does not restore a grant or authorize replay.
+OpenClaw does not automatically replay a failed program. Earlier calls may have
+changed state, and a failed call may have partially applied. Inspect authoritative
+state before deciding what remains, and do not repeat completed actions. This
+also applies when `wait` resumes a suspended cell: its earlier calls belong to the
+same program.
 
-Catalog search, handle `describe()`, `skills.list()`, and `skills.read()` are
-read-only discovery. A guest error after only these operations still allows
-ordinary recovery from a failed `exec`; discovery does not count as a mutation.
-
-OpenClaw does not automatically replay a failed program. If earlier calls
-may have changed state or a failed call may have partially applied, OpenClaw
-deliberately permits one temporary read-only recovery attempt to inspect the
-current state. The internal instruction identifies OpenClaw as its source. It
-does not expose writes, sends, shell commands, or other mutations during that
-inspection.
-
-If inspection finds unfinished work, the model can request one bounded recovery.
-Code Mode stays disabled, and OpenClaw restores the normal direct-tool or Tool
-Search surface with its real tool names and argument schemas. Host-recorded
-nested-call facts block an exact repeat whose earlier effect was committed or
-uncertain. The recovery permits one mutation attempt; reads and schema discovery
-remain available afterward, but a later mutation does not run blindly when the
-first attempt fails. If no work remains, the inspection report ends the run
-without another model turn. Cancellation, explicitly terminal tool outcomes,
-sandbox restrictions, approval requirements, and tool-policy denials retain
-their existing behavior.
-
-Computer observations, including window and cursor queries, cropped screenshots,
-browser state, and dialog inspection, do not spend that mutation attempt. Browser
-preparation, input, and dialog acceptance or dismissal still count as mutations.
+Every subsequent call runs the ordinary hooks and approvals again. Consumed voice
+confirmations stay consumed; continuing after an error does not restore a grant.
+Cancellation, explicitly terminal tool outcomes, sandbox restrictions, approval
+requirements, and tool-policy denials retain their existing behavior.
 
 ### Verify the active surface
 
@@ -322,11 +303,21 @@ With code mode active, the logged model-facing tool names should be `exec` and
 ## Use Swarm for agent fan-out
 
 [Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
-for orchestrating concurrent sub-agents from Code Mode scripts. Enable
-`tools.swarm`, and ensure Code Mode engages through `"auto"` or `true`, then use
-normal JavaScript control flow for fan-out, decision gates, and structured
-collection. Swarm is a separate opt-in gate; engaging Code Mode alone does not
-expose the `agents.*` API.
+for orchestrating concurrent sub-agents from Code Mode scripts. Swarm is enabled
+by default; Code Mode remains separately opt-in through `"auto"` or `true`.
+Use normal JavaScript control flow for fan-out, decision gates, and structured
+collection.
+
+The Swarm globals, `API.read("agents.d.ts")`, and Swarm prompt hints appear only
+when Swarm is enabled and the native OpenClaw `sessions_spawn` tool is present
+in the Code Mode catalog and permitted by the run's execution allowlist. An MCP
+tool with the same name does not qualify. Code Mode waits for collector results
+internally, so `agents.run()` does not require the standalone `agents_wait`
+tool. Direct low-level Swarm use requires both tools allowed.
+
+Set `tools.swarm: false` or `tools.swarm.enabled: false` to opt out, globally or
+under an agent's `tools`. Engaging Code Mode does not override that opt-out or
+grant access to tools denied by policy.
 
 ## Technical tour
 
@@ -567,9 +558,9 @@ Rules:
   explicitly requests replay after a gateway restart, and never for `write`,
   `edit`, `exec`, or any mutation. Every catalog call must be explicitly
   replay-safe. OpenClaw rejects unmarked catalog tools and namespace
-  surfaces that are not proven replay-safe, and restart-safe runs do not
-  auto-drain pending calls. A generic exec surface is not replay-safe merely
-  because one command appears read-only; use audited read, grep, or find tools.
+  surfaces that are not proven replay-safe. A generic exec surface is not
+  replay-safe merely because one command appears read-only; use audited read,
+  grep, or find tools.
   Suspended results are marked replay-safe so
   [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
   turn from its transcript instead of restoring the process-local snapshot.
@@ -834,6 +825,11 @@ Calling a global or catalog handle returns the normal tool's JSON `details`
 value directly. Exact catalog ids and raw `{ tool, result }` envelopes are not
 guest-visible.
 
+The `ls`, `find`, and `grep` tools include their bounded listing or search text
+in `content`, including empty-result messages and truncation notices. Directory
+pages retain `nextAfter`; search results retain their existing limit and
+truncation metadata.
+
 ## Declared output contracts
 
 OpenClaw tools can declare `outputSchema` for the structured value placed in
@@ -990,6 +986,13 @@ declare namespace MCP.github {
 }
 ```
 
+Dictionary inputs retain their value types. Nullable enums and fields marked
+`nullable: true` include `null`, unless an explicit enum excludes it.
+Top-level fields with defaults may be omitted from calls.
+These declarations approximate JSON Schema; for constraints that TypeScript
+cannot express, inspect the original schema with
+`MCP.<server>.$api("<tool>", { schema: true })`.
+
 MCP tool calls return their original JSON-safe content blocks, including block
 annotations and block-level `_meta`, plus top-level `structuredContent` and
 `isError` when provided. Top-level MCP `_meta` and private app metadata never
@@ -1028,6 +1031,12 @@ the bridge as JSON-compatible values with explicit size caps.
 ```typescript
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
+
+Await async values before emitting them or returning arrays or plain objects that
+contain them. Unawaited Promises appear as a diagnostic string with `await` and
+`Promise.all` guidance. For example, use
+`return await Promise.all(handles.map((tool) => tool.describe()));` to return tool
+descriptions. Output serialization does not await nested Promises for you.
 
 Output order matches guest calls. Each nested tool result is bounded separately
 by `maxOutputBytes`. Cumulative guest output and the final value or failure
@@ -1154,15 +1163,11 @@ reconstructed from source code or outer results.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
-result. Proven no-start failures and errors after only audited read-only work
-allow ordinary model recovery, including when `wait` resumes a suspended cell.
-This proof covers the cell's entire execution, not just the latest resume.
-Failed waits without that host proof remain terminal; serialized result fields
-cannot grant recovery. Possible nested side effects in a failed `exec` require
-the [read-only inspection and bounded recovery](#recover-from-tool-errors) flow
-before any further action. Network-controlled tool output and errors retain
-their existing untrusted-content wrapping and sanitization; recovering from a
-failure does not grant new permissions or replay completed side effects.
+result and the agent can continue normally. Follow the
+[tool-error guidance](#recover-from-tool-errors) to inspect possible partial
+effects before choosing another action. Network-controlled tool output and errors
+retain their existing untrusted-content wrapping and sanitization; continuing
+after a failure does not grant new permissions or replay completed side effects.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
 tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)

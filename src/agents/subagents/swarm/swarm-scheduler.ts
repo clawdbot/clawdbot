@@ -220,22 +220,10 @@ export function enqueueSwarmRun(params: {
   start: () => Promise<void>;
   onStartFailure: (error: unknown) => boolean | Promise<boolean>;
 }): void {
-  if (
-    !reserveSwarmRun({
-      groupId: params.groupId,
-      runId: params.runId,
-      maxConcurrent: params.maxConcurrent,
-      activeRunIds: params.activeRunIds,
-    })
-  ) {
+  if (!reserveSwarmRun(params)) {
     throw new Error(`swarm scheduler run already exists: ${params.runId}`);
   }
-  activateSwarmRun({
-    groupId: params.groupId,
-    runId: params.runId,
-    start: params.start,
-    onStartFailure: params.onStartFailure,
-  });
+  activateSwarmRun(params);
 }
 
 export function releaseSwarmRun(runId: string): boolean {
