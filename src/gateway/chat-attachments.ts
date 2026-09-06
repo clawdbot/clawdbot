@@ -54,7 +54,7 @@ export type OffloadedRef = {
 
 /** Deletes prepared inbound files that never reached a durable owner. */
 export async function discardPreparedInboundMedia(
-  refs: readonly OffloadedRef[],
+  refs: readonly Pick<OffloadedRef, "id">[],
   log?: { warn: (message: string) => void },
 ): Promise<void> {
   const results = await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));

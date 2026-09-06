@@ -24,7 +24,7 @@ import {
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
-import { isRetiredRunningSubagent } from "./subagent-registry-restart-recovery-helpers.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
@@ -253,7 +253,11 @@ export function createSubagentRegistryRestorer(config: {
           runId,
           maxConcurrent: currentSwarmConfig.maxConcurrent,
           activeRunIds: groupRuns
-            .filter((candidate) => candidate.execution.status === "running")
+            .filter(
+              (candidate) =>
+                candidate.execution.status === "running" ||
+                candidate.execution.status === "interrupted",
+            )
             .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
           start: async () => {
             await runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -328,7 +332,7 @@ export function createSubagentRegistryRestorer(config: {
         sessionEntry?.abortedLastRun === true ||
         (sessionEntry?.status === "running" &&
           sessionEntry.lifecycleRunId === entry.runId &&
-          isRetiredRunningSubagent(entry))
+          isRetiredSubagentExecution(entry))
       ) {
         continue;
       }
