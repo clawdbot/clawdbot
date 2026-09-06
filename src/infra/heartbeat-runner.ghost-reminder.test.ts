@@ -658,7 +658,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).toHaveBeenCalled();
   });
 
-  it("consumes exec completion entries without dropping later generic events", async () => {
+  it("composes and consumes exec completion entries together with later generic events", async () => {
     const { result, calledCtx, sessionKey } = await runHeartbeatCase({
       tmpPrefix: "openclaw-exec-preserve-generic-",
       replyText: "Deploy succeeded",
@@ -674,8 +674,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(calledCtx?.InternalTurnSource).toBe("exec");
     expect(calledCtx?.Body).toContain("deploy succeeded");
-    expect(calledCtx?.Body).not.toContain("Node connected");
-    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
+    expect(calledCtx?.Body).toContain("Node connected");
+    expect(
+      calledCtx?.Body?.match(/Node connected/g)?.length ?? 0,
+      "the generic event reaches the model turn exactly once",
+    ).toBe(1);
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
   });
 
   it("ignores an acknowledged exec-event wake without consuming unrelated events", async () => {

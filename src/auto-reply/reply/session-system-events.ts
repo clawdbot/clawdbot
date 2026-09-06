@@ -6,14 +6,11 @@ import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
-  compactSystemEvent,
-  isExecCompletionEvent,
-} from "../../infra/heartbeat-events-filter.js";
-import {
   formatUtcTimestamp,
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
+import { compactSystemEvent, isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 // Records system-level session events for restarts, forks, and resets.
 import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
@@ -59,7 +56,7 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
     return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
   }
   return (
-    formatZonedTimestamp(date, { timeZone: zone.timezone, displaySeconds: true }) ?? "unknown-time"
+    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ?? "unknown-time"
   );
 }
 

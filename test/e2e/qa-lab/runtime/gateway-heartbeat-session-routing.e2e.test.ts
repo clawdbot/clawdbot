@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { markCompleteReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -21,7 +22,12 @@ import {
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../../../../src/gateway/test-openai-responses-model.js";
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
+import {
+  consumeSelectedSystemEventEntries,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../../../../src/infra/system-events.js";
 import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../../../src/utils/delivery-context.shared.js";
@@ -208,7 +214,7 @@ describe("Gateway heartbeat session routing", () => {
 
   it(
     "routes monitor and explicit wakes while preserving prompt-omitted events",
-    { timeout: 90_000 },
+    { timeout: 120_000 },
     async () => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
       const tempHome = tempDirs.make("openclaw-gateway-heartbeat-routing-");
@@ -264,6 +270,10 @@ describe("Gateway heartbeat session routing", () => {
       const overflowEvent = `${overflowEventPrefix} ${"x".repeat(8_100)}`;
       const overflowOmittedEvent = nextId("overflow-omitted-event");
       const overflowReply = nextId("overflow-heartbeat-reply");
+      const sharedOverflowEventPrefix = nextId("shared-overflow-visible-event");
+      const sharedOverflowEvent = `${sharedOverflowEventPrefix} ${"y".repeat(8_100)}`;
+      const sharedOmittedEvent = nextId("shared-overflow-omitted-event");
+      const sharedOverflowReply = nextId("shared-overflow-reply");
       const mainSessionKey = "agent:main:main";
       const mainSessionId = nextId("main-session");
       const providerRequests: Array<Record<string, unknown>> = [];
@@ -287,11 +297,14 @@ describe("Gateway heartbeat session routing", () => {
             response,
             serialized.includes(overflowEventPrefix)
               ? overflowReply
-              : serialized.includes(configuredEvent)
-                ? configuredReply
-                : serialized.includes(explicitQueuedEvent) || serialized.includes(explicitWakeText)
-                  ? explicitReply
-                  : nextId("unexpected-heartbeat-reply"),
+              : serialized.includes(sharedOverflowEventPrefix)
+                ? sharedOverflowReply
+                : serialized.includes(configuredEvent)
+                  ? configuredReply
+                  : serialized.includes(explicitQueuedEvent) ||
+                      serialized.includes(explicitWakeText)
+                    ? explicitReply
+                    : nextId("unexpected-heartbeat-reply"),
           );
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
@@ -371,6 +384,7 @@ describe("Gateway heartbeat session routing", () => {
         if (!runtimeConfig) {
           throw new Error("gateway runtime config snapshot was not initialized");
         }
+        markCompleteReplyConfig(runtimeConfig, { runtimeMode: "full" });
         const client = gateway.client;
 
         const seedSession = async (params: {
@@ -470,7 +484,8 @@ describe("Gateway heartbeat session routing", () => {
                 runId: configuredRun.runId,
                 limit: 1,
               });
-              return history.entries.find((entry) => entry.runId === configuredRun.runId);
+              const entry = history.entries.find((e) => e.runId === configuredRun.runId);
+              return entry;
             },
             { timeout: 15_000, interval: 50 },
           )
@@ -480,6 +495,10 @@ describe("Gateway heartbeat session routing", () => {
           .toBeGreaterThan(configuredRequestBaseline);
         const configuredRequest = JSON.stringify(providerRequests[configuredRequestBaseline]);
         expect(configuredRequest).toContain(configuredEvent);
+        expect(
+          configuredRequest.split(configuredEvent).length - 1,
+          "the queued event reaches the shared-session model turn exactly once",
+        ).toBe(1);
         await expect
           .poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent), {
             timeout: 15_000,
@@ -541,6 +560,11 @@ describe("Gateway heartbeat session routing", () => {
         const explicitRequest = JSON.stringify(providerRequests[explicitRequestBaseline]);
         expect(explicitRequest).toContain(explicitQueuedEvent);
         expect(explicitRequest).toContain(explicitWakeText);
+        expect(
+          explicitRequest.split(explicitQueuedEvent).length - 1,
+          "the shared-session wake renders the queued event exactly once",
+        ).toBe(1);
+        expect(explicitRequest.split(explicitWakeText).length - 1).toBe(1);
         await expect
           .poll(
             () => {
@@ -592,6 +616,64 @@ describe("Gateway heartbeat session routing", () => {
         expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(
           "main-destination",
         );
+
+        // Shared-session overflow: the bounded composed prompt is the only
+        // rendering owner, so the represented event reaches the model turn
+        // exactly once and the cap-omitted event stays queued.
+        await expect(
+          client.request<{ ok: boolean }>("system-event", {
+            text: sharedOverflowEvent,
+            sessionKey: configuredSessionKey,
+            wake: false,
+          }),
+        ).resolves.toEqual({ ok: true });
+        const sharedOverflowBaseline = providerRequests.length;
+        await expect(
+          client.request<{ ok: boolean }>("system-event", {
+            text: sharedOmittedEvent,
+            sessionKey: configuredSessionKey,
+            wake: true,
+          }),
+        ).resolves.toEqual({ ok: true });
+        await expect
+          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
+          .toBeGreaterThan(sharedOverflowBaseline);
+        const sharedOverflowRequest = JSON.stringify(providerRequests[sharedOverflowBaseline]);
+        expect(sharedOverflowRequest).toContain(sharedOverflowEventPrefix);
+        expect(sharedOverflowRequest).not.toContain(sharedOmittedEvent);
+        expect(
+          sharedOverflowRequest.split(sharedOverflowEventPrefix).length - 1,
+          "the shared-session wake renders the represented event exactly once",
+        ).toBe(1);
+        await expect
+          .poll(() => peekSystemEvents(configuredSessionKey).includes(sharedOverflowEvent), {
+            timeout: 15_000,
+            interval: 50,
+          })
+          .toBe(false);
+        // The oversized event was partially shown, so its truncation-hidden
+        // tail re-queues as a continuation next to the cap-omitted event.
+        const sharedQueuedAfterOverflow = peekSystemEvents(configuredSessionKey);
+        expect(sharedQueuedAfterOverflow).toHaveLength(2);
+        expect(sharedQueuedAfterOverflow).toContain(sharedOmittedEvent);
+        expect(sharedQueuedAfterOverflow.find((entry) => entry !== sharedOmittedEvent)).toMatch(
+          /^y+$/,
+        );
+        await expect
+          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
+          .toHaveLength(3);
+        expect((await readDeliveryTrace(deliveryTracePath)).at(-1)).toEqual({
+          accountId: "default",
+          text: sharedOverflowReply,
+          threadId: null,
+          to: "configured-destination",
+        });
+        // Leave the configured queue empty for the isolated restart below.
+        consumeSelectedSystemEventEntries(
+          configuredSessionKey,
+          peekSystemEventEntries(configuredSessionKey),
+        );
+        expect(peekSystemEvents(configuredSessionKey)).toEqual([]);
 
         await disconnectGatewayClient(client);
         await gateway.server.close({ reason: "Restart with isolated heartbeat session enabled" });
@@ -665,10 +747,17 @@ describe("Gateway heartbeat session routing", () => {
             interval: 50,
           })
           .toBe(false);
-        expect(peekSystemEvents(configuredSessionKey)).toEqual([overflowOmittedEvent]);
+        // The oversized event was partially shown, so its truncation-hidden
+        // tail re-queues as a continuation next to the cap-omitted event.
+        const isolatedQueuedAfterOverflow = peekSystemEvents(configuredSessionKey);
+        expect(isolatedQueuedAfterOverflow).toHaveLength(2);
+        expect(isolatedQueuedAfterOverflow).toContain(overflowOmittedEvent);
+        expect(isolatedQueuedAfterOverflow.find((entry) => entry !== overflowOmittedEvent)).toMatch(
+          /^x+$/,
+        );
         await expect
           .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
-          .toHaveLength(3);
+          .toHaveLength(4);
         expect((await readDeliveryTrace(deliveryTracePath)).at(-1)).toEqual({
           accountId: "default",
           text: overflowReply,

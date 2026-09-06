@@ -354,18 +354,16 @@ describe("Heartbeat event routing", () => {
       if (queue === "legacy") {
         expect(legacyRowRemovedAtReply).toBe(true);
       }
-      if (queue === "base") {
-        expect(formatted ?? "").not.toContain(generic);
-        expect(peekSystemEvents(queueKey)).toEqual(queuedBefore);
-      } else {
-        expect(formatted).toContain(generic);
-        expect(formatted).not.toContain(completion);
-        expect(formatted).not.toContain(reminder);
-        expect(peekSystemEvents(queueKey)).toEqual(dedicated === "exec" ? [reminder] : []);
-      }
+      // The composed wake prompt is the only rendering owner: the model turn
+      // embeds the queue's events, reply admission renders nothing for the
+      // wake, and the surfaced selection is consumed after the successful run.
+      expect(context.Body).toContain(generic);
+      expect(formatted ?? "").not.toContain(generic);
+      expect(formatted ?? "").not.toContain(completion);
+      expect(formatted ?? "").not.toContain(reminder);
+      expect(peekSystemEvents(queueKey)).toEqual([]);
       if (dedicated !== "none") {
         expect(context.Body).toContain(dedicated === "exec" ? completion : reminder);
-        expect(context.Body).not.toContain(generic);
       }
       expect(readSessionStoreForTest(storePath)[baseKey]?.sessionId).toBe("base-conversation");
     });

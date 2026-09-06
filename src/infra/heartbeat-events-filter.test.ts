@@ -185,6 +185,9 @@ describe("heartbeat event prompts", () => {
         execEvents: [`Exec finished: ${"e".repeat(8_100)}`, "Exec finished: omitted"],
       },
       kind: "exec" as const,
+      // Exec completions are consumed as a class: ordinary admission never
+      // drains them, so truncated entries cannot be left without an owner.
+      expected: [0, 1],
     },
     {
       name: "generic",
@@ -192,22 +195,19 @@ describe("heartbeat event prompts", () => {
         genericEvents: [`Gateway startup ${"g".repeat(8_100)}`, "Gateway restart omitted"],
       },
       kind: "generic" as const,
+      expected: [0],
     },
-  ])("tracks the $name entries retained by its class budget", ({ params, kind }) => {
+  ])("tracks the $name entries retained by its class budget", ({ params, kind, expected }) => {
     const resolution = resolveHeartbeatEventPrompt(params);
 
     expect(resolution.prompt).toContain("[truncated]");
     expect(resolution.prompt).not.toContain("omitted");
-    expect(resolution.handledEventIndexes[kind]).toEqual([0]);
+    expect(resolution.handledEventIndexes[kind]).toEqual(expected);
   });
 
   it("tracks cron entries retained by aggregate head and tail truncation", () => {
     const resolution = resolveHeartbeatEventPrompt({
-      cronEvents: [
-        `First reminder ${"a".repeat(12_000)}`,
-        "Middle reminder omitted",
-        `Last reminder ${"z".repeat(12_000)}`,
-      ],
+      cronEvents: [`F${"a".repeat(11_100)}`, "Middle reminder omitted", `L${"z".repeat(5_000)}`],
     });
 
     expect(resolution.prompt).toContain("[truncated]");
@@ -222,6 +222,200 @@ describe("heartbeat event prompts", () => {
 
     expect(resolution.prompt).toContain("no command output was found");
     expect(resolution.handledEventIndexes.exec).toEqual([0]);
+  });
+
+  it("keeps a bisected event queued when only a fragment survives truncation", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      cronEvents: [`F${"a".repeat(10_950)}`, "CRITICAL_RESTART_FAILURE", `L${"z".repeat(5_500)}`],
+    });
+
+    expect(resolution.prompt).toContain("[truncated]");
+    expect(resolution.prompt).not.toContain("CRITICAL_RESTART_FAILURE");
+    expect(resolution.handledEventIndexes.cron).toEqual([0, 2]);
+  });
+
+  it("selects the same retained events across delivery and response-tool modes", () => {
+    const params = {
+      execEvents: [
+        "Exec completed (backup, code 0)",
+        `Exec failed (restore, code 1) :: ${"e".repeat(7_900)}`,
+      ],
+      cronEvents: [
+        `Reminder: rotate logs ${"c".repeat(7_900)}`,
+        "Reminder: send the overnight report",
+      ],
+      genericEvents: [`Gateway restart ${"g".repeat(7_900)}`, "Gateway restart ok"],
+    };
+    const modes = [
+      { deliverToUser: true, useHeartbeatResponseTool: false },
+      { deliverToUser: false, useHeartbeatResponseTool: false },
+      { deliverToUser: true, useHeartbeatResponseTool: true },
+    ] as const;
+    const baseline = resolveHeartbeatEventPrompt({ ...params, ...modes[0] });
+
+    for (const mode of modes.slice(1)) {
+      const resolution = resolveHeartbeatEventPrompt({ ...params, ...mode });
+      expect(resolution.handledEventIndexes, `mode ${JSON.stringify(mode)}`).toEqual(
+        baseline.handledEventIndexes,
+      );
+      expect(resolution.prompt.length).toBeLessThanOrEqual(16_000);
+    }
+    expect(baseline.handledEventIndexes.exec).toEqual([0, 1]);
+    expect(baseline.handledEventIndexes.cron).toEqual([0, 1]);
+    expect(baseline.handledEventIndexes.generic).toEqual([0, 1]);
+  });
+
+  it("reports the hidden remainder of a partially shown oversized event", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      genericEvents: [`Gateway startup report ${"g".repeat(12_000)}`],
+    });
+
+    expect(resolution.prompt).toContain("[truncated]");
+    expect(resolution.handledEventIndexes.generic).toEqual([0]);
+    expect(resolution.unseenRemainders).toHaveLength(1);
+    expect(resolution.unseenRemainders[0]).toMatchObject({ kind: "generic", eventIndex: 0 });
+    expect(resolution.unseenRemainders[0]?.text).toMatch(/^g+$/);
+    expect(resolution.unseenRemainders[0]?.text.length).toBeGreaterThan(3_000);
+  });
+
+  it("records aggregate gaps for exec events consumed as a class", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: [
+        `Exec completed (one, code 0) :: ${"a".repeat(2_900)}`,
+        `Exec completed (two, code 0) :: ${"b".repeat(2_900)}`,
+        `Exec completed (three, code 0) :: ${"c".repeat(2_900)}`,
+      ],
+      cronEvents: ["Reminder: rotate logs"],
+      genericEvents: ["Gateway restart ok"],
+    });
+
+    expect(resolution.handledEventIndexes.exec).toEqual([0, 1, 2]);
+    const remainderTexts = resolution.unseenRemainders
+      .filter((remainder) => remainder.kind === "exec")
+      .map((remainder) => remainder.text);
+    expect(remainderTexts.join("").length).toBeGreaterThan(500);
+    expect(remainderTexts.some((text) => text.includes("bbb"))).toBe(true);
+    expect(remainderTexts.some((text) => text.includes("ccc"))).toBe(true);
+    // Exactly one continuation per partially shown exec entry: the single
+    // collector must not duplicate entries also consumed as a class, and the
+    // fully shown first entry needs no continuation.
+    expect(remainderTexts).toHaveLength(2);
+  });
+
+  it("conserves content across both truncation stages for an oversized exec event", () => {
+    const event = `Exec completed (big, code 0) :: ${"Z".repeat(16_400)}`;
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: [event],
+      cronEvents: ["Reminder: rotate logs"],
+      genericEvents: ["Gateway restart ok"],
+    });
+
+    expect(resolution.handledEventIndexes.exec).toEqual([0]);
+    expect(
+      resolution.unseenRemainders.filter((remainder) => remainder.kind === "exec"),
+    ).toHaveLength(1);
+    const remainder = resolution.unseenRemainders.find((r) => r.kind === "exec")?.text ?? "";
+    // Shown chunk + remainder covers the original output exactly once.
+    const shown = (resolution.prompt.match(/Z/g) ?? []).length;
+    expect(shown + (remainder.match(/Z/g) ?? []).length).toBe(16_400);
+  });
+
+  it("advances an oversized generic event across successive wakes", () => {
+    const event = `Gateway status ${"Z".repeat(20_000)}`;
+    const first = resolveHeartbeatEventPrompt({ genericEvents: [event] });
+
+    // First wake surfaces a chunk and reports the exact unseen remainder.
+    expect(first.handledEventIndexes.generic).toEqual([0]);
+    const remainder = first.unseenRemainders.find((r) => r.kind === "generic")?.text ?? "";
+    expect(remainder.length).toBeGreaterThan(1_000);
+    const shown = (first.prompt.match(/Z/g) ?? []).length;
+    expect(shown + remainder.length).toBe(20_000);
+
+    // Feeding the remainder back surfaces strictly more content.
+    const second = resolveHeartbeatEventPrompt({
+      genericEvents: [event.slice(0, event.length - remainder.length), remainder],
+    });
+    const secondShown = (second.prompt.match(/Z/g) ?? []).length;
+    expect(secondShown).toBeGreaterThan(0);
+    const totalShownAfterTwo = shown + secondShown;
+    expect(totalShownAfterTwo).toBeGreaterThan(shown);
+  });
+
+  it("keeps a full composed batch within the aggregate limit with a missing-output exec", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: [
+        "Exec failed (audit, code 1)",
+        `Exec completed (logs, code 0) :: ${"L".repeat(7_000)}`,
+      ],
+      cronEvents: [`Reminder: send the overnight report ${"R".repeat(7_000)}`],
+      genericEvents: [`Gateway restart ${"G".repeat(7_000)}`],
+    });
+
+    expect(resolution.prompt.length).toBeLessThanOrEqual(16_000);
+    expect(resolution.prompt).toContain("without captured stdout/stderr");
+    expect(resolution.handledEventIndexes.exec).toEqual([0, 1]);
+  });
+
+  it("keeps combined truncation gaps in source order", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      cronEvents: ["Reminder: rotate logs"],
+      genericEvents: [`${"A".repeat(7_900)}${"B".repeat(4_500)}`],
+    });
+
+    expect(resolution.prompt).toContain("[truncated]");
+    const genericRemainder = resolution.unseenRemainders.find(
+      (remainder) => remainder.kind === "generic",
+    );
+    expect(genericRemainder?.text).toMatch(/^A+B+$/);
+    expect(genericRemainder?.text.length).toBeGreaterThan(4_000);
+  });
+
+  it("decides silence once for a quiet exec plus reminder batch", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: ["Exec completed (abc12345, code 0)"],
+      cronEvents: ["Reminder: send the overnight report"],
+      deliverToUser: true,
+      useHeartbeatResponseTool: false,
+    });
+
+    expect(resolution.prompt).toContain("Reminder: send the overnight report");
+    expect(resolution.prompt).toContain("no command output was found");
+    expect(resolution.prompt).not.toContain("Reply NO_REPLY only");
+    expect(resolution.handledEventIndexes.exec).toEqual([0]);
+    expect(resolution.handledEventIndexes.cron).toEqual([0]);
+    expect(
+      resolution.prompt.match(/reply NO_REPLY/g)?.length ?? 0,
+      "the batch completion policy mentions NO_REPLY exactly once",
+    ).toBe(1);
+  });
+
+  it("keeps the silence decision for a quiet-only batch", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: ["Exec completed (abc12345, code 0)"],
+      cronEvents: [""],
+      deliverToUser: true,
+      useHeartbeatResponseTool: false,
+    });
+
+    expect(resolution.prompt).toContain("no command output was found");
+    expect(resolution.prompt).toContain("no event content was found");
+    expect(resolution.prompt).toContain("Reply NO_REPLY");
+    expect(resolution.handledEventIndexes.exec).toEqual([0]);
+    expect(resolution.handledEventIndexes.cron).toEqual([0]);
+  });
+
+  it("decides silence once for an internal-only mixed batch", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: ["Exec completed (abc12345, code 0)"],
+      cronEvents: ["Reminder: send the overnight report"],
+      deliverToUser: false,
+      useHeartbeatResponseTool: false,
+    });
+
+    expect(resolution.prompt).toContain("Reminder: send the overnight report");
+    expect(resolution.prompt).not.toContain("Please relay this reminder");
+    expect(resolution.prompt).not.toContain("Reply NO_REPLY only");
+    expect(resolution.prompt).toContain("reply NO_REPLY");
   });
 
   it("embeds generic system events in the heartbeat prompt", () => {

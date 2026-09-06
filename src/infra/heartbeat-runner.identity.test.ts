@@ -150,8 +150,12 @@ describe("runHeartbeatOnce identity", () => {
         AgentId: "hooks",
         SessionKey: "global",
       });
-      expect(systemEventBlocks).toHaveLength(1);
-      expect(systemEventBlocks[0]).toContain("Mapped hook wake");
+      // The composed wake prompt owns rendering; the admission-side drain at
+      // the reply boundary renders nothing for this turn.
+      expect(systemEventBlocks[0]).toBeUndefined();
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        Body: expect.stringContaining("Mapped hook wake"),
+      });
       expect(peekSystemEventEntries("global")).toEqual([]);
     });
   });
@@ -203,9 +207,13 @@ describe("runHeartbeatOnce identity", () => {
         AgentId: "alpha",
         SessionKey: "global",
       });
-      // The first targeted wake must not drain the other agent's queued event.
-      expect(systemEventBlocks[0]).toContain("Hook Alpha: done");
-      expect(systemEventBlocks[0]).not.toContain("Hook Beta: done");
+      // The first targeted wake must not surface or drain the other agent's
+      // queued event; its own event renders through the composed wake prompt.
+      expect(systemEventBlocks[0]).toBeUndefined();
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        Body: expect.stringContaining("Hook Alpha: done"),
+      });
+      expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("Hook Beta: done");
       expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
         "Hook Beta: done",
       ]);
@@ -224,8 +232,11 @@ describe("runHeartbeatOnce identity", () => {
 
       expect(betaResult.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledTimes(2);
-      expect(systemEventBlocks[1]).toContain("Hook Beta: done");
-      expect(systemEventBlocks[1]).not.toContain("Hook Alpha: done");
+      expect(systemEventBlocks[1]).toBeUndefined();
+      expect(replySpy.mock.calls[1]?.[0]).toMatchObject({
+        Body: expect.stringContaining("Hook Beta: done"),
+      });
+      expect(replySpy.mock.calls[1]?.[0].Body).not.toContain("Hook Alpha: done");
       expect(peekSystemEventEntries("global")).toEqual([]);
     });
   });

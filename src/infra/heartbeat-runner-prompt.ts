@@ -142,8 +142,8 @@ export async function resolveHeartbeatPreflight(params: {
     shouldInspectPendingEvents,
     authoritativeScheduledTick:
       typeof params.scheduledEveryMs === "number" &&
-      Number.isSafeInteger(scheduledEveryMs) &&
-      scheduledEveryMs > 0,
+      Number.isSafeInteger(params.scheduledEveryMs) &&
+      params.scheduledEveryMs > 0,
     ...(monitorScratch?.jobId
       ? {
           scratchJobId: monitorScratch.jobId,
@@ -208,6 +208,11 @@ type HeartbeatPromptResolution = {
    * heartbeat delivery path after a successful run.
    */
   genericEvents: SystemEvent[];
+  /**
+   * Truncation-hidden content of handled entries; terminal consumption re-queues
+   * these remainders so partially shown events are never silently dropped.
+   */
+  partialEventRemainders: Array<{ event: SystemEvent; remainder: string }>;
 };
 
 /** Appends monitor scratch prose to the generated heartbeat prompt. */
@@ -222,37 +227,44 @@ function appendHeartbeatScratch(prompt: string, heartbeatScratchContent?: string
   return `${prompt}\n\nHeartbeat monitor scratch:\n${directives}`;
 }
 
-export function resolveHeartbeatRunPrompt(params: {
-  cfg: OpenClawConfig;
+export type HeartbeatEventOwnership = {
+  hasExecCompletion: boolean;
+  hasCronEvents: boolean;
+  hasGenericEvents: boolean;
+  /** Retained entries the composed prompt surfaces; consumed after a successful run. */
+  handledSystemEvents: SystemEvent[];
+  /**
+   * Generic entries the composed prompt did not embed. Reply admission renders
+   * and consumes exactly this selection; embedded entries are consumed by the
+   * heartbeat delivery path after a successful run.
+   */
+  genericEvents: SystemEvent[];
+  /**
+   * Truncation-hidden content of handled entries. Consuming a partially shown
+   * event must re-queue its remainder so no queued content is silently dropped.
+   */
+  partialEventRemainders: Array<{ event: SystemEvent; remainder: string }>;
+};
+
+/**
+ * Resolve which queued entries this turn owns before delivery is known: the
+ * retained selection does not depend on relay or response-tool flags, so the
+ * wake's turn-source delivery context can follow exactly the surfaced events.
+ */
+export function selectHeartbeatEventOwnership(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
-  canRelayToUser: boolean;
-  startedAt: number;
-  scheduledTasks: readonly HeartbeatScheduledTask[];
-  heartbeatScratchContent?: string;
-  useHeartbeatResponseTool: boolean;
-}): HeartbeatPromptResolution {
+}): HeartbeatEventOwnership {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const cronEventEntries = pendingEventEntries.filter(
     (event) =>
       (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
       isCronSystemEvent(event.text),
   );
-  const shouldInspectExecEvents =
-    params.preflight.shouldInspectPendingEvents &&
-    !(
-      params.heartbeat?.isolatedSession === true &&
-      params.preflight.isWakePayload &&
-      !params.preflight.isCronWake &&
-      !params.preflight.session.entry?.heartbeatIsolatedBaseSessionKey
-    );
-  const execEventEntries = shouldInspectExecEvents
+  const execEventEntries = shouldInspectExecEventEntries(params)
     ? pendingEventEntries.filter((event) => isExecCompletionEvent(event.text))
     : [];
   const hasExecCompletion = execEventEntries.length > 0;
-  const hasRelayableExecCompletion =
-    params.canRelayToUser &&
-    execEventEntries.some((event) => isRelayableExecCompletionEvent(event.text));
   const hasCronEvents = cronEventEntries.length > 0;
   const genericEventEntries = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries.filter(
@@ -275,6 +287,85 @@ export function resolveHeartbeatRunPrompt(params: {
           !isExecCompletionEvent(event.text) &&
           !(params.preflight.isCronWake || event.contextKey?.startsWith("cron:")),
       );
+  const eventPromptResolution =
+    hasExecCompletion || hasCronEvents || hasGenericEvents
+      ? resolveHeartbeatEventPrompt({
+          execEvents: execEventEntries.map((event) => event.text),
+          cronEvents: cronEventEntries.map((event) => event.text),
+          genericEvents: genericEventEntries.map((event) => event.text),
+        })
+      : undefined;
+  const handledEventEntries = eventPromptResolution
+    ? [
+        ...eventPromptResolution.handledEventIndexes.exec.map((index) => execEventEntries[index]),
+        ...eventPromptResolution.handledEventIndexes.cron.map((index) => cronEventEntries[index]),
+        ...eventPromptResolution.handledEventIndexes.generic.map(
+          (index) => genericEventEntries[index],
+        ),
+      ].filter((event): event is SystemEvent => event !== undefined)
+    : [];
+  const handledEventEntrySet = new Set(handledEventEntries);
+  const remainderEventsByKind: Record<"exec" | "cron" | "generic", readonly SystemEvent[]> = {
+    exec: execEventEntries,
+    cron: cronEventEntries,
+    generic: genericEventEntries,
+  };
+  const partialEventRemainders = (eventPromptResolution?.unseenRemainders ?? []).flatMap(
+    (remainder) => {
+      const event = remainderEventsByKind[remainder.kind][remainder.eventIndex];
+      return event ? [{ event, remainder: remainder.text }] : [];
+    },
+  );
+  return {
+    hasExecCompletion,
+    hasCronEvents,
+    hasGenericEvents,
+    handledSystemEvents: pendingEventEntries.filter((event) => handledEventEntrySet.has(event)),
+    genericEvents: deferredGenericEvents,
+    partialEventRemainders,
+  };
+}
+
+export function resolveHeartbeatRunPrompt(params: {
+  cfg: OpenClawConfig;
+  heartbeat?: HeartbeatConfig;
+  preflight: HeartbeatPreflight;
+  canRelayToUser: boolean;
+  startedAt: number;
+  scheduledTasks: readonly HeartbeatScheduledTask[];
+  heartbeatScratchContent?: string;
+  useHeartbeatResponseTool: boolean;
+  ownership?: HeartbeatEventOwnership;
+}): HeartbeatPromptResolution {
+  const pendingEventEntries = params.preflight.pendingEventEntries;
+  const ownership =
+    params.ownership ??
+    selectHeartbeatEventOwnership({ preflight: params.preflight, heartbeat: params.heartbeat });
+  const { hasExecCompletion, hasCronEvents, hasGenericEvents } = ownership;
+  const { handledSystemEvents } = ownership;
+  const execEventEntries = shouldInspectExecEventEntries(params)
+    ? pendingEventEntries.filter((event) => isExecCompletionEvent(event.text))
+    : [];
+  const cronEventEntries = pendingEventEntries.filter(
+    (event) =>
+      (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+      isCronSystemEvent(event.text),
+  );
+  const genericEventEntries = params.preflight.shouldInspectPendingEvents
+    ? pendingEventEntries.filter(
+        (event) =>
+          !isExecCompletionEvent(event.text) &&
+          !(
+            (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+            isCronSystemEvent(event.text)
+          ) &&
+          !isHeartbeatNoiseEvent(event.text),
+      )
+    : [];
+  const hasRelayableExecCompletion =
+    params.canRelayToUser &&
+    execEventEntries.some((event) => isRelayableExecCompletionEvent(event.text));
+  const deferredGenericEvents = ownership.genericEvents;
   if (params.scheduledTasks.length > 0) {
     const taskList = params.scheduledTasks
       .map((task) => `- ${task.name}: ${task.prompt}`)
@@ -297,6 +388,7 @@ ${completionInstruction}`;
       handledSystemEvents: [],
       usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       genericEvents: deferredGenericEvents,
+      partialEventRemainders: [],
     };
   }
 
@@ -316,19 +408,6 @@ ${completionInstruction}`;
     (baseUsesHeartbeatResponseTool
       ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
       : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat));
-  const handledEventEntries = eventPromptResolution
-    ? [
-        ...eventPromptResolution.handledEventIndexes.exec.map((index) => execEventEntries[index]),
-        ...eventPromptResolution.handledEventIndexes.cron.map((index) => cronEventEntries[index]),
-        ...eventPromptResolution.handledEventIndexes.generic.map(
-          (index) => genericEventEntries[index],
-        ),
-      ].filter((event): event is SystemEvent => event !== undefined)
-    : [];
-  const handledEventEntrySet = new Set(handledEventEntries);
-  const handledSystemEvents = pendingEventEntries.filter((event) =>
-    handledEventEntrySet.has(event),
-  );
   const basePromptWithDirectives = appendHeartbeatScratch(
     basePrompt,
     params.heartbeatScratchContent,
@@ -342,7 +421,23 @@ ${completionInstruction}`;
     handledSystemEvents,
     usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
     genericEvents: deferredGenericEvents,
+    partialEventRemainders: ownership.partialEventRemainders,
   };
+}
+
+function shouldInspectExecEventEntries(params: {
+  heartbeat?: HeartbeatConfig;
+  preflight: HeartbeatPreflight;
+}): boolean {
+  return (
+    params.preflight.shouldInspectPendingEvents &&
+    !(
+      params.heartbeat?.isolatedSession === true &&
+      params.preflight.isWakePayload &&
+      !params.preflight.isCronWake &&
+      !params.preflight.session.entry?.heartbeatIsolatedBaseSessionKey
+    )
+  );
 }
 
 export function selectSystemEventsConsumedByHeartbeat(params: {

@@ -19,6 +19,8 @@ import {
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { acknowledgeSessionStateNotices } from "../sessions/session-state-events.js";
+import { decodeSessionStateNoticeContextKey } from "../sessions/session-state-notices.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   normalizeHeartbeatReply,
@@ -48,8 +50,12 @@ import {
   type NormalizedOutboundPayload,
 } from "./outbound/payloads.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { withSystemEventOwner } from "./system-event-ownership.js";
-import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
+import { resolveSystemEventOwnerAgentId, withSystemEventOwner } from "./system-event-ownership.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEvent,
+  type SystemEvent,
+} from "./system-events.js";
 
 const log = heartbeatLog;
 
@@ -293,7 +299,47 @@ export async function finalizeHeartbeatOutcome(params: {
       params.wake.preflight.shouldInspectPendingEvents &&
       params.prepared.inspectedSystemEventsToConsume.length
     ) {
-      consumeSelectedSystemEventEntries(sessionKey, params.prepared.inspectedSystemEventsToConsume);
+      // Consume the selected originals first: an occurrence replaced mid-turn
+      // is skipped here, and the freed slots keep continuation inserts from
+      // evicting unrelated queued entries at the capacity bound.
+      const consumed = consumeSelectedSystemEventEntries(
+        sessionKey,
+        params.prepared.inspectedSystemEventsToConsume,
+      );
+      // Partially shown events must not lose their truncation-hidden content:
+      // re-queue each remainder, but only for originals this run actually
+      // transitioned, and carrying the source owner so another agent sharing
+      // the queue can never claim the continuation.
+      const consumedEventIds = new Set(consumed.map((entry) => entry.id));
+      for (const { event: sourceEvent, remainder } of params.prepared.partialEventRemainders) {
+        if (!consumedEventIds.has(sourceEvent.id)) {
+          continue;
+        }
+        const continuationOptions: {
+          sessionKey: string;
+          contextKey?: string;
+          deliveryContext?: NonNullable<SystemEvent["deliveryContext"]>;
+        } = {
+          sessionKey,
+          ...(sourceEvent.contextKey ? { contextKey: sourceEvent.contextKey } : {}),
+          ...(sourceEvent.deliveryContext ? { deliveryContext: sourceEvent.deliveryContext } : {}),
+        };
+        const sourceOwnerAgentId = resolveSystemEventOwnerAgentId(sourceEvent);
+        enqueueSystemEvent(
+          remainder,
+          sourceOwnerAgentId
+            ? withSystemEventOwner(continuationOptions, sourceOwnerAgentId)
+            : continuationOptions,
+        );
+      }
+      const sessionStateTargets = consumed
+        .map((entry) =>
+          entry.contextKey ? decodeSessionStateNoticeContextKey(entry.contextKey) : undefined,
+        )
+        .filter((target): target is string => target !== undefined);
+      if (sessionStateTargets.length > 0) {
+        acknowledgeSessionStateNotices(sessionKey, sessionStateTargets);
+      }
     }
     return { status: "ran", durationMs: Date.now() - startedAt } as const;
   };

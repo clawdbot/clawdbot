@@ -68,6 +68,7 @@ import {
 import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,
+  selectHeartbeatEventOwnership,
   selectSystemEventsConsumedByHeartbeat,
   shouldPreflightWakeBeforeBusy,
 } from "./heartbeat-runner-prompt.js";
@@ -96,6 +97,7 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { resolveSystemEventDeliveryContext } from "./system-events.js";
 
 const log = heartbeatLog;
 const CRON_COMMAND_LANE: string = CommandLane.Cron;
@@ -389,6 +391,17 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing uses the selected conversation, not the fresh execution row.
+  // Ownership is resolved before delivery so the wake's turn-source route follows
+  // exactly the events this turn surfaces; a cap-omitted entry must not retarget
+  // the reply away from the events actually shown.
+  const eventOwnership = selectHeartbeatEventOwnership({ preflight, heartbeat });
+  const ownedEventEntrySet = new Set([
+    ...eventOwnership.handledSystemEvents,
+    ...eventOwnership.genericEvents,
+  ]);
+  const ownedTurnSourceDeliveryContext = resolveSystemEventDeliveryContext(
+    preflight.pendingEventEntries.filter((event) => ownedEventEntrySet.has(event)),
+  );
   const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg,
     agentId,
@@ -397,9 +410,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     currentSessionKey: sessionKey,
     // A base queue's route stays excluded; events on the actual isolated queue
     // own their route, including exec completion after the base route moves.
-    turnSource: preflight.session.inspectsRunQueue
-      ? preflight.turnSourceDeliveryContext
-      : undefined,
+    turnSource: preflight.session.inspectsRunQueue ? ownedTurnSourceDeliveryContext : undefined,
   });
   // Routeless ambient polls are pure model burn, but only they may skip:
   // triggered wakes (hook/manual/cron/exec), polls with queued events, and
@@ -462,6 +473,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     scheduledTasks,
     heartbeatScratchContent: preflight.heartbeatScratchContent,
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
+    ownership: eventOwnership,
   });
 
   const runSessionKey = run.sessionKey;
@@ -553,6 +565,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         scheduledTasks,
         heartbeatScratchContent: preflight.heartbeatScratchContent,
         useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
+        ownership: eventOwnership,
       });
     }
   }
@@ -569,13 +582,20 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     runSessionKey,
     outboundPolicySessionKey,
     ...heartbeatRunPrompt,
-    inspectedSystemEventsToConsume: selectSystemEventsConsumedByHeartbeat({
-      preflight,
-      hasExecCompletion,
-      hasCronEvents,
-      hasGenericEvents,
-      handledSystemEvents,
-    }),
+    partialEventRemainders: eventOwnership.partialEventRemainders,
+    // Scheduled-task turns render only the task prompt; every queued event keeps
+    // its own owner (generic entries still reach reply admission via the handoff)
+    // instead of being consumed unseen.
+    inspectedSystemEventsToConsume:
+      scheduledTasks.length > 0
+        ? []
+        : selectSystemEventsConsumedByHeartbeat({
+            preflight,
+            hasExecCompletion,
+            hasCronEvents,
+            hasGenericEvents,
+            handledSystemEvents,
+          }),
   } as const;
 }
 
