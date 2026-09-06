@@ -18,9 +18,22 @@ struct GatewayMenuCardModel: Equatable, Sendable {
     let isProbing: Bool
 
     func secondaryLine(now _: Date) -> String {
-        [self.version, self.buildId.map { String($0.prefix(7)) }, self.endpointLabel, self.transportLabel]
+        [self.version, self.buildId.flatMap(Self.shortBuild), self.endpointLabel, self.transportLabel]
             .compactMap { $0?.nonEmpty }
             .joined(separator: " · ")
+    }
+
+    /// Gateway build ids look like `2026.9.1-release-303796cd7872-2026-09-05T21-06-03.000Z`;
+    /// show the commit segment, or the whole id shortened when no commit is embedded.
+    static func shortBuild(_ buildId: String) -> String? {
+        let trimmed = buildId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        for segment in trimmed.split(separator: "-") where segment.count >= 7 {
+            if segment.allSatisfy(\.isHexDigit), segment.contains(where: \.isLetter) || segment.count >= 12 {
+                return String(segment.prefix(7))
+            }
+        }
+        return String(trimmed.prefix(7))
     }
 
     func tertiaryLine(now: Date) -> String {

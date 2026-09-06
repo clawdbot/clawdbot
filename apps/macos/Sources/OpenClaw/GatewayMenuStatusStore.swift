@@ -37,6 +37,11 @@ final class GatewayMenuStatusStore {
         profileProbe: @escaping @MainActor @Sendable (String) async throws -> Probe = { profileID in
             let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profileID)
             try Task.checkCancellation()
+            // The first request may include connecting; time a second one so the
+            // card shows the warm round-trip like the primary's lastPingMs.
+            _ = try await connection.request(
+                method: "health", params: nil, timeoutMs: 3000, retryTransportFailures: false)
+            try Task.checkCancellation()
             let start = Date()
             _ = try await connection.request(
                 method: "health", params: nil, timeoutMs: 3000, retryTransportFailures: false)

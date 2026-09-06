@@ -8,11 +8,23 @@ struct GatewayMenuCardModelTests {
 
     @Test func `secondary line omits missing facts and abbreviates builds`() {
         let cases: [(String?, String?, String?, String?, String)] = [
-            ("2026.9.1", "6b97bae123", "studio.local via ssh", nil, "2026.9.1 · 6b97bae · studio.local via ssh"),
+            (
+                "2026.9.1",
+                "2026.9.1-release-6b97bae123ab-2026-09-05T21-06-03.000Z",
+                "studio.local via ssh",
+                nil,
+                "2026.9.1 · 6b97bae · studio.local via ssh"),
+            (
+                "2026.9.2",
+                "2026.9.2-303796cd7872-2026-09-06T00-38-10.000Z",
+                "studio.local",
+                nil,
+                "2026.9.2 · 303796c · studio.local"),
             ("2026.9.1", "40a6b50abc", "stable.example", "Access", "2026.9.1 · 40a6b50 · stable.example · Access"),
             (nil, "6b97bae123", "studio.local", "token", "6b97bae · studio.local · token"),
             ("2026.9.1", nil, "studio.local", nil, "2026.9.1 · studio.local"),
             (nil, "abc", nil, nil, "abc"),
+            (nil, "2026.9.1", nil, nil, "2026.9."),
             (nil, nil, nil, nil, ""),
         ]
         for (version, buildId, endpoint, transport, expected) in cases {
