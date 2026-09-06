@@ -236,7 +236,6 @@ export function registerQrCli(program: Command) {
 
         const setupCode = encodePairingSetupCode(resolved.payload);
 
-        // --json reserves stdout for the JSON document, so it wins over --setup-code-only.
         if (opts.json) {
           defaultRuntime.writeJson({
             setupCode,

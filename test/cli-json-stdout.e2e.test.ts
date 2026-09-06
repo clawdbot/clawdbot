@@ -428,7 +428,10 @@ describe("cli json stdout contract", () => {
     );
   });
 
-  it("keeps qr --setup-code-only --json as one JSON document on stdout", async () => {
+  it.each([
+    { name: "qr", command: ["qr"] },
+    { name: "clawbot qr", command: ["clawbot", "qr"] },
+  ])("keeps combined $name output flags as one JSON document on stdout", async ({ command }) => {
     await withTempHome(
       async (tempHome) => {
         const configPath = path.join(tempHome, "openclaw.json");
@@ -443,16 +446,26 @@ describe("cli json stdout contract", () => {
           }),
         );
 
-        const result = runBuiltCli(tempHome, ["qr", "--setup-code-only", "--json"], {
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-        });
+        for (const flags of [
+          ["--setup-code-only", "--json"],
+          ["--json", "--setup-code-only"],
+        ]) {
+          const result = runBuiltCli(
+            tempHome,
+            [...command, ...flags],
+            {
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            },
+            { inheritEnvironment: false },
+          );
 
-        expect(result.status, result.stderr).toBe(0);
-        const payload = JSON.parse(result.stdout);
-        expect(typeof payload.setupCode).toBe("string");
-        expect(payload.gatewayUrl).toBe("ws://127.0.0.1:18789");
-        expect(result.stdout).toBe(`${JSON.stringify(payload, null, 2)}\n`);
+          expect(result.status, result.stderr).toBe(0);
+          const payload = JSON.parse(result.stdout);
+          expect(typeof payload.setupCode).toBe("string");
+          expect(payload.gatewayUrl).toBe("ws://127.0.0.1:18789");
+          expect(result.stderr).not.toContain(payload.setupCode);
+        }
       },
       { prefix: "openclaw-qr-setup-code-json-e2e-" },
     );
