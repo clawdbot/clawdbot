@@ -604,6 +604,18 @@ describe("openshell sandbox backend e2e", () => {
         await expect(bridge.readFile({ filePath: "nested/remote-only.txt" })).resolves.toEqual(
           Buffer.from("hello-remote\n"),
         );
+        await bridge.writeFile({ filePath: ".mcp.json", data: "{}\n" });
+        await expect(
+          backend.discoverCapabilityRoots?.({
+            roots: [{ id: "workspace", path: backend.workdir }],
+          }),
+        ).resolves.toEqual([
+          expect.objectContaining({
+            id: "workspace",
+            path: backend.workdir,
+            mcpConfig: { path: `${backend.workdir}/.mcp.json`, contents: "{}\n" },
+          }),
+        ]);
 
         const verifyResult = await runCommand({
           command: OPENCLAW_OPENSHELL_COMMAND,

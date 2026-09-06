@@ -122,13 +122,18 @@ def scan(fd, location, depth):
         except OSError:
             warn("capability directory scan failed")
 
-fd = os.open("/", dir_flags)
+fd = None
 try:
-    for part in root.split("/"):
-        if part:
-            child_fd = open_dir(fd, part)
-            os.close(fd)
-            fd = child_fd
+    parts = [part for part in root.split("/") if part]
+    if not parts:
+        raise OSError("capability root must not be filesystem root")
+    # OpenShell policies grant managed roots but need not grant directory reads on /.
+    # Pin the first component directly, then retain no-follow traversal below it.
+    fd = os.open("/" + parts[0], dir_flags)
+    for part in parts[1:]:
+        child_fd = open_dir(fd, part)
+        os.close(fd)
+        fd = child_fd
     config_path = os.path.join(root, ".mcp.json")
     if not any(config_path == p or config_path.startswith(p + "/") for p in excluded):
         config = read_text(fd, ".mcp.json", config_path)
@@ -138,7 +143,8 @@ try:
 except OSError:
     result["error"] = "capability root is unavailable or symlinked"
 finally:
-    os.close(fd)
+    if fd is not None:
+        os.close(fd)
 print(json.dumps(result, ensure_ascii=True))
 ' "$1" "$2"
 `;
