@@ -366,12 +366,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         try {
           await this.ensureProviderInitialized();
         } catch (err) {
-          if (
-            this.providerRequirement.mode !== "optional" ||
-            (!options?.allowEmbeddingBootstrapFallback && !hadBootstrapFailure)
-          ) {
+          if (this.providerRequirement.mode !== "optional") {
             throw err;
           }
+          // Background indexing must establish optional keyword fallback before the first search.
           this.markEmbeddingBootstrapFailure(err);
           forceFtsOnly = true;
         }

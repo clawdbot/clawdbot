@@ -1,8 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
+import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
 import { isContextOverflowError } from "../agents/failover/classify.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import {
   readNestedToolActivity,
   nestedToolActivityContent,
@@ -136,6 +138,7 @@ function isContextOverflowAssistantError(message: Record<string, unknown>): bool
 function getAssistantErrorFallbackText(message: Record<string, unknown>): string {
   return (
     formatProviderRefusalText(message) ??
+    renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(message) }) ??
     (isContextOverflowAssistantError(message)
       ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
       : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT)

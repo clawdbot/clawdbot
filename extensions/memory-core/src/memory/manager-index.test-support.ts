@@ -25,7 +25,7 @@ type GetMemorySearchManager = typeof import("./index.js").getMemorySearchManager
 type ManagerConfig = Parameters<GetMemorySearchManager>[0]["cfg"];
 type ManagerResult = Awaited<ReturnType<GetMemorySearchManager>>;
 
-export type ManagerIndexFixtureConfig = {
+type ManagerIndexFixtureConfig = {
   extraPaths?: string[];
   sources?: Array<"memory" | "sessions">;
   sessionMemory?: boolean;
@@ -45,12 +45,6 @@ export type ManagerIndexFixtureConfig = {
   ftsTokenizer?: "unicode61" | "trigram";
   cacheEnabled?: boolean;
   minScore?: number;
-  hybrid?: {
-    enabled: boolean;
-    vectorWeight?: number;
-    textWeight?: number;
-    temporalDecay?: { enabled: boolean };
-  };
 };
 
 type ProviderCall = {
@@ -525,7 +519,6 @@ export function createManagerIndexFixture(deps: {
       sources: ["memory", "sessions"],
       sessionMemory: true,
       minScore: 0,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
     const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
     trackManager(manager);

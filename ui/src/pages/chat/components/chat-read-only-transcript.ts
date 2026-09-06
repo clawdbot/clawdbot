@@ -35,6 +35,7 @@ export function renderReadOnlyTranscript(params: {
       userId: chat.userId,
       userName: chat.userName,
       userAvatar: chat.userAvatar,
+      avatarPlacement: chat.avatarPlacement,
       // Peer authors link to their Activity feed here exactly as in the live transcript.
       personActivity: chat.personActivity,
       basePath: chat.basePath,

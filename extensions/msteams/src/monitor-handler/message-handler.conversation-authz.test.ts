@@ -26,7 +26,7 @@ vi.mock("../graph-thread.js", () => ({
   fetchChannelMessage: vi.fn(async () => undefined),
   fetchThreadReplies: vi.fn(async () => []),
   fetchChatMessageText: vi.fn(async () => undefined),
-  formatThreadContext: vi.fn(() => ""),
+  buildThreadContext: vi.fn(() => []),
   stripHtmlFromTeamsMessage: vi.fn((value: string) => value),
 }));
 

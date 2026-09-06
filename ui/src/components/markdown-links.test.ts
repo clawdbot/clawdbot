@@ -295,6 +295,41 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(links[1]?.textContent).toBe("bar.ts:7:3");
     });
 
+    it("targets the first line of a range suffix", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`src/commands/auth-choice-options.static.ts:26-35`", {
+          fileLinks: true,
+        }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe("src/commands/auth-choice-options.static.ts");
+      expect(link?.dataset.fileLine).toBe("26");
+    });
+
+    it("does not link a shorter prefix of a numeric-suffix filename", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("rotated logs/app.log.1 but see src/lib/foo.ts.", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual(["src/lib/foo.ts"]);
+      expect(fragment.textContent).toContain("logs/app.log.1");
+    });
+
+    it("does not link dotted version numbers but keeps authored digit-led extensions", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)",
+          {
+            fileLinks: true,
+          },
+        ),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual(["assets/part.3mf"]);
+    });
+
     it("links Windows absolute paths", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {
@@ -585,6 +620,94 @@ describe("toSanitizedMarkdownHtml links", () => {
     ])("does not link %s", (_kind, input) => {
       const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
       expect(fragment.querySelector("a[data-session-key]")).toBeNull();
+    });
+
+    it.each([
+      ["absolute href", `[Open session](${location.origin}/chat/roboclaw/d0effac9)`],
+      ["bare URL", `${location.origin}/chat/roboclaw/d0effac9`],
+      ["relative href", "[Open session](/chat/roboclaw/d0effac9)"],
+      ["literal with a file extension", "[Open session](/chat/roboclaw/d0effac9.md)"],
+      ["inline URL", `\`${location.origin}/chat/roboclaw/d0effac9\``],
+      ["inline relative URL", "`/chat/roboclaw/d0effac9`"],
+    ])("decorates host-local session URLs in %s", (_kind, input) => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(input, { sessionLinks: true, fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.getAttribute("href")).toContain("/chat/roboclaw/d0effac9");
+      expect(link?.hasAttribute("target")).toBe(false);
+      expect(link?.hasAttribute("data-file-path")).toBe(false);
+      expect(link?.hasAttribute("data-session-key")).toBe(false);
+      expect(fragment.querySelector("a a")).toBeNull();
+    });
+
+    it.each(["", "?view=full#latest"])(
+      "captures the cleaned session URL with suffix %j before trailing CJK prose",
+      (suffix) => {
+        const href = `${location.origin}/chat/main/d0effac9${suffix}`;
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(`${href}重新解读`, { sessionLinks: true, fileLinks: true }),
+        );
+        const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+        expect(link.getAttribute("href")).toBe(href);
+        expect(link.dataset.sessionHref).toBe(href);
+        expect(link.textContent).toBe(href);
+        expect(link.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+        expect(link.nextSibling?.textContent).toBe("重新解读");
+      },
+    );
+
+    it.each([
+      "https://elsewhere.example/chat/roboclaw/d0effac9",
+      "[External session](https://elsewhere.example/chat/roboclaw/d0effac9)",
+      "`https://elsewhere.example/chat/roboclaw/d0effac9`",
+      "[Other page](/activity)",
+    ])("keeps other destinations undecorated: %s", (input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      expect(fragment.querySelector(".markdown-session-link")).toBeNull();
+      expect(fragment.querySelector("[data-session-key]")).toBeNull();
+      if (input.startsWith("`")) {
+        expect(fragment.querySelector("a")).toBeNull();
+      }
+    });
+
+    it.each([
+      ["source", "src/utils/foo.ts", "file"],
+      ["root session", "/chat/main/cafebabe", "session"],
+      ["absolute session", `${location.origin}/chat/main/cafebabe`, "session"],
+      ["relative route", "chat/main/x", "plain"],
+    ])("classifies %s independently of the current chat route", (label, href, kind) => {
+      const previous = location.href;
+      history.replaceState(null, "", "/chat/main/d0effac9");
+      try {
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(`[${label}](${href})`, { sessionLinks: true, fileLinks: true }),
+        );
+        const link = fragment.querySelector<HTMLAnchorElement>("a")!;
+        expect(link.classList.contains("markdown-session-link")).toBe(kind === "session");
+        expect(link.hasAttribute("data-session-href")).toBe(kind === "session");
+        expect(link.classList.contains("markdown-file-link")).toBe(kind === "file");
+        expect(link.dataset.filePath).toBe(kind === "file" ? href : undefined);
+        expect(link.getAttribute("href")).toBe(kind === "file" ? null : href);
+      } finally {
+        history.replaceState(null, "", previous);
+      }
+    });
+
+    it("keeps ordinary inline code out of session routes on a chat page", () => {
+      const previous = location.href;
+      history.replaceState(null, "", "/chat/main/d0effac9");
+      try {
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml("`README.md` `src/chat.ts` `ordinary text`", {
+            sessionLinks: true,
+          }),
+        );
+        expect(fragment.querySelector("a")).toBeNull();
+        expect(fragment.querySelectorAll("code")).toHaveLength(3);
+      } finally {
+        history.replaceState(null, "", previous);
+      }
     });
 
     it("keeps punctuation outside the link and rejects embedded word matches", () => {

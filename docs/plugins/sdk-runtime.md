@@ -611,6 +611,10 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `plugins.entries.<id>.subagent.allowedModels` can restrict overrides to
     canonical `provider/model` targets. The same policy applies to `complete`;
     request-scoped calls retain their authenticated client's override authority.
+    The check uses the destination agent's model configuration, including exact
+    configured model IDs, and applies to the plugin's initial override. Configured
+    defaults, operator-installed model routing hooks, and automatic model fallbacks
+    retain their own selection policies.
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 

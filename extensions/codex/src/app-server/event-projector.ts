@@ -340,15 +340,15 @@ export class CodexAppServerEventProjector {
       case "error": {
         this.usageProjection.invalidateContext();
         if (params.willRetry === true) {
+          this.eventProjection.handleRetry(params);
           break;
         }
         const codexErrorInfo = isJsonObject(params.error) ? params.error.codexErrorInfo : undefined;
-        const message = readCodexErrorNotificationMessage(params);
         const compactionFailure = codexErrorInfo === "other" && this.isCompacting();
         this.settledTurnFailureFinalizationAllowed =
           codexErrorInfo === "serverOverloaded" || compactionFailure;
         this.terminalFailure.record({
-          message,
+          message: readCodexErrorNotificationMessage(params),
           codexErrorInfo,
           rateLimits: this.options.readRecentRateLimits?.(),
           fallbackMessage: "codex app-server error",

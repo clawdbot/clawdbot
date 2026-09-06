@@ -398,6 +398,14 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           deviceId: entry.id,
           desktopEnvironment,
           pendingRequestId,
+          onEditAlias: entry.device
+            ? () =>
+                props.onDeviceRename({
+                  id: entry.id,
+                  name: entry.name,
+                  operatorLabel: entry.device?.operatorLabel,
+                })
+            : undefined,
           onRemove: () => props.onInventoryRemove(toRemovalRequest(entry)),
         })}
       </div>
