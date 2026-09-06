@@ -391,6 +391,14 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 | `searchDefaultLimit`  | `8`                            | clamped to `maxSearchLimit`                     |
 | `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
 
+`timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
+computation, and inline tool waits share that budget; approval waits pause it.
+The model-facing `exec` description includes the effective limit. Blocking guest
+computation that exhausts the budget fails with `timeout`. Unfinished tool calls
+can instead return `waiting`, so a later `wait` can resume them with a fresh call
+budget. When the shell `exec` tool is available, use it for heavier computation
+and keep guest JavaScript focused on coordinating tools and processing results.
+
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
 for that run; it does not silently expose normal tools as a fallback. This
 holds for `true` and for `"auto"` runs where the model resolves as preferred:

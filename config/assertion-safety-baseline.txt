@@ -1458,7 +1458,7 @@ packages/ai/src/providers/clean-for-gemini.ts	15
 packages/ai/src/providers/google-shared.ts	3
 packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	27
+packages/ai/src/providers/openai-chatgpt-responses.ts	26
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
 packages/ai/src/providers/openai-completions.ts	10
 packages/ai/src/providers/openai-reasoning-effort.ts	6
@@ -2387,7 +2387,7 @@ src/commands/backup-schedule.ts	1
 src/commands/backup-shared.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
-src/commands/channel-setup/discovery.ts	11
+src/commands/channel-setup/discovery.ts	10
 src/commands/channel-test-registry.ts	2
 src/commands/channels/add-wizard.ts	2
 src/commands/channels/add.ts	3
@@ -2690,7 +2690,7 @@ src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	4
 src/cron/task-run-detail.ts	2
 src/daemon/arg-split.ts	2
-src/daemon/launchd-install.ts	7
+src/daemon/launchd-install.ts	6
 src/daemon/launchd-lifecycle.ts	4
 src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2

@@ -427,6 +427,7 @@ interface OllamaChatResponse extends Record<string, unknown> {
   total_duration?: number;
   load_duration?: number;
   prompt_eval_count?: number;
+  prompt_eval_cached_count?: number;
   prompt_eval_duration?: number;
   eval_count?: number;
   eval_duration?: number;
@@ -501,6 +502,10 @@ function resolveUsageCount(
     return estimate;
   }
   return 0;
+}
+
+function resolveOptionalUsageCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 type InputContentPart =
@@ -848,13 +853,27 @@ export function buildAssistantMessage(
     }
   }
 
+  const promptTokens = resolveUsageCount(response.prompt_eval_count, usageFallback?.input);
+  const outputTokens = resolveUsageCount(response.eval_count, usageFallback?.output);
+  const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
+  // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
+  const cacheRead =
+    reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
+
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
     stopReason: resolveOllamaStopReason(response),
     usage: buildUsageWithNoCost({
-      input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
-      output: resolveUsageCount(response.eval_count, usageFallback?.output),
+      input: promptTokens - (cacheRead ?? 0),
+      output: outputTokens,
+      ...(cacheRead === undefined
+        ? {}
+        : {
+            cacheRead,
+            cacheWrite: 0,
+            totalTokens: promptTokens + outputTokens,
+          }),
     }),
   });
 }

@@ -121,13 +121,34 @@ const writePersistedInstalledPluginIndexInstallRecords: Mock<WritePersistedInsta
   });
 export const readPersistedInstalledPluginIndexMock: Mock<ReadPersistedInstalledPluginIndexFn> =
   vi.fn<ReadPersistedInstalledPluginIndexFn>(async () => null);
-export const writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock: Mock<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn> =
-  vi.fn<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn>(async (records) => {
+const writeMockInstalledIndexWithLease: WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn =
+  async (records) => {
     const previous = await readPersistedInstalledPluginIndexMock();
+    const row = (index: InstalledPluginIndex, revision: number) => ({
+      state_key: "plugins.installedIndex",
+      value_json: JSON.stringify({ index, revision }),
+      updated_at_ms: revision,
+    });
+    const before = previous ? row(previous, mockInstalledPluginIndexRevision) : null;
     mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
     mockInstalledPluginIndexRevision += 1;
-    return { previous, revision: mockInstalledPluginIndexRevision };
-  });
+    return {
+      previous,
+      revision: mockInstalledPluginIndexRevision,
+      mutation: {
+        databasePath: "/tmp/openclaw-state/openclaw.sqlite",
+        before,
+        after: row(
+          createTestInstalledPluginIndex({ policyHash: "test-policy", installRecords: records }),
+          mockInstalledPluginIndexRevision,
+        ),
+      },
+    };
+  };
+export const writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock: Mock<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn> =
+  vi.fn<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn>(
+    writeMockInstalledIndexWithLease,
+  );
 export const restorePersistedInstalledPluginIndexIfCurrentMock: Mock<RestorePersistedInstalledPluginIndexIfCurrentFn> =
   vi.fn<RestorePersistedInstalledPluginIndexIfCurrentFn>(async (index, expectedRevision) => {
     if (mockInstalledPluginIndexRevision !== expectedRevision) {
@@ -974,12 +995,7 @@ export function resetPluginsCliTestState() {
   });
   readPersistedInstalledPluginIndexMock.mockResolvedValue(null);
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockImplementation(
-    async (records) => {
-      const previous = await readPersistedInstalledPluginIndexMock();
-      mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
-      mockInstalledPluginIndexRevision += 1;
-      return { previous, revision: mockInstalledPluginIndexRevision };
-    },
+    writeMockInstalledIndexWithLease,
   );
   restorePersistedInstalledPluginIndexIfCurrentMock.mockImplementation(
     async (index, expectedRevision) => {

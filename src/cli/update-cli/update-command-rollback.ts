@@ -66,20 +66,18 @@ export async function rollbackFailedUpdate(params: {
   const port = before?.stopped
     ? await resolveUpdatedGatewayRestartPort({ config: params.config, serviceEnv: env })
     : undefined;
-  const failed = (reason: string) => {
-    return {
-      result: {
-        ...result,
-        status: "error" as const,
-        reason:
-          result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
-            ? (params.result.reason ?? reason)
-            : reason,
-      },
-      rolledBack: false,
-      stoppedForRollback,
-    };
-  };
+  const failed = (reason: string) => ({
+    result: {
+      ...result,
+      status: "error" as const,
+      reason:
+        result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
+          ? (params.result.reason ?? reason)
+          : reason,
+    },
+    rolledBack: false,
+    stoppedForRollback,
+  });
   const stateUnchanged = async () => {
     const baseline = params.schemaVersions;
     const current = await readUpdateStateSchemaVersions({
@@ -179,16 +177,17 @@ export async function rollbackFailedUpdate(params: {
       after: undefined,
       steps: [...result.steps, restored],
     };
-    if (activePackageRoot) {
-      result.after = await readPackageUpdateIdentity(activePackageRoot);
-    }
     if (restored.exitCode === 0) {
+      // The transaction verified the previous package. Do not gate its restart
+      // on an extra diagnostic read whose result would be discarded.
       result.after = result.before;
       result.recovery = {
         serviceRestartSafe: false,
         packageRollbackVerified: true,
         reason: "runtime-verification-failed",
       };
+    } else if (activePackageRoot) {
+      result.after = await readPackageUpdateIdentity(activePackageRoot);
     }
     if (opts.run) {
       recordUpdateRunStep(

@@ -2,6 +2,8 @@
 import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
+import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -33,7 +35,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
     options,
     createClient: () => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      return createClient(model, apiKey, options?.headers);
+      return createClient(model, apiKey, resolveOpencodeSessionHeaders(model, options));
     },
     buildParams: () => buildParams(model, context, options),
     nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
@@ -74,10 +76,9 @@ function createClient(
     httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
   }
   if (model.headers || optionsHeaders) {
-    httpOptions.headers = resolveAiTransportHeaderSentinels({
-      ...model.headers,
-      ...optionsHeaders,
-    });
+    httpOptions.headers = resolveAiTransportHeaderSentinels(
+      mergeTransportHeaders(model.headers, optionsHeaders),
+    );
   }
 
   // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.

@@ -7,6 +7,7 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import type {
   Context,
   Model,
@@ -80,7 +81,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      return createClient(model, context, apiKey, options?.headers, cacheSessionId);
+      return createClient(
+        model,
+        context,
+        apiKey,
+        resolveOpencodeSessionHeaders(model, options),
+        cacheSessionId,
+      );
     },
     buildParams: (_requestModel, replayMode) => buildParams(model, context, options, replayMode),
     processStreamOptions: {

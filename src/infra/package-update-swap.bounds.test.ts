@@ -190,24 +190,57 @@ describe("package verification bounds", () => {
     },
   );
 
-  it("bounds a single directory before descending into its children", async () => {
+  it.each([
+    { shape: "single directory", width: 50_000 },
+    { shape: "nested directories", width: 30_000 },
+  ])("bounds the whole-tree inventory across $shape", async ({ width }) => {
     await withTestDir({ prefix: "openclaw-rollback-entry-bound-" }, async (base) => {
-      const { params, packageRoot } = await createPackageSwapFixture(base);
-      const directory = await fs.opendir(packageRoot);
-      const child = await directory.read();
-      expect(child).not.toBeNull();
-      // Select the promise overload instead of Dir.read's callback overload.
-      const promiseReader: { read(): Promise<typeof child> } = directory;
-      const read = vi.spyOn(promiseReader, "read").mockResolvedValue(child);
-      vi.spyOn(fs, "opendir").mockResolvedValue(directory);
-      const open = vi.spyOn(fs, "open");
+      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+      const nested = path.join(packageRoot, "dist");
+      const rootChild = (await fs.readdir(packageRoot, { withFileTypes: true })).find(
+        (entry) => entry.name === "dist",
+      )!;
+      const [nestedChild] = await fs.readdir(nested, { withFileTypes: true });
+      const opendir = fs.opendir.bind(fs);
+      let discovered = 0;
+      vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+        const directory = await opendir(...args);
+        if (![packageRoot, nested].includes(String(args[0]))) {
+          return directory;
+        }
+        const child = String(args[0]) === packageRoot ? rootChild : nestedChild!;
+        // Model wide inventories without allocating their contents on disk.
+        const promiseReader: { read(): Promise<typeof child | null> } = directory;
+        let returned = 0;
+        vi.spyOn(promiseReader, "read").mockImplementation(async () => {
+          if (returned++ >= width) {
+            return null;
+          }
+          discovered++;
+          return child;
+        });
+        return directory;
+      });
+      const open = vi.spyOn(fs, "open").mockRejectedValue(new Error("unexpected file read"));
       const beforeActivate = vi.fn();
-      const result = await swapStagedPackageInstall({ ...params, beforeActivate, timeoutMs: 5000 });
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({
+        ...params,
+        beforeActivate,
+        onLiveMutation,
+        timeoutMs: 5000,
+      });
       expect(result.status).toBe("failed");
-      expect(result.step.stderrTail).toContain("entry limit exceeded");
-      expect(read).toHaveBeenCalledTimes(50_000);
-      expect(open).not.toHaveBeenCalled();
       expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"1.0.0"',
+      );
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+      // Includes one overflow entry; the root itself consumes the other slot.
+      expect(discovered).toBeLessThanOrEqual(50_000);
+      expect(result.step.stderrTail).toContain("entry limit exceeded");
+      expect(open).not.toHaveBeenCalled();
     });
   });
 });

@@ -126,13 +126,11 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
     const hardlinks = new Map<string, string>();
     let bytes = 0;
+    let remainingEntries = MAX_TREE_ENTRIES - 1;
     let device: bigint | undefined;
     let rootIdentity = "";
 
     async function visit(file: string, relative: string): Promise<void> {
-      if (observed.length >= MAX_TREE_ENTRIES) {
-        throw new Error("Package rollback verification entry limit exceeded");
-      }
       const stat = await read(() => fs.lstat(file, { bigint: true }));
       if (stat.ino === 0n || (device !== undefined && device !== stat.dev)) {
         throw new Error("Package rollback filesystem identity is unavailable");
@@ -188,7 +186,10 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
         }
         digest.update(JSON.stringify(["file", owner, contents.digest]));
       } else if (stat.isDirectory()) {
-        const children = await entries(file, MAX_TREE_ENTRIES - observed.length);
+        const children = await entries(file, remainingEntries);
+        // Reserve pending siblings before descending so wide ancestor lists
+        // cannot each retain another full tree budget.
+        remainingEntries -= children.length;
         for (const child of children) {
           await visit(path.join(file, child), relative ? `${relative}/${child}` : child);
         }
