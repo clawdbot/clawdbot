@@ -628,6 +628,27 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("preserves ordinary files inside directories named like AppleDouble SQLite sidecars", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-appledouble-directory-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        await state.writeText("._archive.sqlite/notes.txt", "ordinary content\n");
+        const result = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        expect(entries.some((entry) => entry.endsWith("/state/._archive.sqlite/notes.txt"))).toBe(
+          true,
+        );
+      },
+    );
+  });
+
   it.each<{
     configRelativePath: string;
     onlyConfig: boolean;

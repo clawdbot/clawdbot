@@ -109,6 +109,7 @@ function isAppleDoubleSqliteSidecar(sourcePath: string): boolean {
 export function classifyBackupSqliteSource(
   sourcePath: string,
   inventory: BackupResourceInventory,
+  options: { isRegularFile?: boolean } = {},
 ): "excluded" | "sqlite" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
   const transient = isTransientSqliteBackupPath(resolvedSourcePath);
@@ -124,7 +125,7 @@ export function classifyBackupSqliteSource(
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
   }
-  if (isAppleDoubleSqliteSidecar(resolvedSourcePath)) {
+  if (options.isRegularFile !== false && isAppleDoubleSqliteSidecar(resolvedSourcePath)) {
     return "excluded";
   }
   if (transient) {
