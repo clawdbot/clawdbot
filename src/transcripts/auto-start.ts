@@ -223,7 +223,7 @@ export function createTranscriptsAutoStartService(
     attempt: number,
     store: TranscriptsStore,
   ) => {
-    if (stopped || startedSessions.has(entry.sessionId ?? "")) {
+    if (stopped) {
       return;
     }
     const capture: OwnedCapture = {
@@ -233,6 +233,14 @@ export function createTranscriptsAutoStartService(
     };
     void runPending(async (controller) => {
       try {
+        // A consumed fixed ID stays suppressed after capture ends; settle the
+        // duplicate's retry diagnostic without reopening its saved history.
+        if (startedSessions.has(entry.sessionId ?? "")) {
+          throw new TranscriptStartError(
+            "id-conflict",
+            new Error("transcripts session already started by this service"),
+          );
+        }
         await startCapture(capture, index, {
           store,
           abortSignal: controller.signal,
