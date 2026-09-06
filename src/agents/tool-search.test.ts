@@ -256,7 +256,15 @@ describe("Tool Search", () => {
         ],
       }),
     ).toBe(true);
-    expect(Value.Check(limitSearchTool.parameters, { queries: [] })).toBe(false);
+    // Argument validation runs before execute; the parser owns empty/null handling.
+    for (const input of [
+      { queries: [] },
+      { query: null, queries: [{ query: "calendar" }] },
+      { query: "calendar", queries: [] },
+      { query: "calendar", queries: null },
+    ]) {
+      expect(Value.Check(limitSearchTool.parameters, input)).toBe(true);
+    }
     expect(
       Value.Check(limitSearchTool.parameters, {
         queries: Array.from({ length: 17 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
@@ -425,6 +433,16 @@ describe("Tool Search", () => {
 
     const groups = (details: Record<string, unknown>) =>
       details.results as Array<{ query: string; candidates: Array<{ name: string }> }>;
+
+    // Every served shape must first pass the agent loop's argument validation.
+    for (const input of [
+      { query: "calendar", limit: 1, queries: [{ query: "Slack" }] },
+      { query: "", queries: [{ query: "Slack" }] },
+      { query: null, queries: [{ query: "Slack" }] },
+      { query: "calendar", queries: [] },
+    ]) {
+      expect(Value.Check(searchTool.parameters, input)).toBe(true);
+    }
 
     // Strict-schema models send every property: the single query joins the batch first.
     const mixed = groups(

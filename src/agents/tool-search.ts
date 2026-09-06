@@ -303,32 +303,38 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; when both are set, query is searched as the first batch entry. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.Optional(
-          Type.String({
+          Type.Union([Type.String(), Type.Null()], {
             description:
-              "Single search query, in English. Prefer queries alone for several searches; a query set beside queries runs as the first batch entry.",
+              "Single search query, in English. Prefer queries alone for several searches; a query set beside queries runs as the first batch entry. Null or empty is ignored when queries is present.",
           }),
         ),
         limit: Type.Optional(
           Type.Integer({ minimum: 1, description: "Maximum number of single-search results." }),
         ),
         queries: Type.Optional(
-          Type.Array(
-            Type.Object({
-              query: Type.String({
-                minLength: 1,
-                maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-                description: "Search query, in English. Describe the capability you need.",
-              }),
-              limit: Type.Optional(
-                Type.Integer({
-                  minimum: 1,
-                  description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+          Type.Union(
+            [
+              // Strict-schema models send every property; an empty or null batch
+              // beside a real query must validate so the parser can serve the query.
+              Type.Array(
+                Type.Object({
+                  query: Type.String({
+                    minLength: 1,
+                    maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+                    description: "Search query, in English. Describe the capability you need.",
+                  }),
+                  limit: Type.Optional(
+                    Type.Integer({
+                      minimum: 1,
+                      description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+                    }),
+                  ),
                 }),
+                { maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES },
               ),
-            }),
+              Type.Null(),
+            ],
             {
-              minItems: 1,
-              maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
               description: `Independent searches. Prefer this alone for several searches; a non-empty query beside it runs as the first entry. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
             },
           ),
