@@ -1,10 +1,11 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import Testing
 
 /// Temporary before/after proof; remove after both CI images have been exported.
 @MainActor
-func writeCronSummaryProof(_ row: NSView, label: String) throws {
+func cronSummaryProofLabels(in row: NSView, title: String) async throws -> [String] {
     var repository = URL(fileURLWithPath: #filePath).resolvingSymlinksInPath()
     for _ in 0..<5 {
         repository.deleteLastPathComponent()
@@ -15,10 +16,115 @@ func writeCronSummaryProof(_ row: NSView, label: String) throws {
     let output = repository.appendingPathComponent(".artifacts/mac-cron-summary-proof", isDirectory: true)
     try #require(output.resolvingSymlinksInPath().path == output.path)
     try files.createDirectory(at: output, withIntermediateDirectories: true)
+    let hadWindowAtCapture = row.window != nil
     let bitmap = try #require(row.bitmapImageRepForCachingDisplay(in: row.bounds))
     row.cacheDisplay(in: row.bounds, to: bitmap)
     let png = try #require(bitmap.representation(using: .png, properties: [:]))
     try png.write(to: output.appendingPathComponent("summary.png"), options: .withoutOverwriting)
-    try Data("\(label)\n".utf8).write(
+
+    // Use the existing AX materialization operation once; never inventory the returned windows.
+    let materialization = await Task.detached {
+        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        var windows: CFTypeRef?
+        return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
+    }.value
+
+    let maximumElements = 64
+    let maximumChildren = 64
+    let maximumDepth = 8
+    let maximumTextLength = 256
+    var elements: [[String: Any]] = []
+    var labels: [String] = []
+    var visited = Set<ObjectIdentifier>()
+    var truncations = Set<String>()
+    var repeatedObjects = 0
+    var outsideRowObjects = 0
+
+    func attribute(_ value: Any?) -> [String: Any] {
+        guard let value else { return ["state": "unknown"] }
+        let text: String
+        let kind: String
+        if let string = value as? String {
+            text = string
+            kind = "string"
+        } else if let number = value as? NSNumber {
+            text = number.stringValue
+            kind = "number"
+        } else {
+            return ["state": "non-scalar"]
+        }
+        let prefix = text.prefix(maximumTextLength + 1)
+        let truncated = prefix.count > maximumTextLength
+        if truncated { truncations.insert("text") }
+        return [
+            "state": "observed",
+            "kind": kind,
+            "text": String(prefix.prefix(maximumTextLength)),
+            "truncated": truncated,
+        ]
+    }
+
+    func visit(_ element: AnyObject, path: String, depth: Int) {
+        guard depth <= maximumDepth else {
+            truncations.insert("depth")
+            return
+        }
+        guard elements.count < maximumElements else {
+            truncations.insert("elements")
+            return
+        }
+        if element is NSWindow || element is NSApplication {
+            outsideRowObjects += 1
+            return
+        }
+        let view = element as? NSView
+        if let view, view !== row, !view.isDescendant(of: row) {
+            outsideRowObjects += 1
+            return
+        }
+        guard visited.insert(ObjectIdentifier(element)).inserted else {
+            repeatedObjects += 1
+            return
+        }
+        let subviews = view?.subviews ?? []
+        let children = element.accessibilityChildren?()
+        let label = element.accessibilityLabel?()
+        if let label { labels.append(label) }
+        elements.append([
+            "path": path, "depth": depth, "isView": view != nil,
+            "role": attribute(element.accessibilityRole?()?.rawValue),
+            "label": attribute(label), "title": attribute(element.accessibilityTitle?()),
+            "value": attribute(element.accessibilityValue?()),
+            "viewChildren": attribute(view.map { _ in subviews.count }),
+            "accessibilityChildren": attribute(children?.count),
+        ])
+        if subviews.count > maximumChildren || (children?.count ?? 0) > maximumChildren {
+            truncations.insert("children")
+        }
+        for (index, child) in subviews.prefix(maximumChildren).enumerated() {
+            visit(child, path: "\(path).view[\(index)]", depth: depth + 1)
+        }
+        for (index, child) in (children ?? []).prefix(maximumChildren).enumerated() {
+            visit(child as AnyObject, path: "\(path).ax[\(index)]", depth: depth + 1)
+        }
+    }
+    visit(row, path: "row", depth: 0)
+    let observation: [String: Any] = [
+        "schemaVersion": 1, "mode": "owned-row-diagnostic", "title": attribute(title),
+        "lookupPrefix": attribute("\(title), "), "rowBounds": NSStringFromRect(row.bounds),
+        "rowHadWindowAtCapture": hadWindowAtCapture, "rowHasWindow": row.window != nil,
+        "materializationStatus": materialization.rawValue,
+        "limits": [
+            "elements": maximumElements,
+            "childrenPerList": maximumChildren,
+            "depth": maximumDepth,
+            "textCharacters": maximumTextLength,
+        ],
+        "truncations": truncations.sorted(), "repeatedObjectsSkipped": repeatedObjects,
+        "outsideRowObjectsSkipped": outsideRowObjects, "elements": elements,
+    ]
+    try JSONSerialization.data(withJSONObject: observation, options: [.prettyPrinted, .sortedKeys]).write(
         to: output.appendingPathComponent("summary-label.txt"), options: .withoutOverwriting)
+    try #require(materialization == .success)
+    return labels
 }

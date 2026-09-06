@@ -27,15 +27,12 @@ struct StatusMenuSummariesTests {
             }
             window.orderFront(nil)
             row.layoutSubtreeIfNeeded()
-            let labels = try await AppKitTestSupport.accessibilityElements(in: row).compactMap {
-                $0.accessibilityLabel?()
-            }
+            let labels = try await cronSummaryProofLabels(in: row, title: item.title)
             let label = try #require(labels.first { $0.hasPrefix("\(item.title), ") })
             let preview = try #require(item.submenu).items.filter {
                 ($0.representedObject as? String)?.hasPrefix("cron.job.") == true
             }
             #expect(preview.count == 8)
-            try writeCronSummaryProof(row, label: label)
             #expect(label == "\(item.title), 201")
         }
     }
