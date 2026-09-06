@@ -1,0 +1,170 @@
+name: Watch RTC local archive measurement
+
+on:
+  push:
+    branches: [codex/watch-rtc-cache-probe-20260906]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watch-rtc-cache-probe-20260906
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    if: github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/codex/watch-rtc-cache-probe-20260906'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select the existing iOS CI toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          [[ "$xcode_version" == 26.6* ]]
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          time rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+          command -v tar
+          command -v zstd
+
+      - name: Measure cold build, relocated restore, and source freshness
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import tempfile
+          import time
+          import tomllib
+
+          checkout = Path.cwd()
+          original = checkout / "apps/shared/OpenClawWatchRTC"
+          work = Path(tempfile.mkdtemp(prefix="watch-rtc-probe-", dir=os.environ["RUNNER_TEMP"]))
+          source = work / "source"
+          cold = work / "cold"
+          restored = work / "restored"
+          archive = work / "target.tar.zst"
+          results = {"timings_seconds": {}, "work": str(work)}
+
+          def capture(*command):
+              return subprocess.check_output(command, text=True).strip()
+
+          def sha(path):
+              with path.open("rb") as stream:
+                  return hashlib.file_digest(stream, "sha256").hexdigest()
+
+          def inventory(root):
+              return {str(p.relative_to(root)): sha(p) for p in sorted(root.rglob("*")) if p.is_file()}
+
+          def measured(name, command):
+              start = time.monotonic()
+              log = work / (name + ".log")
+              with log.open("w") as output:
+                  child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                  for line in child.stdout:
+                      print(line, end="", flush=True)
+                      output.write(line)
+                  code = child.wait()
+              results["timings_seconds"][name] = time.monotonic() - start
+              print(json.dumps({"phase": name, "seconds": results["timings_seconds"][name], "exit_code": code}), flush=True)
+              if code:
+                  raise subprocess.CalledProcessError(code, command)
+              return log.read_text()
+
+          toolchain = tomllib.loads((original / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+          original_inputs = inventory(original)
+          shutil.copytree(original, source)
+          assert inventory(source) == original_inputs
+          cold.mkdir()
+          restored.mkdir()
+          sysroot = Path(capture("rustc", "+" + toolchain, "--print", "sysroot"))
+          results["identity"] = {
+              "commit": capture("git", "rev-parse", "HEAD"),
+              "source_tree": capture("git", "rev-parse", "HEAD:apps/shared/OpenClawWatchRTC"),
+              "inputs_sha256": original_inputs,
+              "os": capture("sw_vers"),
+              "architecture": capture("uname", "-m"),
+              "cpu_memory": capture("sysctl", "hw.logicalcpu", "hw.memsize"),
+              "runner_image": {key: os.environ.get(key) for key in ("ImageOS", "ImageVersion", "RUNNER_ARCH")},
+              "rustc": capture("rustc", "+" + toolchain, "-vV"),
+              "cargo": capture("cargo", "+" + toolchain, "-vV"),
+              "rust_src_sha256": hashlib.sha256(json.dumps(inventory(sysroot / "lib/rustlib/src/rust/library"), sort_keys=True).encode()).hexdigest(),
+              "xcode": capture("xcodebuild", "-version"),
+              "sdk": capture("xcrun", "--sdk", "watchsimulator", "--show-sdk-path"),
+              "sdk_version": capture("xcrun", "--sdk", "watchsimulator", "--show-sdk-version"),
+              "sdk_build": capture("xcrun", "--sdk", "watchsimulator", "--show-sdk-build-version"),
+              "clang": capture("xcrun", "--sdk", "watchsimulator", "clang", "--version"),
+              "tar": capture("tar", "--version"),
+              "zstd": capture("zstd", "--version"),
+              "build_environment": {key: os.environ.get(key) for key in (
+                  "CARGO_BUILD_JOBS", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS", "WATCHOS_DEPLOYMENT_TARGET", "DEVELOPER_DIR"
+              )},
+              "build_arguments": ["watchsimulator", "<output>", "arm64", "x86_64"],
+          }
+          assert results["identity"]["source_tree"] == "3604c392e1321c147b3f59e880957cb2d769ce4d", "WatchRTC inputs moved from the reviewed source"
+          print(json.dumps(results["identity"], indent=2), flush=True)
+
+          def build(name, destination):
+              return measured(name, ["bash", str(source / "build.sh"), "watchsimulator", str(destination), "arm64", "x86_64"])
+
+          try:
+              build("cold_build", cold)
+              target = cold / "target"
+              results["target_bytes"] = sum(p.stat().st_size for p in target.rglob("*") if p.is_file())
+              results["target_disk_usage"] = capture("du", "-sk", str(target))
+              # The archive contains only artifacts just built by this job. No shared cache is read or written.
+              measured("archive", ["bash", "-euo", "pipefail", "-c", 'tar -C "$1" -cf - target | zstd -T0 -3 -o "$2"', "probe", str(cold), str(archive)])
+              results["archive_bytes"] = archive.stat().st_size
+              results["archive_sha256"] = sha(archive)
+              measured("extract", ["bash", "-euo", "pipefail", "-c", 'zstd -dc "$1" | tar -C "$2" -xf -', "probe", str(archive), str(restored)])
+              for triple in ("aarch64-apple-watchos-sim", "x86_64-apple-watchos-sim"):
+                  relative = Path("target") / triple / "release/libopenclaw_watch_rtc.a"
+                  assert sha(cold / relative) == sha(restored / relative), "Restored slice differs from its producer"
+              # Restored metadata must not resolve absolute paths in the original build directory.
+              shutil.rmtree(cold)
+              warm_log = build("relocated_warm_build", restored)
+              results["warm_compiling_lines"] = [line.strip() for line in warm_log.splitlines() if "Compiling " in line]
+              results["restore_plus_warm_seconds"] = results["timings_seconds"]["extract"] + results["timings_seconds"]["relocated_warm_build"]
+              results["archive_plus_restore_plus_warm_seconds"] = results["timings_seconds"]["archive"] + results["restore_plus_warm_seconds"]
+
+              targets = ("aarch64-apple-watchos-sim", "x86_64-apple-watchos-sim")
+              symbol = "_openclaw_rtc_probe_freshness_20260906"
+              def slice_symbols(target):
+                  return capture("xcrun", "nm", "-gU", str(restored / "target" / target / "release/libopenclaw_watch_rtc.a"))
+              assert all(symbol not in slice_symbols(target) for target in targets)
+              # Change only the disposable source copy; an exported function must appear in both rebuilt slices.
+              lib = source / "src/lib.rs"
+              with lib.open("a") as output:
+                  output.write('\n#[unsafe(no_mangle)]\npub extern "C" fn openclaw_rtc_probe_freshness_20260906() -> u32 { 20260906 }\n')
+              results["changed_source_sha256"] = sha(lib)
+              changed_log = build("changed_source_build", restored)
+              assert changed_log.count("Compiling openclaw-watch-rtc ") == 2, "Expected the source crate to compile for both slices"
+              assert all(symbol in slice_symbols(target) for target in targets), "Changed function missing from a rebuilt slice"
+              results["freshness_control"] = "Both simulator slices recompiled and contain the new exported function"
+              results["architectures"] = capture("xcrun", "lipo", "-archs", str(restored / "libopenclaw_watch_rtc.a"))
+              assert set(results["architectures"].split()) == {"arm64", "x86_64"}
+          finally:
+              assert inventory(original) == original_inputs, "Canonical source changed"
+              print(json.dumps(results, indent=2), flush=True)
+              (work / "results.json").write_text(json.dumps(results, indent=2) + "\n")
+          PY
