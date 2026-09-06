@@ -4397,6 +4397,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       ...shared,
       sessionCtx: { ...shared.sessionCtx, MessageSid: "queued-message" },
       isActive: true,
+      bindActiveAuthority: false,
       isRunActive: () => true,
       shouldFollowup: true,
       resolvedQueueMode: "followup",
