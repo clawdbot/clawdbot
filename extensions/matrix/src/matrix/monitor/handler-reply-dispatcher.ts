@@ -557,6 +557,24 @@ export function createMatrixReplyDispatcher(config: {
       toolDeliveryFailureSettled = false;
       runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
     },
+    onBeforeDeliverCancelled: async (_payload, info) => {
+      // A third non-delivery path alongside deliver()'s own success/failure:
+      // beforeDeliver can cancel a queued tool payload (return no payload,
+      // or a failed custody claim) without ever invoking deliver() or
+      // onError. Left unconsumed here, this tool's queued generation would
+      // strand at the head of the FIFO and get wrongly taken by the *next*
+      // tool's deliver() call. A beforeDeliver *throw* runs this same
+      // notifier and then still reaches onError above for the identical
+      // failure -- toolDeliveryFailureSettled tells that later, redundant
+      // onError call to skip its own consumption instead of taking a
+      // second (unrelated) entry for the same tool.
+      if (info.kind === "tool") {
+        toolDeliveryFailureSettled = true;
+        await draftController.settleDraftForToolDispatch(
+          draftController.takeNextPendingToolDispatchGeneration(),
+        );
+      }
+    },
     onReplyStart: typingCallbacks.onReplyStart,
     onIdle: typingCallbacks.onIdle,
   };

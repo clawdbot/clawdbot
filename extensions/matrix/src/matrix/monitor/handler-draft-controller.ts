@@ -276,7 +276,15 @@ export async function createMatrixDraftController(params: {
       draftStream?.reset();
     }
     draftDisposition = "active";
-    currentDraftMessageGeneration = 0;
+    // Advance, don't reset to 0: pendingToolDispatchGenerations deliberately
+    // keeps entries from the interrupted turn (see below), so generation
+    // numbers must stay globally unique across resets. Resetting to a fixed
+    // value would let an old, still-queued entry (very plausibly also
+    // generation 0 -- the first message of almost every turn starts there)
+    // spuriously match this new turn's own current generation, letting
+    // settleDraftForToolDispatch finalize this turn's active draft on behalf
+    // of a tool call that isn't its own (ClawSweeper P2).
+    currentDraftMessageGeneration += 1;
     currentDraftBlockOffset = 0;
     latestDraftFullText = "";
     pendingDraftBoundaries.length = 0;

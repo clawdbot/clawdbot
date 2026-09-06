@@ -3136,6 +3136,9 @@ describe("matrix monitor handler draft streaming", () => {
   }) {
     let capturedDeliver: DeliverFn | undefined;
     let capturedOnError: ((error: unknown, info: { kind: string }) => void) | undefined;
+    let capturedOnBeforeDeliverCancelled:
+      | ((payload: unknown, info: { kind: string }) => Promise<void> | void)
+      | undefined;
     let capturedReplyOpts: ReplyOpts | undefined;
     let resolveCaptured: (() => void) | undefined;
     const captured = new Promise<void>((resolve) => {
@@ -3174,6 +3177,8 @@ describe("matrix monitor handler draft streaming", () => {
       createReplyDispatcherWithTyping: (params: Record<string, unknown> | undefined) => {
         capturedDeliver = params?.deliver as DeliverFn | undefined;
         capturedOnError = params?.onError as typeof capturedOnError;
+        capturedOnBeforeDeliverCancelled =
+          params?.onBeforeDeliverCancelled as typeof capturedOnBeforeDeliverCancelled;
         notifyCaptured();
         return {
           dispatcher: {
@@ -3204,6 +3209,7 @@ describe("matrix monitor handler draft streaming", () => {
       return {
         deliver: capturedDeliver!,
         onError: capturedOnError!,
+        onBeforeDeliverCancelled: capturedOnBeforeDeliverCancelled!,
         opts: capturedReplyOpts!,
         // Release the run gate and wait for the handler to finish
         // (including the finally block that stops the draft stream).
@@ -4866,6 +4872,148 @@ describe("matrix monitor handler draft streaming", () => {
     // The second tool call must still resolve to its own queued generation
     // (0), not whatever the first failure's unconsumed entry would have left
     // behind -- the still-live "Second" draft must never be finalized.
+    expect(
+      mockCalls(editMessageMatrixMock, "edit calls").some(
+        ([, eventId, , options]) =>
+          eventId === "$draft1" && requireRecord(options, "edit options").live === false,
+      ),
+    ).toBe(false);
+    await finish();
+  });
+
+  it("does not let a stale queued tool settle a follow-up turn's draft after generation numbers reset", async () => {
+    // ClawSweeper P2 (found reviewing the fix above): resetDraftDeliveryState
+    // (fired by onQueuedFollowupAdmitted) deliberately keeps
+    // pendingToolDispatchGenerations across the reset (a tool from the
+    // interrupted turn can still be queued), but it must NOT also reset
+    // currentDraftMessageGeneration back to a reused value -- generation 0
+    // especially, since almost every turn's first message starts there. If
+    // it did, an old tool queued at generation 0 would spuriously match the
+    // new turn's own (also-reset-to-0) current generation and finalize its
+    // still-live draft on the old tool's behalf.
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "First" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // A tool call is queued from generation 0, still pending when a queued
+    // followup interrupts this turn.
+    opts.onToolResultQueued?.();
+
+    sendSingleTextMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+    await opts.onQueuedFollowupAdmitted?.();
+    opts.onPartialReply?.({ text: "Followup answer" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Only now does the original turn's delayed tool delivery finish.
+    await deliver({ text: "tool result" }, { kind: "tool" });
+
+    // The follow-up turn's own draft ($draft2) must never be finalized on
+    // the old tool's behalf.
+    expect(
+      mockCalls(editMessageMatrixMock, "edit calls").some(
+        ([, eventId, , options]) =>
+          eventId === "$draft2" && requireRecord(options, "edit options").live === false,
+      ),
+    ).toBe(false);
+    await finish();
+  });
+
+  it("consumes its queued generation when beforeDeliver cancels a tool payload, keeping the FIFO aligned for the next tool", async () => {
+    // ClawSweeper P2 (found reviewing the fix above): beforeDeliver can
+    // cancel a queued tool payload (return no payload) without ever
+    // invoking deliver() or onError -- a third non-delivery path neither of
+    // those two already-fixed paths cover. Left unconsumed, that entry
+    // strands at the head of the FIFO and gets wrongly taken by the *next*
+    // tool's deliver() call, making that next tool (which actually still
+    // belongs to the live, unfinalized generation) appear to belong to an
+    // older, already-superseded one instead -- and skip finalizing its own,
+    // genuinely still-current draft.
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, onBeforeDeliverCancelled, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "First" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    opts.onToolResultQueued?.();
+
+    opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Second" });
+    await waitForMatrixState(() => {
+      expect(
+        mockCalls(editMessageMatrixMock, "edit calls").some(
+          ([, eventId, body]) => eventId === "$draft1" && body === "Second",
+        ),
+      ).toBe(true);
+    });
+    opts.onToolResultQueued?.();
+
+    // The first tool's beforeDeliver cancels it -- deliver() and onError are
+    // never called for it at all.
+    await onBeforeDeliverCancelled({ text: "cancelled tool" }, { kind: "tool" });
+
+    // The second tool still belongs to the current (not yet superseded)
+    // generation and must correctly finalize its own draft.
+    await deliver({ text: "tool result 2" }, { kind: "tool" });
+
+    expect(
+      mockCalls(editMessageMatrixMock, "edit calls").some(
+        ([, eventId, , options]) =>
+          eventId === "$draft1" && requireRecord(options, "edit options").live === false,
+      ),
+    ).toBe(true);
+    await finish();
+  });
+
+  it("does not double-consume the FIFO when a beforeDeliver throw reaches both onBeforeDeliverCancelled and onError", async () => {
+    // A beforeDeliver *throw* (as opposed to a plain cancellation) runs
+    // onBeforeDeliverCancelled and then still reaches onError for the same
+    // failure (the shared dispatcher re-throws after notifying). Without
+    // toolDeliveryFailureSettled also covering this path, both callbacks
+    // would consume a FIFO entry for the SAME failed tool -- eating the
+    // *next* tool's entry too and leaving it to wrongly fall back to
+    // whatever generation happens to be current by the time it delivers.
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, onError, onBeforeDeliverCancelled, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "First" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    opts.onToolResultQueued?.(); // tool #1, generation 0
+
+    opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Second" });
+    opts.onToolResultQueued?.(); // tool #2, generation 1
+
+    opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Third" });
+    await waitForMatrixState(() => {
+      expect(
+        mockCalls(editMessageMatrixMock, "edit calls").some(
+          ([, eventId, body]) => eventId === "$draft1" && body === "Third",
+        ),
+      ).toBe(true);
+    });
+
+    // Tool #1's beforeDeliver throws: the shared dispatcher calls both
+    // callbacks in sequence for this one failure.
+    await onBeforeDeliverCancelled({ text: "cancelled tool" }, { kind: "tool" });
+    onError(new Error("boom"), { kind: "tool" });
+
+    // Tool #2 (generation 1, already superseded by generation 2's "Third")
+    // must resolve to its own real entry, not an empty queue falling back
+    // to the live generation 2 -- which would wrongly look like a match and
+    // finalize the still-live "Third" draft on tool #2's behalf.
+    await deliver({ text: "tool result 2" }, { kind: "tool" });
+
     expect(
       mockCalls(editMessageMatrixMock, "edit calls").some(
         ([, eventId, , options]) =>
