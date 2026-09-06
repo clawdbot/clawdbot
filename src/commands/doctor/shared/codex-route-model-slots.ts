@@ -1,3 +1,7 @@
+import {
+  listModelRefsFromConfigValue,
+  visitModelSelectorRefs,
+} from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -42,19 +46,17 @@ export function collectStringModelSlot(params: {
   value: unknown;
   runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
+}): void {
   if (typeof params.value !== "string") {
-    return false;
+    return;
   }
-  return Boolean(
-    recordCodexModelHit({
-      hits: params.hits,
-      path: params.path,
-      model: params.value.trim(),
-      runtime: params.runtime,
-      blockedModelIdentities: params.blockedModelIdentities,
-    }),
-  );
+  recordCodexModelHit({
+    hits: params.hits,
+    path: params.path,
+    model: params.value.trim(),
+    runtime: params.runtime,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
 }
 
 export function collectModelConfigSlot(params: {
@@ -63,49 +65,19 @@ export function collectModelConfigSlot(params: {
   value: unknown;
   runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
-  if (typeof params.value === "string") {
-    return collectStringModelSlot(params);
-  }
-  const record = asMutableRecord(params.value);
-  if (!record) {
-    return false;
-  }
-  const rewrotePrimary = collectStringModelSlot({
-    hits: params.hits,
-    path: `${params.path}.primary`,
-    value: record.primary,
-    runtime: params.runtime,
-    blockedModelIdentities: params.blockedModelIdentities,
+}): void {
+  visitModelSelectorRefs(params.value, params.path, (path, value, role) => {
+    collectStringModelSlot({
+      ...params,
+      path,
+      value,
+      runtime: role === "primary" ? params.runtime : undefined,
+    });
   });
-  if (Array.isArray(record.fallbacks)) {
-    for (const [index, entry] of record.fallbacks.entries()) {
-      collectStringModelSlot({
-        hits: params.hits,
-        path: `${params.path}.fallbacks.${index}`,
-        value: entry,
-        blockedModelIdentities: params.blockedModelIdentities,
-      });
-    }
-  }
-  return rewrotePrimary;
 }
 
 export function modelConfigContainsRef(value: unknown, modelRef: string): boolean {
-  if (typeof value === "string") {
-    return value.trim() === modelRef;
-  }
-  const record = asMutableRecord(value);
-  if (!record) {
-    return false;
-  }
-  if (typeof record.primary === "string" && record.primary.trim() === modelRef) {
-    return true;
-  }
-  return (
-    Array.isArray(record.fallbacks) &&
-    record.fallbacks.some((entry) => typeof entry === "string" && entry.trim() === modelRef)
-  );
+  return listModelRefsFromConfigValue(value).some((ref) => ref.trim() === modelRef);
 }
 
 export function collectModelConfigRefs(params: {
@@ -113,24 +85,9 @@ export function collectModelConfigRefs(params: {
   path: string;
   value: unknown;
 }): void {
-  if (typeof params.value === "string") {
-    collectStringModelConfigRef(params);
-    return;
-  }
-  const record = asMutableRecord(params.value);
-  if (!record) {
-    return;
-  }
-  if (typeof record.primary === "string" && record.primary.trim()) {
-    params.refs.push({ path: `${params.path}.primary`, modelRef: record.primary.trim() });
-  }
-  if (Array.isArray(record.fallbacks)) {
-    for (const [index, entry] of record.fallbacks.entries()) {
-      if (typeof entry === "string" && entry.trim()) {
-        params.refs.push({ path: `${params.path}.fallbacks.${index}`, modelRef: entry.trim() });
-      }
-    }
-  }
+  visitModelSelectorRefs(params.value, params.path, (path, value) =>
+    collectStringModelConfigRef({ ...params, path, value }),
+  );
 }
 
 export function collectStringModelConfigRef(params: {
