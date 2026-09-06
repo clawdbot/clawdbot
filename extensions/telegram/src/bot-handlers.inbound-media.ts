@@ -343,16 +343,13 @@ export function createTelegramInboundMedia({
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntime });
         } catch (error) {
-          if (
-            entry.spooledReplayParticipants.length > 0 &&
-            (mediaRuntime.abortSignal?.aborted || isDurablyRetryableInboundMediaError(error))
-          ) {
+          if (mediaRuntime.abortSignal?.aborted || isDurablyRetryableInboundMediaError(error)) {
             throw error;
           }
           if (!isRecoverableMediaGroupError(error)) {
             throw error;
           }
-          // Classic polling cannot replay a failed album; retain its existing partial-delivery path.
+          // A failed attachment must not hide the rest of the album.
           runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
         }
         if (media) {

@@ -319,13 +319,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
 ## Runtime behavior
 
-- Telegram runs inside the gateway process.
+- Telegram message handling runs inside the gateway process.
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for replies the gateway has observed.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>`.
 - When the bot joins an allowed group or supergroup, it posts one introduction grounded in available room metadata: the group title, description, and pinned message. The Telegram Bot API cannot read group messages from before the bot joined, so introductions never claim to use prior chat history. Introductions are enabled by default, never run in private chats, and can be disabled with `channels.telegram.joinIntro: false` or overridden per account with `channels.telegram.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for once-per-room behavior and untrusted-content handling.
 - DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
-- Long polling uses the grammY runner with per-chat/per-thread sequencing. Runner sink concurrency uses `agents.defaults.maxConcurrent`.
+- Long polling runs in an isolated worker. Updates are saved to a durable queue and processed in order for each chat and topic.
 - Multi-account startup bounds concurrent `getMe` probes so large bot fleets do not fan out every account probe at once.
 - Each gateway process guards long polling so only one active poller can use a bot token at a time. Persistent `getUpdates` 409 conflicts point to another OpenClaw gateway, script, or external poller using the same token.
 - The polling watchdog restarts after 120 seconds without completed `getUpdates` liveness.
@@ -823,7 +823,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     The listener reserves `/healthz` for health checks, so `webhookPath` must use a different route. If an existing setup uses `/healthz`, choose another route, update the path in `webhookUrl` and the reverse proxy mapping, then restart OpenClaw.
 
-    In the default isolated long-polling mode, OpenClaw persists its restart watermark after an update is committed to the durable ingress queue. A failed handler remains retryable from that queue. Classic polling (`polling.isolated: false`) advances its watermark after dispatch succeeds.
+    In long-polling mode, OpenClaw saves its restart position after an update is committed to the durable ingress queue. A failed handler remains retryable from that queue.
 
     The local listener binds to `127.0.0.1:8787` by default. For public ingress, put a reverse proxy in front of the local port, or set `webhookHost: "0.0.0.0"` intentionally.
 
