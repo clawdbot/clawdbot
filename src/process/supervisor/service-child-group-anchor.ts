@@ -309,13 +309,19 @@ export function runServiceChildGroupAnchor(): void {
         await requestCleanup("lineage-lost");
       }
     };
-    // Own these private output descriptors: global stdio can keep them open after
-    // pipeline ends, while the control channel must retain descendant authority.
-    pipeline(command.stdout!, createWriteStream("", { fd: 1, autoClose: true }), () => {
+    // Bun's global streams retain output writers after pipeline completion. Node's
+    // stdio streams must preserve fd 1/2: closing them aborts its later Linux spawnSync census.
+    const stdout = process.versions.bun
+      ? createWriteStream("", { fd: 1, autoClose: true })
+      : process.stdout;
+    const stderr = process.versions.bun
+      ? createWriteStream("", { fd: 2, autoClose: true })
+      : process.stderr;
+    pipeline(command.stdout!, stdout, () => {
       stdoutDrained = true;
       void settleRoot();
     });
-    pipeline(command.stderr!, createWriteStream("", { fd: 2, autoClose: true }), () => {
+    pipeline(command.stderr!, stderr, () => {
       stderrDrained = true;
       void settleRoot();
     });

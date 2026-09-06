@@ -99,13 +99,18 @@ export function runServiceChildRelay(): void {
     anchor.once("spawn", () => {
       // The anchor inherited these outputs. Close only the relay's duplicate writers
       // so output EOF does not depend on either process giving up cleanup authority.
-      for (const fd of [1, 2]) {
-        const output = createWriteStream("", { fd, autoClose: true });
-        output.once("error", (error) => {
-          report({ type: "relay-error", generation: start.generation, error: error.message });
-          notifyParentLoss();
-        });
-        output.end();
+      if (process.versions.bun) {
+        for (const fd of [1, 2]) {
+          const output = createWriteStream("", { fd, autoClose: true });
+          output.once("error", (error) => {
+            report({ type: "relay-error", generation: start.generation, error: error.message });
+            notifyParentLoss();
+          });
+          output.end();
+        }
+      } else {
+        process.stdout.destroy();
+        process.stderr.destroy();
       }
       anchor?.send(start);
       if (parentLost) {
