@@ -116,14 +116,15 @@ suite.define(() => {
             },
           });
           const expandTools = async () => {
-            for (const summary of await page.locator(".chat-activity-group__summary").all()) {
-              if ((await summary.getAttribute("aria-expanded")) !== "true") {
-                await summary.click();
-              }
-            }
-            for (const summary of await page.locator(".chat-tool-msg-summary").all()) {
-              if ((await summary.getAttribute("aria-expanded")) !== "true") {
-                await summary.click();
+            for (const selector of [
+              "button.chat-activity-group__summary",
+              "button.chat-tool-msg-summary",
+            ]) {
+              for (const summary of await page.locator(selector).all()) {
+                if ((await summary.getAttribute("aria-expanded")) !== "true") {
+                  await summary.press("Enter");
+                  await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("true");
+                }
               }
             }
           };

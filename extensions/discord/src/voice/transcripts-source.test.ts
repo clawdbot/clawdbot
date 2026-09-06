@@ -504,7 +504,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       if (!result?.ok) {
         throw new Error("expected occupancy watch handle");
       }
-      result.value.stop();
+      await result.value.stop();
       listener?.({ occupied: true });
       expect(transitions).toEqual(["occupied", "empty"]);
       expect(unsubscribe).toHaveBeenCalledOnce();
