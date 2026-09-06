@@ -391,6 +391,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
+    providerOwnsDynamicModelPreparation: vi.fn(() => false),
     shouldDeferProviderSyntheticProfileAuthWithPlugin: vi.fn(() => false),
   }));
 }
