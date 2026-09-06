@@ -307,7 +307,7 @@ export class TranscriptsStore {
   }
 
   readNotes(session: TranscriptSessionDescriptor, exporting = false) {
-    return read.readTranscriptNotes(this.database().db, session, exporting);
+    return read.readStoredTranscriptNotes(this.database().db, session, exporting);
   }
 
   readUtterancePage(

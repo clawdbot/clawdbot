@@ -490,7 +490,7 @@ export function readTranscriptUtterancePage(
 }
 
 /** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
-export function readTranscriptNotes(
+export function readStoredTranscriptNotes(
   database: DatabaseSync,
   session: TranscriptSessionDescriptor,
   exporting = false,
