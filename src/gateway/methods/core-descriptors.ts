@@ -219,7 +219,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.curator.unpin", "skills", "operator.admin", "<=2026.7"],
   ["skills.curator.restore", "skills", "operator.admin", "<=2026.7"],
   ["skills.proposals.list", "skills", "operator.read", "<=2026.7"],
-  ["skills.workshop.read", "skills", "operator.read", "2026.9"],
   ["skills.proposals.inspect", "skills", "operator.read", "<=2026.7"],
   ["skills.proposals.historyStatus", "skills", "operator.read", "<=2026.7"],
   ["skills.proposals.historyScan", "skills", "operator.admin", "<=2026.7"],
@@ -649,6 +648,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["update.runs.get", "update", "operator.admin", "2026.9"],
   ["update.runs.list", "update", "operator.admin", "2026.9"],
   ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["skills.workshop.read", "skills", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
