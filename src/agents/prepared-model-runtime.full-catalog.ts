@@ -4,6 +4,7 @@ import { discoverModels } from "./agent-model-discovery.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import {
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
@@ -14,7 +15,6 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { modelCatalogEntryKey } from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   toStaticCatalogEntry,
@@ -77,7 +77,7 @@ export async function prepareFullCatalogFacts(
   const providerOutcomes = catalogSource?.providerOutcomes ?? [];
   const completeModelCatalog = {
     ...modelCatalog,
-    staticEntries: dedupeByKey(providerStaticModels, modelCatalogEntryKey).map(
+    staticEntries: dedupeByKey(providerStaticModels, resolveModelCatalogIdentityKey).map(
       toStaticCatalogEntry,
     ),
     ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
@@ -104,7 +104,7 @@ export function prepareModelCatalogPublication(
     ...discovered,
     entries: dedupeByKey(
       [...discovered.entries, ...discovered.routeVariants].filter((entry) => !entry.nativeRuntime),
-      modelCatalogEntryKey,
+      resolveModelCatalogIdentityKey,
     ),
     routeVariants: discovered.routeVariants.filter((entry) => !entry.nativeRuntime),
   };
@@ -187,9 +187,14 @@ export function prepareModelCatalogPublication(
     ).toSorted(compareModelCatalogEntries);
   const published: ModelCatalogSnapshot = {
     ...catalog,
-    entries: retain(catalog.entries, previous?.entries ?? [], modelCatalogEntryKey),
+    entries: retain(catalog.entries, previous?.entries ?? [], resolveModelCatalogIdentityKey),
     routeVariants: retain(catalog.routeVariants, previous?.routeVariants ?? [], (entry) =>
-      JSON.stringify([modelCatalogEntryKey(entry), entry.api, entry.baseUrl, entry.nativeRuntime]),
+      JSON.stringify([
+        resolveModelCatalogIdentityKey(entry),
+        entry.api,
+        entry.baseUrl,
+        entry.nativeRuntime,
+      ]),
     ),
     authoritative: false,
   };
@@ -216,13 +221,13 @@ export function materializePreparedModelCatalog(
   const sourceEntries = snapshot.entries;
   const runtimeByKey = new Map(
     runtimeCapabilityModels.map(({ provider, modelId, model }) => [
-      modelCatalogEntryKey({ provider, id: modelId }),
+      resolveModelCatalogIdentityKey({ provider, id: modelId }),
       toStaticCatalogEntry(model),
     ]),
   );
   const project = (entries: ModelCatalogSnapshot["entries"]) =>
     entries.map((entry) => {
-      const runtime = runtimeByKey.get(modelCatalogEntryKey(entry));
+      const runtime = runtimeByKey.get(resolveModelCatalogIdentityKey(entry));
       if (!runtime) {
         return entry;
       }
@@ -251,7 +256,7 @@ export function materializePreparedModelCatalog(
           ...configuredRuntimeModels.map(({ model }) => toStaticCatalogEntry(model)),
           ...(snapshot.staticEntries ?? []),
         ],
-        modelCatalogEntryKey,
+        resolveModelCatalogIdentityKey,
       ),
     );
   }

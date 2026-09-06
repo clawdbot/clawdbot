@@ -40,6 +40,7 @@ import {
 } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   resolvePluginModelCatalogOwnerPluginId,
@@ -52,10 +53,7 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  modelCatalogEntryKey,
-  prepareConfiguredRuntimeFacts,
-} from "./prepared-model-runtime.configured-catalog.js";
+import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
@@ -420,16 +418,20 @@ export async function prepareWorkspaceBuildGroup(
         ],
         resolveRuntimeModel: resolveConfiguredManifestModel,
       });
-      const configuredEntryKeys = new Set(configuredCatalogEntries.map(modelCatalogEntryKey));
+      const configuredEntryKeys = new Set(
+        configuredCatalogEntries.map(resolveModelCatalogIdentityKey),
+      );
       for (const configured of configuredRuntimeModels) {
         configuredEntryKeys.add(
-          modelCatalogEntryKey({ provider: configured.provider, id: configured.modelId }),
+          resolveModelCatalogIdentityKey({ provider: configured.provider, id: configured.modelId }),
         );
       }
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
           facts.configuredModelRefs.flatMap(({ provider, modelId }) => {
-            if (configuredEntryKeys.has(modelCatalogEntryKey({ provider, id: modelId }))) {
+            if (
+              configuredEntryKeys.has(resolveModelCatalogIdentityKey({ provider, id: modelId }))
+            ) {
               return [];
             }
             const pluginId = resolvePluginModelCatalogOwnerPluginId({

@@ -50,10 +50,6 @@ type ModelCatalogLogicalOverrides = Partial<
   >
 >;
 
-function normalizeExactModelId(value: string): string {
-  return splitTrailingAuthProfile(value).model.trim().toLowerCase();
-}
-
 /** Reads explicit logical capability overrides without re-resolving auth. */
 export function resolveConfiguredModelCatalogOverrides(params: {
   cfg: OpenClawConfig;
@@ -65,14 +61,13 @@ export function resolveConfiguredModelCatalogOverrides(params: {
   if (!providerConfig) {
     return undefined;
   }
-  const configuredIdentity = params.policy?.resolveIdentity(params.entry);
   const normalizeConfiguredModelId = (modelId: string) =>
     params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
-    normalizeExactModelId(modelId);
+    modelId.trim();
   const model = resolveMergedModelProviderModels({
     models: providerConfig.models,
     normalizeModelId: normalizeConfiguredModelId,
-  }).get(configuredIdentity?.key ?? normalizeExactModelId(params.entry.id));
+  }).get(normalizeConfiguredModelId(params.entry.id));
   const overrides: ModelCatalogLogicalOverrides = {
     ...(model?.name ? { name: model.name } : {}),
     ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
@@ -159,13 +154,12 @@ export function projectModelCatalogEntryForRoute(params: {
   if (params.projection.kind === "unmanaged") {
     return applyLogicalOverrides(params.entry, params.overrides);
   }
-  const identity = params.projection.policy.resolveIdentity(params.entry) ?? {
-    id: splitTrailingAuthProfile(params.entry.id).model,
-    key: `${normalizeProviderId(params.entry.provider)}/${normalizeExactModelId(params.entry.id)}`,
-  };
+  const id =
+    params.projection.policy.resolveIdentity(params.entry)?.id ??
+    splitTrailingAuthProfile(params.entry.id).model;
   if (params.projection.kind === "unresolved") {
     return applyLogicalOverrides(
-      logicalIdentity(params.entry, identity.id, params.entry.name),
+      logicalIdentity(params.entry, id, params.entry.name),
       params.overrides,
     );
   }
@@ -180,7 +174,7 @@ export function projectModelCatalogEntryForRoute(params: {
     });
   const projected = logicalIdentity(
     params.entry,
-    identity.id,
+    id,
     donor?.name ?? params.entry.name,
     donor ?? params.entry,
   );

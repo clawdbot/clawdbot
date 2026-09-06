@@ -67,14 +67,12 @@ export function selectOpenAIModelRouteAuth(params: {
 export const openAIModelCatalogRoutePolicy =
   createProviderModelCatalogRoutePolicy(OPENAI_PROVIDER_ID);
 
-/** Canonical catalog identity key: route-policy identity, else normalized provider/id. */
+/** Canonical catalog identity without ambiguity between provider and model segments. */
 export function resolveModelCatalogIdentityKey(
   entry: Pick<ModelCatalogEntry, "provider" | "id">,
 ): string {
-  return (
-    openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ??
-    `${normalizeProviderId(entry.provider)}/${entry.id}`
-  );
+  const id = openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.id ?? entry.id;
+  return JSON.stringify([normalizeProviderId(entry.provider), id]);
 }
 
 /** Resolves provider-owned OpenAI route state without loading the full provider runtime. */

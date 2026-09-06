@@ -70,6 +70,7 @@ describe("prepared model runtime scoped refresh", () => {
       };
       const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
       const learned = { provider: "provider-a", id: "learned", name: "Learned" };
+      const caseDistinct = { provider: "provider-a", id: "Learned", name: "Case distinct" };
       const variant = { ...learned, baseUrl: "https://catalog.example.test/v1" };
       const fallback = { provider: "provider-a", id: "advisory", name: "Advisory" };
       const sibling = { provider: "provider-b", id: "new", name: "New" };
@@ -87,8 +88,8 @@ describe("prepared model runtime scoped refresh", () => {
           providerOutcomes: [{ provider: "provider-a", profileId, status: "unavailable" }],
         },
         {
-          entries: [native],
-          routeVariants: [variant, native],
+          entries: [caseDistinct, native],
+          routeVariants: [variant, caseDistinct, native],
           providerOutcomes: [
             { provider: "provider-a", profileId: "provider-a:default", status: "ready" },
           ],
@@ -128,15 +129,15 @@ describe("prepared model runtime scoped refresh", () => {
       });
       await owner.loadFullModelCatalog!({ refresh: true });
       const failed = await owner.loadFullModelCatalog!({ refresh: true });
-      expect(failed.entries).toMatchObject([learned, sibling]);
-      expect(failed.routeVariants).toMatchObject([variant, sibling]);
+      expect(failed.entries).toMatchObject([learned, caseDistinct, sibling]);
+      expect(failed.routeVariants).toMatchObject([variant, caseDistinct, sibling]);
       expect(failed.authoritative).toBe(false);
       expect(failed.providerOutcomes).toEqual([
         { provider: "provider-a", profileId, status: "unavailable" },
         { provider: "provider-b", status: "ready" },
       ]);
       const failedAgain = await owner.loadFullModelCatalog!({ refresh: true });
-      expect(failedAgain.entries).toMatchObject([learned, sibling]);
+      expect(failedAgain.entries).toMatchObject([learned, caseDistinct, sibling]);
       const recovered = await owner.loadFullModelCatalog!({ refresh: true });
       expect(recovered.entries).toMatchObject([sibling]);
       expect(recovered.routeVariants).toMatchObject([sibling]);

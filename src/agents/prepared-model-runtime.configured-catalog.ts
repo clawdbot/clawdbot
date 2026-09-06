@@ -1,8 +1,8 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   toStaticCatalogEntry,
@@ -19,10 +19,6 @@ type ConfiguredCatalogWorkspaceFacts = {
   inlineProviderModels: readonly InlineModelEntry[];
 };
 
-export function modelCatalogEntryKey(entry: Pick<ModelCatalogEntry, "id" | "provider">): string {
-  return `${normalizeProviderId(entry.provider)}\0${entry.id.trim().toLowerCase()}`;
-}
-
 function createConfiguredModelCatalogSnapshot(params: {
   agentFacts: ConfiguredCatalogAgentFacts;
   workspaceFacts: ConfiguredCatalogWorkspaceFacts;
@@ -31,7 +27,7 @@ function createConfiguredModelCatalogSnapshot(params: {
 }): ModelCatalogSnapshot {
   const entries = new Map<string, ModelCatalogEntry>();
   const addEntry = (entry: ModelCatalogEntry) => {
-    const key = modelCatalogEntryKey(entry);
+    const key = resolveModelCatalogIdentityKey(entry);
     if (!entries.has(key)) {
       entries.set(key, entry);
     }
