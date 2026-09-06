@@ -21,6 +21,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -39,6 +40,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -60,6 +62,7 @@ class ChatReaderScrollOwnershipLayoutTest {
 
   private lateinit var reader: ChatReaderScrollController
   private var observedScale: Float? = null
+  private var bookmark: ChatReaderPosition? = null
 
   @Test
   fun manualNavigationStopsAnAlreadyMovingAutomaticScroll() {
@@ -161,6 +164,50 @@ class ChatReaderScrollOwnershipLayoutTest {
     assertEquals(ViewportPosition(expectedIndex, 23), viewport().position)
   }
 
+  @Test
+  fun reopeningRespectsLiveFollowingManualReadingAndJumpToLatest() {
+    showReader(withPersistence = true)
+    composeRule.waitForIdle()
+    assertNull("Following latest must not save yesterday's last message", bookmark)
+    click("Read here")
+    composeRule.waitForIdle()
+    val pausedAtEdge = requireNotNull(bookmark)
+    click("Reopen")
+    composeRule.waitForIdle()
+    assertEquals("An existing bookmark preserves the pause, even before any new output", pausedAtEdge, bookmark)
+    click("Jump to latest")
+    composeRule.waitForIdle()
+    assertNull(bookmark)
+    click("Reopen + output")
+    composeRule.waitForIdle()
+    assertEquals(ViewportPosition(0, 0), viewport().position)
+    composeRule.onNodeWithText("reopened reply 2").assertIsDisplayed()
+
+    click("Read earlier")
+    composeRule.waitForIdle()
+    val saved = requireNotNull(bookmark)
+    val oldViewport = viewport().position
+    click("Reopen + output")
+    composeRule.waitForIdle()
+    assertEquals(saved, bookmark)
+    assertEquals(ViewportPosition(oldViewport.index + 1, oldViewport.offset), viewport().position)
+
+    composeRule.mainClock.autoAdvance = false
+    try {
+      click("Jump to latest")
+      composeRule.mainClock.advanceTimeByFrame()
+      drainCurrentWork()
+      assertNull("The live-edge choice must clear the bookmark before the animation finishes", bookmark)
+    } finally {
+      composeRule.mainClock.autoAdvance = true
+      composeRule.waitForIdle()
+    }
+    click("Reopen + output")
+    composeRule.waitForIdle()
+    assertEquals(ViewportPosition(0, 0), viewport().position)
+    composeRule.onNodeWithText("reopened reply 4").assertIsDisplayed()
+  }
+
   private fun verifyManualTakeover(replaceRunningTransition: Boolean) {
     showReader()
     composeRule.waitForIdle()
@@ -250,7 +297,10 @@ class ChatReaderScrollOwnershipLayoutTest {
       .performClick()
   }
 
-  private fun showReader(initialHistoryLoading: Boolean = false) {
+  private fun showReader(
+    initialHistoryLoading: Boolean = false,
+    withPersistence: Boolean = false,
+  ) {
     val initialMessages = listOf(message("old user", "user", 1)) + (0 until 60).map { message("assistant $it", "assistant", it + 2) }
     composeRule.setContent {
       ClawDesignTheme {
@@ -258,7 +308,22 @@ class ChatReaderScrollOwnershipLayoutTest {
         var historyLoading by remember { mutableStateOf(initialHistoryLoading) }
         val scope = rememberCoroutineScope()
         val timeline = remember(messages) { buildChatTimeline(messages, 0, emptyList(), null) }
-        val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
+        var reopenGeneration by remember { mutableStateOf(0) }
+        val current =
+          key(reopenGeneration) {
+            rememberChatReaderScrollController(
+              "animation-owner",
+              timeline,
+              historyLoading = historyLoading,
+              historyResolved = true,
+              gatewayId = "gateway-a".takeIf { withPersistence },
+              ownerAgentId = "main",
+              sessionId = "session-a",
+              loadPosition = { ChatReaderPositionBinding(it, bookmark) },
+              savePosition = { _, position -> bookmark = position },
+              clearPosition = { bookmark = null },
+            )
+          }
         SideEffect { reader = current }
         LaunchedEffect(Unit) { observedScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor }
         CompositionLocalProvider(LocalChatReaderNavigation provides current.onManualNavigation) {
@@ -275,7 +340,17 @@ class ChatReaderScrollOwnershipLayoutTest {
               TextButton(onClick = manualNavigation) { Text("Read here") }
             }
             TextButton(onClick = { messages = initialMessages + message("new user", "user", 1000) }) { Text("Append user turn") }
-            TextButton(onClick = { historyLoading = !historyLoading }) { Text("Loading: $historyLoading") }
+            if (withPersistence) {
+              Row {
+                TextButton(onClick = { reopenGeneration += 1 }) { Text("Reopen") }
+                TextButton(onClick = {
+                  reopenGeneration += 1
+                  messages = messages + message("reopened reply $reopenGeneration", "assistant", 1000 + reopenGeneration)
+                }) { Text("Reopen + output") }
+              }
+            } else {
+              TextButton(onClick = { historyLoading = !historyLoading }) { Text("Loading: $historyLoading") }
+            }
             Text("User turns: ${messages.count { it.role == "user" }}")
             LazyColumn(
               state = current.listState,

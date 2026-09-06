@@ -9,13 +9,15 @@ import ai.openclaw.app.chat.resolvesReaderHistory
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -44,50 +46,73 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
-  fun cancellingViewportDebounceFlushesLatestPosition() =
+  fun closingReaderFlushesItsLastObservedChoice() =
     runTest {
-      val expected = ChatReaderPosition(messageId = "message-1", itemOffset = 37)
-      val expectedWrite = ChatReaderPositionWrite.Save(expected)
-      val positions =
-        flow {
-          emit(true to expectedWrite)
-          awaitCancellation()
-        }
-      val saved = mutableListOf<ChatReaderPositionWrite>()
-      val collector =
-        launch(start = CoroutineStart.UNDISPATCHED) {
-          collectChatReaderPositionSaves(positions) { write -> saved += write }
-        }
-
-      yield()
-      collector.cancelAndJoin()
-
-      assertEquals(listOf(expectedWrite), saved)
+      val save = ChatReaderPositionWrite.Save(ChatReaderPosition("message-1", 37))
+      for ((observations, expected) in listOf(
+        listOf(true to save) to save,
+        listOf(true to save, false to ChatReaderPositionWrite.None) to save,
+        listOf(true to save, true to ChatReaderPositionWrite.Clear) to ChatReaderPositionWrite.Clear,
+      )) {
+        val emitted = CompletableDeferred<Unit>()
+        val positions =
+          flow {
+            observations.forEach { emit(it) }
+            emitted.complete(Unit)
+            awaitCancellation()
+          }
+        val saved = mutableListOf<ChatReaderPositionWrite>()
+        val collector =
+          launch(start = CoroutineStart.UNDISPATCHED) {
+            collectChatReaderPositionSaves(positions) { saved += it }
+          }
+        // Cancellation after an actual observation, not after an assumed number of scheduler turns.
+        emitted.await()
+        collector.cancelAndJoin()
+        assertEquals(listOf(expected), saved)
+      }
     }
 
   @Test
-  fun volatileRowAtScrollEndPersistsLastStableAnchor() =
+  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+  fun liveChoiceDuringAnInFlightSaveWinsWhenTheReaderCloses() =
     runTest {
-      val expectedWrite =
-        ChatReaderPositionWrite.Save(
-          ChatReaderPosition(messageId = "message-1", itemOffset = 37),
-        )
-      val positions =
-        flow {
-          emit(true to expectedWrite)
-          emit(false to ChatReaderPositionWrite.None)
-          awaitCancellation()
-        }
-      val saved = mutableListOf<ChatReaderPositionWrite>()
-      val collector =
-        launch(start = CoroutineStart.UNDISPATCHED) {
-          collectChatReaderPositionSaves(positions) { write -> saved += write }
-        }
-
-      yield()
-      collector.cancelAndJoin()
-
-      assertEquals(listOf(expectedWrite), saved)
+      for (old in listOf(ChatReaderPositionWrite.Save(ChatReaderPosition("old", 17)), ChatReaderPositionWrite.Clear)) {
+        val queued = ChatReaderPositionWrite.Save(ChatReaderPosition("queued", 23))
+        val positions = MutableSharedFlow<Pair<Boolean, ChatReaderPositionWrite>>(extraBufferCapacity = 2)
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val releaseSecond = CompletableDeferred<Unit>()
+        val writes = mutableListOf<ChatReaderPositionWrite>()
+        val collector =
+          launch(start = CoroutineStart.UNDISPATCHED) {
+            collectChatReaderPositionSaves(positions) { write ->
+              if (write == old) {
+                firstStarted.complete(Unit)
+                releaseFirst.await()
+              }
+              if (write == queued) {
+                secondStarted.complete(Unit)
+                releaseSecond.await()
+              }
+              writes += write
+            }
+          }
+        runCurrent()
+        positions.emit(false to old)
+        firstStarted.await()
+        positions.emit(false to queued)
+        runCurrent()
+        positions.emit(false to ChatReaderPositionWrite.Clear)
+        runCurrent()
+        releaseFirst.complete(Unit)
+        secondStarted.await()
+        collector.cancel()
+        releaseSecond.complete(Unit)
+        collector.join()
+        assertEquals("The final choice wins even for Clear -> Save -> Clear", ChatReaderPositionWrite.Clear, writes.last())
+      }
     }
 
   @Test
@@ -134,28 +159,16 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
-  fun persistedLiveEdgeRestoresFollowingWithoutNewerContent() {
+  fun restoredBookmarkKeepsReadingPausedEvenAtTheLatestMessage() {
     val timeline = timeline(user("user-1"), assistant("assistant-1"))
-    val saved = requireNotNull(timeline.readerPosition(index = 0, offset = 0))
-
-    val restored = requireNotNull(restoredChatReaderTransition(timeline, saved))
-
-    assertEquals(0, restored.scrollIndex)
-    assertEquals(ChatScrollFollowTarget.LatestContent, restored.state.followTarget)
-    assertFalse(restored.state.hasNewerContent)
-  }
-
-  @Test
-  fun persistedOffsetInsideLatestMessageDoesNotResumeFollowing() {
-    val timeline = timeline(user("user-1"), assistant("assistant-1"))
-    val saved = requireNotNull(timeline.readerPosition(index = 0, offset = 120))
-
-    val restored = requireNotNull(restoredChatReaderTransition(timeline, saved))
-
-    assertEquals(0, restored.scrollIndex)
-    assertEquals(120, restored.scrollOffset)
-    assertNull(restored.state.followTarget)
-    assertTrue(restored.state.hasNewerContent)
+    for (offset in listOf(0, 120)) {
+      val saved = requireNotNull(timeline.readerPosition(index = 0, offset = offset))
+      val restored = requireNotNull(restoredChatReaderTransition(timeline, saved))
+      assertEquals(0, restored.scrollIndex)
+      assertEquals(offset, restored.scrollOffset)
+      assertNull(restored.state.followTarget)
+      assertEquals(offset != 0, restored.state.hasNewerContent)
+    }
   }
 
   @Test

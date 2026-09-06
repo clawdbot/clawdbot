@@ -31,6 +31,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
@@ -223,17 +225,20 @@ internal fun rememberChatReaderScrollController(
   }
 
   LaunchedEffect(gatewayId, ownerAgentId, sessionKey, sessionId, positionBinding) {
-    gatewayId?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
     val binding = positionBinding ?: return@LaunchedEffect
     collectChatReaderPositionSaves(
       positions =
         snapshotFlow {
           val write =
-            if (positionLoaded && readerState.initialized && applyingScrollCount == 0) {
-              val index = listState.firstVisibleItemIndex
-              currentTimeline.readerPositionWrite(index, listState.firstVisibleItemScrollOffset)
-            } else {
-              ChatReaderPositionWrite.None
+            when {
+              !positionLoaded || !readerState.initialized -> ChatReaderPositionWrite.None
+
+              // Live following is the reopen fallback, not a bookmark to yesterday's last row.
+              readerState.followTarget == ChatScrollFollowTarget.LatestContent -> ChatReaderPositionWrite.Clear
+
+              applyingScrollCount > 0 -> ChatReaderPositionWrite.None
+
+              else -> currentTimeline.readerPositionWrite(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
             }
           listState.isScrollInProgress to write
         },
@@ -294,22 +299,26 @@ internal suspend fun collectChatReaderPositionSaves(
   persist: suspend (ChatReaderPositionWrite) -> Unit,
 ) {
   var pendingWrite: ChatReaderPositionWrite? = null
+  var pendingRevision = 0L
   try {
-    positions.collectLatest { (scrolling, observedWrite) ->
-      val write =
-        if (observedWrite == ChatReaderPositionWrite.None) {
-          pendingWrite ?: return@collectLatest
-        } else {
-          observedWrite.also { pendingWrite = it }
+    positions
+      // Admit the latest choice even while a non-cancellable store write is finishing.
+      .onEach { (_, write) ->
+        if (write != ChatReaderPositionWrite.None) {
+          pendingWrite = write
+          pendingRevision += 1
         }
-      if (scrolling) {
-        delay(250)
+      }.conflate()
+      .collectLatest { (scrolling, observedWrite) ->
+        val write = observedWrite.takeUnless { it == ChatReaderPositionWrite.None } ?: pendingWrite ?: return@collectLatest
+        val revision = pendingRevision
+        if (scrolling && write is ChatReaderPositionWrite.Save) delay(250)
+        withContext(NonCancellable) {
+          val saved = runCatching { persist(write) }.isSuccess
+          // Clear -> Save -> Clear contains two distinct live-edge choices.
+          if (saved && pendingRevision == revision && pendingWrite == write) pendingWrite = null
+        }
       }
-      withContext(NonCancellable) {
-        val saved = runCatching { persist(write) }.isSuccess
-        if (saved && pendingWrite == write) pendingWrite = null
-      }
-    }
   } finally {
     pendingWrite?.let { write ->
       // Composition disposal must flush the last observed viewport even when it
@@ -351,14 +360,15 @@ internal fun restoredChatReaderTransition(
     } else {
       timeline.indexOfMessage(position.messageId) ?: position.messageVersion?.let(timeline::indexOfMessageVersion)
     } ?: return null
-  val followsLatest = restoredIndex == timeline.latestContentIndex && position.itemOffset == 0
+  val isAtLatestContent = restoredIndex == timeline.latestContentIndex && position.itemOffset == 0
   return ChatReaderTransition(
     state =
       ChatReaderState(
         ownerSessionKey = ownerSessionKey,
         initialized = true,
-        followTarget = ChatScrollFollowTarget.LatestContent.takeIf { followsLatest },
-        hasNewerContent = !followsLatest && timeline.latestContentIndex != null,
+        // Bookmark presence records paused reading; geometry alone must not resume following.
+        followTarget = null,
+        hasNewerContent = !isAtLatestContent && timeline.latestContentIndex != null,
         latestUserMessageId = timeline.latestUserMessageId,
         latestUserMessageVersion = timeline.latestUserMessageVersion,
         latestContentVersion = timeline.latestContentVersion,
