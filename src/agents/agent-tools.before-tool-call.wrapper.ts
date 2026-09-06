@@ -209,6 +209,7 @@ export function getBeforeToolCallFailureDisposition(
   }
 }
 
+/** Remember hook-adjusted params for later adapter-side execution. */
 export function recordAdjustedParamsForToolCall(
   toolCallId: string | undefined,
   params: unknown,
@@ -217,14 +218,22 @@ export function recordAdjustedParamsForToolCall(
   if (!toolCallId) {
     return;
   }
-  let clonedParams: unknown;
-  try {
-    clonedParams = structuredClone(params);
-  } catch {
+  const cloneResult = cloneParamsForAdjustedReplay(params);
+  if (!cloneResult.ok) {
     return;
   }
-  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), clonedParams);
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), cloneResult.value);
   pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
+}
+
+function cloneParamsForAdjustedReplay(
+  params: unknown,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: structuredClone(params) };
+  } catch {
+    return { ok: false };
+  }
 }
 
 /** Record that one concrete core-owned tool call may use structured replay classification. */
@@ -314,7 +323,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
-      const normalizedToolName = normalizeToolPolicyName(toolName);
+      const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
       const trace =
         hookOptions.emitDiagnostics && ctx?.trace
           ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))

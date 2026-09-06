@@ -116,7 +116,9 @@ async function requireDirectory(value: string, label: string): Promise<string> {
 
 function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () => void {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  // The runtime snapshot owns config while the state directory is repointed.
+  // Repointing the state dir would otherwise make the config resolve relative to
+  // it (see `resolveConfigDir`), so clear any inherited path override and let the
+  // published runtime snapshot own config for this run.
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
   const previousWorkspaceDir = process.env.OPENCLAW_WORKSPACE_DIR;
   process.env.OPENCLAW_STATE_DIR = params.stateDir;
@@ -204,6 +206,7 @@ function writeAgentExecOutput(
   }
 }
 
+/** Run one isolated embedded agent turn and project its stable CLI result. */
 export async function agentExecCommand(
   positionalMessage: string | undefined,
   opts: AgentExecCliOptions,
@@ -269,10 +272,13 @@ export async function agentExecCommand(
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
       : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-"));
-    // Cleanup owns only the temporary state this command created.
+    // Only a state dir this command created is removed; `--state-dir` is the
+    // caller's and is left alone.
     temporaryStateDir = opts.stateDir ? undefined : stateDir;
     configIo = await import("../config/io.js");
-    // Capture the caller's snapshot before config loading can replace it.
+    // Both process globals are captured before the config is resolved: an ambient
+    // load publishes a runtime snapshot of its own, so reading "previous" after it
+    // would record exec's snapshot as the caller's.
     const previousRuntimeConfigSnapshot = configIo.getRuntimeConfigSnapshot();
     const snapshotIo = configIo;
     restoreRuntimeConfigSnapshot = () => {
@@ -282,9 +288,13 @@ export async function agentExecCommand(
         snapshotIo.clearRuntimeConfigSnapshot();
       }
     };
-    // Load from the caller's config location before repointing state. Restore
-    // successful loads' env changes so later runs cannot inherit provider keys;
-    // the loader already restores failed loads.
+    // Resolve the config before the environment repoints the state dir, so the
+    // ordinary config location still applies. A successful load finalizes the
+    // config's `env` block and login-shell import against `process.env`, so undo
+    // exactly those mutations on the way out: otherwise an in-process caller's
+    // later isolated run would inherit provider keys from this one. A failed load
+    // needs no handling here -- the loader applies env vars as its last step and
+    // restores them from its own catch.
     const { restoreEnvChangesIfUnchanged, snapshotEnv } = configIo;
     const envBeforeConfigLoad = snapshotEnv(process.env);
     const baseConfig = deps.baseConfig ?? (await resolveExecBaseConfig(opts));
@@ -296,8 +306,9 @@ export async function agentExecCommand(
         after: envAfterConfigLoad,
       });
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
-    // Capture operator-owned plugin roots before temporary state redirects
-    // both discovery and the installed-index database.
+    // Installed plugins belong to the operator config resolved above, not to
+    // the disposable state root used for this run. Capture all roots before
+    // OPENCLAW_STATE_DIR moves so discovery and the installed-index DB agree.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
     const pluginInstallContext = inheritInstalledPlugins
       ? await import("../plugins/install-root-context.js")
@@ -309,8 +320,13 @@ export async function agentExecCommand(
     const fallbacks = normalizeFallbacks(opts.model, deps.modelFallbacksOverride ?? opts.fallback);
     const { resolveAgentDir, resolveAmbientOwnerAgentId } =
       await import("../agents/agent-scope-config.js");
-    // Resolve credential ownership from the operator config before repointing
-    // state; runConfig strips agent directories to keep run state ephemeral.
+    // Resolve from the inherited config, not `{}`: the default agent may declare
+    // its own `agentDir`, and that is where its stored auth profiles live. This
+    // reads `baseConfig` rather than `runConfig` because the run config
+    // deliberately strips agent directories to keep run state ephemeral, while
+    // credential ownership must still follow the operator's configuration.
+    // Computed before the environment repoints the state dir so the unconfigured
+    // case still resolves against the real one.
     const execAgentId = resolveAmbientOwnerAgentId(baseConfig, deps.agentId, {
       surface: "agent exec",
       hint: "Set agents.defaults.systemAgent.agentId.",
@@ -359,8 +375,12 @@ export async function agentExecCommand(
         formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
       });
     }
-    // Publish only in memory: serializing resolved config would expose provider
-    // keys to the run's own exec tool through a temporary file.
+    // The runtime snapshot is the only in-process config cache (`clearConfigCache`
+    // is a no-op shim), so publishing the composed config here is what makes the
+    // run use it. Serializing it to a temporary file and repointing
+    // OPENCLAW_CONFIG_PATH would only feed this same snapshot, while writing
+    // env-substituted provider keys to disk where the run's own exec tool
+    // could read them.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
     if (isExecutionIdentityCollectionEnabled(runConfig)) {
       try {
