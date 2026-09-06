@@ -8,12 +8,12 @@ import {
 import { resolveRetainedManagedNpmInstallPackageInfo } from "../../../plugins/managed-npm-retention.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
-  buildPluginDependencyStatus,
+  findMissingRequiredPluginDependencies,
   normalizePluginDependencySpecs,
 } from "../../../plugins/status-dependencies-core.js";
 
 /** Collects dependency failures only for enabled, canonically recorded npm installs. */
-export function collectInstalledPluginMissingRequiredDependencies(params: {
+export async function collectInstalledPluginMissingRequiredDependencies(params: {
   cfg: OpenClawConfig;
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
@@ -55,7 +55,7 @@ export function collectInstalledPluginMissingRequiredDependencies(params: {
     if (rootDir !== params.resolvePathIdentity(record.installPath)) {
       continue;
     }
-    const status = buildPluginDependencyStatus({
+    const missingRequired = await findMissingRequiredPluginDependencies({
       rootDir,
       dependencyRootDir:
         resolveRetainedManagedNpmInstallPackageInfo(rootDir)?.projectRoot ?? rootDir,
@@ -64,8 +64,8 @@ export function collectInstalledPluginMissingRequiredDependencies(params: {
         optionalDependencies: plugin.packageOptionalDependencies,
       }),
     });
-    if (!status.requiredInstalled) {
-      missing.set(plugin.id, { rootDir, missingRequired: status.missing });
+    if (missingRequired.length > 0) {
+      missing.set(plugin.id, { rootDir, missingRequired });
     }
   }
   return missing;
