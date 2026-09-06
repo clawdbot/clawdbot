@@ -7,15 +7,29 @@ import {
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import {
+  exceedsApprovalTextLimit,
+  sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
+} from "../../infra/exec-approval-text-sanitize.js";
+import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
-import { resolvePluginApprovalTimeoutMs } from "../../infra/plugin-approvals.js";
+import {
+  PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+  PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  resolvePluginApprovalTimeoutMs,
+  truncatePluginApprovalDetail,
+} from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
@@ -48,8 +62,17 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond, client }) => {
-      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
+    "plugin.approval.list": async ({ respond, client, context }) => {
+      respond(
+        true,
+        listVisiblePendingApprovalRequests({
+          manager,
+          client,
+          approvalKind: "plugin",
+          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        }),
+        undefined,
+      );
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (
@@ -68,12 +91,14 @@ export function createPluginApprovalHandlers(
         description: string;
         detail?: string | null;
         severity?: string | null;
+        scope?: ApprovalScope | null;
         toolName?: string | null;
         toolCallId?: string | null;
+        mcpTool?: { server: string; tool: string };
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
-        approvalReviewerDeviceIds?: string[];
+        approvalReviewerDeviceIds?: string[] | null;
         turnSourceChannel?: string | null;
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
@@ -112,14 +137,71 @@ export function createPluginApprovalHandlers(
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
 
+      const rawSessionKey = normalizeOptionalString(
+        trustedAgentRuntime?.sessionKey ?? p.sessionKey,
+      );
+      const sessionOwner = rawSessionKey
+        ? resolveRequestedSessionAgentId(
+            context.getRuntimeConfig(),
+            rawSessionKey,
+            normalizeOptionalString(trustedAgentRuntime?.agentId ?? p.agentId),
+          )
+        : undefined;
+      if (sessionOwner && !sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      const sessionKey =
+        rawSessionKey && sessionOwner?.ok
+          ? resolveStoredSessionKeyForAgentStore({
+              cfg: context.getRuntimeConfig(),
+              agentId: sessionOwner.agentId,
+              sessionKey: rawSessionKey,
+            })
+          : null;
+
+      // Sanitize once at the creation boundary, like exec command text: the
+      // raw record otherwise reaches channel messages, iOS push, and the web
+      // modal unescaped (bidi/invisible spoofing). Escaping expands invisible
+      // chars to \u{...}, so re-check the protocol caps: a spoof-heavy title
+      // must fail loud here, not as a misleading registration throw later.
+      const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
+      const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
+      if (
+        exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+        exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "approval title or description exceeds the display limit after sanitization",
+          ),
+        );
+        return;
+      }
+      const rawDetail = normalizeTrimmedString(p.detail);
+      // Untrusted display metadata gets the same escape as title/description:
+      // pluginId/toolName/agentId are interpolated into channel approval text.
+      // Host-minted runtime identity values stay authoritative and unescaped.
+      const sanitizeMeta = (value?: string | null): string | null =>
+        normalizeTrimmedString(value) === null
+          ? null
+          : sanitizeExecApprovalDisplayText(normalizeTrimmedString(value)!);
       const request: PluginApprovalRequestPayload = {
-        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? p.pluginId ?? null,
-        title: p.title,
-        description: p.description,
-        detail: normalizeTrimmedString(p.detail),
+        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
+        title: sanitizedTitle,
+        description: sanitizedDescription,
+        scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
+        detail:
+          rawDetail === null
+            ? null
+            : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
-        toolName: p.toolName ?? null,
+        toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
+        ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
         ...(Array.isArray(p.allowedDecisions)
           ? {
               allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
@@ -127,8 +209,10 @@ export function createPluginApprovalHandlers(
               }),
             }
           : {}),
-        agentId: trustedAgentRuntime?.agentId ?? p.agentId ?? null,
-        sessionKey: trustedAgentRuntime?.sessionKey ?? p.sessionKey ?? null,
+        agentId:
+          trustedAgentRuntime?.agentId ??
+          (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
+        sessionKey,
         runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
         turnSourceChannel: trustedAgentRuntime
           ? normalizeTrimmedString(trustedAgentRuntime.turnSourceChannel)
@@ -149,6 +233,14 @@ export function createPluginApprovalHandlers(
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       if (trustedAgentRuntime) {
         record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+        if (request.mcpTool && request.toolCallId) {
+          record.mcpToolApprovalActive = takeMcpToolApprovalBinding({
+            authority: trustedAgentRuntime.delegatedAuthority,
+            agentId: trustedAgentRuntime.agentId,
+            toolCallId: request.toolCallId,
+            ...request.mcpTool,
+          });
+        }
       }
       if (
         trustedAgentRuntime?.executionIdentity &&
@@ -175,14 +267,13 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      const requestEvent = buildRequestedApprovalEvent(record);
+      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
       const forwardRequest = opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder);
       const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
 
       await handlePendingApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond,
         context,
         clientConnId: client?.connId,
@@ -213,11 +304,12 @@ export function createPluginApprovalHandlers(
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond, client }) => {
+    "plugin.approval.waitDecision": async ({ params, respond, client, context }) => {
       await handleApprovalWaitDecision({
         manager,
         inputId: (params as { id?: string }).id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         respond,
       });
     },

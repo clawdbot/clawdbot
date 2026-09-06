@@ -31,27 +31,34 @@ struct BrowserProfileImportBannerContent: Equatable {
             let browsers = Self.browserList(for: profiles)
             return BrowserProfileImportBannerContent(
                 title: String(localized: "Use your browser logins"),
-                subtitle: String(localized: """
-                Copy cookies from \(browsers) into an isolated agent profile. \
+                subtitle: String(format: String(localized: """
+                Copy cookies from %@ into an isolated agent profile. \
                 Passwords are never touched.
-                """),
+                """), browsers),
                 badge: .globe,
                 action: .importProfiles(profiles))
         case let .importing(profile, target):
             return BrowserProfileImportBannerContent(
                 title: String(localized: "Importing browser cookies…"),
-                subtitle: String(localized: """
-                Copying \(profile.displayName) into “\(target)”. Touch ID may be required.
-                """),
+                subtitle: String(
+                    format: String(localized: """
+                    Copying %@ into “%@”. Touch ID may be required.
+                    """),
+                    profile.displayName,
+                    target),
                 badge: .progress,
                 action: .none)
         case let .imported(result):
             return BrowserProfileImportBannerContent(
                 title: String(localized: "Browser logins imported"),
-                subtitle: String(localized: """
-                \(result.cookies.imported) of \(result.cookies.total) cookies copied into \
-                “\(result.into)” — now the default profile for agent browsing.
-                """),
+                subtitle: String(
+                    format: String(localized: """
+                    %lld of %lld cookies copied into \
+                    “%@” — now the default profile for agent browsing.
+                    """),
+                    result.cookies.imported,
+                    result.cookies.total,
+                    result.into),
                 badge: .success,
                 action: .none)
         case let .failed(message, _):
@@ -119,7 +126,7 @@ struct BrowserProfileImportBannerView: View {
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
         .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(content.title). \(content.subtitle)")
+        .accessibilityLabel(Text(verbatim: "\(content.title). \(content.subtitle)"))
     }
 
     @ViewBuilder

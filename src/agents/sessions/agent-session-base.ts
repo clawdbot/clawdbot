@@ -1,4 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -9,12 +11,18 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import { isToolResultError } from "../tool-result-error.js";
+import {
+  takeCodeModeResponseSource,
+  prepareCodeModeSourceAppend,
+} from "../transcript-code-mode-source.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
   AgentSessionEventListener,
   AgentSessionWriteSettlementRunner,
 } from "./agent-session-types.js";
+import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
 import {
   type ExtensionCommandContextActions,
@@ -83,7 +91,7 @@ export abstract class AgentSessionBase {
   // Compaction state
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
-  protected overflowRecoveryAttempted = false;
+  protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
 
   // Branch summarization state
@@ -196,8 +204,8 @@ export abstract class AgentSessionBase {
     headers?: Record<string, string>;
   }> {
     if (
-      this.agent.streamFn ===
-      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+      getStreamLlmRuntime(this.agent.streamFn) ===
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime
     ) {
       return this.getRequiredRequestAuth(model);
     }
@@ -249,9 +257,11 @@ export abstract class AgentSessionBase {
     };
 
     this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+      // Normalize adapted failures before middleware, which may explicitly recover.
+      const resultIsError = isError || isToolResultError(result);
       const runner = this.currentExtensionRunner;
       if (!runner.hasHandlers("tool_result")) {
-        return undefined;
+        return { isError: resultIsError };
       }
 
       const hookResult = await this.runWithSessionWriteSettlement(
@@ -263,21 +273,23 @@ export abstract class AgentSessionBase {
             input: args as Record<string, unknown>,
             content: result.content,
             details: result.details,
-            isError,
+            isError: resultIsError,
+            ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
 
-      if (!hookResult) {
-        return undefined;
+      if (hookResult) {
+        this.extensionModifiedToolResultIds.add(toolCall.id);
       }
-      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
-        content: hookResult.content,
-        details: hookResult.details,
-        isError: hookResult.isError ?? isError,
+        ...hookResult,
+        isError: hookResult?.isError ?? resultIsError,
       };
     };
+    // Pre-execution failures skip afterToolCall and its recovery handlers.
+    this.agent.afterToolOutcome = async ({ executionStarted, result, isError }) =>
+      executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
 
   // =========================================================================
@@ -367,12 +379,14 @@ export abstract class AgentSessionBase {
 
     // Retire the exact queued display entry before publishing message_start.
     if (event.type === "message_start" && event.message.role === "user") {
-      this.overflowRecoveryAttempted = false;
+      this.overflowRecoveryAttempts = 0;
       retireQueuedUserMessage(event.message);
     }
 
+    const sourceSlots =
+      event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     // Emit to extensions first
-    const messageChangedByExtension = await this.emitExtensionEvent(event);
+    const messageChanged = await this.emitExtensionEvent(event);
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     // Notify all listeners
@@ -408,10 +422,14 @@ export abstract class AgentSessionBase {
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         let entryId: string;
         try {
-          entryId = this.sessionManager.appendMessage(event.message, {
-            invalidateSerializedPrefixCache:
-              messageChangedByExtension || toolResultChangedByExtension,
-          });
+          // Normalize live delivery facts before persistence makes its redacted copy.
+          // Stored arguments must never replace the values used for tool execution.
+          applyAssistantDeliveryDirectives(event.message);
+          const appendOptions = {
+            invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
+          };
+          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
+          entryId = this.sessionManager.appendMessage(event.message, appendOptions);
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);
@@ -436,7 +454,7 @@ export abstract class AgentSessionBase {
         // A length response may still need overflow recovery in checkCompaction();
         // retryCount is independent and resets for every non-error response below.
         if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
-          this.overflowRecoveryAttempted = false;
+          this.overflowRecoveryAttempts = 0;
         }
 
         // Reset retry counter immediately on successful assistant response
@@ -459,39 +477,13 @@ export abstract class AgentSessionBase {
       return false;
     }
 
-    for (const message of event.messages.toReversed()) {
-      if (message.role === "assistant") {
-        return this.isRetryableError(message);
-      }
-    }
-    return false;
+    const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
+    return lastAssistant !== undefined && this.isRetryableError(lastAssistant);
   }
 
   /** Find the last assistant message in agent state (including aborted ones) */
   protected findLastAssistantMessage(): AssistantMessage | undefined {
-    const messages = this.agent.state.messages;
-    for (const msg of messages.toReversed()) {
-      if (msg.role === "assistant") {
-        return msg;
-      }
-    }
-    return undefined;
-  }
-
-  private replaceMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
-    // Agent-core stores the finalized message object in its state before emitting message_end.
-    // SessionManager persistence happens later in handleAgentEvent() with event.message.
-    // Mutating this object in place keeps agent state, later turn/agent events, listeners,
-    // and the eventual SessionManager.appendMessage(event.message) persistence in sync.
-    if (target === replacement) {
-      return;
-    }
-
-    const targetRecord = target as unknown as Record<string, unknown>;
-    for (const key of Object.keys(targetRecord)) {
-      delete targetRecord[key];
-    }
-    Object.assign(targetRecord, replacement);
+    return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
   /** Emit extension events based on agent events */
@@ -537,7 +529,7 @@ export abstract class AgentSessionBase {
       };
       const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
       if (replacement) {
-        this.replaceMessageInPlace(event.message, replacement);
+        replaceAgentMessageInPlace(event.message, replacement);
         return true;
       }
     } else if (event.type === "tool_execution_start") {

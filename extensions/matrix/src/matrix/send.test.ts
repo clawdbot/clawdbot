@@ -35,9 +35,9 @@ const loadConfigMock = vi.fn(() => ({}));
 const withResolvedRuntimeMatrixClientMock = vi.hoisted(() => vi.fn());
 const getImageMetadataMock = vi.fn().mockResolvedValue(null);
 const resizeToJpegMock = vi.fn();
-const mediaKindFromMimeMock = vi.fn((_: string | null | undefined) => "image");
+const mediaKindFromMimeMock = vi.fn((_mime: string | null | undefined) => "image");
 const isVoiceCompatibleAudioMock = vi.fn(
-  (_: { contentType?: string | null; fileName?: string | null }) => false,
+  (_options: { contentType?: string | null; fileName?: string | null }) => false,
 );
 const resolveTextChunkLimitMock = vi.fn<
   (cfg: unknown, channel: unknown, accountId?: unknown) => number
@@ -1213,7 +1213,7 @@ describe("sendMessageMatrix threads", () => {
     expect(content["m.relates_to"]).not.toHaveProperty("m.in_reply_to");
   });
 
-  it("includes thread fallback metadata only with an explicit reply target", async () => {
+  it("preserves an explicit reply target inside its thread", async () => {
     const { client, sendMessage } = makeClient();
 
     await sendMessageMatrix("room:!room:example", "hello thread", {
@@ -1235,7 +1235,6 @@ describe("sendMessageMatrix threads", () => {
     expect(content["m.relates_to"]).toEqual({
       rel_type: "m.thread",
       event_id: "$thread",
-      is_falling_back: true,
       "m.in_reply_to": { event_id: "$reply" },
     });
   });

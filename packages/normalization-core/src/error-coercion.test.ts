@@ -13,12 +13,73 @@ const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
 
 describe("formatErrorMessage", () => {
+  it("retains aggregate branches, nested causes and codes once despite cycles", () => {
+    const native = Object.assign(new Error("native close failed"), { code: "EIO" });
+    const cleanup = new AggregateError([native, native, "second failure"], "cleanup failed");
+    const outer = new AggregateError([cleanup, native], "turn failed", {
+      cause: new Error("primary failure"),
+    });
+    native.cause = outer;
+
+    expect(format(outer)).toBe(
+      "turn failed | primary failure | cleanup failed | native close failed | EIO | second failure",
+    );
+  });
+
+  it("redacts aggregate causes without treating arbitrary error metadata as causes", () => {
+    const inner = Object.assign(new Error("native secret"), {
+      data: new Error("display-only detail"),
+      errors: [new Error("not an aggregate")],
+    });
+    const outer = new AggregateError([inner], "cleanup failed: native secret");
+    const redact = vi.fn((text: string) => text.replaceAll("secret", "[REDACTED]"));
+
+    expect(formatErrorMessage(outer, { redact })).toBe("cleanup failed: native [REDACTED]");
+    expect(redact).toHaveBeenCalledOnce();
+  });
+
+  it("ignores inaccessible aggregate links but keeps readable causes", () => {
+    const error = new AggregateError([], "cleanup failed", { cause: new Error("native failed") });
+    Object.defineProperty(error, "errors", {
+      get: () => {
+        throw new Error("opaque");
+      },
+    });
+    expect(format(error)).toBe("cleanup failed | native failed");
+  });
+
   it("walks and deduplicates Error cause chains while preserving codes", () => {
     const root = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const inner = new Error("request failed", { cause: root });
-    const outer = new Error("request failed", { cause: inner });
+    const outer = Object.assign(new Error("request failed", { cause: inner }), {
+      code: "REQUEST_FAILED",
+    });
 
     expect(format(outer)).toBe("request failed | socket closed | ECONNRESET");
+    expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
+      "request failed | REQUEST_FAILED | socket closed | ECONNRESET",
+    );
+  });
+
+  it("omits cause text the wrapper message already spells out", () => {
+    // Wrappers that embed the cause verbatim printed the whole sentence twice.
+    const parseFailure = new SyntaxError("JSON5: invalid character 'j' at 1:7");
+    const wrapped = new Error(`Failed to parse --file as JSON5: ${parseFailure.message}`, {
+      cause: parseFailure,
+    });
+    expect(format(wrapped)).toBe(
+      "Failed to parse --file as JSON5: JSON5: invalid character 'j' at 1:7",
+    );
+
+    // Codes keep their own segment even when the detail already names them.
+    const errno = Object.assign(
+      new Error("ENOENT: no such file or directory, open '/tmp/missing.json'"),
+      { code: "ENOENT" },
+    );
+    const notFound = new Error("--file not found: /tmp/missing.json.", { cause: errno });
+    expect(format(notFound)).toBe(
+      "--file not found: /tmp/missing.json. | ENOENT: no such file or directory, open '/tmp/missing.json' | ENOENT",
+    );
   });
 
   it("formats status/code records and structured non-Error causes", () => {
@@ -29,9 +90,21 @@ describe("formatErrorMessage", () => {
     expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
       "request failed | status=429 code=unknown",
     );
+    // A non-Error cause carrying recognized status/code fields alongside extra
+    // keys used to be dropped entirely: formatStatusAndCode returns undefined
+    // for any object with keys beyond status/code, and the cause-chain branch
+    // had no stringifyUnknown fallback (unlike the top-level branch). The
+    // structured detail now survives instead of being swallowed.
     expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
-      "request failed",
+      'request failed | {"statusCode":429}',
     );
+    expect(
+      format(
+        new Error("request failed", {
+          cause: { status: 503, code: "UNAVAILABLE", requestId: "abc" },
+        }),
+      ),
+    ).toBe('request failed | {"status":503,"code":"UNAVAILABLE","requestId":"abc"}');
   });
 
   it("stringifies primitives and circular records without throwing", () => {

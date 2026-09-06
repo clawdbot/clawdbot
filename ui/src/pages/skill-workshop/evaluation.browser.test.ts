@@ -70,6 +70,7 @@ const evaluation: SkillWorkshopEvaluation = {
 
 const proposal: SkillWorkshopProposal = {
   key: "proposal-1",
+  kind: "update",
   slug: "inbox-cleaner",
   name: "Inbox Cleaner",
   oneLine: "Clean inbox triage",
@@ -83,7 +84,7 @@ const proposal: SkillWorkshopProposal = {
   recencyGroup: "today",
   ageLabel: "now",
   supportFiles: [],
-  isNew: false,
+  bodyLoaded: true,
 };
 
 function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
@@ -100,6 +101,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     inspectingKey: null,
     proposals: [proposal],
     selectedKey: proposal.key,
+    appliedDiffMode: "changes",
     statusFilter: "pending",
     query: "",
     filePreviewKey: null,
@@ -110,6 +112,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     actionNotice: null,
     revisionKey: null,
     revisionDraft: "",
+    revisionRecoveryActive: false,
     assistantName: "OpenClaw",
     workshopAgentName: "Research",
     selfLearning: null,
@@ -122,6 +125,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     onQueueWidthChange: vi.fn(),
     onModeChange: vi.fn(),
     onSelect: vi.fn(),
+    onAppliedDiffModeChange: vi.fn(),
     onPrev: vi.fn(),
     onNext: vi.fn(),
     onApply: vi.fn(),
@@ -139,6 +143,76 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
 }
 
 describe("Skill Workshop evaluation results (browser)", () => {
+  it.each(["board", "today"] as const)(
+    "keeps embedded images within the %s proposal card",
+    async (mode) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1600;
+      canvas.height = 20;
+      const container = document.createElement("div");
+      container.style.width = mode === "today" ? "390px" : "800px";
+      const props = propsFor(mode);
+      props.proposals = [{ ...proposal, body: `![Diagram](${canvas.toDataURL()})` }];
+      document.body.append(container);
+      try {
+        render(renderSkillWorkshop(props), container);
+        const disclosure = container.querySelector<HTMLDetailsElement>(".sw-today__body");
+        if (mode === "today") {
+          expect(disclosure?.open).toBe(false);
+          disclosure!.querySelector("summary")!.click();
+          expect(disclosure?.open).toBe(true);
+        }
+        const image = container.querySelector<HTMLImageElement>(".sidebar-markdown img")!;
+        await vi.waitFor(() => expect(image.complete).toBe(true));
+        expect(image.naturalWidth).toBe(1600);
+        const card = container
+          .querySelector(mode === "today" ? ".sw-today__hero" : ".sw-body-card")!
+          .getBoundingClientRect();
+        expect(image.getBoundingClientRect().right).toBeLessThanOrEqual(card.right);
+        if (mode === "today") {
+          expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
+          disclosure!.querySelector("summary")!.click();
+          expect(disclosure?.open).toBe(false);
+        }
+      } finally {
+        render(nothing, container);
+        container.remove();
+      }
+    },
+  );
+
+  it.each([
+    ["board", "apply", ".sw-action-bar .sw-btn--primary", "onApply"],
+    ["board", "reject", ".sw-action-bar .sw-btn--danger", "onReject"],
+    ["today", "apply", ".sw-today__big--primary", "onApply"],
+    ["today", "reject", ".sw-today__big--skip", "onReject"],
+  ] as const)(
+    "captures the rendered revision when %s %s is chosen",
+    async (mode, _action, selector, callbackName) => {
+      const container = document.createElement("div");
+      const props = propsFor(mode);
+      document.body.append(container);
+
+      try {
+        render(renderSkillWorkshop(props), container);
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+
+        const actionButton = container.querySelector<HTMLButtonElement>(selector);
+        expect(actionButton).toBeInstanceOf(HTMLButtonElement);
+        actionButton?.click();
+        expect(props[callbackName]).toHaveBeenCalledWith({
+          proposalId: "proposal-1",
+          expectedRevisionHash: DRAFT_HASH,
+        });
+      } finally {
+        render(nothing, container);
+        container.remove();
+      }
+    },
+  );
+
   it.each(["board", "today"] as const)(
     "renders attributed completed, error, and block results with an Evaluate command in %s",
     async (mode) => {

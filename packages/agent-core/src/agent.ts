@@ -164,6 +164,12 @@ export interface AgentOptions {
 
 class PendingMessageQueue {
   private messages: AgentMessage[] = [];
+  private readonly listeners = new Set<() => void>();
+  private readonly submitted = new Set<AgentMessage>();
+  // Drained messages stay owned here until message_end commits them.
+  // A failed run restores them ahead of messages accepted later.
+  private inFlight: AgentMessage[] = [];
+  private cancelled = new WeakSet<AgentMessage>();
   public mode: QueueMode;
 
   constructor(mode: QueueMode) {
@@ -172,6 +178,32 @@ class PendingMessageQueue {
 
   enqueue(message: AgentMessage): void {
     this.messages.push(message);
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  peek(): readonly AgentMessage[] {
+    // A tool checkpoint fixes the next injection batch while the response is live.
+    // Later input must wait for that batch to commit before it can reach the provider.
+    const messages = this.inFlight.length > 0 ? this.inFlight : this.messages;
+    return messages.slice(0, this.mode === "all" ? undefined : 1);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  reserve(messages: readonly AgentMessage[]): () => void {
+    for (const message of messages) {
+      this.submitted.add(message);
+    }
+    return () => {
+      for (const message of messages) {
+        this.submitted.delete(message);
+      }
+    };
   }
 
   hasItems(): boolean {
@@ -179,23 +211,66 @@ class PendingMessageQueue {
   }
 
   drain(): AgentMessage[] {
-    if (this.mode === "all") {
-      const drained = this.messages.slice();
-      this.messages = [];
-      return drained;
+    let count = this.mode === "all" ? this.messages.length : 1;
+    // Submitted input already belongs to one provider continuation. Later queued
+    // messages must not rewrite that continuation's context before it completes.
+    const boundary = this.messages.findIndex((message) => !this.submitted.has(message));
+    if (boundary > 0) {
+      count = Math.min(count, boundary);
     }
+    const drained = this.messages.splice(0, count);
+    this.inFlight.push(...drained);
+    return drained;
+  }
 
-    // one-at-a-time preserves later queued messages for subsequent loop turns.
-    const first = this.messages[0];
-    if (!first) {
-      return [];
+  commit(message: AgentMessage): void {
+    this.submitted.delete(message);
+    this.cancelled.delete(message);
+    const index = this.inFlight.indexOf(message);
+    if (index >= 0) {
+      this.inFlight.splice(index, 1);
     }
-    this.messages = this.messages.slice(1);
-    return [first];
+  }
+
+  restore(): void {
+    this.messages = [...this.inFlight, ...this.messages];
+    this.inFlight = [];
+    // Admission fences belong to the closed run. Preserve unsaved input for
+    // recovery without retaining authority over its later cancellation.
+    this.submitted.clear();
+  }
+
+  cancelFirst(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
+    const pendingIndex = this.messages.findIndex(predicate);
+    const pendingMessage = this.messages[pendingIndex];
+    if (pendingMessage) {
+      // Provider-admitted input cannot be withdrawn. Retain its local queue
+      // owner until the ordinary transcript boundary commits the same message.
+      if (this.submitted.has(pendingMessage)) {
+        return undefined;
+      }
+      return this.messages.splice(pendingIndex, 1)[0];
+    }
+    const inFlightIndex = this.inFlight.findIndex(predicate);
+    const message = this.inFlight[inFlightIndex];
+    if (!message || this.submitted.has(message)) {
+      return undefined;
+    }
+    this.inFlight.splice(inFlightIndex, 1);
+    // The loop may already hold this object after draining; retain a cancellation
+    // fact until its next injection checkpoint so it cannot outlive queue ownership.
+    this.cancelled.add(message);
+    return message;
+  }
+
+  consumeCancellation(message: AgentMessage): boolean {
+    return this.cancelled.delete(message);
   }
 
   clear(): void {
-    this.messages = [];
+    this.messages = this.messages.filter((message) => this.submitted.has(message));
+    this.inFlight = this.inFlight.filter((message) => this.submitted.has(message));
+    this.cancelled = new WeakSet<AgentMessage>();
   }
 }
 
@@ -338,12 +413,17 @@ export class Agent {
     this.steeringQueue.enqueue(message);
   }
 
+  /** Cancel queued input unless a live provider response may already have admitted it. */
+  cancelSteeringMessage(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
+    return this.steeringQueue.cancelFirst(predicate);
+  }
+
   /** Queue a message to run only after the agent would otherwise stop. */
   followUp(message: AgentMessage): void {
     this.followUpQueue.enqueue(message);
   }
 
-  /** Remove all queued steering messages. */
+  /** Remove queued steering messages that have not been submitted to a live response. */
   clearSteeringQueue(): void {
     this.steeringQueue.clear();
   }
@@ -391,8 +471,7 @@ export class Agent {
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
     this.toolLoopRecoveryState.criticalToolLoopSeen = false;
-    this.clearFollowUpQueue();
-    this.clearSteeringQueue();
+    this.clearAllQueues();
   }
 
   /** Start a new prompt from text, a single message, or a batch of messages. */
@@ -511,6 +590,11 @@ export class Agent {
     const getSteeringMessages = attachInternalSyncSteeringGetter(
       async () => drainSteeringMessages(),
       drainSteeringMessages,
+      {
+        peek: () => this.steeringQueue.peek(),
+        reserve: (messages) => this.steeringQueue.reserve(messages),
+        subscribe: (listener) => this.steeringQueue.subscribe(listener),
+      },
     );
     return {
       model: this.mutableState.model,
@@ -546,6 +630,9 @@ export class Agent {
       getApiKey: this.getApiKey,
       getSteeringMessages,
       getFollowUpMessages: async () => this.followUpQueue.drain(),
+      consumeQueuedMessageCancellation: (message) =>
+        this.steeringQueue.consumeCancellation(message) ||
+        this.followUpQueue.consumeCancellation(message),
     };
   }
 
@@ -587,6 +674,8 @@ export class Agent {
   }
 
   private finishRun(): void {
+    this.steeringQueue.restore();
+    this.followUpQueue.restore();
     this.mutableState.isStreaming = false;
     this.mutableState.streamingMessage = undefined;
     this.mutableState.pendingToolCalls = new Set<string>();
@@ -609,7 +698,14 @@ export class Agent {
         break;
 
       case "message_start":
-        this.mutableState.streamingMessage = event.message;
+        // Async results can settle between assistant deltas. Their transcript
+        // lifecycle must leave the still-streaming assistant visible.
+        if (
+          event.message.role !== "toolResult" ||
+          this.mutableState.streamingMessage?.role !== "assistant"
+        ) {
+          this.mutableState.streamingMessage = event.message;
+        }
         break;
 
       case "message_update":
@@ -617,8 +713,15 @@ export class Agent {
         break;
 
       case "message_end":
-        this.mutableState.streamingMessage = undefined;
+        if (
+          event.message.role !== "toolResult" ||
+          this.mutableState.streamingMessage?.role !== "assistant"
+        ) {
+          this.mutableState.streamingMessage = undefined;
+        }
         this.mutableState.messages.push(event.message);
+        this.steeringQueue.commit(event.message);
+        this.followUpQueue.commit(event.message);
         break;
 
       case "tool_execution_start": {

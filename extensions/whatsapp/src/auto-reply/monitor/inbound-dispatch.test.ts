@@ -1,7 +1,11 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Whatsapp tests cover inbound dispatch plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
+import { loadWebMedia } from "../../media.js";
+import { deliverWebReply } from "../deliver-reply.js";
 
 let capturedDispatchParams: unknown;
 
@@ -124,6 +128,8 @@ vi.mock("./runtime-api.js", async () => {
     shouldLogVerbose: () => false,
   };
 });
+
+vi.mock("../../media.js", () => ({ loadWebMedia: vi.fn() }));
 
 import {
   buildWhatsAppInboundTransportContext,
@@ -284,6 +290,21 @@ function groupAdmission(conversationId: string): TestAdmissionOverride {
 }
 
 describe("prepared WhatsApp inbound boundary", () => {
+  it("projects from-me messages as the operator's own sender identity", async () => {
+    const prepared = await prepareWhatsAppInboundContext({
+      combinedBody: "hello from me",
+      msg: makeMsg({ platform: { fromMe: true } }),
+      route: makeRoute(),
+      sender: { id: "+15550001111", name: "Operator" },
+    });
+
+    expect(prepared.inbound.sender.isSelf).toBe(true);
+    expect(prepared.ctxPayload).toMatchObject({
+      SenderId: "+15550001111",
+      SenderIsSelf: true,
+    });
+  });
+
   it("separates portable facts from WhatsApp transport callbacks", async () => {
     const msg = makeMsg({
       event: { id: "current-1", timestamp: 1_710_000_000 },
@@ -468,16 +489,6 @@ function expectReplyResultFields(
   expectRecordFields(requireRecord(params.replyResult, "reply result"), fields);
 }
 
-function expectRememberSentContextFields(
-  rememberSentText: { mock: { calls: unknown[][] } },
-  text: unknown,
-  fields: Record<string, unknown>,
-) {
-  const call = rememberSentText.mock.calls.at(-1);
-  expect(call?.[0]).toBe(text);
-  expectRecordFields(requireRecord(call?.[1], "remember sent context"), fields);
-}
-
 type BufferedReplyParams = Parameters<typeof createWhatsAppReplyPlan>[0];
 type BufferedReplyOverrides = Partial<Omit<BufferedReplyParams, "context" | "transport">> & {
   context?: Partial<BufferedReplyParams["context"]>;
@@ -563,7 +574,6 @@ async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
     groupHistoryKey: "+1000",
     maxMediaBytes: 1,
     inbound: makePreparedInbound(msg),
-    rememberSentText: () => {},
     replyLogger: makeReplyLogger(),
     replyPipeline: {} as never,
     replyResolver: (async () => undefined) as never,
@@ -676,7 +686,13 @@ function requireCapturedDeliver(params: CapturedDispatchParams) {
   return deliver;
 }
 
-async function dispatchDeferredMediaReplacement(overrides: BufferedReplyOverrides): Promise<{
+async function dispatchDeferredMediaReplacement(
+  overrides: BufferedReplyOverrides,
+  media: { deferred: string[]; replacement: string[] } = {
+    deferred: DEFERRED_TOOL_MEDIA.mediaUrls,
+    replacement: CAPTIONED_MEDIA_REPLACEMENT.mediaUrls,
+  },
+): Promise<{
   finalization: Promise<unknown>;
   replacement: PromiseSettledResult<unknown>;
 }> {
@@ -687,12 +703,15 @@ async function dispatchDeferredMediaReplacement(overrides: BufferedReplyOverride
       capturedDispatchParams = params;
       const deliver = requireCapturedDeliver(params);
       const deferred = requireRecord(
-        await deliver(DEFERRED_TOOL_MEDIA, { kind: "tool" }),
+        await deliver({ ...DEFERRED_TOOL_MEDIA, mediaUrls: media.deferred }, { kind: "tool" }),
         "deferred media result",
       );
       finalization = deferred.finalization as Promise<unknown>;
       [replacement] = await Promise.allSettled([
-        deliver(CAPTIONED_MEDIA_REPLACEMENT, { kind: "block" }),
+        deliver(
+          { ...CAPTIONED_MEDIA_REPLACEMENT, mediaUrls: media.replacement },
+          { kind: "block" },
+        ),
       ]);
       await params.dispatcherOptions?.onSettled?.();
       return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
@@ -1050,20 +1069,17 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("replaces duplicate media-only interim payloads with the final captioned WhatsApp media", async () => {
-    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
+    const deliverReply = vi.fn<BufferedReplyParams["deliverReply"]>(
+      async ({ replyResult, onMediaAccepted }) => {
+        replyResult.mediaUrls?.forEach((url) => onMediaAccepted?.(url));
+        return acceptedDeliveryResult();
+      },
+    );
 
-    await dispatchBufferedReply({
-      deliverReply,
-      rememberSentText,
-    });
-
+    await dispatchBufferedReply({ deliverReply });
     const deliver = getCapturedDeliver();
-    expect(deliver).toBeTypeOf("function");
-
     await deliver?.({ text: "tool payload" }, { kind: "tool" });
     expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
 
     await expect(
       deliver?.(
@@ -1074,7 +1090,6 @@ describe("whatsapp inbound dispatch", () => {
       ),
     ).resolves.toMatchObject({ visibleReplySent: false });
     expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
 
     await deliver?.(
       { text: "generated image", mediaUrls: ["/tmp/generated.jpg"] },
@@ -1083,7 +1098,6 @@ describe("whatsapp inbound dispatch", () => {
       },
     );
     expect(deliverReply).toHaveBeenCalledTimes(1);
-    expect(rememberSentText).toHaveBeenCalledTimes(1);
     expectReplyResultFields(deliverReply, {
       mediaUrls: ["/tmp/generated.jpg"],
       text: "generated image",
@@ -1092,15 +1106,14 @@ describe("whatsapp inbound dispatch", () => {
     await deliver?.({ text: "block payload" }, { kind: "block" });
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverReply).toHaveBeenCalledTimes(3);
-    expect(rememberSentText).toHaveBeenCalledTimes(3);
   });
 
-  it("retains approved deferred media when its captioned replacement is cancelled", async () => {
+  it("retains the full approved batch when its partial replacement is cancelled", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const { finalization, replacement } = await dispatchDeferredMediaReplacement({
-      deliverReply,
-      cancelAfterPrepare: (payload) => payload.text === "captioned replacement",
-    });
+    const { finalization, replacement } = await dispatchDeferredMediaReplacement(
+      { deliverReply, cancelAfterPrepare: (payload) => payload.text === "captioned replacement" },
+      { deferred: ["/tmp/a.jpg", "/tmp/b.jpg"], replacement: ["/tmp/a.jpg"] },
+    );
 
     expect(replacement).toMatchObject({
       status: "fulfilled",
@@ -1112,7 +1125,7 @@ describe("whatsapp inbound dispatch", () => {
     await expect(finalization).resolves.toMatchObject({ visibleReplySent: true });
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expectReplyResultFields(deliverReply, {
-      mediaUrls: ["/tmp/generated.jpg"],
+      mediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"],
       text: undefined,
     });
   });
@@ -1122,7 +1135,10 @@ describe("whatsapp inbound dispatch", () => {
       sentBeforeError: true,
       visibleReplySent: true,
     });
-    const deliverReply = vi.fn().mockRejectedValueOnce(error);
+    const deliverReply = vi.fn<BufferedReplyParams["deliverReply"]>(async ({ onMediaAccepted }) => {
+      onMediaAccepted?.("/tmp/generated.jpg");
+      throw error;
+    });
     const { finalization, replacement } = await dispatchDeferredMediaReplacement({ deliverReply });
     const replacementFailure = replacement.status === "rejected" ? replacement.reason : undefined;
 
@@ -1140,32 +1156,101 @@ describe("whatsapp inbound dispatch", () => {
     expect((replacementFailure as Error).cause).toBe(error);
   });
 
-  it("drops deferred media when replacement bookkeeping fails after provider acceptance", async () => {
-    const error = new Error("remember sent text failed");
-    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn(() => {
-      throw error;
-    });
-    const { finalization, replacement } = await dispatchDeferredMediaReplacement({
-      deliverReply,
-      rememberSentText,
-    });
-    const replacementFailure = replacement.status === "rejected" ? replacement.reason : undefined;
+  it.each([
+    {
+      name: "first upload rejected",
+      failIndex: 0,
+      acceptedBeforeError: false,
+      expectedRemainder: ["/tmp/a.jpg"],
+    },
+    {
+      name: "trailing upload rejected",
+      failIndex: 1,
+      acceptedBeforeError: false,
+      expectedRemainder: ["/tmp/b.jpg"],
+    },
+    {
+      name: "first upload accepted before transport error",
+      failIndex: 0,
+      acceptedBeforeError: true,
+      expectedRemainder: ["/tmp/b.jpg"],
+    },
+  ])(
+    "retains only unsent attachments when $name",
+    async ({ failIndex, acceptedBeforeError, expectedRemainder }) => {
+      const sent: string[] = [];
+      let attempt = 0;
+      vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
+        buffer: Buffer.from(url),
+        contentType: "image/jpeg",
+        kind: "image",
+      }));
+      const sendMedia: TestMsg["platform"]["sendMedia"] = async (content) => {
+        if (!("image" in content) || !Buffer.isBuffer(content.image)) {
+          throw new Error("expected image transport payload");
+        }
+        const url = content.image.toString();
+        if (attempt++ === failIndex) {
+          const error = new Error("upload failed");
+          if (acceptedBeforeError) {
+            sent.push(url);
+            throw createChannelPartialDeliveryError(error, {
+              visibleReplySent: true,
+              messageIds: ["accepted-before-error"],
+            });
+          }
+          throw error;
+        }
+        sent.push(url);
+        return createAcceptedWhatsAppSendResult("media", `accepted-${attempt}`);
+      };
+      const reply = vi.fn<TestMsg["platform"]["reply"]>(async () =>
+        createAcceptedWhatsAppSendResult("text", "warning"),
+      );
+      const deliverReply = vi.fn(deliverWebReply);
+      const { finalization, replacement } = await dispatchDeferredMediaReplacement(
+        { deliverReply, msg: makeMsg({ platform: { sendMedia, reply } }) },
+        { deferred: ["/tmp/a.jpg", "/tmp/b.jpg"], replacement: ["/tmp/a.jpg", "/tmp/b.jpg"] },
+      );
 
-    await expect(finalization).resolves.toEqual({ visibleReplySent: false });
-    expect(deliverReply).toHaveBeenCalledTimes(1);
-    expect(replacementFailure).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        content: "captioned replacement",
-        messageIds: ["wa-sent-1"],
-        receipt: testReceipt(["wa-sent-1"]),
-        visibleReplySent: true,
-      },
-      sentBeforeError: true,
-      visibleReplySent: true,
+      expect(deliverReply.mock.calls.map(([params]) => params.replyResult.mediaUrls)).toEqual([
+        ["/tmp/a.jpg", "/tmp/b.jpg"],
+        expectedRemainder,
+      ]);
+      expect(sent.toSorted()).toEqual(["/tmp/a.jpg", "/tmp/b.jpg"]);
+      await expect(finalization).resolves.toMatchObject({ visibleReplySent: true });
+      if (acceptedBeforeError) {
+        expect(replacement).toMatchObject({
+          status: "rejected",
+          reason: {
+            code: "CHANNEL_PARTIAL_DELIVERY",
+            deliveryResult: { visibleReplySent: true },
+          },
+        });
+        expect(reply).not.toHaveBeenCalled();
+      } else {
+        expect(replacement).toMatchObject({
+          status: "fulfilled",
+          value: { visibleReplySent: true },
+        });
+        expect(reply).toHaveBeenCalledOnce();
+        expect(reply.mock.calls[0]?.[0]).toContain("⚠️ Media");
+      }
+    },
+  );
+
+  it("does not defer or send a tool batch vetoed by the sending hook", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    await dispatchBufferedReply({ deliverReply, cancelAfterPrepare: () => true });
+    const deliver = requireCapturedDeliver(capturedDispatchParams as CapturedDispatchParams);
+    await expect(
+      deliver({ mediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"] }, { kind: "tool" }),
+    ).resolves.toMatchObject({
+      visibleReplySent: false,
+      suppression: { reason: "cancelled_by_message_sending_hook" },
     });
-    expect((replacementFailure as Error).cause).toBe(error);
+    await getCapturedOnSettled()?.();
+    expect(deliverReply).not.toHaveBeenCalled();
   });
 
   it("returns receipt-backed delivery facts for native text fallback", async () => {
@@ -1221,12 +1306,9 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
-
     await dispatchBufferedReply({
       context: { Body: "incoming", SessionKey: "agent:main:whatsapp:+15551234567" },
       deliverReply,
-      rememberSentText,
       route: makeRoute({
         accountId: "default",
         agentId: "main",
@@ -1258,10 +1340,6 @@ describe("whatsapp inbound dispatch", () => {
       SessionKey: "agent:main:whatsapp:+15551234567",
     });
     expect(deliverReply).not.toHaveBeenCalled();
-    expectRememberSentContextFields(rememberSentText, "final payload", {
-      combinedBody: "incoming",
-      combinedBodySessionKey: "agent:main:whatsapp:+15551234567",
-    });
   });
 
   it.each([
@@ -1378,11 +1456,8 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
-
     await dispatchBufferedReply({
       deliverReply,
-      rememberSentText,
     });
 
     const deliver = getCapturedDeliver();
@@ -1404,7 +1479,6 @@ describe("whatsapp inbound dispatch", () => {
       text: "cancelled by hook",
     });
     expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("reports deferred media visible only after an accepted flush", async () => {
@@ -1442,7 +1516,6 @@ describe("whatsapp inbound dispatch", () => {
 
   it("flushes deferred media through the settled delivery hook", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
     let settledResult: unknown;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
@@ -1468,17 +1541,12 @@ describe("whatsapp inbound dispatch", () => {
     await expect(
       dispatchBufferedReply({
         deliverReply,
-        rememberSentText,
       }),
     ).resolves.toBe(true);
 
     expect(settledResult).toMatchObject({ visibleReplySent: true });
     expect(getCapturedOnSettled()).toBeTypeOf("function");
     expect(deliverReply).toHaveBeenCalledTimes(1);
-    expectRememberSentContextFields(rememberSentText, undefined, {
-      combinedBody: "hi",
-      combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
-    });
   });
 
   it("marks deferred media flush failures visible after an earlier accepted flush", async () => {
@@ -1617,11 +1685,8 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
-
     await dispatchBufferedReply({
       deliverReply,
-      rememberSentText,
     });
 
     const deliver = getCapturedDeliver();
@@ -1635,19 +1700,13 @@ describe("whatsapp inbound dispatch", () => {
       mediaUrls: ["/tmp/generated.jpg"],
       text: "generated image",
     });
-    expectRememberSentContextFields(rememberSentText, "generated image", {
-      combinedBody: "hi",
-      combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
-    });
   });
 
-  it("normalizes WhatsApp payload text before delivery and echo bookkeeping", async () => {
+  it("normalizes WhatsApp payload text before delivery", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
 
     await dispatchBufferedReply({
       deliverReply,
-      rememberSentText,
     });
 
     const deliver = getCapturedDeliver();
@@ -1661,19 +1720,12 @@ describe("whatsapp inbound dispatch", () => {
     );
 
     expectReplyResultFields(deliverReply, { text: "Before\n\nAfter" });
-    expectRememberSentContextFields(rememberSentText, "Before\n\nAfter", {
-      combinedBody: "hi",
-      combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
-    });
   });
 
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
-
     await dispatchBufferedReply({
       deliverReply,
-      rememberSentText,
     });
 
     const deliver = getCapturedDeliver();
@@ -1685,16 +1737,12 @@ describe("whatsapp inbound dispatch", () => {
       { kind: "block" },
     );
     expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("suppresses payloads that normalize to no visible WhatsApp content", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
-
     await dispatchBufferedReply({
       deliverReply,
-      rememberSentText,
     });
 
     const deliver = getCapturedDeliver();
@@ -1708,23 +1756,34 @@ describe("whatsapp inbound dispatch", () => {
     );
 
     expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
-  it("suppresses error payload text", async () => {
+  it("delivers final error payload text", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
-
-    await dispatchBufferedReply({ deliverReply, rememberSentText });
+    await dispatchBufferedReply({ deliverReply });
 
     const deliver = getCapturedDeliver();
     expect(deliver).toBeTypeOf("function");
 
     await deliver?.({ text: "provider exploded", isError: true }, { kind: "final" });
 
-    expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
+    expect(deliverReply).toHaveBeenCalledTimes(1);
   });
+
+  it.each([{ kind: "block" as const }, { kind: "tool" as const }])(
+    "suppresses $kind error payload noise",
+    async ({ kind }) => {
+      const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+      await dispatchBufferedReply({ deliverReply });
+
+      const deliver = getCapturedDeliver();
+      expect(deliver).toBeTypeOf("function");
+
+      await deliver?.({ text: "tool call failed", isError: true }, { kind });
+
+      expect(deliverReply).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -1854,7 +1913,6 @@ describe("whatsapp inbound dispatch", () => {
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
@@ -1866,17 +1924,14 @@ describe("whatsapp inbound dispatch", () => {
     await expect(
       dispatchBufferedReply({
         deliverReply,
-        rememberSentText,
       }),
     ).resolves.toBe(true);
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
-    expect(rememberSentText).toHaveBeenCalledTimes(1);
   });
 
   it("returns success when shared dispatch observes message-tool delivery", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
@@ -1891,17 +1946,14 @@ describe("whatsapp inbound dispatch", () => {
     await expect(
       dispatchBufferedReply({
         deliverReply,
-        rememberSentText,
       }),
     ).resolves.toBe(true);
 
     expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("keeps visible delivery successful while marking a failed agent run as an error", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
     const statusReactionController = {
       setQueued: vi.fn(),
       setThinking: vi.fn(),
@@ -1928,7 +1980,6 @@ describe("whatsapp inbound dispatch", () => {
     await expect(
       dispatchBufferedReply({
         deliverReply,
-        rememberSentText,
         statusReactionController,
       }),
     ).resolves.toBe(true);
@@ -1937,7 +1988,6 @@ describe("whatsapp inbound dispatch", () => {
     });
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
-    expect(rememberSentText).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setDone).not.toHaveBeenCalled();
     expect(statusReactionController.setError.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1947,7 +1997,6 @@ describe("whatsapp inbound dispatch", () => {
 
   it("does not treat generated WhatsApp text as sent when the provider did not accept it", async () => {
     const deliverReply = vi.fn(async () => unacceptedDeliveryResult());
-    const rememberSentText = vi.fn();
     const replyLogger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -1965,13 +2014,11 @@ describe("whatsapp inbound dispatch", () => {
     await expect(
       dispatchBufferedReply({
         deliverReply,
-        rememberSentText,
         replyLogger,
       }),
     ).resolves.toBe(false);
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
-    expect(rememberSentText).not.toHaveBeenCalled();
     const warnMock = replyLogger["warn"] as unknown as { mock: { calls: unknown[][] } };
     const warningContext = requireMockArg(warnMock, 0, 0, "warning context");
     expectRecordFields(warningContext, {
@@ -1983,7 +2030,6 @@ describe("whatsapp inbound dispatch", () => {
 
   it("returns true for tool-only media turns after delivering media", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    const rememberSentText = vi.fn();
     const msg = makeMsg();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
@@ -2007,7 +2053,6 @@ describe("whatsapp inbound dispatch", () => {
         groupHistoryKey: "+1000",
         inbound: makePreparedInbound(msg),
         maxMediaBytes: 1,
-        rememberSentText,
         replyLogger: {
           info: () => {},
           warn: () => {},
@@ -2027,7 +2072,6 @@ describe("whatsapp inbound dispatch", () => {
       mediaUrls: ["/tmp/generated.jpg"],
       text: undefined,
     });
-    expectRememberSentContextFields(rememberSentText, undefined, {});
   });
 
   it("passes sendComposing through as the reply typing callback", async () => {

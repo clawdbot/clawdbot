@@ -4,8 +4,8 @@ import {
   errorShape,
   validateNodeInvokeProgressParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const MAX_PROGRESS_CHUNK_BYTES = 16 * 1024;
 
@@ -16,20 +16,12 @@ export const handleNodeInvokeProgress: GatewayRequestHandler = async ({
   context,
   client,
 }) => {
-  if (!validateNodeInvokeProgressParams(params)) {
-    respondInvalidParams({
-      respond,
-      method: "node.invoke.progress",
-      validator: validateNodeInvokeProgressParams,
-    });
+  if (
+    !assertValidParams(params, validateNodeInvokeProgressParams, "node.invoke.progress", respond)
+  ) {
     return;
   }
-  const progress = params as {
-    invokeId: string;
-    nodeId: string;
-    seq: number;
-    chunk: string;
-  };
+  const progress = params;
   const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
   if (callerNodeId && callerNodeId !== progress.nodeId) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));

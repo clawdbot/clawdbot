@@ -1,0 +1,120 @@
+title: System-agent delegation from a channel turn
+
+scenario:
+  id: system-agent-delegation-generation
+  surface: channel
+  coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
+    secondary:
+      - channels.qa-channel-outbound
+  objective: Verify a channel-scoped agent can complete first-use system-agent delegation while an admitted plugin generation is active.
+  successCriteria:
+    - A synthetic channel turn exposes and calls the real openclaw delegate tool once.
+    - First-use inference verification completes through its isolated read-only runtime.
+    - The delegate result contains the system-agent marker and no generation-guard failure.
+    - The parent turn records a successful tool result and emits one visible channel reply.
+  docsRefs:
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/agents/tools/openclaw-delegate-tool.ts
+    - src/gateway/server-methods/system-agent.ts
+    - src/system-agent/inference-fallback.ts
+    - src/agents/embedded-agent-runner/run-orchestrator.ts
+  execution:
+    kind: flow
+    summary: Exercise channel-to-system-agent delegation through an ephemeral Gateway and mock provider.
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      conversationId: qa-system-agent-delegation
+      promptSnippet: system agent delegation generation qa check
+      prompt: "@openclaw tool search qa check target=openclaw. System agent delegation generation QA check. Call the openclaw tool exactly once, then reply exactly: QA-SYSTEM-AGENT-DELEGATE-OK."
+      delegateReplyMarker: QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK
+      expectedMarker: QA-SYSTEM-AGENT-DELEGATE-OK
+      generationGuardError: prepared model runtime replaced the admitted plugin generation
+
+flow:
+  steps:
+    - name: completes first-use system-agent delegation from a channel turn
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this boundary scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `channel:${config.conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: channel
+              title: QA System Agent Delegation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'channel' && !candidate.threadId && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 100
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').toLowerCase().includes(config.promptSnippet))"
+        - set: delegatePlan
+          value:
+            expr: "scenarioRequests.find((request) => request.plannedToolName === 'openclaw')"
+        - set: delegateResult
+          value:
+            expr: "scenarioRequests.find((request) => request.toolOutputCallId === delegatePlan?.plannedToolCallId)"
+        - assert:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'openclaw').length === 1 && delegatePlan?.plannedToolArgs?.message === `Reply exactly ${config.delegateReplyMarker}. Do not call tools.`"
+            message:
+              expr: "`expected exactly one openclaw delegate plan, saw ${JSON.stringify(scenarioRequests.map((request) => ({ tool: request.plannedToolName ?? null, args: request.plannedToolArgs ?? null })))}`"
+        - assert:
+            expr: "String(delegateResult?.toolOutput ?? '').includes(config.delegateReplyMarker) && !String(delegateResult?.toolOutput ?? '').includes(config.generationGuardError)"
+            message:
+              expr: "`delegate did not cross first-use inference verification: ${String(delegateResult?.toolOutput ?? '')}`"
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: "transcript.successfulToolCallCounts.openclaw === 1 && transcript.finalText.includes(config.expectedMarker)"
+            message:
+              expr: "`channel transcript lost the successful delegate result or final reply: ${JSON.stringify(transcript)}`"
+        - set: matchingOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'channel' && String(message.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: matchingOutbound.length === 1
+            message:
+              expr: "`expected one visible channel reply, saw ${matchingOutbound.length}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'system-agent-delegation-generation', provider: env.providerMode, gateway: 'ephemeral-child', transport: transport.id, plannedDelegateCalls: scenarioRequests.filter((request) => request.plannedToolName === 'openclaw').length, successfulDelegateResults: transcript.successfulToolCallCounts.openclaw, delegateReplyMarkerPresent: String(delegateResult?.toolOutput ?? '').includes(config.delegateReplyMarker), generationGuardErrorPresent: String(delegateResult?.toolOutput ?? '').includes(config.generationGuardError), visibleChannelReplies: matchingOutbound.length }, null, 2)"

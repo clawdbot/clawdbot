@@ -3,9 +3,22 @@ import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
+  formatProviderRefusalText,
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,
 } from "./assistant-error-format.js";
+
+describe("formatProviderRefusalText", () => {
+  it.each(["bio", "cyber"])("formats a sanitized %s refusal", (category) => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category } }],
+      }),
+    ).toBe(
+      `The provider refused this request (category: ${category}). Revise the request and try again.`,
+    );
+  });
+});
 
 describe("extractLeadingHttpStatus", () => {
   it("accepts status codes in the valid HTTP range 100-599", () => {
@@ -81,6 +94,18 @@ describe("extractErrorHttpStatus", () => {
 });
 
 describe("HTTP status consumers", () => {
+  it("does not return raw HTML after an HTTP reason phrase", () => {
+    const raw = [
+      "HTTP 502 Bad Gateway",
+      "",
+      "<!doctype html><html><body><h1>502</h1></body></html>",
+    ].join("\n");
+
+    expect(formatRawAssistantErrorForUi(raw)).toBe(
+      "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
+    );
+  });
+
   it("formats only status lines inside the HTTP range", () => {
     expect(formatRawAssistantErrorForUi("100 Continue")).toBe("HTTP 100: Continue");
     expect(formatRawAssistantErrorForUi("599 Provider Error")).toBe("HTTP 599: Provider Error");

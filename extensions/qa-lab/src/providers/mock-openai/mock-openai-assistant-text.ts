@@ -28,15 +28,18 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractToolErrorForNamedCall,
-  isHeartbeatPrompt,
+  resolveHeartbeatPromptReply,
   readFirstMediaPath,
 } from "./mock-openai-directives.js";
 import {
   extractLastUserText,
+  extractMockSubagentContext,
+  splitMockConversationContext,
   extractToolOutput,
   extractLatestToolOutput,
   extractSlackMpimRetainedBotNonce,
   extractAllUserTexts,
+  extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
   parseToolOutputJson,
@@ -116,6 +119,35 @@ export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boole
   );
 }
 
+export function readForkedContextCompletion(input: ResponsesInputItem[]) {
+  const { current } = splitMockConversationContext(extractAllUserTexts(input).at(-1) ?? "");
+  // The yielded requester gets a numbered all-settled finding; active requesters
+  // can receive the individual protected event. Both carry owner-recorded status.
+  const settled =
+    /(?:^|\n)\d+\. qa-fork-context\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/.exec(
+      current,
+    );
+  if (settled && current.includes("sourceTool=subagent_announce")) {
+    const result = settled[2];
+    return settled[1] === "ok" &&
+      result &&
+      /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/.test(result)
+      ? result
+      : "FORKED-CONTEXT-MISSING-RESULT";
+  }
+  const eventStart = current.lastIndexOf("[Internal task completion event]");
+  const event = eventStart < 0 ? "" : current.slice(eventStart);
+  if (!/^task:\s*qa-fork-context\s*$/m.test(event)) {
+    return undefined;
+  }
+  const result = /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/m.exec(event);
+  return /^source:\s*subagent\s*$/m.test(event) &&
+    /^status:\s*completed; ready for parent review\s*$/m.test(event) &&
+    result
+    ? result[0]
+    : "FORKED-CONTEXT-MISSING-RESULT";
+}
+
 export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
@@ -142,7 +174,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
         .filter((value): value is string => typeof value === "string")
         .join("\n")
     : "";
-  const userTexts = extractAllUserTexts(input);
+  const userTexts = extractUserTurnTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
@@ -214,8 +246,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (/memory unavailable check/i.test(prompt)) {
     return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
   }
-  if (isHeartbeatPrompt(prompt)) {
-    return "HEARTBEAT_OK";
+  const heartbeatReply = resolveHeartbeatPromptReply(prompt);
+  if (heartbeatReply) {
+    return heartbeatReply;
   }
   if (
     /roundtrip image inspection check/i.test(currentImageRequest.text) &&
@@ -364,21 +397,25 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
   }
-  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
-    return "FORKED-CONTEXT-ALPHA";
+  const forkTask = extractMockSubagentContext(input);
+  if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
+    const parent = forkTask.inheritedUserTexts.findLast((text) =>
+      /forked subagent context qa check/i.test(text),
+    );
+    const inheritedCode =
+      /The visible code in this current conversation is (FORKED-CONTEXT-[A-Z0-9-]+)\./.exec(
+        parent ?? "",
+      )?.[1];
+    return inheritedCode && !forkTask.task.includes(inheritedCode)
+      ? `FORKED-CONTEXT-CHILD: ${inheritedCode}`
+      : "FORKED-CONTEXT-MISSING-HISTORY";
   }
-  if (
-    /forked subagent context qa check/i.test(prompt) &&
-    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
-  ) {
-    return [
-      "Worked",
-      "- FORKED-CONTEXT-ALPHA",
-      "Evidence",
-      "- The forked child recovered the visible code from requester transcript context.",
-      "Blocked",
-      "- None.",
-    ].join("\n");
+  const forkCompletion = readForkedContextCompletion(input);
+  if (forkCompletion) {
+    return forkCompletion;
+  }
+  if (/forked subagent context qa check/i.test(splitMockConversationContext(prompt).current)) {
+    return "Waiting for the forked child to recover the visible code.";
   }
   if (
     toolOutput &&
@@ -416,6 +453,22 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     .filter(Boolean)
     .join(",");
   const askUserNote = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=single\b/i.test(allInputText) &&
+    askUserDeploy
+  ) {
+    return `ASK-USER-SINGLE-OK | deploy=${askUserDeploy}`;
+  }
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=multi\b/i.test(allInputText) &&
+    askUserChecks
+  ) {
+    return `ASK-USER-MULTI-OK | checks=${askUserChecks}`;
+  }
   if (
     toolOutput &&
     /"status"\s*:\s*"answered"/.test(askUserResult) &&

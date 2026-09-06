@@ -8,6 +8,72 @@ type FeishuSender = FeishuMessageEvent["sender"];
 type TestConfigBase = Record<string, unknown> & {
   channels?: Record<string, unknown>;
 };
+type FeishuSecretRefPolicyCase = {
+  name: string;
+  provider: string;
+  defaultEnv?: string;
+  providers: NonNullable<NonNullable<ClawdbotConfig["secrets"]>["providers"]>;
+  configured: boolean;
+};
+
+export const FEISHU_SELECTED_SECRET_ENV = "FEISHU_SECRET_REF_SELECTED_TEST";
+export const FEISHU_SIBLING_SECRET_ENV = "FEISHU_SECRET_REF_SIBLING_TEST";
+
+export const feishuSecretRefPolicyCases: FeishuSecretRefPolicyCase[] = [
+  {
+    name: "unconfigured provider alias",
+    provider: "unconfigured",
+    providers: {},
+    configured: false,
+  },
+  {
+    name: "provider configured with a non-env source",
+    provider: "corp-env",
+    providers: { "corp-env": { source: "file", path: "/unused" } },
+    configured: false,
+  },
+  {
+    name: "provider allowlist excluding the selected credential",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "env", allowlist: [FEISHU_SIBLING_SECRET_ENV] } },
+    configured: false,
+  },
+  {
+    name: "configured env provider allowing the selected credential",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "env", allowlist: [FEISHU_SELECTED_SECRET_ENV] } },
+    configured: true,
+  },
+  {
+    name: "selected env provider with an empty allowlist",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "env", allowlist: [] } },
+    configured: false,
+  },
+  {
+    name: "literal env default shadowing a file provider",
+    provider: "default",
+    providers: { default: { source: "file", path: "/unused" } },
+    configured: true,
+  },
+  {
+    name: "selected env default shadowing an exec provider",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "exec", command: "/unused" } },
+    configured: true,
+  },
+  {
+    name: "selected env default shadowing a store provider",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "store" } },
+    configured: true,
+  },
+];
 
 export function createFeishuTestConfig(
   feishu: FeishuConfig,
@@ -17,6 +83,36 @@ export function createFeishuTestConfig(
     ...base,
     channels: { ...base.channels, feishu },
   } as ClawdbotConfig;
+}
+
+export function createFeishuSecretRefPolicyConfig({
+  provider,
+  providers,
+  defaultEnv,
+}: FeishuSecretRefPolicyCase): ClawdbotConfig {
+  return createFeishuTestConfig(
+    {
+      accounts: {
+        selected: {
+          appId: "selected-app",
+          appSecret: { source: "env", provider, id: FEISHU_SELECTED_SECRET_ENV },
+        },
+        sibling: {
+          appId: "sibling-app",
+          appSecret: { source: "env", provider: "sibling-env", id: FEISHU_SIBLING_SECRET_ENV },
+        },
+      },
+    },
+    {
+      secrets: {
+        defaults: defaultEnv ? { env: defaultEnv } : undefined,
+        providers: {
+          ...providers,
+          "sibling-env": { source: "env", allowlist: [FEISHU_SIBLING_SECRET_ENV] },
+        },
+      },
+    },
+  );
 }
 
 export function createFeishuTestEvent(params: {

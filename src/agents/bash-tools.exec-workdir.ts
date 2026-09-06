@@ -6,8 +6,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
-import { safeStatSync } from "../infra/path-guards.js";
+import { isPathInside, safeStatSync } from "../infra/path-guards.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
@@ -47,7 +48,7 @@ type ExistingHostPathResult =
   | { kind: "invalid" };
 
 function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedWorkdirInput {
-  if (workdir === undefined) {
+  if (workdir === undefined || workdir === "") {
     return { kind: "omitted" };
   }
   const value = normalizeOptionalString(workdir);
@@ -60,14 +61,7 @@ function unavailable(requestedCwd: string): ExecWorkdirResolution {
 
 function resolveExistingHostWorkdir(workdir: string): string | null {
   const stats = safeStatSync(workdir);
-  return stats?.isDirectory() ? workdir : null;
-}
-
-function isHostPathInsideRoot(params: { root: string; candidate: string }): boolean {
-  const root = path.resolve(params.root);
-  const candidate = path.resolve(params.candidate);
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return stats?.isDirectory() ? (safeRealpathSync(workdir) ?? path.resolve(workdir)) : null;
 }
 
 function safeCurrentCwd(): string | null {
@@ -275,12 +269,7 @@ function resolveBackendHostWorkdirCandidate(params: {
   if (readOnlySkillMapping) {
     return { ...readOnlySkillMapping, failIfInvalid: false };
   }
-  if (
-    isHostPathInsideRoot({
-      root: params.sandbox.workspaceDir,
-      candidate: hostPath,
-    })
-  ) {
+  if (isPathInside(path.resolve(params.sandbox.workspaceDir), hostPath)) {
     return {
       hostPath,
       hostRoot: path.resolve(params.sandbox.workspaceDir),

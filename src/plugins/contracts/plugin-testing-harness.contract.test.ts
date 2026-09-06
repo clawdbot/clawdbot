@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
+  describePluginRegistrationContract,
+  pluginRegistrationContractCases,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -12,6 +14,8 @@ const echoCases = typedCases([
   { message: "alpha", expected: "scoped:alpha" },
   { message: "beta", expected: "scoped:beta" },
 ]);
+
+describePluginRegistrationContract(pluginRegistrationContractCases.brave);
 
 describe("plugin testing harness contracts", () => {
   it("executes declared tools and reports missing tool contracts", async () => {

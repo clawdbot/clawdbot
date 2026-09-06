@@ -118,33 +118,61 @@ When the macOS app uses a local Gateway, it can offer this import once and make 
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
+### Cookie sync to a remote Gateway
+
+`import-profile` targets a managed profile on the same host. When your OpenClaw Gateway and agent browser run on a separate computer, use `cookie-sync` to decrypt cookies on this Mac and push them into a managed profile on that remote Gateway over the operator connection:
+
+```bash
+openclaw browser cookie-sync --domains github.com,news.ycombinator.com --into work
+openclaw browser --url wss://gateway.example.com cookie-sync --domains github.com --into work --watch
+```
+
+- `--domains` is required. Cookie sync copies live session cookies, so it never sends an unrestricted cookie jar; a missing or empty allowlist is a hard error.
+- `--into` selects the target managed profile on the Gateway (default `imported`); `--gateway`/`--url` selects a remote Gateway (default is the configured/local one).
+- `--watch` keeps the command running and re-pushes when the source Cookies database changes. The macOS Keychain secret is read once per watch session, so you approve a single consent prompt rather than one per change.
+- Decryption is host-local (macOS only) and reuses the same allowlist and Keychain path as `import-profile`. Cookies are decrypted on this Mac and shipped over the existing TLS-pinned Gateway connection; no cookie values are printed.
+- Some Google sessions use device-bound session credentials (DBSC) that stay tied to this Mac and can still require re-authentication after sync. For those sites, prefer driving the browser on the Mac itself through the [browser node proxy](#remote-browser-control-node-host-proxy).
+
+The macOS app exposes the same capability under **Dashboard → Settings → This Mac → Browser**: an off-by-default toggle, an editable domain allowlist, and a target-profile field. When enabled in remote mode it supervises `cookie-sync --watch` for you against the connected Gateway and shows a live status row.
+
 ## Chrome extension relay
 
 ```bash
 openclaw browser extension path
 openclaw browser extension install
+openclaw browser extension install --no-store
 openclaw browser extension install --json --wait-ms 60000
 openclaw browser extension status
 openclaw browser extension status --json
 openclaw browser extension uninstall-host
+openclaw browser extension uninstall-store
 openclaw browser extension pair
 openclaw browser extension pair --gateway-url wss://gateway.example.com
 openclaw browser extension cdp
 openclaw browser extension cdp --json
 ```
 
-- `extension install` copies the bundled runtime into a stable state-directory
-  path and pre-registers its deterministic, origin-locked native bootstrap host
-  in existing Chrome-family user-data roots. Launch Chrome, run this command,
-  and use **Load unpacked** only after it prints the stable path. The command
-  waits while Chrome records that exact path, then verifies the recorded ID
-  against Chromium's path-derived ID. **Load unpacked** is the only manual
-  action in normal setup.
-- `extension status` reports the installed copy, detected IDs/profiles,
-  owned-registration health, and whether manual setup is required. JSON output
-  never includes a pairing string or relay key.
+- `extension install` pre-registers the origin-locked native bootstrap host in
+  existing Chrome-family user-data roots. On macOS, it then requests the official
+  Store installation in Google Chrome for all profiles in its user-data directory.
+  Chrome discovers this at startup; fully quit and reopen Chrome when convenient,
+  then approve or enable OpenClaw. The command never restarts Chrome or bypasses
+  approval. For other browsers and platforms,
+  [add OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
+  Linux supports automatic native pairing; Windows retains manual pairing.
+- `extension install --no-store` copies the stable development extension and
+  registers the native host without creating a Store request. Existing requests
+  are unchanged. Use the printed path for **Load unpacked**.
+- `extension status` reports `storeInstallRequests` states (`requested`,
+  `missing`, `foreign`, `invalid`) separately from `storeDiscovered` approval
+  fields (`enabled`, `awaitingApproval`), approved unpacked IDs and paths, and
+  native-host registration health. Local installation status does not prove a
+  live relay connection. JSON output never includes a pairing string or relay key.
 - `extension uninstall-host` removes only verified OpenClaw-owned native-host
   manifests and launchers. It does not remove the extension from Chrome.
+- `extension uninstall-store` removes only OpenClaw-owned macOS Chrome Store
+  requests. Chrome may remove an externally installed extension at its next
+  startup. Native-host registration and the development copy remain intact.
 - `extension path` is read-only. It prints the stable installed copy when
   present and the bundled source directory otherwise.
 - `extension pair` remains the advanced manual flow. `--gateway-url` creates a
@@ -164,8 +192,13 @@ pairings continue to use the relay on the browser-node host, while explicit
 `--gateway-url` pairings remain direct-remote and manual-only.
 
 The advanced manual `extension pair` command without `--gateway-url` retains
-the host-local `/extension` relay URL. It does not wake Browser control, so the
-selected profile relay must already be running before the extension connects.
+the host-local `/extension` relay URL. With the native host installed,
+**Automatic local setup** enabled, and an extension build that supports relay
+wake-up, reconnecting can start a standalone relay on the saved pairing's
+configured port. This does not start Gateway browser control: authenticated CDP
+clients can use the standalone relay without a Gateway, but `openclaw browser`
+actions still require one. For source-checkout testing, load the managed unpacked
+copy from the same OpenClaw installation.
 
 `extension cdp --legacy-bearer` is a temporary migration escape hatch. It
 prints the old Bearer header with a warning only while
@@ -175,10 +208,15 @@ on stderr so stdout stays valid JSON.
 
 Setup, security model, and recovery steps: [Chrome extension](/tools/chrome-extension).
 
+Run installation on the machine hosting Chrome. In the macOS app,
+**Dashboard → Settings → This Mac → Browser → Set up Chrome on this Mac** invokes
+the local CLI even when connected to a remote Gateway. The browser-based
+dashboard offers Store and documentation links instead.
+
 If the extension already attempted automatic setup before the native host
 existed, Chromium retains that miss for the running browser process. Restart
-Chrome once, then repeat the ordered install flow; popup retries alone cannot
-recover that existing process.
+Chrome once, run `extension install`, then reopen the Store extension; popup
+retries alone cannot recover that existing process.
 
 ## Tabs
 
@@ -240,6 +278,10 @@ openclaw browser evaluate --fn 'const title = document.title; return title;'
 openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 ```
 
+`press` accepts named keys and shortcuts such as `Escape`, `Control+Shift+T`, and `Control++`; common `Esc`, `Return`, `Del`, `Ctrl`, and `Cmd` aliases are normalized.
+
+For managed browser profiles, `select` preserves option values exactly. Quote empty or whitespace-sensitive values, such as `openclaw browser select <ref> ""` or `openclaw browser select <ref> " padded "`.
+
 `evaluate --fn` accepts a function source, an expression, or a statement body. Statement bodies are wrapped as async functions, so use `return` for the value you want back. Use `--timeout-ms` when the page-side function may need longer than the default evaluate timeout. `browser.evaluateEnabled=false` (default: `true`) disables both `evaluate` and `wait --fn`.
 
 Action responses return the current raw `targetId` after action-triggered page replacement when OpenClaw can prove the replacement tab. Scripts should still store and pass `suggestedTargetId`/labels for long-lived workflows.
@@ -257,6 +299,8 @@ openclaw browser dialog --dismiss --dialog-id d1
 
 Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp root). Use `waitfordownload` or `download` when the agent needs to wait for a specific file and return its path; those explicit waiters own the next download. Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed inbound media, including `media://inbound/<id>` and sandbox-relative `media/inbound/<id>` references. Nested media refs, traversal, and arbitrary local paths are rejected.
 
+If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
+
 When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
 Batch actions:
@@ -268,6 +312,8 @@ openclaw browser batch --actions-file - --continue
 ```
 
 `openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
+
+`--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
 
 ## State and storage
 
@@ -334,7 +380,7 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, and `fill` reject per-call timeout overrides; `evaluate` accepts `--timeout-ms`.
 - `select` supports one value only.
 - `wait --load networkidle` is not supported (works on managed and raw/remote CDP profiles).
-- File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.
+- File uploads require `--ref` / `--input-ref` and do not support CSS `--element`. Pass multiple paths when the page's file input accepts multiple files.
 - Dialog hooks do not support `--timeout`.
 - Screenshots support page captures and `--ref`, but not CSS `--element`.
 - `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.

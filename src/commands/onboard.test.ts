@@ -3,10 +3,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import * as nonInteractiveApiKeys from "./onboard-non-interactive/api-keys.js";
 import { setupWizardCommand } from "./onboard.js";
+import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -119,12 +122,16 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   handleReset: mocks.handleReset,
 }));
 
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
+async function expectAuthPreflightError(
+  opts: Parameters<typeof setupWizardCommand>[0],
+  getMessage: () => string,
+): Promise<void> {
+  const runtime = makeRuntime();
+  const options = { reset: true, nonInteractive: true, acceptRisk: true, ...opts };
+  await setupWizardCommand(options, runtime);
+  expect(runtime.error).toHaveBeenCalledWith(getMessage());
+  expect(mocks.handleReset).not.toHaveBeenCalled();
+  expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
 }
 
 function expectResetCall(params: { scope: string; runtime: RuntimeEnv; workspace?: string }): void {
@@ -191,6 +198,34 @@ describe("setupWizardCommand", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
   });
 
+  it.each(["main", "robby", "Robby!"])("accepts valid first-agent name %s", async (agentName) => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ nonInteractive: true, acceptRisk: true, agentName }, runtime);
+
+    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName }),
+      runtime,
+    );
+  });
+
+  it.each(["!!!", "openclaw", "crestodian"])(
+    "rejects invalid or reserved first-agent name %s before setup",
+    async (agentName) => {
+      const runtime = makeRuntime();
+
+      await setupWizardCommand(
+        { nonInteractive: true, acceptRisk: true, reset: true, agentName },
+        runtime,
+      );
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Invalid --agent-name"));
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    },
+  );
+
   it("fails fast for invalid secret-input-mode before setup starts", async () => {
     const runtime = makeRuntime();
 
@@ -201,8 +236,7 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
       `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for the interactive setup.`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -233,12 +267,7 @@ describe("setupWizardCommand", () => {
   it("defaults --reset to config+creds+sessions scope", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand(
-      {
-        reset: true,
-      },
-      runtime,
-    );
+    await setupWizardCommand({ reset: true }, runtime);
 
     expectResetCall({ scope: "config+creds+sessions", runtime });
   });
@@ -246,14 +275,21 @@ describe("setupWizardCommand", () => {
   it.each([
     ["guided", { reset: true }],
     ["classic", { reset: true, classic: true }],
+    ["guided JSON", { reset: true, json: true }],
+    ["classic JSON", { reset: true, classic: true, json: true }],
   ] as const)("rejects headless %s onboarding before reset", async (_label, options) => {
     const runtime = makeRuntime();
     mocks.hasInteractiveOnboardingTty.mockReturnValue(false);
 
     await setupWizardCommand(options, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+    const message =
+      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.";
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(vi.mocked(runtime.log).mock.calls).toEqual(
+      "json" in options
+        ? [[JSON.stringify({ ok: false, phase: "options", message }, null, 2)]]
+        : [],
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
@@ -296,12 +332,7 @@ describe("setupWizardCommand", () => {
       },
     });
 
-    await setupWizardCommand(
-      {
-        reset: true,
-      },
-      runtime,
-    );
+    await setupWizardCommand({ reset: true }, runtime);
 
     expect(mocks.handleReset).toHaveBeenCalledWith(
       "config+creds+sessions",
@@ -325,13 +356,7 @@ describe("setupWizardCommand", () => {
       },
     });
 
-    await setupWizardCommand(
-      {
-        reset: true,
-        resetScope: "full",
-      },
-      runtime,
-    );
+    await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expect(mocks.handleReset).toHaveBeenCalledWith(
       "full",
@@ -360,13 +385,7 @@ describe("setupWizardCommand", () => {
       } as unknown as OpenClawConfig,
     });
 
-    await setupWizardCommand(
-      {
-        reset: true,
-        resetScope: "full",
-      },
-      runtime,
-    );
+    await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
@@ -386,13 +405,7 @@ describe("setupWizardCommand", () => {
       readError: { code: "EACCES" },
     });
 
-    await setupWizardCommand(
-      {
-        reset: true,
-        resetScope: "full",
-      },
-      runtime,
-    );
+    await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
@@ -409,13 +422,7 @@ describe("setupWizardCommand", () => {
       sourceConfig: { gateway: { port: 1 } },
     });
 
-    await setupWizardCommand(
-      {
-        reset: true,
-        resetScope: "full",
-      },
-      runtime,
-    );
+    await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expect(mocks.handleReset).toHaveBeenCalledWith(
       "full",
@@ -427,13 +434,7 @@ describe("setupWizardCommand", () => {
   it("accepts explicit --reset-scope full", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand(
-      {
-        reset: true,
-        resetScope: "full",
-      },
-      runtime,
-    );
+    await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expectResetCall({ scope: "full", runtime });
   });
@@ -449,8 +450,7 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
       `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -462,12 +462,7 @@ describe("setupWizardCommand", () => {
   it("rejects --reset-scope without --reset", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand(
-      {
-        resetScope: "full",
-      },
-      runtime,
-    );
+    await setupWizardCommand({ resetScope: "full" }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--reset-scope requires --reset. Re-run with openclaw onboard --reset --reset-scope full.",
@@ -479,44 +474,35 @@ describe("setupWizardCommand", () => {
     expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
   });
 
-  it("fails fast for invalid non-interactive --mode before reset", async () => {
+  it.each([
+    { mode: "typo", json: true },
+    { mode: "", json: false },
+  ])("fails fast for invalid non-interactive --mode $mode before reset", async ({ mode, json }) => {
     const runtime = makeRuntime();
+    const message = `Invalid --mode "${mode}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`;
 
     await setupWizardCommand(
       {
         reset: true,
         nonInteractive: true,
         acceptRisk: true,
-        mode: "typo" as never,
+        mode: mode as never,
+        ...(json && { json }),
       },
       runtime,
     );
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Invalid --mode "typo". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    if (json) {
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+        JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+      );
+    } else {
+      expect(runtime.log).not.toHaveBeenCalled();
+    }
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("fails fast for an empty non-interactive --mode before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        mode: "" as never,
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Invalid --mode "". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
   });
 
   it("validates a remote URL before reset", async () => {
@@ -539,57 +525,164 @@ describe("setupWizardCommand", () => {
   });
 
   it.each([
-    {
-      label: "unsupported flow",
-      options: { flow: "bogus" as never },
-      expectedError: "Invalid --flow",
-    },
-    {
-      label: "malformed remote URL",
-      options: { mode: "remote" as const, remoteUrl: "garbage" },
-      expectedError: "URL must start with ws:// or wss://",
-    },
-    {
-      label: "non-WebSocket remote URL",
-      options: { mode: "remote" as const, remoteUrl: "https://example.invalid" },
-      expectedError: "URL must start with ws:// or wss://",
-    },
-    {
-      label: "remote URL in local mode",
-      options: { mode: "local" as const, remoteUrl: "wss://gateway.example.invalid" },
-      expectedError: "--remote-url requires --mode remote in non-interactive setup.",
-    },
-    {
-      label: "remote token in default local mode",
-      options: { remoteToken: "fixture-token" },
-      expectedError: "--remote-token requires --mode remote in non-interactive setup.",
-    },
-    {
-      label: "unsupported daemon runtime while daemon install is skipped",
-      options: { daemonRuntime: "bogus" as never, installDaemon: false },
-      expectedError: "Invalid --daemon-runtime",
-    },
-    {
-      label: "unsupported node manager",
-      options: { nodeManager: "bogus" as never },
-      expectedError: "Invalid --node-manager",
-    },
-  ])(
-    "rejects $label before non-interactive setup without reset",
-    async ({ options, expectedError }) => {
+    ["unsupported flow", { flow: "bogus" as never }, "Invalid --flow"],
+    ...([false, true] as const).map(
+      (json) =>
+        [
+          `remote mode without a URL${json ? " in JSON output" : ""}`,
+          { mode: "remote" as const, json },
+          formatCliCommand(
+            "openclaw onboard --non-interactive --accept-risk --mode remote --remote-url ws://127.0.0.1:3000",
+          ),
+        ] as const,
+    ),
+    [
+      "malformed remote URL",
+      { mode: "remote" as const, remoteUrl: "garbage" },
+      "URL must start with ws:// or wss://",
+    ],
+    [
+      "non-WebSocket remote URL",
+      { mode: "remote" as const, remoteUrl: "https://example.invalid" },
+      "URL must start with ws:// or wss://",
+    ],
+    [
+      "remote URL in local mode",
+      { mode: "local" as const, remoteUrl: "wss://gateway.example.invalid" },
+      "--remote-url requires --mode remote in non-interactive setup.",
+    ],
+    [
+      "remote token in default local mode",
+      { remoteToken: "fixture-token" },
+      "--remote-token requires --mode remote in non-interactive setup.",
+    ],
+    [
+      "remote password in default local mode",
+      { remotePassword: "fixture-password" },
+      "--remote-password requires --mode remote in non-interactive setup.",
+    ],
+    [
+      "unsupported daemon runtime while daemon install is skipped",
+      { daemonRuntime: "bogus" as never, installDaemon: false },
+      "Invalid --daemon-runtime",
+    ],
+    ["unsupported node manager", { nodeManager: "bogus" as never }, "Invalid --node-manager"],
+  ] as const)("rejects %s before non-interactive setup without reset", async (_, opts, error) => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ nonInteractive: true, acceptRisk: true, ...opts }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
+    if ("json" in opts && opts.json) {
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(error));
+    }
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
+
+  const tokenError =
+    "--gateway-token configures local gateway auth. Use --remote-token in remote mode.";
+  const refError =
+    "--gateway-token-ref-env configures local gateway auth. Use --remote-token with --secret-input-mode ref in remote mode.";
+  it.each([
+    [
+      { remoteToken: "fixture-token", remotePassword: "fixture-password" },
+      "Use either --remote-token or --remote-password, not both.",
+    ],
+    [{ remoteToken: " " }, "Invalid --remote-token: value cannot be empty."],
+    [{ remotePassword: " " }, "Invalid --remote-password: value cannot be empty."],
+    [
+      { gatewayPassword: "fixture-password" },
+      "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
+    ],
+    [{ gatewayToken: "fixture-token" }, tokenError],
+    [{ gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" }, refError],
+    [{ nonInteractive: false, gatewayToken: "fixture-token" }, tokenError],
+    [{ nonInteractive: false, gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" }, refError],
+  ] as const)("rejects invalid remote credentials %j before reset", async (options, message) => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        mode: "remote",
+        remoteUrl: "wss://gateway.example.invalid",
+        ...options,
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    (
+      [
+        ["gatewayPassword", "OPENCLAW_GATEWAY_PASSWORD"],
+        ["remoteToken", "OPENCLAW_GATEWAY_TOKEN"],
+        ["remotePassword", "OPENCLAW_GATEWAY_PASSWORD"],
+      ] as const
+    ).flatMap(([optionName, envName]) =>
+      ["", "different-credential"].map((envValue) => ({ optionName, envName, envValue })),
+    ),
+  )(
+    "rejects $optionName with env value $envValue before reading or resetting config",
+    async ({ optionName, envName, envValue }) => {
+      vi.stubEnv(envName, envValue);
       const runtime = makeRuntime();
 
-      await setupWizardCommand({ nonInteractive: true, acceptRisk: true, ...options }, runtime);
+      await setupWizardCommand(
+        {
+          reset: true,
+          nonInteractive: true,
+          acceptRisk: true,
+          secretInputMode: "ref",
+          [optionName]: "expected-credential",
+          ...(optionName.startsWith("remote")
+            ? { mode: "remote", remoteUrl: "wss://gateway.example.invalid" }
+            : {}),
+        },
+        runtime,
+      );
 
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(expectedError));
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(envName));
+      if (envValue) {
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("does not match"));
+      }
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mocks.handleReset).not.toHaveBeenCalled();
       expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-      expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
-      expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps interactive gateway reference selection independent of the default env var", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        acceptRisk: true,
+        gatewayPassword: "interactive-password",
+        secretInputMode: "ref",
+      },
+      runtime,
+    );
+
+    expect(mocks.runInteractiveSetup).toHaveBeenCalledOnce();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 
   it("validates dependent gateway options before reset", async () => {
     const runtime = makeRuntime();
@@ -658,111 +751,111 @@ describe("setupWizardCommand", () => {
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("validates dependent auth-choice options before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        authChoice: "token",
-        token: "value",
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Auth choice "token" requires --token-provider in non-interactive setup.',
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("validates a required setup token before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        authChoice: "setup-token",
-        tokenProvider: "anthropic",
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Auth choice "setup-token" requires --token in non-interactive setup.',
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("validates setup-token expiry before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
+  it.each([
+    {
+      name: "validates dependent auth-choice options before reset",
+      opts: { authChoice: "token", token: "value" },
+      message: 'Auth choice "token" requires --token-provider in non-interactive setup.',
+    },
+    {
+      name: "validates a required setup token before reset",
+      opts: { authChoice: "setup-token", tokenProvider: "anthropic" },
+      message: 'Auth choice "setup-token" requires --token in non-interactive setup.',
+    },
+    {
+      name: "validates setup-token expiry before reset",
+      opts: {
         authChoice: "setup-token",
         tokenProvider: "anthropic",
         token: "test-token",
         tokenExpiresIn: "nope",
       },
-      runtime,
-    );
+      message: "Invalid --token-expires-in: invalid duration",
+    },
+    {
+      name: "validates the token provider before reset",
+      opts: { authChoice: "token", tokenProvider: "typo", token: "value" },
+      message: 'Auth choice "token" was not matched to provider "typo".',
+    },
+  ] as const)("$name", ({ opts, message }) => expectAuthPreflightError(opts, () => message));
 
-    expect(runtime.error).toHaveBeenCalledWith("Invalid --token-expires-in: invalid duration");
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("validates the token provider before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        authChoice: "token",
-        tokenProvider: "typo",
-        token: "value",
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Auth choice "token" was not matched to provider "typo".',
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it.each(localResetProviderCases)(
-    "validates $providerId exactly once before reset and non-interactive setup",
-    async ({ providerId, methodId }) => {
+  it.each([
+    { agentName: "robby", agentId: "robby", scope: "config", reuseProfile: true },
+    { agentName: "Robby!", agentId: "robby", scope: "config", reuseProfile: true },
+    { agentName: undefined, agentId: "main", scope: "config", reuseProfile: true },
+    { agentName: "robby", agentId: "robby", scope: "config+creds+sessions", reuseProfile: false },
+    { agentName: "robby", agentId: "robby", scope: "full", reuseProfile: false },
+  ] as const)(
+    "preflights $agentId provider profiles against reset scope $scope",
+    async ({ agentName, agentId, scope, reuseProfile }) => {
       const runtime = makeRuntime();
-      const { runNonInteractive, validateNonInteractive } = mockLocalResetPreflight({
+      const workspaceDir = "/tmp/openclaw-reset-agent-workspace";
+      const agentDirSuffix = path.join("agents", agentId, "agent");
+      const resolveApiKey = vi
+        .spyOn(nonInteractiveApiKeys, "resolveNonInteractiveApiKey")
+        .mockImplementation(async (input) =>
+          input.allowProfile && input.agentDir?.endsWith(agentDirSuffix)
+            ? { key: "fixture-agent-profile-key", source: "profile" }
+            : null,
+        );
+
+      try {
+        await setupWizardCommand(
+          {
+            reset: true,
+            resetScope: scope,
+            nonInteractive: true,
+            acceptRisk: true,
+            agentName,
+            workspace: workspaceDir,
+            authChoice: "apiKey",
+            tokenProvider: "anthropic",
+          },
+          runtime,
+        );
+
+        expect(resolveApiKey).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentDir: expect.stringContaining(agentDirSuffix),
+            workspaceDir,
+            allowProfile: reuseProfile,
+          }),
+        );
+        expect(mocks.handleReset).toHaveBeenCalledTimes(reuseProfile ? 1 : 0);
+        expect(mocks.runNonInteractiveSetup).toHaveBeenCalledTimes(reuseProfile ? 1 : 0);
+      } finally {
+        resolveApiKey.mockRestore();
+      }
+    },
+  );
+
+  it.each(
+    [true, false].flatMap((validationResult) =>
+      localResetProviderCases.map(({ providerId, methodId }) => ({
         providerId,
         methodId,
-        validationResult: true,
-      });
-
+        validationResult,
+      })),
+    ),
+  )(
+    "preflights $providerId before reset and setup (accepted: $validationResult)",
+    async (params) => {
+      const { providerId, validationResult } = params;
+      const runtime = makeRuntime();
+      const { runNonInteractive, validateNonInteractive } = mockLocalResetPreflight(params);
       await setupWizardCommand(
-        {
-          reset: true,
-          nonInteractive: true,
-          acceptRisk: true,
-          authChoice: providerId,
-        },
+        { reset: true, nonInteractive: true, acceptRisk: true, authChoice: providerId },
         runtime,
       );
-
+      expect(runNonInteractive).not.toHaveBeenCalled();
+      expect(mocks.handleReset).toHaveBeenCalledTimes(validationResult ? 1 : 0);
+      expect(mocks.runNonInteractiveSetup).toHaveBeenCalledTimes(validationResult ? 1 : 0);
+      if (!validationResult) {
+        expect(validateNonInteractive).toHaveBeenCalledOnce();
+        expect(runtime.error).toHaveBeenCalledWith("Local provider preflight failed");
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        return;
+      }
       expect(validateNonInteractive).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           authChoice: providerId,
@@ -772,10 +865,6 @@ describe("setupWizardCommand", () => {
           runtime,
         }),
       );
-      expect(mocks.handleReset).toHaveBeenCalledOnce();
-      expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
-      expect(runNonInteractive).not.toHaveBeenCalled();
-
       const validationCall = validateNonInteractive.mock.invocationCallOrder.at(0);
       const resetCall = mocks.handleReset.mock.invocationCallOrder.at(0);
       const setupCall = mocks.runNonInteractiveSetup.mock.invocationCallOrder.at(0);
@@ -787,106 +876,45 @@ describe("setupWizardCommand", () => {
     },
   );
 
-  it.each(localResetProviderCases)(
-    "never resets or starts setup when $providerId validation fails",
-    async ({ providerId, methodId }) => {
-      const runtime = makeRuntime();
-      const { runNonInteractive, validateNonInteractive } = mockLocalResetPreflight({
-        providerId,
-        methodId,
-        validationResult: false,
-      });
-
-      await setupWizardCommand(
-        {
-          reset: true,
-          nonInteractive: true,
-          acceptRisk: true,
-          authChoice: providerId,
-        },
-        runtime,
-      );
-
-      expect(validateNonInteractive).toHaveBeenCalledOnce();
-      expect(runtime.error).toHaveBeenCalledWith("Local provider preflight failed");
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(mocks.handleReset).not.toHaveBeenCalled();
-      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-      expect(runNonInteractive).not.toHaveBeenCalled();
-    },
-  );
-
   it("validates a provider-specific API key before reset", async () => {
-    const runtime = makeRuntime();
     vi.stubEnv("ANTHROPIC_API_KEY", "");
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        authChoice: "apiKey",
-        tokenProvider: "anthropic",
-        anthropicApiKey: "",
-      },
-      runtime,
+    await expectAuthPreflightError(
+      { authChoice: "apiKey", tokenProvider: "anthropic", anthropicApiKey: "" },
+      () =>
+        `Missing --anthropic-api-key (or ANTHROPIC_API_KEY in env). Export ANTHROPIC_API_KEY, pass --anthropic-api-key, or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Missing --anthropic-api-key (or ANTHROPIC_API_KEY in env). Export ANTHROPIC_API_KEY, pass --anthropic-api-key, or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
   it("validates an inferred custom auth choice before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        customBaseUrl: "https://example.com/v1",
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expectAuthPreflightError({ customBaseUrl: "https://example.com/v1" }, () =>
       [
         'Auth choice "custom-api-key" requires a base URL and model ID.',
         "Use --custom-base-url and --custom-model-id.",
       ].join("\n"),
     );
+  });
+
+  it("rejects ambiguous interactive provider flags before reset", async () => {
+    const runtime = makeRuntime();
+    await setupWizardCommand({ reset: true, nvidiaApiKey: "n", openaiApiKey: "o" }, runtime);
     expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
   it("validates custom credential storage before reset", async () => {
-    const runtime = makeRuntime();
     vi.stubEnv("CUSTOM_API_KEY", "");
-
-    await setupWizardCommand(
+    await expectAuthPreflightError(
       {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
         customBaseUrl: "https://example.com/v1",
         customModelId: "test-model",
         customApiKey: "test-token",
         secretInputMode: "ref",
       },
-      runtime,
+      () =>
+        [
+          "--custom-api-key cannot be used with --secret-input-mode ref unless CUSTOM_API_KEY is set in env.",
+          "Set CUSTOM_API_KEY in env and omit --custom-api-key, or use --secret-input-mode plaintext.",
+        ].join("\n"),
     );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      [
-        "--custom-api-key cannot be used with --secret-input-mode ref unless CUSTOM_API_KEY is set in env.",
-        "Set CUSTOM_API_KEY in env and omit --custom-api-key, or use --secret-input-mode plaintext.",
-      ].join("\n"),
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
   it("rejects migration import before reset because provider input is not preplanned", async () => {
@@ -920,7 +948,6 @@ describe("setupWizardCommand", () => {
         skipSkills: false,
         acceptRisk: false,
         json: false,
-        tailscaleResetOnExit: undefined,
         customImageInput: undefined,
       },
       runtime,
@@ -932,8 +959,10 @@ describe("setupWizardCommand", () => {
   });
 
   it.each([
+    ["--agent-name", { agentName: "robby" }],
     ["--tui", { tui: true }],
     ["--skip-ui", { skipUi: true }],
+    ["--suppress-gateway-token-output", { suppressGatewayTokenOutput: true }],
   ])("keeps %s on guided onboarding", async (_label, opts) => {
     const runtime = makeRuntime();
 
@@ -953,9 +982,8 @@ describe("setupWizardCommand", () => {
     ["--remote-url", { remoteUrl: "wss://gw.example.ts.net" }],
     ["--skip-bootstrap", { skipBootstrap: true }],
     ["--no-install-daemon", { installDaemon: false }],
-    ["--no-tailscale-reset-on-exit", { tailscaleResetOnExit: false }],
     ["--custom-text-input", { customImageInput: false }],
-    ["--daemon-runtime", { daemonRuntime: "node" as const }],
+    ["--daemon-runtime", { daemonRuntime: "bun" as const }],
     ["a provider auth flag", { mistralApiKey: "sk-x" }],
   ])("keeps the classic interactive wizard for %s", async (_label, opts) => {
     const runtime = makeRuntime();
@@ -976,31 +1004,120 @@ describe("setupWizardCommand", () => {
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("rejects conflicting classic and non-interactive modes", async () => {
+  it.each([
+    {
+      opts: { classic: true },
+      error:
+        "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    },
+    {
+      opts: { tui: true },
+      error:
+        "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    },
+  ])("rejects conflicting $opts and non-interactive modes", async ({ opts, error }) => {
     const runtime = makeRuntime();
-
-    await setupWizardCommand({ classic: true, nonInteractive: true, acceptRisk: true }, runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
-    );
+    await setupWizardCommand({ ...opts, nonInteractive: true, acceptRisk: true }, runtime);
+    expect(runtime.error).toHaveBeenCalledWith(error);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
   });
 
-  it("rejects conflicting TUI and non-interactive modes", async () => {
+  it.each([
+    {
+      name: "rejects a deprecated choice before non-interactive effects",
+      authChoice: "claude-cli",
+      hasReplacement: true,
+      nonInteractive: true,
+      expectedAuthChoice: "demo-provider-api-key",
+    },
+    {
+      name: "warns before interactive dispatch of the replacement",
+      authChoice: "claude-cli",
+      hasReplacement: true,
+      nonInteractive: false,
+      expectedAuthChoice: "demo-provider-api-key",
+    },
+    {
+      name: "normalizes oauth without a deprecation warning",
+      authChoice: "oauth",
+      hasReplacement: true,
+      nonInteractive: false,
+      expectedAuthChoice: "setup-token",
+    },
+    {
+      name: "keeps the original choice when replacement metadata is missing",
+      authChoice: "claude-cli",
+      hasReplacement: false,
+      nonInteractive: false,
+      expectedAuthChoice: "claude-cli",
+    },
+  ])("$name", async ({ authChoice, hasReplacement, nonInteractive, expectedAuthChoice }) => {
     const runtime = makeRuntime();
+    const warning = 'Auth choice "claude-cli" is deprecated; using Fixture Provider setup instead.';
+    const manifest = vi
+      .spyOn(providerAuthChoices, "resolveManifestDeprecatedProviderAuthChoice")
+      .mockImplementation((choice) =>
+        hasReplacement && choice === "claude-cli"
+          ? {
+              pluginId: "fixture-provider",
+              providerId: "fixture-provider",
+              methodId: "api-key",
+              choiceId: "demo-provider-api-key",
+              choiceLabel: "  Fixture Provider  ",
+              deprecatedChoiceIds: ["claude-cli"],
+            }
+          : undefined,
+      );
 
-    await setupWizardCommand({ tui: true, nonInteractive: true, acceptRisk: true }, runtime);
+    try {
+      await setupWizardCommand(
+        nonInteractive
+          ? { authChoice, nonInteractive: true, json: true, reset: true }
+          : { authChoice, classic: true },
+        runtime,
+      );
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
-    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+      if (nonInteractive) {
+        const message =
+          'Auth choice "claude-cli" is deprecated.\nUse "--auth-choice demo-provider-api-key".';
+        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+        expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+        );
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(mocks.withSetupMigrationTargetLock).not.toHaveBeenCalled();
+        expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.runInteractiveSetup).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ authChoice: expectedAuthChoice, classic: true }),
+        runtime,
+      );
+      const logCalls = vi.mocked(runtime.log).mock.calls;
+      expect(logCalls.filter(([message]) => String(message).startsWith('Auth choice "'))).toEqual(
+        hasReplacement && authChoice === "claude-cli" ? [[warning]] : [],
+      );
+      if (hasReplacement && authChoice === "claude-cli") {
+        const warningIndex = logCalls.findIndex(([message]) => message === warning);
+        const warningOrder = vi.mocked(runtime.log).mock.invocationCallOrder[warningIndex];
+        const setupOrder = mocks.runInteractiveSetup.mock.invocationCallOrder[0];
+        if (warningOrder === undefined || setupOrder === undefined) {
+          throw new Error("Expected legacy warning and interactive dispatch");
+        }
+        expect(warningOrder).toBeLessThan(setupOrder);
+      }
+    } finally {
+      manifest.mockRestore();
+    }
   });
 });

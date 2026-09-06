@@ -158,6 +158,10 @@ pnpm openclaw qa character-eval \
 ```
 
 - Runs local QA gateway child processes, not Docker.
+- Packaged `pnpm build` omits QA Lab + qa-channel by design (source-checkout
+  only). To exercise `openclaw qa`/qa-channel from a built dist, build with
+  `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` (emits `dist/plugin-sdk/qa-lab.js`,
+  `qa-runtime.js`, `dist/extensions/{qa-lab,qa-channel}`) or run via `pnpm dev`.
 - With no model flags, character eval uses its current source-defined candidate,
   judge, thinking, and fast defaults.
 - Repeat `--model provider/model,thinking=<level>[,fast|,no-fast|,fast=<bool>]`

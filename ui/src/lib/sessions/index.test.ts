@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
@@ -8,8 +9,12 @@ import {
 } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import { reconcileSessionRunTerminal } from "./index.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 function sessionChangedEvent(key: string): GatewayEventFrame {
   return {
@@ -28,6 +33,88 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  it.each(["direct", "subscription"] as const)(
+    "shares confirmed archive visibility after %s reconciliation",
+    async (path) => {
+      const key = "agent:main:archive-from-agent";
+      const row = { key, kind: "direct" as const, sessionId: "archive-session", updatedAt: 1 };
+      const request = vi.fn(async () => sessionsResult([row], 1));
+      const { emitEvent, gateway } = createGatewayHarness({
+        request,
+      } as unknown as GatewayBrowserClient);
+      const sessions = createTestSessionCapability(gateway);
+      const reconcile = (archived: boolean, updatedAt: number) => {
+        const payload = { ...row, sessionKey: key, reason: "patch", archived, updatedAt };
+        if (path === "direct") {
+          sessions.reconcileChanged(payload);
+        } else {
+          emitEvent({ type: "event", event: "sessions.changed", payload });
+        }
+      };
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        reconcile(true, 2);
+        expect(sessions.archiveVisibility(key)).toBe("archived");
+        await sessions.refresh({ agentId: "main", force: true });
+        expect(sessions.archiveVisibility(key)).toBe("archived");
+        reconcile(false, 3);
+        expect(sessions.archiveVisibility(key)).toBeUndefined();
+      } finally {
+        sessions.dispose();
+      }
+    },
+  );
+
+  it.each(["direct", "subscription"] as const)(
+    "ignores stale archive state after a newer unarchive via %s reconciliation",
+    async (path) => {
+      const key = "agent:main:main";
+      const request = vi.fn(async (method: string) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        return sessionsResult(
+          [
+            {
+              key,
+              kind: "direct",
+              sessionId: "main-session",
+              updatedAt: 30,
+              archived: false,
+            },
+          ],
+          30,
+        );
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { emitEvent, gateway } = createGatewayHarness(client);
+      const sessions = createTestSessionCapability(gateway);
+      await sessions.refresh({ agentId: "main", force: true });
+      const staleArchive = {
+        sessionKey: key,
+        key,
+        kind: "direct" as const,
+        sessionId: "main-session",
+        updatedAt: 20,
+        archived: true,
+        archivedAt: 20,
+        reason: "update",
+      };
+
+      if (path === "direct") {
+        sessions.reconcileChanged(staleArchive);
+      } else {
+        emitEvent({ type: "event", event: "sessions.changed", payload: staleArchive });
+      }
+
+      expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
+        archived: false,
+        updatedAt: 30,
+      });
+      sessions.dispose();
+    },
+  );
+
   it("allows an advertised group catalog load to be retried after failure", async () => {
     let groupsCalls = 0;
     const request = vi.fn(async (method: string) => {
@@ -45,7 +132,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.groupsLoad();
     expect(sessions.state.groups).toEqual([]);
@@ -76,7 +163,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.groupsLoad();
 
@@ -91,12 +178,29 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.groupsLoad();
     await sessions.groupsLoad();
 
     expect(request).toHaveBeenCalledOnce();
+    sessions.dispose();
+  });
+
+  it("loads a metadata-less group catalog without probing the newer defaults method", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        return { groups: [{ name: "Research", position: 0 }] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway);
+
+    await expect(sessions.groupsLoad()).resolves.toEqual([{ name: "Research", position: 0 }]);
+    expect(request).toHaveBeenCalledOnce();
+    expect(sessions.state.groups).toEqual(["Research"]);
     sessions.dispose();
   });
 
@@ -109,10 +213,10 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.rename"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.groupsRename("Alpha", "Beta")).rejects.toThrow("rename failed");
-    expect(sessions.state.error).toBe("Error: rename failed");
+    expect(sessions.state.error).toBe("rename failed");
     sessions.dispose();
   });
 
@@ -125,10 +229,10 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.put"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
-    expect(sessions.state.error).toBe("Error: group catalog rejected");
+    expect(sessions.state.error).toBe("group catalog rejected");
     sessions.dispose();
   });
 
@@ -141,10 +245,10 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.delete"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.groupsDelete("Alpha")).rejects.toThrow("delete failed");
-    expect(sessions.state.error).toBe("Error: delete failed");
+    expect(sessions.state.error).toBe("delete failed");
     sessions.dispose();
   });
 
@@ -164,7 +268,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client, ["sessions.groups.rename"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     const operation = sessions.groupsRename("Alpha", "Beta");
     publish(false);
@@ -192,7 +296,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client, ["sessions.groups.put"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     const operation = sessions.groupsPut(["Alpha"]);
     publish(false);
@@ -221,7 +325,7 @@ describe("createSessionCapability", () => {
       });
       const client = { request } as unknown as GatewayBrowserClient;
       const { gateway, publish } = createGatewayHarness(client, [method]);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
 
       const mutation =
         operation === "rename"
@@ -242,7 +346,7 @@ describe("createSessionCapability", () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, []);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.groupsLoad();
     await sessions.groupsLoad();
@@ -268,7 +372,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client, ["sessions.groups.list"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     const firstLoad = sessions.groupsLoad();
     await waitForFast(() => expect(groupsCalls).toBe(1));
@@ -295,20 +399,37 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
-    await expect(sessions.delete(key)).resolves.toEqual({ deleted: false });
+    await expect(
+      sessions.delete(key, { expectedSessionId: "session-before-replacement" }),
+    ).resolves.toEqual({ deleted: false });
     expect(sessions.state.deletedSessions).toEqual([]);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.delete",
+      {
+        key,
+        deleteTranscript: true,
+        expectedSessionId: "session-before-replacement",
+      },
+      { timeoutMs: 10 * 60_000 },
+    );
     sessions.dispose();
   });
 
   it("excludes lifecycle no-ops from batch deletion results", async () => {
+    const rejectedKey = "agent:main:rejected";
     const keptKey = "agent:main:kept";
     const deletedKey = "agent:main:deleted";
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.delete") {
         const key = (params as { key?: string } | undefined)?.key;
+        if (key === rejectedKey) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: `Session ${key} changed before deletion. Retry.`,
+          });
+        }
         return { ok: true, deleted: key === deletedKey };
       }
       if (method === "sessions.list") {
@@ -318,23 +439,35 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const deletedSnapshots: string[][] = [];
     const unsubscribe = sessions.subscribe((next) => {
       deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
     });
 
     await expect(
-      sessions.deleteMany([{ key: keptKey }, { key: deletedKey, archivedOnly: true }]),
-    ).resolves.toEqual({ deleted: [deletedKey], errors: [], preservedWorktrees: [] });
+      sessions.deleteMany([
+        { key: rejectedKey },
+        { key: keptKey },
+        { key: deletedKey, archivedOnly: true },
+      ]),
+    ).resolves.toEqual({
+      deleted: [deletedKey],
+      errors: [`Session ${rejectedKey} changed before deletion. Retry.`],
+      preservedWorktrees: [],
+    });
     expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
     expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key: deletedKey,
-      deleteTranscript: true,
-      archivedOnly: true,
-    });
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.delete",
+      {
+        key: deletedKey,
+        deleteTranscript: true,
+        archivedOnly: true,
+      },
+      { timeoutMs: 10 * 60_000 },
+    );
     unsubscribe();
     sessions.dispose();
   });
@@ -347,7 +480,7 @@ describe("createSessionCapability", () => {
       return sessionsResult([{ key: "agent:main:listed", kind: "direct", updatedAt: 2 }], 2);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot: {
         client,
         phase: "connected" as const,
@@ -389,7 +522,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     const staleRefresh = sessions.refresh({ force: true });
     publish(false);
@@ -402,36 +535,6 @@ describe("createSessionCapability", () => {
 
     currentList.resolve(sessionsResult([{ key: "current", kind: "direct", updatedAt: 2 }], 2));
     await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
-    sessions.dispose();
-  });
-
-  it("does not publish a created session from a retired same-client epoch", async () => {
-    const staleCreate = createDeferred<{ key: string }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.create") {
-        return await staleCreate.promise;
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-
-    const operation = sessions.create({ agentId: "main" });
-    publish(false);
-    publish(true);
-    staleCreate.resolve({ key: "agent:main:stale" });
-
-    await expect(operation).resolves.toBeNull();
-    expect(created).not.toHaveBeenCalled();
     sessions.dispose();
   });
 
@@ -453,7 +556,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     const refresh = sessions.refresh({ force: true });
     expect(sessions.state.loading).toBe(true);
@@ -487,7 +590,7 @@ describe("createSessionCapability", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot: {
         client,
         phase: "connected" as const,
@@ -522,7 +625,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     const reset = sessions.reset("agent:main:main");
     publish(false);
@@ -548,83 +651,10 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.reset("agent:main:main")).resolves.toBe("uncertain");
     expect(sessions.state.error).toContain("post-commit lifecycle failed");
-    sessions.dispose();
-  });
-
-  it("clears optimistic and settled model overrides when its connection epoch retires", async () => {
-    const stalePatch = createDeferred<unknown>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        return await stalePatch.promise;
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
-    const key = "agent:main:main";
-    const inactiveKey = "agent:main:inactive";
-    sessions.setModelOverride(key, "openai/gpt-old");
-    sessions.setModelOverride(inactiveKey, "openai/gpt-old-account");
-
-    const operation = sessions.patch(key, { model: "openai/gpt-new" });
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
-
-    publish(false);
-    expect(sessions.state.modelOverrides).toEqual({});
-    publish(true);
-    stalePatch.resolve({});
-
-    await expect(operation).resolves.toBeNull();
-    expect(sessions.state.modelOverrides).toEqual({});
-    sessions.dispose();
-  });
-
-  it("does not dispatch a queued patch on a replacement connection", async () => {
-    const priorPatch = createDeferred();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        return { ok: true, path: "", key: "agent:main:main", entry: {} };
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
-    const key = "agent:main:main";
-    sessions.setModelOverride(key, "openai/gpt-old");
-
-    const operation = sessions.patch(
-      key,
-      { model: "openai/gpt-new" },
-      { waitFor: priorPatch.promise },
-    );
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
-    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
-
-    publish(false);
-    publish(true);
-    priorPatch.resolve();
-
-    await expect(operation).resolves.toBeNull();
-    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
-    expect(sessions.state.modelOverrides[key]).toBeUndefined();
     sessions.dispose();
   });
 
@@ -639,7 +669,7 @@ describe("createSessionCapability", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot: {
         client,
         phase: "connected" as const,
@@ -701,7 +731,7 @@ describe("createSessionCapability", () => {
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
     };
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     await sessions.refresh({ agentId: "main", force: true });
     const loadingStates: boolean[] = [];
     const stop = sessions.subscribe((state) => loadingStates.push(state.loading));
@@ -745,7 +775,7 @@ describe("createSessionCapability", () => {
       );
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot: {
         client,
         phase: "connected" as const,
@@ -881,12 +911,12 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ force: true });
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
-      expect.objectContaining({ configuredAgentsOnly: true, limit: 50 }),
+      expect.objectContaining({ configuredAgentsOnly: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
     );
     const publishedKeys: string[][] = [];
     sessions.subscribe((next) => {
@@ -912,12 +942,15 @@ describe("createSessionCapability", () => {
         throw new Error(`Unexpected request: ${method}`);
       }
       listCalls += 1;
-      const result = sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 1);
+      const result = sessionsResult(
+        [{ key: visibleKey, sessionId: "deleted-generation", kind: "direct", updatedAt: 1 }],
+        1,
+      );
       return listCalls === 1 ? result : await refreshed.promise;
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ force: true });
     const deletedSnapshots: string[][] = [];
@@ -928,7 +961,7 @@ describe("createSessionCapability", () => {
     emitEvent({
       type: "event",
       event: "sessions.changed",
-      payload: { sessionKey: visibleKey, reason: "delete" },
+      payload: { sessionKey: visibleKey, sessionId: "deleted-generation", reason: "delete" },
     });
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
@@ -949,7 +982,7 @@ describe("createSessionCapability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ configuredAgentsOnly: false, force: true, limit: 0 });
     const requestParams = request.mock.calls[0]?.[1];
@@ -1001,7 +1034,7 @@ describe("createSessionCapability", () => {
         return () => undefined;
       },
     };
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     await sessions.refresh({ agentId: "main", force: true });
 
     eventListener?.({

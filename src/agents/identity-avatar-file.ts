@@ -3,8 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {

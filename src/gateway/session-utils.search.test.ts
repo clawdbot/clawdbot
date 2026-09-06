@@ -3,9 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { filterAndSortSessionEntries } from "./session-utils-list.js";
 
-// Search selection does not render rows, read transcripts, or load ACP metadata.
-// Keep those integration owners out of this focused suite and their coverage in
-// session-utils.test.ts, session-utils.subagent.test.ts, and ACP runtime tests.
+// Candidate search must never render full rows or read transcripts.
 vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMetaBatch: () => new Map(),
 }));
@@ -16,7 +14,6 @@ vi.mock("./session-utils-row.js", () => ({
   buildGatewaySessionRow: () => {
     throw new Error("search selection must not render session rows");
   },
-  projectSessionActor: () => undefined,
 }));
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
@@ -63,9 +60,16 @@ function selectSessionKeys(params: {
   now?: number;
 }): string[] {
   const now = params.now ?? Date.now();
+  const store = params.store ?? makeStore(now);
   return filterAndSortSessionEntries({
     cfg: params.cfg ?? baseCfg,
-    store: params.store ?? makeStore(now),
+    store,
+    targetsBySessionKey: new Map(
+      Object.keys(store).map((key) => [
+        key,
+        { agentId: "main", storeTarget: { agentId: "main", storePath: "" } },
+      ]),
+    ),
     opts: params.opts,
     now,
   }).map(([key]) => key);
@@ -96,7 +100,7 @@ describe("filterAndSortSessionEntries search", () => {
     }
   });
 
-  test("filters by displayed provider and model identity", () => {
+  test("filters by selected and stored provider and model identity", () => {
     const now = Date.now();
     const cfg = createModelDefaultsConfig("anthropic/claude-sonnet-4-6");
     const store: Record<string, SessionEntry> = {
@@ -121,12 +125,21 @@ describe("filterAndSortSessionEntries search", () => {
       } as SessionEntry,
     };
     const cases = [
-      { search: "anthropic", expectedKey: "agent:main:inherited-default" },
-      { search: "claude-sonnet", expectedKey: "agent:main:inherited-default" },
-      { search: "anthropic/claude-sonnet", expectedKey: "agent:main:inherited-default" },
-      { search: "openai/gpt-5.5", expectedKey: "agent:main:override" },
-      { search: "gemini-3.1", expectedKey: "agent:main:runtime" },
-      { search: "google/gemini", expectedKey: "agent:main:runtime" },
+      {
+        search: "anthropic",
+        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
+      },
+      {
+        search: "claude-sonnet",
+        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
+      },
+      {
+        search: "anthropic/claude-sonnet",
+        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
+      },
+      { search: "openai/gpt-5.5", expectedKeys: ["agent:main:override"] },
+      { search: "gemini-3.1", expectedKeys: ["agent:main:runtime"] },
+      { search: "google/gemini", expectedKeys: ["agent:main:runtime"] },
     ] as const;
 
     for (const testCase of cases) {
@@ -137,7 +150,7 @@ describe("filterAndSortSessionEntries search", () => {
           opts: { search: testCase.search },
           now,
         }),
-      ).toEqual([testCase.expectedKey]);
+      ).toEqual(testCase.expectedKeys);
     }
   });
 
@@ -157,6 +170,32 @@ describe("filterAndSortSessionEntries search", () => {
         now,
       }),
     ).toEqual(["agent:main:inherited-local-model"]);
+  });
+
+  test("matches canonical group titles and kinds before offset selection", () => {
+    const store: Record<string, SessionEntry> = Object.fromEntries(
+      Array.from({ length: 55 }, (_, index) => [
+        `agent:main:filler-${index}`,
+        { sessionId: `filler-${index}`, updatedAt: 100 + index },
+      ]),
+    );
+    store["agent:main:slack:channel:target"] = {
+      sessionId: "target",
+      updatedAt: 1,
+      groupChannel: "astronomy",
+      space: "observatory",
+      displayName: "compact-room-id",
+      chatType: "channel",
+    };
+    expect(
+      selectSessionKeys({ store, opts: { search: "observatory #astronomy", limit: 50 } }),
+    ).toEqual(["agent:main:slack:channel:target"]);
+    expect(selectSessionKeys({ store, opts: { search: "group", limit: 50 } })).toEqual([
+      "agent:main:slack:channel:target",
+    ]);
+    expect(
+      selectSessionKeys({ store, opts: { search: "direct", limit: 50, offset: 50 } }),
+    ).toHaveLength(5);
   });
 
   test("hides cron run alias session keys", () => {

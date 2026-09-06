@@ -4,8 +4,8 @@ import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugi
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps } from "./core-bridge.js";
 
 // Builds compact agent context injected into realtime voice sessions.
 
@@ -60,7 +60,7 @@ export async function buildRealtimeVoiceInstructions(params: {
   baseInstructions: string;
   config: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  agentRuntime: CoreAgentDeps;
+  agentRuntime: OpenClawPluginApi["runtime"]["agent"];
   agentId: string;
 }): Promise<string> {
   const { config } = params;

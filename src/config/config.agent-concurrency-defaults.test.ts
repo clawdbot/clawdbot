@@ -53,6 +53,7 @@ describe("agent concurrency defaults", () => {
 
     expect(cfg.agents?.defaults?.maxConcurrent).toBe(resolveAgentMaxConcurrent());
     expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(cfg.agents?.defaults?.subagents?.maxSpawnDepth).toBeUndefined();
     expect(cfg.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
       DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
     );

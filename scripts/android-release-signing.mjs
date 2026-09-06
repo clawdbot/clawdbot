@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { runAndroidSigningCommandSync } from "./lib/android-release-signing-process.mjs";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const rootDir = resolveRepoRoot(import.meta.url);
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
@@ -480,4 +481,3 @@ try {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
 }
-import { isRecord } from "./lib/record-shared.mjs";

@@ -1,17 +1,15 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
-import {
-  resolveSessionSubscriptionKey,
-  resolveSessionSubscriptionKeys,
-} from "../session-subscription-keys.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ChatBroadcastContext = Pick<
   GatewayRequestContext,
   "broadcast" | "nodeSendToSession" | "agentRunSeq"
 > &
-  Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+  Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "chatRunState">>;
 
 type SideResultPayload = {
   kind: "btw";
@@ -30,21 +28,43 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
+export function resolveGlobalAwareNodeChatDeliveryKeys(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+}): string[] {
+  if (parseAgentSessionKey(params.sessionKey)) {
+    return [params.sessionKey];
+  }
+  const unscopedOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+    params.cfg,
+    params.sessionKey,
+  );
+  const selectedAgentId = params.agentId ?? unscopedOwnerAgentId;
+  if (!selectedAgentId) {
+    return [params.sessionKey];
+  }
+  const scopedAgentId = normalizeAgentId(selectedAgentId);
+  const keys = [`agent:${scopedAgentId}:${params.sessionKey}`];
+  if (
+    unscopedOwnerAgentId &&
+    normalizeAgentId(unscopedOwnerAgentId) === normalizeAgentId(scopedAgentId)
+  ) {
+    keys.push(params.sessionKey);
+  }
+  return keys;
+}
+
 function resolveChatSessionKeys(params: {
   context: Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   sessionKey: string;
   agentId?: string;
 }): string[] {
-  const canonicalKey = resolveSessionSubscriptionKey(params.sessionKey, params.agentId ?? "");
-  if (canonicalKey === params.sessionKey) {
-    return [canonicalKey];
-  }
-  const defaultAgentId = resolveDefaultAgentId(params.context.getRuntimeConfig?.() ?? {});
-  return resolveSessionSubscriptionKeys(
-    params.sessionKey,
-    params.agentId ?? defaultAgentId,
-    defaultAgentId,
-  );
+  return resolveGlobalAwareNodeChatDeliveryKeys({
+    cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
 }
 
 export function sendGlobalAwareNodeChatPayload(params: {
@@ -73,16 +93,25 @@ type ChatBroadcastParams = {
 };
 
 type ChatTerminal =
-  | { state: "final"; message?: Record<string, unknown> }
-  | { state: "error"; errorMessage?: string };
+  | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
+  | { state: "error"; errorMessage?: string; stopReason?: string; errorKind?: "timeout" };
 
-function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
+export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
   const seq = nextChatSeq(params.context, params.runId);
-  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
+  const payloadAgentId = parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId;
   const terminal =
-    params.state === "final"
-      ? { state: params.state, message: projectChatDisplayMessage(params.message) }
-      : { state: params.state, errorMessage: params.errorMessage };
+    params.state !== "error"
+      ? {
+          state: params.state,
+          message: projectChatDisplayMessage(params.message),
+          ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+        }
+      : {
+          state: params.state,
+          errorMessage: params.errorMessage,
+          ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+          ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+        };
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
@@ -90,7 +119,9 @@ function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void
     seq,
     ...terminal,
   };
+  const group = params.context.chatRunState?.runs.get(params.runId)?.liveTextGroup?.signal;
   params.context.broadcast("chat", payload, {
+    ...(group ? { liveText: { group } } : {}),
     sessionKeys: resolveChatSessionKeys({
       context: params.context,
       sessionKey: params.sessionKey,
@@ -130,8 +161,9 @@ export function broadcastSideResult(params: {
   payload: SideResultPayload;
 }): void {
   const seq = nextChatSeq(params.context, params.payload.runId);
-  const payloadAgentId =
-    params.payload.sessionKey === "global" ? params.payload.agentId : undefined;
+  const payloadAgentId = parseAgentSessionKey(params.payload.sessionKey)
+    ? undefined
+    : params.payload.agentId;
   const payload = {
     ...params.payload,
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
@@ -153,7 +185,9 @@ export function broadcastSideResult(params: {
   });
 }
 
-export function broadcastChatError(params: ChatBroadcastParams & { errorMessage?: string }): void {
+export function broadcastChatError(
+  params: ChatBroadcastParams & Omit<Extract<ChatTerminal, { state: "error" }>, "state">,
+): void {
   broadcastChatTerminal({ ...params, state: "error" });
 }
 

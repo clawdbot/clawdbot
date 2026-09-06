@@ -1,6 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import {
-  fetchRemoteEmbeddingVectors,
+  createRemoteEmbeddingProvider,
   resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -49,55 +49,25 @@ export async function createOpenAiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
   const client = await resolveOpenAiEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
-
-  const resolveInputType = (kind: "query" | "document"): string | undefined => {
-    const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
-    const value = explicit ?? client.inputType;
-    return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-  };
-
-  const embed = async (
-    input: string[],
-    kind: "query" | "document",
-    signal?: AbortSignal,
-  ): Promise<number[][]> => {
-    if (input.length === 0) {
-      return [];
-    }
-    const inputType = resolveInputType(kind);
-    return await fetchRemoteEmbeddingVectors({
-      url,
-      headers: client.headers,
-      ssrfPolicy: client.ssrfPolicy,
-      fetchImpl: client.fetchImpl,
-      signal,
-      body: {
-        model: client.model,
-        input,
-        ...(typeof client.outputDimensionality === "number"
-          ? { dimensions: client.outputDimensionality }
-          : {}),
-        ...(inputType ? { input_type: inputType } : {}),
-      },
-      errorPrefix: "openai embeddings failed",
-    });
-  };
-
   return {
-    provider: {
+    provider: createRemoteEmbeddingProvider({
       id: "openai",
-      model: client.model,
-      ...(typeof OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] === "number"
-        ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] }
-        : {}),
-      embedQuery: async (text, optionsValue) => {
-        const [vec] = await embed([text], "query", optionsValue?.signal);
-        return vec ?? [];
+      client,
+      errorPrefix: "openai embeddings failed",
+      maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)],
+      buildRequestFields: (kind) => {
+        const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
+        const value = explicit ?? client.inputType;
+        const inputType =
+          typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+        return {
+          ...(typeof client.outputDimensionality === "number"
+            ? { dimensions: client.outputDimensionality }
+            : {}),
+          ...(inputType ? { input_type: inputType } : {}),
+        };
       },
-      embedBatch: async (texts, optionsLocal) =>
-        await embed(texts, "document", optionsLocal?.signal),
-    },
+    }),
     client,
   };
 }
@@ -123,6 +93,6 @@ async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
-    outputDimensionality: options.outputDimensionality,
+    outputDimensionality: options.dimensions,
   };
 }

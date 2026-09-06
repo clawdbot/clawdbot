@@ -15,6 +15,8 @@ export type PluginHookSkillBundleSnapshot = {
 };
 
 export type PluginHookSkillProposalEvaluateEvent = {
+  /** Caller-supplied correlation metadata; not authenticated identity or authorization proof. */
+  correlationId?: string;
   proposal: {
     id: string;
     kind: PluginHookSkillProposalKind;

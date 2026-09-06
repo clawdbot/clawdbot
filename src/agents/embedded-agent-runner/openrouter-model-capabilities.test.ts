@@ -228,8 +228,30 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("loads cached OpenRouter capabilities from SQLite on the next import", async () => {
+  it("preserves partial native OpenRouter pricing overrides in memory and across SQLite reads", async () => {
     await withOpenRouterStateDir(async () => {
+      const cost = {
+        input: 2,
+        output: 10,
+        cacheRead: expect.closeTo(0.2, 12),
+        cacheWrite: 2.5,
+        tieredPricing: [
+          {
+            input: 2,
+            output: 10,
+            cacheRead: expect.closeTo(0.2, 12),
+            cacheWrite: 2.5,
+            range: [0, 272_001],
+          },
+          {
+            input: 4,
+            output: 10,
+            cacheRead: expect.closeTo(0.2, 12),
+            cacheWrite: 2.5,
+            range: [272_001],
+          },
+        ],
+      };
       const fetchSpy = vi.fn(
         async () =>
           new Response(
@@ -242,7 +264,18 @@ describe("openrouter-model-capabilities", () => {
                   supported_parameters: ["tools"],
                   context_length: 8765,
                   max_completion_tokens: 4321,
-                  pricing: { prompt: "0.000005", completion: "0.000006" },
+                  pricing: {
+                    prompt: "0.000002",
+                    completion: "0.00001",
+                    input_cache_read: "0.0000002",
+                    input_cache_write: "0.0000025",
+                    overrides: [
+                      {
+                        min_prompt_tokens: 272_000,
+                        prompt: "0.000004",
+                      },
+                    ],
+                  },
                 },
               ],
             }),
@@ -256,6 +289,9 @@ describe("openrouter-model-capabilities", () => {
 
       const firstModule = await importOpenRouterModelCapabilities("sqlite-cache-writer");
       await firstModule.loadOpenRouterModelCapabilities("acme/sqlite-cached-model");
+      expect(firstModule.getOpenRouterModelCapabilities("acme/sqlite-cached-model")?.cost).toEqual(
+        cost,
+      );
       expect(fetchSpy).toHaveBeenCalledTimes(1);
 
       const secondModule = await importOpenRouterModelCapabilities("sqlite-cache-reader");
@@ -265,9 +301,80 @@ describe("openrouter-model-capabilities", () => {
           supportsTools: true,
           contextWindow: 8765,
           maxTokens: 4321,
+          cost,
         },
       );
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it.each([
+    ["missing data", {}],
+    ["non-array data", { data: {} }],
+  ])("preserves cached capabilities when a refresh has %s", async (_label, malformedPayload) => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "acme/healthy-model";
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: modelId,
+                  name: "Healthy Model",
+                  context_length: 8192,
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(malformedPayload), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const writer = await importOpenRouterModelCapabilities(`malformed-writer-${_label}`);
+      await writer.loadOpenRouterModelCapabilities(modelId);
+      await writer.loadOpenRouterModelCapabilities("acme/new-model");
+
+      expect(writer.getOpenRouterModelCapabilities(modelId)?.name).toBe("Healthy Model");
+      const reader = await importOpenRouterModelCapabilities(`malformed-reader-${_label}`);
+      expect(reader.getOpenRouterModelCapabilities(modelId)?.name).toBe("Healthy Model");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("treats an explicit empty catalog as an authoritative replacement", async () => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "acme/removed-model";
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              data: [{ id: modelId, name: "Removed Model", context_length: 8192 }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const module = await importOpenRouterModelCapabilities("authoritative-empty");
+      await module.loadOpenRouterModelCapabilities(modelId);
+      await module.loadOpenRouterModelCapabilities("acme/new-model");
+
+      expect(module.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
     });
   });
 

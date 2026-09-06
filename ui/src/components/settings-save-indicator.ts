@@ -13,6 +13,7 @@ export type SettingsSaveIndicatorProps = {
   applying: boolean;
   applyDisabled: boolean;
   onRetry: () => void;
+  onSave: () => void;
   onReload: () => void;
   onApply: () => void;
 };
@@ -87,6 +88,17 @@ class SettingsSaveIndicator extends LitElement {
           @click=${props.onRetry}
         >
           ${t("configView.retry")}
+        </button>`;
+    } else if (props.status === "paused") {
+      // Reconnect latch: autosave is off for this draft until an explicit
+      // Save; without this row the form silently never saves again.
+      content = html` <span>${t("configView.autoSavePaused")}</span>
+        <button
+          class="btn btn--xs settings-save-indicator__action"
+          type="button"
+          @click=${props.onSave}
+        >
+          ${t("configView.saveNow")}
         </button>`;
     } else if (props.status === "conflict") {
       modifier = " settings-save-indicator--danger";

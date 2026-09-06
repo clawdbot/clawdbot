@@ -33,7 +33,7 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = createTransport({ onStatus, onTalkEvent }, client);
+    const transport = await createTransport({ onStatus, onTalkEvent }, client);
 
     const ws = await startTransport(transport);
     vi.spyOn(ws, "send").mockImplementation(() => {
@@ -86,7 +86,7 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = createTransport({}, client);
+    const transport = await createTransport({}, client);
     const ws = await startTransport(transport);
     ws.emitMessage(
       encodeJsonFrame({
@@ -157,7 +157,7 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = createTransport({}, client);
+    const transport = await createTransport({}, client);
     const ws = await startTransport(transport);
     ws.emitMessage(
       encodeJsonFrame({
@@ -228,7 +228,7 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = createTransport({}, client);
+    const transport = await createTransport({}, client);
     const ws = await startTransport(transport);
     ws.emitMessage(
       encodeJsonFrame({

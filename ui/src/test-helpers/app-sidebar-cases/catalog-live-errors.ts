@@ -153,15 +153,23 @@ describe("AppSidebar session catalog request errors", () => {
         createSessions("roboclaw", ["agent:roboclaw:main"]),
         "panel",
         {
-          defaultId: "main",
+          defaultId: "roboclaw",
           mainKey: "main",
           scope: "per-sender",
-          agents: [{ id: "main" }],
+          agents: [{ id: "roboclaw" }],
         },
       );
-      (context.agents.state as { client: GatewayBrowserClient | null }).client = {
+      expect(context.agentSelection.state.selectedId).toBe("roboclaw");
+      // Establish selection from the current roster before exposing a stale snapshot.
+      context.agents.state.client = {
         request: vi.fn(),
       } as unknown as GatewayBrowserClient;
+      context.agents.state.agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      };
       sidebar.connected = true;
       await sidebar.updateComplete;
       await vi.advanceTimersByTimeAsync(0);

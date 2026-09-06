@@ -1,17 +1,10 @@
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 // Fish Audio HTTP client for buffered and streaming TTS plus voice discovery.
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import {
-  assertOkOrThrowProviderError,
-  assertProviderBinaryResponseContent,
-  readProviderBinaryResponse,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
-import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FISH_AUDIO_BASE_URL = "https://api.fish.audio";
 const FISH_AUDIO_VOICES_MAX_BYTES = 2 * 1024 * 1024;
@@ -63,6 +56,8 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
   release: () => Promise<void>;
 }> {
   const baseUrl = normalizeFishAudioBaseUrl(params.baseUrl);
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   return await fetchWithSsrFGuard({
     url: `${baseUrl}/v1/tts`,
     init: {
@@ -81,96 +76,27 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
 }
 
 export async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer> {
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
   try {
     await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
-    return Buffer.from(
-      await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
-        maxBytes: params.maxBytes,
-      }),
-    );
+    return await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
+      maxBytes: params.maxBytes,
+    });
   } finally {
     await release();
   }
-}
-
-function createBoundedFishAudioStream(
-  stream: ReadableStream<Uint8Array>,
-  maxBytes: number,
-): { audioStream: ReadableStream<Uint8Array>; release: () => Promise<void> } {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let totalBytes = 0;
-
-  const releaseReader = (activeReader: ReadableStreamDefaultReader<Uint8Array>) => {
-    if (reader === activeReader) {
-      reader = undefined;
-      activeReader.releaseLock();
-    }
-  };
-  const cancelReader = async (reason?: unknown) => {
-    const activeReader = reader;
-    if (!activeReader) {
-      return;
-    }
-    try {
-      await activeReader.cancel(reason).catch(() => undefined);
-    } finally {
-      releaseReader(activeReader);
-    }
-  };
-
-  const audioStream = new ReadableStream<Uint8Array>({
-    start() {
-      reader = stream.getReader();
-    },
-    async pull(controller) {
-      const activeReader = reader;
-      if (!activeReader) {
-        controller.close();
-        return;
-      }
-      try {
-        const chunk = await activeReader.read();
-        if (chunk.done) {
-          releaseReader(activeReader);
-          controller.close();
-          return;
-        }
-        const remaining = maxBytes - totalBytes;
-        if (chunk.value.byteLength > remaining) {
-          if (remaining > 0) {
-            controller.enqueue(chunk.value.subarray(0, remaining));
-          }
-          const error = new Error(
-            `Fish Audio TTS API error: audio response exceeds ${maxBytes} bytes`,
-          );
-          await activeReader.cancel(error).catch(() => undefined);
-          releaseReader(activeReader);
-          controller.error(error);
-          return;
-        }
-        totalBytes += chunk.value.byteLength;
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        releaseReader(activeReader);
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      await cancelReader(reason);
-    },
-  });
-
-  return {
-    audioStream,
-    release: () => cancelReader(new Error("Fish Audio TTS stream released")),
-  };
 }
 
 export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
   audioStream: ReadableStream<Uint8Array>;
   release: () => Promise<void>;
 }> {
+  const { createBoundedProviderBinaryStream } =
+    await import("openclaw/plugin-sdk/provider-binary-stream");
+  const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
+    await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
   let handedOff = false;
   try {
@@ -179,20 +105,15 @@ export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
     if (!response.body) {
       throw new Error("Fish Audio TTS API response missing audio stream");
     }
-    const bounded = createBoundedFishAudioStream(response.body, params.maxBytes);
-    let releasePromise: Promise<void> | undefined;
-    const releaseAll = () => {
-      releasePromise ??= (async () => {
-        try {
-          await bounded.release();
-        } finally {
-          await release();
-        }
-      })();
-      return releasePromise;
-    };
+    const bounded = createBoundedProviderBinaryStream(response.body, {
+      maxBytes: params.maxBytes,
+      createOverflowError: ({ maxBytes }) =>
+        new Error(`Fish Audio TTS API error: audio response exceeds ${maxBytes} bytes`),
+      createReleaseError: () => new Error("Fish Audio TTS stream released"),
+      cleanup: release,
+    });
     handedOff = true;
-    return { audioStream: bounded.audioStream, release: releaseAll };
+    return { audioStream: bounded.stream, release: bounded.release };
   } finally {
     if (!handedOff) {
       await release();
@@ -247,6 +168,10 @@ async function requestVoicePage(params: {
   } else {
     url.searchParams.set("sort_by", "score");
   }
+  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
     init: { headers: { Authorization: `Bearer ${params.apiKey}` } },

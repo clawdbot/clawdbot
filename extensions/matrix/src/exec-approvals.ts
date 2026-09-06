@@ -7,10 +7,12 @@ import {
   isChannelExecApprovalTargetRecipient,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -19,9 +21,7 @@ import { normalizeMatrixApproverId } from "./approval-ids.js";
 import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalKind = "exec" | "plugin";
-
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 function normalizeMatrixExecApproverId(value: string | number): string | undefined {
   const normalized = normalizeMatrixApproverId(value);
   return normalized === "*" ? undefined : normalized;
@@ -46,7 +46,7 @@ function isMatrixExecApprovalAccountEligible(params: {
   cfg: OpenClawConfig;
   accountId: string;
   request: ApprovalRequest;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
   const account = resolveMatrixAccount(params);
   if (!account.enabled || !account.configured) {
@@ -73,7 +73,7 @@ function matchesMatrixRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ApprovalRequest;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
   const accountId = params.accountId ?? resolveDefaultMatrixAccountId(params.cfg);
   return doesApprovalRequestSelectChannelAccount({
@@ -101,7 +101,7 @@ export function getMatrixExecApprovalApprovers(params: {
 export function getMatrixApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): string[] {
   if (params.approvalKind === "plugin") {
     return getMatrixApprovalAuthApprovers({
@@ -145,9 +145,9 @@ export const resolveMatrixExecApprovalTarget = matrixExecApprovalProfile.resolve
 export function isMatrixApprovalClientEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
-  if (params.approvalKind === "exec") {
+  if (params.approvalKind === "exec" || params.approvalKind === "system-agent") {
     return isMatrixExecApprovalClientEnabled(params);
   }
   const config = resolveMatrixExecApprovalConfig(params);
@@ -169,6 +169,10 @@ export function isMatrixAnyApprovalClientEnabled(params: {
     isMatrixApprovalClientEnabled({
       ...params,
       approvalKind: "plugin",
+    }) ||
+    isMatrixApprovalClientEnabled({
+      ...params,
+      approvalKind: "system-agent",
     })
   );
 }
@@ -176,10 +180,14 @@ export function isMatrixAnyApprovalClientEnabled(params: {
 export function shouldHandleMatrixApprovalRequest(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
 }): boolean {
-  if (params.approvalKind !== "exec" && params.approvalKind !== "plugin") {
+  if (
+    params.approvalKind !== "exec" &&
+    params.approvalKind !== "plugin" &&
+    params.approvalKind !== "system-agent"
+  ) {
     return false;
   }
   if (
@@ -214,6 +222,7 @@ function buildFilterCheckRequest(params: {
 }): ApprovalRequest {
   if (params.metadata.approvalKind === "plugin") {
     return {
+      approvalKind: "plugin",
       id: params.metadata.approvalId,
       request: {
         title: "Plugin Approval Required",
@@ -226,6 +235,7 @@ function buildFilterCheckRequest(params: {
     };
   }
   return {
+    approvalKind: "exec",
     id: params.metadata.approvalId,
     request: {
       command: "",

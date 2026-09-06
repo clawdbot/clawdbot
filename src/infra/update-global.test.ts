@@ -5,7 +5,6 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   writePackageDistInventory,
   writePackageDistInventoryForPublish,
 } from "../../scripts/lib/package-dist-inventory.ts";
@@ -71,6 +70,9 @@ function createNpmRootRunner(params: {
   overrideNpmRoot?: string;
 }): CommandRunner {
   return async (argv) => {
+    if (argv[1] === "--version") {
+      return { stdout: "12.0.0\n", stderr: "", code: 0 };
+    }
     if (argv[0] === "npm") {
       return { stdout: `${params.defaultNpmRoot}\n`, stderr: "", code: 0 };
     }
@@ -193,6 +195,55 @@ describe("update global helpers", () => {
       manager: "npm",
       globalRoot,
       packageRoot: path.join(globalRoot, "@kevins8", "openclaw"),
+    });
+  });
+
+  it.each([
+    ["11.12.0", "unflagged"],
+    ["11.13.0", "unflagged"],
+    ["11.14.0", "unflagged"],
+    ["11.15.9", "unflagged"],
+    ["11.16.0", "allow-scripts-advisory"],
+    ["12.0.0", "allow-scripts"],
+  ] as const)("binds npm %s lifecycle policy to the owning executable", async (version, policy) => {
+    await withTestDir({ prefix: "openclaw-npm-owner-" }, async (prefix) => {
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const owningNpm = path.join(prefix, "bin", "npm");
+      await Promise.all([
+        fs.mkdir(packageRoot, { recursive: true }),
+        fs.mkdir(path.dirname(owningNpm), { recursive: true }),
+      ]);
+      await fs.writeFile(owningNpm, "", "utf8");
+      const calls: string[][] = [];
+      const runCommand: CommandRunner = async (argv) => {
+        calls.push(argv);
+        if (argv[0] === owningNpm && argv[1] === "root") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (argv[0] === owningNpm && argv[1] === "--version") {
+          return { stdout: `${version}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot: packageRoot,
+          packageName: "openclaw",
+        }),
+      ).resolves.toMatchObject({
+        command: owningNpm,
+        npmOwner: {
+          version,
+          lifecyclePolicy: policy,
+        },
+      });
+      expect(calls).toContainEqual([owningNpm, "--version"]);
+      expect(calls).not.toContainEqual(["npm", "--version"]);
     });
   });
 
@@ -341,7 +392,7 @@ describe("update global helpers", () => {
         );
         await fs.mkdir(pkgRoot, { recursive: true });
 
-        const runCommand = createNpmRootRunner({ defaultNpmRoot: cellarRoot });
+        const runCommand = vi.fn(createNpmRootRunner({ defaultNpmRoot: cellarRoot }));
 
         await expect(
           resolveGlobalInstallTarget({
@@ -355,7 +406,9 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
+        expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([["npm", "--version"]]);
       });
     });
   });
@@ -393,6 +446,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
       });
     });
@@ -406,7 +460,7 @@ describe("update global helpers", () => {
         const pkgRoot = path.join(base, "checkout", "node_modules", "openclaw");
         await fs.mkdir(pkgRoot, { recursive: true });
 
-        const runCommand = createNpmRootRunner({ defaultNpmRoot: nvmRoot });
+        const runCommand = vi.fn(createNpmRootRunner({ defaultNpmRoot: nvmRoot }));
 
         await expect(
           resolveGlobalInstallTarget({
@@ -420,7 +474,9 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: path.join(nvmRoot, "openclaw"),
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
+        expect(runCommand.mock.calls.map(([argv]) => argv)).toContainEqual(["npm", "root", "-g"]);
       });
     });
   });
@@ -446,6 +502,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: null, lifecyclePolicy: null },
         });
       });
     });
@@ -488,6 +545,9 @@ describe("update global helpers", () => {
       await fs.mkdir(path.join(otherPnpmRoot, "openclaw"), { recursive: true });
 
       const runCommand: CommandRunner = async (argv) => {
+        if (argv[1] === "--version") {
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
+        }
         if (argv[0] === "npm" || argv[0] === customNpm) {
           return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
         }
@@ -511,6 +571,7 @@ describe("update global helpers", () => {
         globalRoot: managedNpmRoot,
         packageRoot: pkgRoot,
         directNodeModulesRoot: true,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
       });
       await expect(
         resolveGlobalInstallTarget({
@@ -526,6 +587,7 @@ describe("update global helpers", () => {
         globalRoot: managedNpmRoot,
         packageRoot: pkgRoot,
         directNodeModulesRoot: true,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
       });
 
       expect(
@@ -672,63 +734,6 @@ describe("update global helpers", () => {
     });
   });
 
-  it("builds npm staged install argv with an explicit prefix", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual([
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "--prefix",
-      "/tmp/stage",
-      "openclaw@latest",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual([
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "--prefix",
-      "/tmp/stage",
-      "openclaw@latest",
-      "--omit=optional",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
-  });
-
-  it("allows only the resolved npm candidate lifecycle identity", () => {
-    expect(globalInstallArgs("npm", "/tmp/openclaw-2026.7.2.tgz")).toContain(
-      "--allow-scripts=/tmp/openclaw-2026.7.2.tgz",
-    );
-    expect(globalInstallArgs("npm", "openclaw@npm:@vendor/openclaw@1.2.3")).toContain(
-      "--allow-scripts=@vendor/openclaw",
-    );
-    expect(globalInstallArgs("npm", "openclaw@npm:vendor-openclaw@1.2.3")).toContain(
-      "--allow-scripts=vendor-openclaw",
-    );
-    expect(globalInstallArgs("npm", "./openclaw-candidate")).toContain(
-      "--allow-scripts=./openclaw-candidate",
-    );
-  });
-
-  it("keeps commas in ancestor directories out of npm's lifecycle policy", () => {
-    expect(
-      globalInstallArgs(
-        "npm",
-        "/tmp/build,cache/openclaw-candidate",
-        null,
-        null,
-        "/tmp/build,cache",
-      ),
-    ).toContain("--allow-scripts=./openclaw-candidate");
-  });
-
   it("builds global install argv for each supported manager", () => {
     expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
       "npm",
@@ -862,8 +867,8 @@ describe("update global helpers", () => {
     });
   });
 
-  it("rejects a staged package when lifecycle scripts leave the install guard", async () => {
-    await withTestDir({ prefix: "openclaw-update-global-guard-" }, async (packageRoot) => {
+  it("keeps package-root lifecycle state outside dist verification", async () => {
+    await withTestDir({ prefix: "openclaw-update-global-lifecycle-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot, "2026.7.2");
       for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
         const absolutePath = path.join(packageRoot, relativePath);
@@ -872,9 +877,7 @@ describe("update global helpers", () => {
       }
       await writePackageDistInventoryForPublish(packageRoot);
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `unexpected packaged dist file ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
-      );
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
     });
   });
 

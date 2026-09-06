@@ -1,10 +1,12 @@
 // Covers config path resolution across env, home, and agent roots.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
+  allowsProcessHomeSessionScan,
   CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
   isDefaultInstallIdentity,
@@ -14,6 +16,7 @@ import {
   pinRuntimePaths,
   resolveNativeServiceProfileConflict,
   resolveDefaultConfigCandidates,
+  resolveCanonicalConfigPath,
   resolveConfigPathCandidate,
   resolveConfigPath,
   resolveGatewayPort,
@@ -50,6 +53,7 @@ describe("default install identity", () => {
     const configPath = path.join(stateDir, "openclaw.json");
 
     expect(isDefaultInstallIdentity({ HOME: home }, () => home)).toBe(true);
+    expect(allowsProcessHomeSessionScan({ HOME: home }, () => home)).toBe(true);
     expect(
       isDefaultInstallIdentity(
         { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
@@ -161,6 +165,17 @@ describe("default install identity", () => {
           () => home,
         ),
       ).toBe(true);
+      expect(
+        allowsProcessHomeSessionScan(
+          {
+            HOME: home,
+            OPENCLAW_PROFILE: "work",
+            OPENCLAW_STATE_DIR: profileStateDir,
+            OPENCLAW_CONFIG_PATH: path.join(profileStateDir, "openclaw.json"),
+          },
+          () => home,
+        ),
+      ).toBe(false);
       expect(
         isDefaultInstallIdentity(
           {
@@ -322,9 +337,35 @@ describe("oauth paths", () => {
 describe("gateway port resolution", () => {
   it("prefers numeric env values over config", () => {
     expect(
-      resolveGatewayPort({ gateway: { port: 19002 } }, envWith({ OPENCLAW_GATEWAY_PORT: "19001" })),
+      resolveGatewayPort(
+        { gateway: { port: 19002 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "19001", OPENCLAW_PROFILE: "work" }),
+      ),
     ).toBe(19001);
+    expect(
+      resolveGatewayPort({ gateway: { port: 19002 } }, envWith({ OPENCLAW_PROFILE: "work" })),
+    ).toBe(19002);
   });
+
+  it.each([
+    { profile: "ct2", expected: 45696 },
+    { profile: "p1402", expected: 55636 },
+    { profile: "p2380", expected: 55636 },
+  ])("derives the byte-exact profile port for $profile", ({ profile, expected }) => {
+    const port = resolveGatewayPort({}, envWith({ OPENCLAW_PROFILE: profile }));
+    expect(port).toBe(expected);
+    expect(port).toBeGreaterThanOrEqual(20000);
+    expect(port).toBeLessThan(60000);
+  });
+
+  it.each([undefined, "default", "Default", "../escape"])(
+    "keeps the default port for profile %j",
+    (profile) => {
+      expect(resolveGatewayPort({}, envWith({ OPENCLAW_PROFILE: profile }))).toBe(
+        DEFAULT_GATEWAY_PORT,
+      );
+    },
+  );
 
   it("accepts Compose-style IPv4 host publish values from env", () => {
     expect(
@@ -528,6 +569,22 @@ describe("state + config path candidates", () => {
       const resolved = resolveConfigPathCandidate({} as NodeJS.ProcessEnv, () => root);
       expect(resolved).toBe(legacyPath);
     });
+  });
+
+  it.each([
+    { name: "candidate", resolve: resolveConfigPathCandidate },
+    { name: "active", resolve: resolveConfigPath },
+    { name: "canonical", resolve: resolveCanonicalConfigPath },
+  ])("resolves explicit config selection in $name without filesystem discovery", ({ resolve }) => {
+    const home = path.resolve("config-selection-home");
+    const configPath = path.join(home, "selected.json");
+    const exists = vi.spyOn(fsSync, "existsSync").mockReturnValue(false);
+    try {
+      expect(resolve({ HOME: home, OPENCLAW_CONFIG_PATH: configPath })).toBe(configPath);
+      expect(exists).not.toHaveBeenCalled();
+    } finally {
+      exists.mockRestore();
+    }
   });
 
   it("respects state dir overrides when config is missing", async () => {

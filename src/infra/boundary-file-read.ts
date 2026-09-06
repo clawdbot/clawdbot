@@ -52,6 +52,13 @@ function readFailureErrorCode(error: unknown): string | undefined {
   return typeof code === "string" && code ? code : undefined;
 }
 
+export function isRootFileMissingFailure(failure: RootFileOpenFailure): boolean {
+  return (
+    failure.reason === "path" &&
+    MISSING_PATH_ERROR_CODES.has(readFailureErrorCode(failure.error) ?? "")
+  );
+}
+
 /**
  * Describes a root-scoped open failure without collapsing every cause into a
  * containment violation. Only `validation` means the path failed the boundary or
@@ -70,9 +77,9 @@ export function describeRootFileOpenFailure(params: {
   return matchRootFileOpenFailureFsSafe(params.failure, {
     path: (failure) => {
       const code = readFailureErrorCode(failure.error);
-      return code && !MISSING_PATH_ERROR_CODES.has(code)
-        ? unreadable(code)
-        : `${params.subject} not found: ${params.filePath}`;
+      return isRootFileMissingFailure(failure)
+        ? `${params.subject} not found: ${params.filePath}`
+        : unreadable(code);
     },
     validation: () =>
       `${params.subject} escapes ${params.boundaryLabel} or fails alias checks: ${params.filePath}`,

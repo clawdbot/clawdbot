@@ -20,9 +20,9 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
+  patchSessionEntryCore,
   type SessionCompactionCheckpointMutationResult,
   type SessionTranscriptRuntimeTarget,
-  updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
   branchCompactionCheckpointSession,
@@ -30,6 +30,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-checkpoint.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
+import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
@@ -79,6 +80,7 @@ type BranchCheckpointSessionParams = {
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  creation?: Parameters<typeof branchCompactionCheckpointSession>[0]["creation"];
 };
 
 type RestoreCheckpointSessionParams = {
@@ -92,6 +94,7 @@ type RestoreCheckpointSessionParams = {
 
 type PersistSessionCompactionCheckpointParams = {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   sessionId: string;
   reason: SessionCompactionCheckpointReason;
@@ -434,7 +437,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
 }
 
 function readSessionLeafStateFromRecords(
-  records: readonly Record<string, unknown>[],
+  records: readonly { type?: unknown; id?: unknown }[],
 ): { entryId: string; leafId: string | null } | null {
   let latestEntryId: string | undefined;
   for (const record of records) {
@@ -546,6 +549,7 @@ async function branchCheckpointSessionFromStoredBoundary(
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
     expectedState: params.expectedState,
+    creation: params.creation,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -619,7 +623,7 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
     if (typeof params.sessionManager?.getEntries !== "function") {
       return null;
     }
-    const entryRecords = params.sessionManager.getEntries() as unknown as Record<string, unknown>[];
+    const entryRecords = params.sessionManager.getEntries();
     const transcriptState = readSessionLeafStateFromRecords(entryRecords);
     const position = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: liveLeafId,
@@ -722,6 +726,14 @@ async function persistSessionCompactionCheckpoint(
   const target = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+  // Snapshot sizing may outlive this owner; revalidate its captured context inside the commit.
+  const assertCommitAllowed = captureOwnedTranscriptWriteAssertion({
+    agentId: target.agentId,
+    sessionId: params.sessionId,
+    sessionKey: target.canonicalKey,
+    storePath: target.storePath,
   });
   const createdAt = params.createdAt ?? Date.now();
   const checkpoint: SessionCompactionCheckpoint = {
@@ -751,15 +763,11 @@ async function persistSessionCompactionCheckpoint(
     },
   };
 
-  let trimmedCheckpoints:
-    | {
-        kept: SessionCompactionCheckpoint[] | undefined;
-        removed: SessionCompactionCheckpoint[];
-      }
-    | undefined;
+  let trimmedCheckpoints: ReturnType<typeof trimSessionCheckpoints> | undefined;
   let stored = false;
-  const updatedEntry = await updateSessionEntry(
+  const updatedEntry = await patchSessionEntryCore(
     {
+      agentId: target.agentId,
       storePath: target.storePath,
       sessionKey: target.canonicalKey,
     },
@@ -777,6 +785,7 @@ async function persistSessionCompactionCheckpoint(
         compactionCheckpoints: trimmedCheckpoints.kept,
       };
     },
+    { assertCommitAllowed },
   );
 
   if (!updatedEntry || !stored) {

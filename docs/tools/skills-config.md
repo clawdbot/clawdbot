@@ -28,7 +28,6 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { mode: "auto" },
-      allowSymlinkTargetWrites: false,
       approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -80,10 +79,12 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs - the OpenClaw CLI and Gateway runtime require Node because the
-  canonical state store uses `node:sqlite`. `openclaw setup --node-manager` and
-  `openclaw onboard --node-manager` accept `npm`, `pnpm`, or `bun`; set
-  `"yarn"` directly in config for Yarn-backed skill installs.
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4+
+  with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
+  `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
+  `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
+  installs. Setup preserves this preference unless you pass `--node-manager`;
+  fresh configurations default to `npm`.
 </ParamField>
 
 <ParamField path="skills.install.allowUploadedArchives" type="boolean" default="false">
@@ -175,10 +176,40 @@ directories. Symlinks and insecure paths are rejected.
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
 optional structured `source`, structured `origin`, and `request`. It must
-write one JSON object on stdout: `{ "protocolVersion": 1, "decision": "allow" }`
-or `{ "protocolVersion": 1, "decision": "block", "reason": "..." }`. Non-zero
-exit, timeout, malformed JSON, missing fields, or unsupported protocol
-versions fail closed.
+write one JSON object on stdout with an `allow`, `warn`, or `block` decision.
+`warn` and `block` require a non-empty `reason`; every decision may include a
+`findings` array. Each finding requires non-empty string `ruleId` and `message`
+fields plus a `severity` of `info`, `warn`, or `critical`. Optional `file` and
+`evidence` values must be non-empty strings; a finite numeric `line` is rounded
+down and clamped to the safe-integer range from 1 through `Number.MAX_SAFE_INTEGER`.
+Malformed finding entries are ignored, and
+invalid optional fields are omitted. A non-array `findings` value is treated as
+absent. Operator-facing reason and finding text are limited to 1,000 characters.
+OpenClaw retains at most 100 normalized findings for display. Only a `warn`
+response with more than 100 valid findings fails closed and cannot be
+acknowledged; `allow` and `block` retain the first 100. A warning stops the
+install before commit. A `warn` review whose fully rendered notice, including
+its title, target, sanitized reason and findings, and recovery guidance, exceeds
+the 4,000-character aggregate display limit fails closed without presenting a
+partial review. An over-budget `block` remains terminal with a
+bounded denial, while over-budget findings on `allow` are summarized in bounded
+diagnostic output. Interactive CLI
+plugin and skill commands ask the operator to type the target name using the
+same `install anyway` or `update anyway` copy as suspicious ClawHub releases,
+then run policy again before continuing. Declined and non-interactive commands
+on the direct CLI may use `--acknowledge-install-policy-warning` as explicit
+approval after review for every warning in that command invocation;
+every approved warning is re-evaluated before continuing.
+The Control UI can review and approve warnings for its plugin install request;
+that approval covers every warning in the invocation, and each warning is
+still re-evaluated. Other Gateway-backed and automatic installs remain blocked
+when they have no operator-confirmation flow. Use an equivalent direct plugin
+or skill command to review and approve the warning when one exists. Otherwise,
+change `security.installPolicy` to return `allow` for the reviewed request,
+then retry the managed flow. `--force` does not approve policy warnings. A `block`,
+non-zero exit, timeout, invalid JSON, non-object response, missing or invalid
+protocol version or decision, or missing or empty `warn`/`block` reason always
+fails closed.
 
 OpenClaw does not execute install policy during normal Gateway startup.
 Installs and updates fail closed when policy is enabled but unavailable.
@@ -333,7 +364,7 @@ different visible skill set per agent.
   `off` disables autonomous capture while keeping the durable-instruction
   suggestion nudge. `propose` creates pending proposals from corrections and
   substantial completed work. `auto` sends the same captures through the normal
-  scanner-gated Workshop apply path and runs daily collection cleanup that can
+  scanner-gated Workshop apply path and runs weekly collection cleanup that can
   rewrite or drop eligible writable skills. User-prompted skill creation,
   `/learn`, and manual history scan continue to work in every mode.
 </ParamField>
@@ -346,15 +377,8 @@ proposal-only permissions, and troubleshooting.
   additional approval prompt. `pending` requires operator approval.
 </ParamField>
 
-<ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
-  Allow Skill Workshop apply to write through workspace skill symlinks whose
-  real target is already trusted by `skills.load.allowSymlinkTargets`. Keep
-  this disabled unless generated proposal applies should mutate that shared
-  skill root.
-</ParamField>
-
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per workspace (allowed
+  Maximum pending and quarantined proposals retained per agent (allowed
   range: 1-200).
 </ParamField>
 
@@ -391,22 +415,9 @@ is accepted after realpath resolution. `extraDirs` scans the sibling repo
 directly; `allowSymlinkTargets` preserves the symlinked path for existing
 layouts.
 
-Skill Workshop apply does not write through those symlinks by default. To
-let Workshop apply mutate skills under already-trusted symlink targets, opt
-in separately:
-
-```json5
-{
-  skills: {
-    load: {
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
-    },
-    workshop: {
-      allowSymlinkTargetWrites: true,
-    },
-  },
-}
-```
+Skill Workshop uses each agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`
+containment boundary. It does not use `allowSymlinkTargets`, and it rejects
+symlinked skills that resolve outside that directory.
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks unconditionally (per-skill
@@ -447,18 +458,9 @@ Pass secrets into a Docker sandbox with:
 
 ## Loading order reminder
 
-```text
-workspace/skills      (highest)
-workspace/.agents/skills
-~/.agents/skills
-~/.openclaw/skills
-bundled skills
-skills.load.extraDirs (lowest)
-```
-
-Changes to skills and config take effect on the next new session when the
-watcher is enabled, or on the next agent turn when the watcher detects a
-change.
+See [Loading order](/tools/skills#loading-order) for source precedence, including
+the per-agent Workshop tier, and [Snapshots and refresh](/tools/skills#snapshots-and-refresh)
+for when changes become visible.
 
 ## Related
 

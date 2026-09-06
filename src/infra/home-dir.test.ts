@@ -139,6 +139,15 @@ describe("resolveEffectiveHomeDir", () => {
 
     expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/alice/svc"));
   });
+
+  it("does not interpret $ patterns in HOME when expanding OPENCLAW_HOME tilde", () => {
+    const env = {
+      OPENCLAW_HOME: "~/state",
+      HOME: "/home/$&user",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/$&user/state"));
+  });
 });
 
 describe("resolveRequiredHomeDir", () => {
@@ -229,6 +238,12 @@ describe("expandHomePrefix", () => {
       name: "keeps non-tilde values unchanged",
       input: "/tmp/x",
       expected: "/tmp/x",
+    },
+    {
+      name: "does not interpret $ patterns in home when expanding tilde",
+      input: "~/x",
+      opts: { home: "/home/$&user" },
+      expected: "/home/$&user/x",
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(expandHomePrefix(input, opts)).toBe(expected);

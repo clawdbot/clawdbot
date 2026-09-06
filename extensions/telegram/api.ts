@@ -50,7 +50,6 @@ export {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resetTelegramForumFlagCacheForTest,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
@@ -139,12 +138,7 @@ export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "./src/outbound-params.js";
-export {
-  probeTelegram,
-  resetTelegramProbeFetcherCacheForTests,
-  type TelegramProbe,
-  type TelegramProbeOptions,
-} from "./src/probe.js";
+export { probeTelegram, type TelegramProbe, type TelegramProbeOptions } from "./src/probe.js";
 export {
   type ResolvedReactionLevel,
   resolveTelegramReactionLevel,

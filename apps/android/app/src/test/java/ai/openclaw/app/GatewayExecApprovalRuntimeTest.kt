@@ -123,8 +123,14 @@ class GatewayExecApprovalRuntimeTest {
             requestedIds += requireNotNull(parsed["id"]?.jsonPrimitive?.content)
             unifiedGet(status = "pending", decision = null, id = controlPrefixedId)
           }
-          "exec.approval.list" -> "[]"
-          else -> error("unexpected method $method")
+
+          "exec.approval.list" -> {
+            "[]"
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -154,7 +160,9 @@ class GatewayExecApprovalRuntimeTest {
         when (method) {
           // `applied=true` cannot claim a different decision than this phone sent.
           "approval.resolve" -> unifiedResolve(applied = true, status = "allowed", decision = "allow-always")
+
           "approval.get" -> unifiedGet(status = "allowed", decision = "allow-always")
+
           else -> error("unexpected method $method")
         }
       }
@@ -253,10 +261,17 @@ class GatewayExecApprovalRuntimeTest {
       seedConnectedRuntime(runtime, unifiedMethods)
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "approval.get" -> unifiedGet(status = "denied", decision = "deny")
-          else -> error("unexpected method $method")
+          }
+
+          "approval.get" -> {
+            unifiedGet(status = "denied", decision = "deny")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -284,8 +299,11 @@ class GatewayExecApprovalRuntimeTest {
             releaseUnknownOutcome.await()
             throw GatewayRequestOutcomeUnknown("disconnected before response")
           }
-          "exec.approval.list" ->
+
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
+          }
+
           "approval.get" -> {
             if (approvalReads.incrementAndGet() == 1) {
               pendingReadCompleted.complete(Unit)
@@ -296,7 +314,10 @@ class GatewayExecApprovalRuntimeTest {
               unifiedGet(status = "denied", decision = "deny")
             }
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -341,14 +362,20 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             unifiedResolve(applied = true, status = "denied", decision = "deny")
           }
-          "exec.approval.list" ->
+
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
+          }
+
           "approval.get" -> {
             approvalReads.incrementAndGet()
             refreshReadCompleted.complete(Unit)
             unifiedGet(status = "pending", decision = null)
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -386,13 +413,16 @@ class GatewayExecApprovalRuntimeTest {
             releaseUnknownOutcome.await()
             throw GatewayRequestOutcomeUnknown("response lost")
           }
-          "exec.approval.list" ->
+
+          "exec.approval.list" -> {
             """
             [
               {"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000},
               {"id":"approval-2","createdAtMs":101,"expiresAtMs":4000000000000}
             ]
             """.trimIndent()
+          }
+
           "approval.get" -> {
             val id =
               Json
@@ -412,7 +442,10 @@ class GatewayExecApprovalRuntimeTest {
               throw GatewayRequestOutcomeUnknown("readback unavailable")
             }
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -452,25 +485,38 @@ class GatewayExecApprovalRuntimeTest {
       val approvalReads = AtomicInteger()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
-          "approval.resolve" -> throw GatewayRequestOutcomeUnknown("response lost")
-          "exec.approval.list" ->
+          "approval.resolve" -> {
+            throw GatewayRequestOutcomeUnknown("response lost")
+          }
+
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "approval.get" ->
+          }
+
+          "approval.get" -> {
             when (approvalReads.incrementAndGet()) {
               1 -> {
                 pendingReadStarted.complete(Unit)
                 releasePendingRead.await()
                 unifiedGet(status = "pending", decision = null)
               }
+
               2 -> {
                 staleRefreshReadStarted.complete(Unit)
                 releaseStaleRefreshRead.await()
                 staleRefreshResponseReturning.complete(Unit)
                 unifiedGet(status = "pending", decision = null)
               }
-              else -> error("unexpected extra approval.get")
+
+              else -> {
+                error("unexpected extra approval.get")
+              }
             }
-          else -> error("unexpected method $method")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -531,11 +577,21 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         reconnectMethods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "exec.approval.get" -> legacyGet()
-          "exec.approval.resolve" -> """{"ok":true}"""
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.get" -> {
+            legacyGet()
+          }
+
+          "exec.approval.resolve" -> {
+            """{"ok":true}"""
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -589,8 +645,14 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             unifiedResolve(applied = true, status = "allowed", decision = "allow-once")
           }
-          "approval.get" -> unifiedGet(status = "denied", decision = "deny")
-          else -> error("unexpected method $method")
+
+          "approval.get" -> {
+            unifiedGet(status = "denied", decision = "deny")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -624,9 +686,14 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             """{"ok":true}"""
           }
-          "exec.approval.list", "exec.approval.get" ->
+
+          "exec.approval.list", "exec.approval.get" -> {
             throw rejected("UNAVAILABLE", "$method failed")
-          else -> error("unexpected method $method")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -706,8 +773,14 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             throw rejected("INVALID_REQUEST", "approval rejected", "APPROVAL_ALREADY_RESOLVED")
           }
-          "exec.approval.get" -> legacyGet()
-          else -> error("unexpected method $method")
+
+          "exec.approval.get" -> {
+            legacyGet()
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -747,10 +820,17 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         refreshMethods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-2","createdAtMs":101,"expiresAtMs":4000000000000}]"""
-          "approval.get" -> unifiedGet(status = "pending", decision = null, id = "approval-2")
-          else -> error("unexpected method $method")
+          }
+
+          "approval.get" -> {
+            unifiedGet(status = "pending", decision = null, id = "approval-2")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
       runtime.refreshExecApprovals()
@@ -774,10 +854,17 @@ class GatewayExecApprovalRuntimeTest {
         check(method == "approval.resolve")
         val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
         when (val id = request["id"]?.jsonPrimitive?.content) {
-          "approval-1" -> unifiedResolve(applied = false, status = "denied", decision = "deny")
-          "approval-2" ->
+          "approval-1" -> {
+            unifiedResolve(applied = false, status = "denied", decision = "deny")
+          }
+
+          "approval-2" -> {
             throw rejected("UNAVAILABLE", "resolve failed")
-          else -> error("unexpected approval id $id")
+          }
+
+          else -> {
+            error("unexpected approval id $id")
+          }
         }
       }
 
@@ -807,10 +894,12 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
           "approval.resolve" -> unifiedResolve(applied = false, status = "denied", decision = "deny")
+
           // Readback for the approval-2 resolved event: this terminal-notice publisher
           // does not hold execApprovalsStateLock, the exact writer the atomic dismiss
           // must not race.
           "approval.get" -> unifiedGet(status = "denied", decision = "deny", id = "approval-2")
+
           else -> error("unexpected method $method")
         }
       }
@@ -882,11 +971,21 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "exec.approval.get" -> legacyGet()
-          "exec.approval.resolve" -> """{"ok":true}"""
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.get" -> {
+            legacyGet()
+          }
+
+          "exec.approval.resolve" -> {
+            """{"ok":true}"""
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -915,9 +1014,13 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          else -> error("an inconsistent hello must not select approval RPC $method")
+          }
+
+          else -> {
+            error("an inconsistent hello must not select approval RPC $method")
+          }
         }
       }
 
@@ -948,12 +1051,21 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "approval.get" ->
+          }
+
+          "approval.get" -> {
             throw rejected("INVALID_REQUEST", "unknown method: approval.get")
-          "exec.approval.get" -> error("canonical hello must never downgrade")
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.get" -> {
+            error("canonical hello must never downgrade")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -976,10 +1088,17 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "approval.resolve" ->
+          "approval.resolve" -> {
             throw rejected("INVALID_REQUEST", "unknown method: approval.resolve")
-          "exec.approval.resolve" -> error("canonical hello must never downgrade")
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.resolve" -> {
+            error("canonical hello must never downgrade")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -1015,8 +1134,14 @@ class GatewayExecApprovalRuntimeTest {
             }
             unifiedResolve(applied = true, status = "denied", decision = "deny")
           }
-          "exec.approval.resolve" -> error("stale rejection must not trigger legacy fallback")
-          else -> error("unexpected method $method")
+
+          "exec.approval.resolve" -> {
+            error("stale rejection must not trigger legacy fallback")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -1139,9 +1264,9 @@ class GatewayExecApprovalRuntimeTest {
     methods: Set<String>,
   ) {
     runtime.javaClass
-      .getDeclaredMethod("replaceGatewayMethods", Set::class.java)
+      .getDeclaredMethod("replaceGatewayMethods", Set::class.java, java.lang.Boolean.TYPE)
       .apply { isAccessible = true }
-      .invoke(runtime, methods)
+      .invoke(runtime, methods, true)
   }
 
   private fun writeField(

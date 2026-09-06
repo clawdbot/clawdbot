@@ -10,16 +10,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  type EligibleNodeMessages,
+  resolveEligibleNodeFromList,
+} from "../../shared/node-resolve.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
-import {
-  type EligibleNodeMessages,
-  listNodes,
-  type NodeListNode,
-  resolveEligibleNodeFromList,
-} from "./nodes-utils.js";
+import { listNodes, type NodeListNode } from "./nodes-utils.js";
 
 const MOBILE_UI_OBSERVE_COMMAND = "mobile.ui.observe";
 const MOBILE_UI_ACT_COMMAND = "mobile.ui.act";
@@ -223,7 +222,7 @@ function isEligibleMobileUiNode(node: NodeListNode): boolean {
 
 const MOBILE_UI_NODE_HINT = "enable Android Accessibility Control and approve the pairing update";
 
-const MOBILE_UI_NODE_MESSAGES: EligibleNodeMessages = {
+const MOBILE_UI_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
   ineligibleExact: (query, eligibleIds) =>
     `node "${query}" is not a mobile-UI-capable device (${MOBILE_UI_NODE_HINT}; ` +
     `eligible device ids: ${eligibleIds})`,

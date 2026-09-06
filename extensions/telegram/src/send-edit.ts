@@ -4,16 +4,19 @@ import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
-import { isRecoverableTelegramNetworkError, isTelegramServerError } from "./network-errors.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramMessageHasNoTextError,
+  isTelegramMessageNotModifiedError,
+  isTelegramServerError,
+} from "./network-errors.js";
 import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage,
 } from "./outbound-message-context.js";
-import { getTelegramRichRawApi } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import {
-  isTelegramMessageHasNoTextError,
-  isTelegramMessageNotModifiedError,
   resolveTelegramApiContext,
   sendLogger,
   withTelegramApiContextLease,
@@ -167,14 +170,21 @@ async function editMessageTelegramWithContext(
   }
 
   const performTextEdit = async () => {
-    const page = planTelegramTextDeliveryPages({
-      text: textMode === "html" ? htmlText : text,
-      maxChars: Number.MAX_SAFE_INTEGER,
-      tableMode,
-      richMessages: useRichMessages,
-      skipEntityDetection: !linkPreviewEnabled,
-      ...(textMode === "html" ? { textMode: "html" as const } : {}),
-    })[0];
+    const richPlan = useRichMessages
+      ? buildTelegramRichMarkdownPlan(text, { tableMode, skipEntityDetection: !linkPreviewEnabled })
+      : undefined;
+    // An edit replaces one message. Keep the complete rich document so a
+    // structural-limit rejection recovers all its text, not just the first send page.
+    const page = richPlan?.richMessage.blocks.length
+      ? { ...richPlan, sourceText: richPlan.plainText, sourceTextMode: "markdown" as const }
+      : planTelegramTextDeliveryPages({
+          text: textMode === "html" ? htmlText : text,
+          maxChars: Number.MAX_SAFE_INTEGER,
+          tableMode,
+          richMessages: useRichMessages,
+          skipEntityDetection: !linkPreviewEnabled,
+          ...(textMode === "html" ? { textMode: "html" as const } : {}),
+        })[0];
     if (!page) {
       throw new Error("telegram editMessage failed: empty text");
     }
@@ -203,7 +213,7 @@ async function editMessageTelegramWithContext(
           ),
         sendRich: (richMessage) =>
           edit(() =>
-            getTelegramRichRawApi(api).editMessageText({
+            api.raw.editMessageText({
               chat_id: chatId,
               message_id: messageId,
               rich_message: richMessage,

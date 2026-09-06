@@ -1,8 +1,13 @@
-// Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentEntries,
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { DmScope, GroupScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
@@ -34,9 +39,12 @@ export type RoutePeer = {
 export type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
+  /** Known owner when no configured binding matches this route. */
+  defaultAgentId?: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
+  groupScope?: GroupScope;
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
@@ -50,7 +58,8 @@ export type ResolvedAgentRoute = {
   channel: string;
   accountId: string;
   /** Effective direct-message scope after a matching binding override. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
+  groupScope?: GroupScope;
   /** Internal session key used for persistence + concurrency. */
   sessionKey: string;
   /** Convenience alias for direct-chat collapse. */
@@ -91,7 +100,8 @@ export function buildAgentSessionKey(params: {
   accountId?: string | null;
   peer?: RoutePeer | null;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
+  groupScope?: GroupScope;
   identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
@@ -104,6 +114,7 @@ export function buildAgentSessionKey(params: {
     peerKind: peer?.kind ?? "direct",
     peerId: peer ? normalizeRouteBindingId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
+    groupScope: params.groupScope,
     identityLinks: params.identityLinks,
   });
 }
@@ -111,7 +122,7 @@ export function buildAgentSessionKey(params: {
 type AgentLookupCache = {
   agentsRef: OpenClawConfig["agents"] | undefined;
   byNormalizedId: Map<string, string>;
-  fallbackDefaultAgentId: string;
+  fallbackSoleAgentId?: string;
 };
 
 const agentLookupCacheByCfg = new WeakMap<OpenClawConfig, AgentLookupCache>();
@@ -134,7 +145,7 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
   const next: AgentLookupCache = {
     agentsRef,
     byNormalizedId,
-    fallbackDefaultAgentId: sanitizeAgentId(resolveDefaultAgentId(cfg)),
+    fallbackSoleAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
   };
   agentLookupCacheByCfg.set(cfg, next);
   return next;
@@ -144,20 +155,29 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
-    return lookup.fallbackDefaultAgentId;
+    return sanitizeAgentId(
+      lookup.fallbackSoleAgentId ??
+        resolveDefaultAgentId(cfg, {
+          surface: "agent lookup",
+          hint: "Pass an explicit agent id instead of relying on an implicit route.",
+        }),
+    );
   }
   const normalized = normalizeAgentId(trimmed);
   const resolved = lookup.byNormalizedId.get(normalized);
   if (resolved) {
     return resolved;
   }
-  if (trimmed === DEFAULT_AGENT_ID) {
+  if (normalized === DEFAULT_AGENT_ID) {
     return DEFAULT_AGENT_ID;
   }
   if (lookup.byNormalizedId.size === 0) {
     return sanitizeAgentId(trimmed);
   }
-  return lookup.fallbackDefaultAgentId;
+  throw new AgentSelectionRequiredError([...lookup.byNormalizedId.values()], {
+    surface: "route binding",
+    hint: `Update the binding agentId "${trimmed}" to a configured agent.`,
+  });
 }
 
 type NormalizedPeerConstraint =
@@ -236,6 +256,10 @@ function buildEvaluatedBindingsByChannel(
       continue;
     }
     const match = normalizeBindingMatch(binding.match);
+    // Unmatchable peers cannot establish routing or account-ownership evidence.
+    if (match.peer.state === "invalid") {
+      continue;
+    }
     const evaluated: EvaluatedBinding = {
       binding,
       match,
@@ -321,39 +345,16 @@ function pushToIndexMap(
   map.set(key, [binding]);
 }
 
-function peerLookupKeys(kind: ChatType, id: string): string[] {
-  if (kind === "group") {
-    return [`group:${id}`, `channel:${id}`];
-  }
-  if (kind === "channel") {
-    return [`channel:${id}`, `group:${id}`];
-  }
-  return [`${kind}:${id}`];
+function peerLookupKey(kind: ChatType, id: string): string {
+  // Group/channel matching is interchangeable; share one source-ordered bucket.
+  return `${kind === "channel" ? "group" : kind}:${id}`;
 }
 
-function collectPeerIndexedBindings(
+function getPeerIndexedBindings(
   index: EvaluatedBindingsIndex,
   peer: RoutePeer | null,
 ): EvaluatedBinding[] {
-  if (!peer) {
-    return [];
-  }
-  const out: EvaluatedBinding[] = [];
-  const seen = new Set<EvaluatedBinding>();
-  for (const key of peerLookupKeys(peer.kind, peer.id)) {
-    const matches = index.byPeer.get(key);
-    if (!matches) {
-      continue;
-    }
-    for (const match of matches) {
-      if (seen.has(match)) {
-        continue;
-      }
-      seen.add(match);
-      out.push(match);
-    }
-  }
-  return out;
+  return peer ? (index.byPeer.get(peerLookupKey(peer.kind, peer.id)) ?? []) : [];
 }
 
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
@@ -367,9 +368,11 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
 
   for (const binding of bindings) {
     if (binding.match.peer.state === "valid") {
-      for (const key of peerLookupKeys(binding.match.peer.kind, binding.match.peer.id)) {
-        pushToIndexMap(byPeer, key, binding);
-      }
+      pushToIndexMap(
+        byPeer,
+        peerLookupKey(binding.match.peer.kind, binding.match.peer.id),
+        binding,
+      );
       continue;
     }
     if (binding.match.peer.state === "wildcard-kind") {
@@ -466,6 +469,17 @@ function getEvaluatedBindingIndexForChannelAccount(
   return built;
 }
 
+/** @internal Lists matchable candidates from the canonical channel/account binding index. */
+export function listChannelAccountRouteBindings(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+) {
+  return getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    normalizeLowercaseStringOrEmpty(input.channel),
+    normalizeAccountId(input.accountId),
+  ).map(({ binding }) => binding);
+}
+
 /** @internal Lists exact DM peers from the canonical channel/account binding index. */
 export function listExactDirectMessageBindingPeerIds(
   input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
@@ -539,7 +553,8 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
 }
 
 function formatRouteCachePeer(peer: RoutePeer | null): string {
-  if (!peer || !peer.id) {
+  // Empty IDs still enable kind-specific wildcard routing, so only a missing peer is peerless.
+  if (!peer) {
     return "-";
   }
   return `${peer.kind}:${peer.id}`;
@@ -547,6 +562,7 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
 
 function buildResolvedRouteCacheKey(params: {
   channel: string;
+  defaultAgentId: string;
   accountId: string;
   peer: RoutePeer | null;
   parentPeer: RoutePeer | null;
@@ -554,9 +570,11 @@ function buildResolvedRouteCacheKey(params: {
   teamId: string;
   memberRoleIds: string[];
   dmScope: string;
+  groupScope: string;
 }): string {
   return JSON.stringify([
     params.channel,
+    params.defaultAgentId,
     params.accountId,
     formatRouteCachePeer(params.peer),
     formatRouteCachePeer(params.parentPeer),
@@ -564,13 +582,11 @@ function buildResolvedRouteCacheKey(params: {
     params.teamId ?? null,
     params.memberRoleIds.toSorted(),
     params.dmScope,
+    params.groupScope,
   ]);
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
-  if (match.peer.state === "invalid") {
-    return false;
-  }
   if (match.peer.state === "valid") {
     if (
       !scope.peer ||
@@ -590,6 +606,7 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeLowercaseStringOrEmpty(input.channel);
+  const defaultAgentId = normalizeLowercaseStringOrEmpty(input.defaultAgentId);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer
     ? {
@@ -602,6 +619,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.dmScope ?? input.cfg.session?.dmScope ?? "main";
+  const groupScope = input.groupScope ?? input.cfg.session?.groupScope ?? "per-group";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
@@ -616,6 +634,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const routeCacheKey = routeCache
     ? buildResolvedRouteCacheKey({
         channel,
+        defaultAgentId,
         accountId,
         peer,
         parentPeer,
@@ -623,6 +642,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         teamId,
         memberRoleIds,
         dmScope,
+        groupScope,
       })
     : "";
   if (routeCache && routeCacheKey) {
@@ -638,10 +658,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const choose = (
     agentId: string,
     matchedBy: ResolvedAgentRoute["matchedBy"],
-    sessionOverride?: { dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"] },
+    sessionOverride?: { dmScope?: DmScope; groupScope?: GroupScope },
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
+    const effectiveGroupScope = sessionOverride?.groupScope ?? groupScope;
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       mainKey: input.cfg.session?.mainKey,
@@ -649,6 +670,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       accountId,
       peer,
       dmScope: effectiveDmScope,
+      groupScope: effectiveGroupScope,
       identityLinks,
     });
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
@@ -662,6 +684,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       channel,
       accountId,
       dmScope: effectiveDmScope,
+      groupScope: effectiveGroupScope,
       sessionKey,
       mainSessionKey,
       lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),
@@ -673,6 +696,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         routeCache.clear();
         routeCache.set(routeCacheKey, route);
       }
+      // Cold and warm returns are caller-owned; edits must not poison the cache.
+      return { ...route };
     }
     return route;
   };
@@ -719,13 +744,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       matchedBy: "binding.peer",
       enabled: Boolean(peer),
       scopePeer: peer,
-      candidates: collectPeerIndexedBindings(bindingsIndex, peer),
+      candidates: getPeerIndexedBindings(bindingsIndex, peer),
     },
     {
       matchedBy: "binding.peer.parent",
       enabled: Boolean(parentPeer && parentPeer.id),
       scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
-      candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
+      candidates: getPeerIndexedBindings(bindingsIndex, parentPeer),
     },
     {
       matchedBy: "binding.peer.wildcard",
@@ -785,13 +810,75 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  return choose(resolveDefaultAgentId(input.cfg), "default");
+  const unboundAgentId = defaultAgentId || tryResolveLegacyCompatibilityAgentId(input.cfg);
+  return choose(
+    unboundAgentId ??
+      resolveDefaultAgentId(input.cfg, {
+        surface: `${channel} account ${accountId} routing`,
+        hint: `Add a channel-wide binding for ${channel}:${accountId} or configure a sole agent.`,
+      }),
+    "default",
+  );
 }
 
-/** @internal Resolves fallback precedence for an unknown direct peer. */
-export function resolveUnknownDirectMessageRoute(
-  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope">,
-): ResolvedAgentRoute {
-  return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
+/** @internal Lists bindings selectable by at least one group/channel route under runtime precedence. */
+export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
+  const bindings = listBindings(cfg);
+  const usedIds = new Set<string>();
+  for (const binding of bindings) {
+    usedIds.add(normalizeAccountId(binding.match.accountId));
+    for (const value of [binding.match.peer?.id, binding.match.guildId, binding.match.teamId]) {
+      const normalized = normalizeRouteBindingId(value);
+      if (normalized) {
+        usedIds.add(normalized);
+      }
+    }
+  }
+  let sentinel = "openclaw-audit-route";
+  while (usedIds.has(sentinel)) {
+    sentinel += "-next";
+  }
+
+  const markerForIndex = (index: number) => `audit-binding-${index}`;
+  const probeCfg: OpenClawConfig = {
+    ...cfg,
+    agents: { entries: {} },
+    bindings: bindings.map((binding, index) => ({ ...binding, agentId: markerForIndex(index) })),
+  };
+
+  return bindings.filter((binding, index) => {
+    const match = normalizeBindingMatch(binding.match);
+    if (
+      match.peer.state === "invalid" ||
+      ((match.peer.state === "valid" || match.peer.state === "wildcard-kind") &&
+        match.peer.kind === "direct")
+    ) {
+      return false;
+    }
+    const peer: RoutePeer =
+      match.peer.state === "valid"
+        ? { kind: match.peer.kind, id: match.peer.id }
+        : match.peer.state === "wildcard-kind"
+          ? { kind: match.peer.kind, id: sentinel }
+          : { kind: "group", id: sentinel };
+    const accountId = match.accountPattern === "*" ? sentinel : match.accountPattern;
+    const roleWitnesses = match.roles?.map((role) => [role]) ?? [[]];
+
+    // Equality/wildcard fields need one fresh value for each open domain. Role matching
+    // is positive OR, so singleton candidate roles prove existence without sampling.
+    return roleWitnesses.some(
+      (memberRoleIds) =>
+        resolveAgentRoute({
+          cfg: probeCfg,
+          channel: binding.match.channel,
+          defaultAgentId: DEFAULT_AGENT_ID,
+          accountId,
+          peer,
+          guildId: match.guildId,
+          teamId: match.teamId,
+          memberRoleIds,
+        }).agentId === markerForIndex(index),
+    );
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

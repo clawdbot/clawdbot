@@ -87,18 +87,16 @@ describe("authorizeSlackDirectMessage", () => {
     expect(params.onUnauthorized).not.toHaveBeenCalled();
   });
 
-  it("keeps bare user ids scoped out of Enterprise DMs", async () => {
+  it("allows bare org user ids for Enterprise DMs", async () => {
     const params = makeParams("allowlist");
     params.ctx.installationIdentity = { kind: "enterprise", enterpriseId: "E11111111" };
     params.eventScope = { teamId: "T11111111", client: {} as never };
-    params.allowFromLower = ["u123"];
+    params.senderId = "W01234567";
+    params.allowFromLower = ["w01234567"];
 
-    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(false);
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
 
-    expect(params.onUnauthorized).toHaveBeenCalledWith({
-      allowMatchMeta: "matchKey=none matchSource=none",
-      senderName: "Alice",
-    });
+    expect(params.onUnauthorized).not.toHaveBeenCalled();
   });
 
   it("creates independent pairing requests for the same user in two Grid workspaces", async () => {

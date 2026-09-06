@@ -29,9 +29,15 @@ vi.mock("openclaw/plugin-sdk/dangerous-name-runtime", () => ({
   isDangerousNameMatchingEnabled: () => false,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  danger: (value: string) => value,
-}));
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    danger: (value: string) => value,
+  };
+});
 
 vi.mock("../proxy-request-client.js", () => ({
   DISCORD_REST_TIMEOUT_MS: 15_000,
@@ -393,6 +399,7 @@ describe("registerDiscordMonitorListeners", () => {
     expect(registeredListenerTypes()).toEqual([
       "interaction",
       "message",
+      "GUILD_CREATE",
       "thread-update",
       "thread-delete",
     ]);
@@ -437,6 +444,7 @@ describe("registerDiscordMonitorListeners", () => {
     expect(registeredListenerTypes()).toEqual([
       "interaction",
       "message",
+      "GUILD_CREATE",
       "thread-update",
       "thread-delete",
       "presence",

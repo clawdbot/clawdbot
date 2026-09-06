@@ -2,8 +2,7 @@
 // reset-hook suite is already at its max-lines budget.
 import { expect, test, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { embeddedRunMock } from "./test-helpers.js";
-import { writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   beforeResetHookMocks,
   beforeResetHookState,

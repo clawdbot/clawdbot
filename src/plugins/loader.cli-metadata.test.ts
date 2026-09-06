@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { Command } from "commander";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   defineBundledChannelEntry,
@@ -16,6 +17,7 @@ import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
+  writePluginMetadata,
 } from "./loader.test-fixtures.js";
 
 afterEach(() => {
@@ -27,6 +29,120 @@ afterAll(() => {
 });
 
 describe("plugin loader CLI metadata", () => {
+  it.each(
+    (["runtime", "cli"] as const).flatMap((surface) =>
+      (["explicit", "auto", "denied", "disabled"] as const).map((policy) => ({
+        surface,
+        policy,
+      })),
+    ),
+  )(
+    "preserves admission before parser registration ($surface, $policy)",
+    async ({ surface, policy }) => {
+      useNoBundledPlugins();
+      const markers = makePluginLoaderTempDir();
+      const targetId = "Admission-Fixture";
+      const command = "admission-fixture";
+      const imported = path.join(markers, "target-imported");
+      const unrelatedImported = path.join(markers, "unrelated-imported");
+      const invoked = path.join(markers, "invoked");
+      const target = writePlugin({
+        id: targetId,
+        filename: "index.cjs",
+        body: `const fs = require("node:fs");
+  fs.writeFileSync(${JSON.stringify(imported)}, "imported");
+  module.exports = { id: ${JSON.stringify(targetId)}, register(api) {
+    api.registerCli(({ program }) => program.command("${command}").action(() => {
+      fs.writeFileSync(${JSON.stringify(invoked)}, api.registrationMode);
+    }), { commands: ["${command}"] });
+  } };`,
+      });
+      const unrelated = writePlugin({
+        id: "unrelated-fixture",
+        filename: "index.cjs",
+        body: `require("node:fs").writeFileSync(${JSON.stringify(unrelatedImported)}, "imported");
+  module.exports = { id: "unrelated-fixture", register() {} };`,
+      });
+      const config = {
+        plugins: {
+          enabled: true,
+          allow: [command, unrelated.id],
+          deny: policy === "denied" ? [command] : [],
+          load: { paths: [target.file, unrelated.file] },
+          entries: { [command]: { enabled: policy !== "disabled" } },
+        },
+      };
+      const options = {
+        config,
+        activate: false,
+        cache: false,
+        onlyPluginIds: [targetId],
+        ...(policy === "auto"
+          ? {
+              activationSourceConfig: { plugins: { enabled: true } },
+              autoEnabledReasons: { [targetId]: ["configured fixture", "selected fixture"] },
+            }
+          : {}),
+      };
+      const registry =
+        surface === "runtime"
+          ? loadOpenClawPlugins(options)
+          : await loadOpenClawPluginCliRegistry(options);
+      const enabled = policy === "explicit" || policy === "auto";
+      const reason =
+        policy === "auto"
+          ? "configured fixture; selected fixture"
+          : policy === "denied"
+            ? "blocked by denylist"
+            : policy === "disabled"
+              ? "disabled in config"
+              : "enabled in config";
+      expect(registry.plugins.map((entry) => entry.id)).toEqual([targetId]);
+      expect(registry.plugins[0]).toMatchObject({
+        enabled,
+        activated: enabled,
+        status: enabled ? "loaded" : "disabled",
+        activationSource: enabled ? policy : "disabled",
+        activationReason: reason,
+      });
+      expect(fs.existsSync(imported)).toBe(enabled);
+      expect(fs.existsSync(unrelatedImported)).toBe(false);
+      expect(registry.cliRegistrars).toHaveLength(enabled ? 1 : 0);
+      if (enabled) {
+        const program = new Command();
+        await registry.cliRegistrars[0]!.register({
+          program,
+          parentPath: [],
+          config,
+          workspaceDir: undefined,
+          logger: { info() {}, warn() {}, error() {} },
+        });
+        await program.parseAsync([command], { from: "user" });
+        expect(fs.readFileSync(invoked, "utf8")).toBe(
+          surface === "runtime" ? "discovery" : "cli-metadata",
+        );
+      } else {
+        expect(fs.existsSync(invoked)).toBe(false);
+      }
+    },
+  );
+
+  it("keeps an explicit empty CLI metadata registry authoritative", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "empty-scope",
+      filename: "index.cjs",
+      body: 'module.exports = { id: "empty-scope", register(api) { api.registerCli(() => {}, { commands: ["empty-scope"] }); } };',
+    });
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: { plugins: { load: { paths: [plugin.file] }, allow: [plugin.id] } },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      installRecords: {},
+    });
+    expect(registry.plugins).toEqual([]);
+    expect(registry.cliRegistrars).toEqual([]);
+  });
+
   it.each([
     {
       id: "wrong-cli-channel-entry",
@@ -78,6 +194,82 @@ describe("plugin loader CLI metadata", () => {
       ]);
     },
   );
+
+  it("rejects runtime access during CLI metadata registration with actionable plugin guidance", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "runtime-dependent",
+      filename: "runtime-dependent.cjs",
+      body: `module.exports = {
+  id: "runtime-dependent",
+  register(api) {
+    api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: [plugin.id],
+        },
+      },
+    });
+
+    const pluginError = registry.plugins.find((entry) => entry.id === plugin.id)?.error;
+    expect(pluginError).toContain('Plugin "runtime-dependent"');
+    expect(pluginError).toContain('"cli-metadata" registration');
+    expect(pluginError).toContain("runtime is intentionally unavailable");
+    expect(pluginError).toContain("cliCommands");
+    expect(pluginError).toContain("defer runtime access out of register()");
+    expect(pluginError).not.toContain("Cannot read properties of undefined");
+  });
+
+  it("loads packaged CLI metadata beside the resolved dist entry without evaluating the heavy entry", async () => {
+    useNoBundledPlugins();
+    const pluginDir = makePluginLoaderTempDir();
+    const distDir = path.join(pluginDir, "dist");
+    const heavyMarker = path.join(pluginDir, "heavy-loaded.txt");
+    fs.mkdirSync(distDir);
+    const plugin = writePlugin({
+      id: "packaged-cli-metadata",
+      dir: pluginDir,
+      filename: "dist/index.js",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(heavyMarker)}, "loaded");
+module.exports = { id: "packaged-cli-metadata", register() {} };`,
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "packaged-cli-metadata",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(distDir, "cli-metadata.js"),
+      `module.exports = {
+  id: "packaged-cli-metadata",
+  register(api) {
+    api.registerCli(() => {}, {
+      descriptors: [{ name: "packaged-light", description: "Light entry", hasSubcommands: false }],
+    });
+  },
+};`,
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: [plugin.id],
+        },
+      },
+    });
+
+    expect(fs.existsSync(heavyMarker)).toBe(false);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("packaged-light");
+  });
 
   it("suppresses trust warning logs during CLI metadata loads", async () => {
     useNoBundledPlugins();
@@ -194,31 +386,16 @@ describe("plugin loader CLI metadata", () => {
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/cli-metadata-channel",
-          openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "cli-metadata-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["cli-metadata-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePluginMetadata({
+      dir: pluginDir,
+      id: "cli-metadata-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["cli-metadata-channel"],
+      packageJson: {
+        name: "@openclaw/cli-metadata-channel",
+        openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `${inlineChannelPluginEntryFactorySource()}
@@ -301,31 +478,16 @@ module.exports = {
     fs.mkdirSync(pluginDir, { recursive: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/bundled-skip-channel",
-          openclaw: { extensions: ["./index.cjs"] },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "bundled-skip-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["bundled-skip-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePluginMetadata({
+      dir: pluginDir,
+      id: "bundled-skip-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["bundled-skip-channel"],
+      packageJson: {
+        name: "@openclaw/bundled-skip-channel",
+        openclaw: { extensions: ["./index.cjs"] },
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
@@ -369,31 +531,16 @@ module.exports = {
     fs.mkdirSync(pluginDir, { recursive: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/bundled-cli-channel",
-          openclaw: { extensions: ["./index.cjs"] },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "bundled-cli-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["bundled-cli-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePluginMetadata({
+      dir: pluginDir,
+      id: "bundled-cli-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["bundled-cli-channel"],
+      packageJson: {
+        name: "@openclaw/bundled-cli-channel",
+        openclaw: { extensions: ["./index.cjs"] },
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
@@ -460,30 +607,15 @@ module.exports = {
     fs.mkdirSync(pluginDir, { recursive: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/bundled-skip-provider",
-          openclaw: { extensions: ["./index.cjs"] },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "bundled-skip-provider",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePluginMetadata({
+      dir: pluginDir,
+      id: "bundled-skip-provider",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      packageJson: {
+        name: "@openclaw/bundled-skip-provider",
+        openclaw: { extensions: ["./index.cjs"] },
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
@@ -524,31 +656,16 @@ module.exports = {
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/full-cli-metadata-channel",
-          openclaw: { extensions: ["./index.cjs"] },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "full-cli-metadata-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["full-cli-metadata-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePluginMetadata({
+      dir: pluginDir,
+      id: "full-cli-metadata-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["full-cli-metadata-channel"],
+      packageJson: {
+        name: "@openclaw/full-cli-metadata-channel",
+        openclaw: { extensions: ["./index.cjs"] },
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `${inlineChannelPluginEntryFactorySource()}
@@ -621,31 +738,16 @@ module.exports = {
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/discovery-cli-metadata-channel",
-          openclaw: { extensions: ["./index.cjs"] },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "discovery-cli-metadata-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["discovery-cli-metadata-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePluginMetadata({
+      dir: pluginDir,
+      id: "discovery-cli-metadata-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["discovery-cli-metadata-channel"],
+      packageJson: {
+        name: "@openclaw/discovery-cli-metadata-channel",
+        openclaw: { extensions: ["./index.cjs"] },
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `${inlineChannelPluginEntryFactorySource()}
@@ -727,31 +829,16 @@ module.exports = {
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const setupMarker = path.join(pluginDir, "setup-loaded.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/force-runtime-cli-channel",
-          openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "force-runtime-cli-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["force-runtime-cli-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePluginMetadata({
+      dir: pluginDir,
+      id: "force-runtime-cli-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["force-runtime-cli-channel"],
+      packageJson: {
+        name: "@openclaw/force-runtime-cli-channel",
+        openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `${inlineChannelPluginEntryFactorySource()}
@@ -970,6 +1057,7 @@ module.exports = {
   id: "machine-output-cli",
   register(api) {
     api.registerCli(() => {}, {
+      commands: [" machine-output-cli ", "machine-output-cli", "additional-cli"],
       descriptors: [{
         name: "machine-output-cli",
         description: "Machine output CLI",
@@ -979,6 +1067,7 @@ module.exports = {
     });
     api.registerCli(() => {}, {
       parentPath: ["nodes"],
+      commands: ["nested-machine-output", " nested-machine-output "],
       descriptors: [{
         name: "nested-machine-output",
         description: "Nested metadata",
@@ -999,6 +1088,10 @@ module.exports = {
     const metadataRegistry = await loadOpenClawPluginCliRegistry({ cache: false, config });
     const fullRegistry = loadOpenClawPlugins({ cache: false, config });
     for (const registry of [metadataRegistry, fullRegistry]) {
+      expect(registry.cliRegistrars[0]?.commands).toEqual(["machine-output-cli", "additional-cli"]);
+      expect(
+        registry.plugins.find((entry) => entry.id === "machine-output-cli")?.cliCommands,
+      ).toEqual(["machine-output-cli", "additional-cli", "nodes nested-machine-output"]);
       const resolver = registry.cliRegistrars[0]?.descriptors[0]?.machineOutput;
       expect(
         resolver?.({ argv: ["node", "openclaw", "machine-output-cli"], stdoutIsTTY: false }),
@@ -1010,6 +1103,7 @@ module.exports = {
         }),
       ).toBe(true);
       const nested = registry.cliRegistrars.find((entry) => entry.parentPath.length > 0);
+      expect(nested?.commands).toEqual(["nested-machine-output"]);
       expect(nested?.descriptors[0]).not.toHaveProperty("machineOutput");
     }
   });

@@ -13,6 +13,40 @@ export const reason = (value: FailoverReason): FailoverClassification => ({
 });
 export const contextOverflow: FailoverClassification = { kind: "context_overflow" };
 
+type LegacyFailoverCorpusCase = readonly [
+  caseNumber: number,
+  matcher: string | readonly [source: string, matcher: string],
+  message: string,
+  expected: FailoverReason | "context_overflow" | null,
+  provider?: string,
+];
+
+export function legacyFailoverCorpusRows(
+  prefix: string,
+  source: string,
+  rows: readonly LegacyFailoverCorpusCase[],
+): FailoverClassificationCorpusRow[] {
+  return rows.map(([caseNumber, matcher, message, expected, provider]) => ({
+    id: `${prefix}-${String(caseNumber).padStart(3, "0")}`,
+    source: typeof matcher === "string" ? `${source}#${matcher}` : `${matcher[0]}#${matcher[1]}`,
+    signal: provider ? { provider, message } : { message },
+    expected:
+      expected === null
+        ? null
+        : expected === "context_overflow"
+          ? contextOverflow
+          : reason(expected),
+  }));
+}
+
+export function failoverSignalRows(
+  source: string,
+  expected: FailoverClassification | null,
+  rows: readonly (readonly [id: string, signal: FailoverSignal])[],
+): FailoverClassificationCorpusRow[] {
+  return rows.map(([id, signal]) => ({ id, source, signal, expected }));
+}
+
 export function messageRows(
   source: string,
   expected: FailoverClassification | null,

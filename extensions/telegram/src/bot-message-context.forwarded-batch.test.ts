@@ -18,7 +18,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         ],
       },
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           {
             message_id: 1,
             date: 1_700_000_000,
@@ -64,7 +64,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         },
       },
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           {
             message_id: 1,
             date: 1_700_000_000,
@@ -122,7 +122,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         topicConfig: undefined,
       }),
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           {
             message_id: 1,
             date: 1_700_000_000,
@@ -171,7 +171,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
       },
       allMedia: [{ path: "/tmp/photo-1.jpg", contentType: "image/jpeg", kind: "image" }],
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           {
             message_id: 1,
             date: 1_700_000_000,

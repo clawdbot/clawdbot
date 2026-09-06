@@ -5,10 +5,7 @@ import {
   parsePairingString,
 } from "./relay-core.js";
 import { isTabSelected } from "./relay-tab-groups.js";
-
-function isValidTabId(value) {
-  return Number.isSafeInteger(value) && value >= 0;
-}
+import { isValidTabId } from "./tab-eligibility.js";
 
 function errorResponse(sendResponse, error) {
   sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
@@ -38,11 +35,9 @@ export function createPopupMessageHandler({
   runAccessMutation,
   detachAllDebuggerSessions,
   syncTabsToRelay,
-  clearRelayOpeningDeadline,
   closeRelaySocket,
   connectRelay,
   setBadge,
-  attachingTabs,
   detachDebugger,
   removeTabFromOpenClawGroup,
   addTabToOpenClawGroup,
@@ -71,7 +66,6 @@ export function createPopupMessageHandler({
     }
     const generation = ++pairingGeneration;
     suspendRelayConnections();
-    clearRelayOpeningDeadline();
     closeRelaySocket();
     await accessReady;
     assertPairingCurrent(generation);
@@ -81,7 +75,6 @@ export function createPopupMessageHandler({
         return;
       }
       suspendRelayConnections();
-      clearRelayOpeningDeadline();
       closeRelaySocket();
       const normalizedMode =
         accessMode === ACCESS_MODE_SELECTED ? ACCESS_MODE_SELECTED : ACCESS_MODE_ALL;
@@ -107,7 +100,6 @@ export function createPopupMessageHandler({
       resumeRelayConnections();
       await connectRelay(() => generation === pairingGeneration);
       if (generation !== pairingGeneration) {
-        clearRelayOpeningDeadline();
         closeRelaySocket();
         setBadge("off");
         assertPairingCurrent(generation);
@@ -123,13 +115,11 @@ export function createPopupMessageHandler({
     policy.invalidateAll();
     suspendRelayConnections();
     resetRelayState();
-    clearRelayOpeningDeadline();
     closeRelaySocket();
     setBadge("off");
     await accessReady;
     policy.setEnabled(false);
     policy.invalidateAll();
-    clearRelayOpeningDeadline();
     closeRelaySocket();
     setBadge("off");
     await runAccessMutation(async () => {
@@ -142,7 +132,6 @@ export function createPopupMessageHandler({
       await detaching;
       await discardRetiredCopilotCustody();
       resetRelayState();
-      clearRelayOpeningDeadline();
       closeRelaySocket();
       setBadge("off");
     });
@@ -258,7 +247,6 @@ export function createPopupMessageHandler({
                   const selected = await isTabSelected(await chromeApi.tabs.get(tabId));
                   if (!msg.grant && selected) {
                     policy.invalidateTab(tabId);
-                    await Promise.allSettled([attachingTabs.get(tabId)]);
                     await detachDebugger(tabId);
                     await removeTabFromOpenClawGroup(tabId);
                   } else if (msg.grant && !selected) {

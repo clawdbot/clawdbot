@@ -58,7 +58,7 @@ function isWorkspaceScopedSlackChannelEntry(
   return isWorkspaceQualifiedSlackTarget(normalized, "channel");
 }
 
-function isWorkspaceScopedSlackAllowlistUserEntry(value: unknown): boolean {
+function isStableSlackAllowlistUserEntry(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
   }
@@ -66,7 +66,11 @@ function isWorkspaceScopedSlackAllowlistUserEntry(value: unknown): boolean {
   if (normalized === "*") {
     return true;
   }
-  return isWorkspaceQualifiedSlackTarget(normalized, "user");
+  if (isWorkspaceQualifiedSlackTarget(normalized, "user")) {
+    return true;
+  }
+  const prefixed = /^(?:slack|user):([BUW][A-Z0-9]{8,})$/.exec(normalized);
+  return Boolean(prefixed?.[1]) || SLACK_USER_ID_RE.test(normalized);
 }
 
 function isStableSlackToolsBySenderEntry(value: unknown): boolean {
@@ -135,7 +139,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
   assertStableEntries({
     values: config.allowFrom,
     path: `channels.slack.accounts.${accountId}.allowFrom`,
-    predicate: isWorkspaceScopedSlackAllowlistUserEntry,
+    predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
     values: config.dm?.groupChannels,
@@ -146,7 +150,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     assertStableEntries({
       values: config.reactionAllowlist,
       path: `channels.slack.accounts.${accountId}.reactionAllowlist`,
-      predicate: isWorkspaceScopedSlackAllowlistUserEntry,
+      predicate: isStableSlackAllowlistUserEntry,
     });
   }
   for (const [channelKey, channel] of Object.entries(config.channels ?? {})) {
@@ -158,7 +162,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     assertStableEntries({
       values: channel?.users,
       path: `channels.slack.accounts.${accountId}.channels.${channelKey}.users`,
-      predicate: isWorkspaceScopedSlackAllowlistUserEntry,
+      predicate: isStableSlackAllowlistUserEntry,
     });
     assertStableEntries({
       values: Object.keys(channel?.toolsBySender ?? {}),
@@ -233,13 +237,14 @@ export function resolveSlackInstallationIdentity(params: {
   const isEnterpriseInstall = auth.is_enterprise_install === true;
   const apiAppId = normalizeOptionalString(auth.app_id);
   const enterpriseId = normalizeOptionalString(auth.enterprise_id);
+  // Slack auth.test does not return app_id for bot tokens. Socket Mode derives it
+  // from the app token; HTTP learns it from the first signed event (provider
+  // onContextIdentity). Durable Agent View markers only persist under this id.
+  const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
   if (isEnterpriseInstall) {
     if (!enterpriseId) {
       throw new Error("Slack org-wide auth.test returned no enterprise_id");
     }
-    // Slack auth.test does not guarantee app_id. Socket Mode can derive it from the
-    // app token; HTTP authenticates the signed event that carries api_app_id.
-    const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
     if (apiAppId && transportApiAppId && apiAppId !== transportApiAppId) {
       throw new Error(
         `Slack token mismatch: bot token app_id=${apiAppId} but transport app_id=${transportApiAppId}`,
@@ -257,11 +262,12 @@ export function resolveSlackInstallationIdentity(params: {
     throw new Error("Slack workspace auth.test returned no team_id");
   }
   const teamName = normalizeOptionalString(auth.team);
+  const workspaceApiAppId = apiAppId ?? transportApiAppId;
   return {
     kind: "workspace",
     teamId,
     ...(teamName ? { teamName } : {}),
-    ...(apiAppId ? { apiAppId } : {}),
+    ...(workspaceApiAppId ? { apiAppId: workspaceApiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };
 }

@@ -2,18 +2,91 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION, type SkillEntry } from "../types.js";
 import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
 
+const loggingMocks = vi.hoisted(() => ({ warn: vi.fn() }));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "skills",
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: loggingMocks.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
+
 afterEach(() => {
   setActiveDegradedSecretOwners([]);
+  loggingMocks.warn.mockClear();
 });
 
+function createEntry(name: string): SkillEntry {
+  return {
+    skill: createCanonicalFixtureSkill({
+      name,
+      description: name,
+      filePath: `/app/skills/${name}/SKILL.md`,
+      baseDir: `/app/skills/${name}`,
+      source: "openclaw-workspace",
+    }),
+    frontmatter: {},
+  };
+}
+
 describe("resolveSkillsPrompt", () => {
+  it.each([8_192, 32_768])(
+    "compacts descriptions at %i tokens without changing admitted skill resources",
+    async (contextTokenBudget) => {
+      const entries = Array.from({ length: 24 }, (_, index) => {
+        const entry = createEntry(`skill-${index}`);
+        entry.skill.description = `Inspect records & preserve <identifiers>. ${"Detailed matching guidance. ".repeat(10)}`;
+        entry.skill.locationNote = "Load the complete instruction file at this location.";
+        entry.skill.readContent = `${"Complete instruction body. ".repeat(300)}END_${index}`;
+        return entry;
+      });
+      const snapshot = buildSkillSnapshot("/tmp/openclaw", { entries });
+      const original = snapshot.prompt.trim();
+      const projected = resolveSkillsPrompt({
+        workspaceDir: "/tmp/openclaw",
+        skillsSnapshot: snapshot,
+        contextTokenBudget,
+      });
+      expect(projected.length).toBeLessThan(original.length);
+      const omitDescriptions = (prompt: string) =>
+        prompt.replace(/<description>[\s\S]*?<\/description>/gu, "");
+      expect(omitDescriptions(projected)).toBe(omitDescriptions(original));
+      expect(projected).toContain("&amp; preserve &lt;identifiers&gt;");
+      expect(snapshot.prompt.trim()).toBe(original);
+      expect(resolveSkillsPrompt({ workspaceDir: "/tmp/openclaw", skillsSnapshot: snapshot })).toBe(
+        original,
+      );
+      const resources = resolveCodeModeSkills({
+        skillsPrompt: projected,
+        candidates: snapshot.resolvedSkills!,
+      });
+      expect(resources.map((skill) => skill.name)).toEqual(
+        snapshot.resolvedSkills!.map((skill) => skill.name),
+      );
+      for (const resource of resources) {
+        expect(await readCodeModeSkill(resource)).toBe(
+          entries.find((entry) => entry.skill.name === resource.name)!.skill.readContent,
+        );
+      }
+    },
+  );
+
   it("prefers snapshot prompt when available", () => {
     const prompt = resolveSkillsPrompt({
       skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },
@@ -109,6 +182,71 @@ describe("resolveSkillsPrompt", () => {
     expect(prompt).toBe("");
   });
 
+  it.each([
+    {
+      name: "legacy owner identity",
+      reason: "legacy-skill-identity",
+      mutate: (snapshot: ReturnType<typeof buildSkillSnapshot>) => ({
+        ...snapshot,
+        skills: snapshot.skills.map(({ name }) => ({ name })),
+      }),
+    },
+    {
+      name: "structurally anomalous catalog",
+      reason: "invalid-catalog-structure",
+      mutate: (snapshot: ReturnType<typeof buildSkillSnapshot>) => ({
+        ...snapshot,
+        prompt: `${snapshot.prompt}\n<available_skills></available_skills>`,
+      }),
+    },
+  ])(
+    "lazily rebuilds healthy entries for a degraded modern $name snapshot",
+    ({ reason, mutate }) => {
+      const entries = [createEntry("cold-skill"), createEntry("healthy-skill")];
+      const snapshot = mutate(buildSkillSnapshot("/tmp/openclaw", { entries }));
+      const loadEntries = vi.fn(() => entries);
+      setActiveDegradedSecretOwners([
+        {
+          ownerKind: "capability",
+          ownerId: "skill:cold-skill",
+          state: "unavailable",
+          paths: ["skills.entries.cold-skill.apiKey"],
+          refKeys: ["env:default:MISSING_SKILL_KEY"],
+          reason: "secret provider failed",
+        },
+      ]);
+
+      const prompt = resolveSkillsPrompt({
+        skillsSnapshot: snapshot,
+        loadEntries,
+        workspaceDir: "/tmp/openclaw",
+      });
+
+      expect(loadEntries).toHaveBeenCalledOnce();
+      expect(prompt).not.toContain("cold-skill/SKILL.md");
+      expect(prompt).toContain("healthy-skill/SKILL.md");
+      expect(loggingMocks.warn).toHaveBeenCalledWith(
+        "Cached skills prompt could not be safely filtered; rebuilding from current skill entries.",
+        { reason },
+      );
+    },
+  );
+
+  it("does not load entries while reusing a valid modern snapshot", () => {
+    const entries = [createEntry("healthy-skill")];
+    const snapshot = buildSkillSnapshot("/tmp/openclaw", { entries });
+    const loadEntries = vi.fn(() => entries);
+
+    expect(
+      resolveSkillsPrompt({
+        skillsSnapshot: snapshot,
+        loadEntries,
+        workspaceDir: "/tmp/openclaw",
+      }),
+    ).toBe(snapshot.prompt.trim());
+    expect(loadEntries).not.toHaveBeenCalled();
+  });
+
   it("matches unavailable owners against a snapshot skill's config key", () => {
     const cold: SkillEntry = {
       skill: createCanonicalFixtureSkill({
@@ -156,16 +294,6 @@ describe("resolveSkillsPrompt", () => {
   });
 
   it("does not add supplied skills outside the saved snapshot during a degraded rebuild", () => {
-    const createEntry = (name: string): SkillEntry => ({
-      skill: createCanonicalFixtureSkill({
-        name,
-        description: name,
-        filePath: `/app/skills/${name}/SKILL.md`,
-        baseDir: `/app/skills/${name}`,
-        source: "openclaw-workspace",
-      }),
-      frontmatter: {},
-    });
     const capturedEntries = [createEntry("cold-skill"), createEntry("healthy-skill")];
     const snapshot = buildSkillSnapshot("/tmp/openclaw", {
       entries: capturedEntries,

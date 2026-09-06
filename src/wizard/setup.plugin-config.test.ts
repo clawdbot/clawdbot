@@ -357,6 +357,85 @@ describe("setupPluginConfig", () => {
     expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
   });
 
+  it.each([
+    {
+      name: "an existing array through a dotted index",
+      field: "accounts.0.token",
+      existing: { accounts: [{}] },
+      expected: { accounts: [{ token: "configured" }] },
+    },
+    {
+      name: "a missing schema-declared array through a dotted index",
+      field: "accounts.0.token",
+      schema: {
+        type: "object",
+        properties: {
+          accounts: {
+            type: "array",
+            items: { type: "object", properties: { token: { type: "string" } } },
+          },
+        },
+      },
+      expected: { accounts: [{ token: "configured" }] },
+    },
+    {
+      name: "a numeric record key through a dotted path",
+      field: "accounts.0.token",
+      schema: {
+        type: "object",
+        properties: {
+          accounts: {
+            type: "object",
+            properties: {
+              "0": { type: "object", properties: { token: { type: "string" } } },
+            },
+          },
+        },
+      },
+      expected: { accounts: { "0": { token: "configured" } } },
+    },
+    {
+      name: "an explicit bracketed array index without a schema",
+      field: "accounts[0].token",
+      expected: { accounts: [{ token: "configured" }] },
+    },
+    {
+      name: "an explicitly quoted numeric record key without a schema",
+      field: 'accounts["0"].token',
+      expected: { accounts: { "0": { token: "configured" } } },
+    },
+    {
+      name: "a quoted record key containing a literal dot",
+      field: 'accounts["primary.backup"].token',
+      expected: { accounts: { "primary.backup": { token: "configured" } } },
+    },
+  ])("writes $name", async ({ field, existing, schema, expected }) => {
+    const pluginId = "indexed-plugin";
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [makeManifestPlugin(pluginId, { [field]: { label: "Token" } }, schema)],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: { [pluginId]: { enabled: true, ...(existing && { config: existing }) } },
+        },
+      },
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => "configured") as unknown as WizardPrompter["text"],
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result.plugins?.entries?.[pluginId]?.config).toEqual(expected);
+  });
+
   it("rejects prototype-polluting dotted uiHint paths without mutating config", async () => {
     const pollutionProbe = "openclawPluginPollutionProbe";
     loadPluginManifestRegistryCore.mockReturnValue({
@@ -389,7 +468,7 @@ describe("setupPluginConfig", () => {
           progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
         },
       }),
-    ).rejects.toThrow(/prototype-polluting/);
+    ).rejects.toThrow(/Invalid path segment/);
     expect(config.plugins?.entries?.["unsafe-plugin"]?.config).toBeUndefined();
     expect(({} as Record<string, unknown>)[pollutionProbe]).toBeUndefined();
   });

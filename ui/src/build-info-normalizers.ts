@@ -1,8 +1,8 @@
 // Shared build identity normalization for the runtime artifact and Vite config.
-// Vite loads this module before source-package aliases exist, so use the canonical source path.
-import { asRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import { normalizeNullableString } from "../../packages/normalization-core/src/string-coerce.js";
-import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
+// Vite and native Node need explicit source paths before source-package aliases exist.
+import { asRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { normalizeNullableString } from "../../packages/normalization-core/src/string-coerce.ts";
+import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
 type ControlUiBuildMetadata = Pick<

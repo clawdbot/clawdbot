@@ -363,7 +363,7 @@ describe("ChannelWizardController", () => {
     expect(controller.state).toEqual({
       phase: "error",
       channel: "telegram",
-      message: "Error: wizard unavailable",
+      message: "wizard unavailable",
     });
 
     await controller.cancel();
@@ -449,7 +449,7 @@ describe("ChannelWizardController", () => {
       await timedOutStart;
       expect(controller.state).toMatchObject({
         phase: "error",
-        message: "Error: wizard request timed out: wizard.start",
+        message: "wizard request timed out: wizard.start",
       });
 
       resolveFirstStart({

@@ -1,7 +1,9 @@
 // Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
+import { closeQaHttpServer, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import type { QaBusPollResult } from "./runtime-api.js";
 
@@ -111,10 +113,59 @@ describe("qa-bus server", () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
-  it("wakes stale-cursor long polls as soon as matching account traffic arrives", async () => {
+  it("returns a 500 JSON response when request handling rejects", async () => {
+    const state = createQaBusState();
+    const requestError = new Error("snapshot unavailable");
+    state.getSnapshot = () => {
+      throw requestError;
+    };
+    const bus = await startQaBusServer({ state });
+    stops.push(async () => await bus.stop());
+
+    const response = await fetch(`${bus.baseUrl}/v1/state`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: requestError.message });
+  });
+
+  it("normalizes direct-message aliases at HTTP ingress without accepting unknown kinds", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
     stops.push(bus["stop"]);
+
+    for (const kind of ["direct", "dm"]) {
+      const response = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+        conversation: { id: "alice", kind },
+        senderId: "alice",
+        text: `hello from ${kind}`,
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        message: { conversation: { id: "alice", kind: "direct" } },
+      });
+    }
+
+    const rejected = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+      conversation: { id: "alice", kind: "private" },
+      senderId: "alice",
+      text: "must not be accepted",
+    });
+
+    expect(rejected.status).toBe(400);
+    expect(state.getSnapshot().messages).toHaveLength(2);
+  });
+
+  it("wakes matching polls and fences late polls and writes during shutdown", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    let stopped = false;
+    stops.push(async () => {
+      if (!stopped) {
+        await bus.stop();
+      }
+    });
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,
@@ -137,6 +188,69 @@ describe("qa-bus server", () => {
       cursor: 1,
       kind: "inbound-message",
     });
+
+    const waitForCursorAdvance = state.waitForCursorAdvance.bind(state);
+    let pollWaitersStarted = 0;
+    let pollWaitersSettled = 0;
+    state.waitForCursorAdvance = async (...args) => {
+      pollWaitersStarted += 1;
+      try {
+        return await waitForCursorAdvance(...args);
+      } finally {
+        pollWaitersSettled += 1;
+      }
+    };
+    const activePoll = fetch(`${bus.baseUrl}/v1/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "active", cursor: 1, timeoutMs: 30_000 }),
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(pollWaitersStarted).toBe(1));
+    const body = JSON.stringify({ accountId: "late-body", cursor: 0, timeoutMs: 30_000 });
+    const slowPoll = request({
+      host: "127.0.0.1",
+      port: bus.port,
+      path: "/v1/poll",
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+    });
+    slowPoll.on("response", (response) => response.resume());
+    slowPoll.on("error", () => undefined);
+    slowPoll.write(body.slice(0, 1));
+    const inboundBody = JSON.stringify({
+      conversation: { id: "late-room", kind: "direct" },
+      senderId: "late-sender",
+      text: "must not survive shutdown",
+    });
+    const slowInbound = request({
+      host: "127.0.0.1",
+      port: bus.port,
+      path: "/v1/inbound/message",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(inboundBody),
+      },
+    });
+    slowInbound.on("response", (response) => response.resume());
+    slowInbound.on("error", () => undefined);
+    slowInbound.write(inboundBody.slice(0, 1));
+    await sleep(10);
+
+    stopped = true;
+    const startedAt = Date.now();
+    const stopping = bus.stop();
+    setTimeout(() => {
+      slowPoll.end(body.slice(1));
+      slowInbound.end(inboundBody.slice(1));
+    }, 50);
+    await stopping;
+    await activePoll;
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(pollWaitersStarted).toBe(1);
+    expect(pollWaitersSettled).toBe(1);
+    expect(state.getSnapshot()).toMatchObject({ events: [], messages: [] });
   });
 
   it("resumes an account after its last acknowledged cursor when the client restarts", async () => {
@@ -410,71 +524,30 @@ describe("qa-bus server", () => {
 });
 
 describe("handleQaBusRequest", () => {
-  it.each(["/v1/inbound/message", "/v1/outbound/message"] as const)(
-    "returns a controlled error when the %s body exceeds the media limit",
-    async (pathname) => {
-      const req = {
-        method: "POST",
-        url: pathname,
-        headers: { "content-length": String(16 * 1024 * 1024 + 1) },
-        destroyed: false,
-        destroy() {
-          this.destroyed = true;
-        },
-      };
-      const res = {
-        statusCode: 0,
-        body: "",
-        writeHead(statusCode: number) {
-          this.statusCode = statusCode;
-        },
-        end(payload: string) {
-          this.body = payload;
-        },
-      };
+  it.each([
+    { pathname: "/v1/inbound/message", limit: 16 * 1024 * 1024 },
+    { pathname: "/v1/outbound/message", limit: 16 * 1024 * 1024 },
+    { pathname: "/v1/reset", limit: 1024 * 1024 },
+  ])(
+    "delivers 413 over the wire and closes when the $pathname body exceeds its limit",
+    async ({ pathname, limit }) => {
+      const bus = await startQaBusServer({ state: createQaBusState() });
+      try {
+        // Declared over-cap length: rejected from the header alone, while the sender is
+        // still mid-upload and can only learn the outcome from what reaches it.
+        const result = await postRawWebhook({
+          url: `${bus.baseUrl}${pathname}`,
+          body: "{}",
+          contentLength: limit + 1,
+          headers: { "content-type": "application/json" },
+        });
 
-      const handled = await handleQaBusRequest({
-        req: req as never,
-        res: res as never,
-        state: createQaBusState(),
-      });
-
-      expect(handled).toBe(true);
-      expect(req.destroyed).toBe(true);
-      expect(res.statusCode).toBe(413);
-      expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
+        expect(result.closedByServer).toBe(true);
+      } finally {
+        await bus.stop();
+      }
     },
   );
-
-  it("returns a controlled error when a v1 POST body exceeds the limit", async () => {
-    const req = {
-      method: "POST",
-      url: "/v1/reset",
-      headers: { "content-length": String(1024 * 1024 + 1) },
-      destroyed: false,
-      destroy() {
-        this.destroyed = true;
-      },
-    };
-    const res = {
-      statusCode: 0,
-      body: "",
-      writeHead(statusCode: number) {
-        this.statusCode = statusCode;
-      },
-      end(payload: string) {
-        this.body = payload;
-      },
-    };
-
-    const handled = await handleQaBusRequest({
-      req: req as never,
-      res: res as never,
-      state: createQaBusState(),
-    });
-
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(413);
-    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
-  });
 });

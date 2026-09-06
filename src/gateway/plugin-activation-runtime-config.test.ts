@@ -3,8 +3,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
-import { resolveGatewayReloadPluginActivationCandidate } from "./plugin-activation-runtime-config.js";
+import {
+  resolveGatewayStartupPluginActivationConfig,
+  resolveGatewayReloadPluginActivationCandidate,
+} from "./plugin-activation-runtime-config.js";
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: vi.fn(),

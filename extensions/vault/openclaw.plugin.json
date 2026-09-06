@@ -2,6 +2,13 @@
   "id": "vault",
   "name": "Vault",
   "description": "HashiCorp Vault SecretRef provider integration.",
+  "cliCommands": [
+    {
+      "name": "vault",
+      "description": "Manage the Vault SecretRef provider integration",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false,
     "onCommands": ["vault"]

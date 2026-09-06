@@ -1,6 +1,6 @@
 // Message-action TTS helpers lazily apply session/config driven speech output
 // to send payloads without loading TTS providers for ordinary sends.
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -57,7 +57,9 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
+  const explicitTts = getReplyPayloadMetadata(params.payload)?.ttsExplicit === true;
   if (
+    !explicitTts &&
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
       ttsAuto,

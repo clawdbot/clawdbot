@@ -3,17 +3,19 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveCommitHash } from "./git-commit.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
   readRestartSentinelRowSync,
+  readRestartSentinelSnapshotSync,
   readUpdateInstallReceiptRowSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
@@ -22,12 +24,28 @@ import {
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+import {
+  beginStaleUpdateFailureReportReceiptCleanupRowSync,
+  beginUpdateFailureReportReceiptCleanupRowSync,
+  claimUpdateFailureReportArtifactSweepRowSync,
+  completeUpdateFailureReportReceiptCleanupRowSync,
+  finalizeUpdateFailureReportReceiptRowSync,
+  hasUpdateFailureReportArtifactSweepLeaseRowSync,
+  markUpdateFailureReportReceiptPreparedRowSync,
+  markUpdateFailureReportReceiptPendingRowSync,
+  readUpdateFailureReportReceiptRowSync,
+  releaseUpdateFailureReportArtifactSweepRowSync,
+  refreshUpdateFailureReportReceiptPreparationRowSync,
+  reserveUpdateFailureReportReceiptRowSync,
+  type UpdateFailureReportReceipt,
+} from "./update-failure-report-receipt-store.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 
 export type {
   RestartSentinelContinuation,
   RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+export type { UpdateFailureReportReceipt } from "./update-failure-report-receipt-store.js";
 
 export type VerifiedGitUpdateReceipt = {
   root: string;
@@ -58,6 +76,222 @@ export async function writeRestartSentinel(
   );
 }
 
+export function reserveUpdateFailureReportReceipt(
+  attemptId: string,
+  reservationId: string,
+  previewDigest: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { receipt: UpdateFailureReportReceipt | null; reserved: boolean } {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      reserveUpdateFailureReportReceiptRowSync(db, attemptId, reservationId, previewDigest),
+    { env },
+    { operationLabel: "update-failure-report.reserve" },
+  );
+}
+
+export function beginUpdateFailureReportReceiptCleanup(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => beginUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.begin-cleanup" },
+  );
+}
+
+export function beginStaleUpdateFailureReportReceiptCleanup(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => beginStaleUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.begin-stale-cleanup" },
+  );
+}
+
+export function completeUpdateFailureReportReceiptCleanup(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => completeUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.complete-cleanup" },
+  );
+}
+
+export function claimUpdateFailureReportArtifactSweep(
+  attemptId: string,
+  expectedReservationId: string,
+  sweepOwnerId: string,
+  sweepGeneration: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      claimUpdateFailureReportArtifactSweepRowSync(
+        db,
+        attemptId,
+        expectedReservationId,
+        sweepOwnerId,
+        sweepGeneration,
+      ),
+    { env },
+    { operationLabel: "update-failure-report.claim-artifact-sweep" },
+  );
+}
+
+export function hasUpdateFailureReportArtifactSweepLease(
+  attemptId: string,
+  expectedReservationId: string,
+  sweepOwnerId: string,
+  sweepGeneration: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) =>
+        hasUpdateFailureReportArtifactSweepLeaseRowSync(
+          db,
+          attemptId,
+          expectedReservationId,
+          sweepOwnerId,
+          sweepGeneration,
+        ),
+      { env },
+    ) ?? false
+  );
+}
+
+export function releaseUpdateFailureReportArtifactSweep(
+  attemptId: string,
+  expectedReservationId: string,
+  sweepOwnerId: string,
+  sweepGeneration: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      releaseUpdateFailureReportArtifactSweepRowSync(
+        db,
+        attemptId,
+        expectedReservationId,
+        sweepOwnerId,
+        sweepGeneration,
+      ),
+    { env },
+    { operationLabel: "update-failure-report.release-artifact-sweep" },
+  );
+}
+
+export function readUpdateFailureReportReceipt(
+  attemptId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): UpdateFailureReportReceipt | null {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readUpdateFailureReportReceiptRowSync(db, attemptId),
+      { env },
+    ) ?? null
+  );
+}
+
+export function refreshUpdateFailureReportReceiptPreparation(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => refreshUpdateFailureReportReceiptPreparationRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.refresh-preparation" },
+  );
+}
+
+export function finalizeUpdateFailureReportReceipt(
+  attemptId: string,
+  receipt: UpdateFailureReportReceipt,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => finalizeUpdateFailureReportReceiptRowSync(db, attemptId, receipt),
+    { env },
+    { operationLabel: "update-failure-report.finalize" },
+  );
+}
+
+export function markUpdateFailureReportReceiptPending(
+  attemptId: string,
+  reservationId: string,
+  previewDigest: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      markUpdateFailureReportReceiptPendingRowSync(db, attemptId, reservationId, previewDigest),
+    { env },
+    { operationLabel: "update-failure-report.mark-pending" },
+  );
+}
+
+export function markUpdateFailureReportReceiptPrepared(
+  attemptId: string,
+  reservationId: string,
+  previewDigest: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      markUpdateFailureReportReceiptPreparedRowSync(db, attemptId, reservationId, previewDigest),
+    { env },
+    { operationLabel: "update-failure-report.mark-prepared" },
+  );
+}
+
+/** Publish an outcome only while its producer and the captured notification are unchanged. */
+export async function writeRestartSentinelIfUnchanged(params: {
+  payload: RestartSentinelPayload;
+  expectedRevision: number | null;
+  isCurrent: () => boolean;
+}): Promise<RestartSentinel | null> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = readRestartSentinelSnapshotSync(db);
+      if (current.state.kind === "invalid" || !params.isCurrent()) {
+        return null;
+      }
+      return current.revision === params.expectedRevision
+        ? writeRestartSentinelRowSync(db, params.payload)
+        : null;
+    },
+    {},
+    { operationLabel: "restart-sentinel.write-if-unchanged" },
+  );
+}
+
+export async function readRestartSentinelSnapshot(): Promise<{
+  sentinel: RestartSentinel | null;
+  revision: number | null;
+}> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const snapshot = readRestartSentinelSnapshotSync(db);
+      return {
+        sentinel: snapshot.state.kind === "valid" ? snapshot.state.sentinel : null,
+        revision: snapshot.revision,
+      };
+    },
+    {},
+    { operationLabel: "restart-sentinel.read-snapshot" },
+  );
+}
+
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
   return structuredClone(payload);
 }
@@ -82,21 +316,10 @@ async function rewriteRestartSentinel(
   );
 }
 
-function commitsMatch(expected: string, actual: string): boolean {
-  const normalizedExpected = expected.trim().toLowerCase();
-  const normalizedActual = actual.trim().toLowerCase();
-  return (
-    normalizedExpected.length >= 7 &&
-    normalizedActual.length >= 7 &&
-    (normalizedExpected.startsWith(normalizedActual) ||
-      normalizedActual.startsWith(normalizedExpected))
-  );
-}
-
 export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
-  commit = resolveCommitHash({ env, moduleUrl: import.meta.url }),
+  commit = resolveRuntimeServiceCommit(),
   runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
   const snapshot = await readRestartSentinel(env);
@@ -144,12 +367,15 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
       const expectedSha = typeof after.sha === "string" ? after.sha.trim() : "";
       const actualSha = commit?.trim() ?? "";
       const verifiesGitRevision =
-        stats.mode !== "git" || (expectedSha.length > 0 && commitsMatch(expectedSha, actualSha));
+        stats.mode !== "git" ||
+        (expectedSha.length > 0 && gitCommitPrefixesMatch(expectedSha, actualSha));
       const verifiesInstallRoot =
         expectedRoot !== null && actualRoot !== null && expectedRoot === actualRoot;
       const changedInstall =
         stats.mode !== "git" ||
-        (beforeSha.length > 0 && expectedSha.length > 0 && !commitsMatch(beforeSha, expectedSha));
+        (beforeSha.length > 0 &&
+          expectedSha.length > 0 &&
+          !gitCommitPrefixesMatch(beforeSha, expectedSha));
       if (payload.status === "ok" && expectedRoot && !verifiesInstallRoot) {
         payload.status = "error";
         stats.reason = actualRoot ? "restart-root-mismatch" : "restart-root-unavailable";
@@ -249,6 +475,29 @@ export async function readRestartSentinel(
       return null;
     }
     return current.kind === "valid" ? current.sentinel : null;
+  } catch (err) {
+    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
+    return null;
+  }
+}
+
+/** Read the restart sentinel without creating or mutating shared state. */
+export async function readRestartSentinelReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  try {
+    const current = withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readRestartSentinelRowSync(db),
+      { env },
+    );
+    if (!current || current.kind === "missing") {
+      return null;
+    }
+    if (current.kind === "invalid") {
+      sentinelLog.warn("Ignoring invalid typed restart sentinel row");
+      return null;
+    }
+    return current.sentinel;
   } catch (err) {
     sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
     return null;

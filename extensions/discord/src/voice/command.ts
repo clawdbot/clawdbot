@@ -4,8 +4,7 @@ import {
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import {
   Command,
@@ -272,7 +271,8 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         return;
       }
       const lines = sessions.map(
-        (entry) => `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})`,
+        (entry) =>
+          `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})${entry.warning ? `\n${entry.warning}` : ""}`,
       );
       await interaction.reply({ content: lines.join("\n"), ephemeral: true });
     }

@@ -1,12 +1,6 @@
 // Fetches and normalizes DeepSeek provider usage records.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { cancelUnreadResponseBody } from "./http-body.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  fetchJson,
-  parseFiniteNumber,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson, parseFiniteNumber } from "./provider-usage.fetch.shared.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
@@ -61,9 +55,10 @@ export async function fetchDeepSeekUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
-    DEEPSEEK_BALANCE_URL,
-    {
+  const parsed = await fetchUsageJson({
+    provider: "deepseek",
+    url: DEEPSEEK_BALANCE_URL,
+    init: {
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -72,17 +67,7 @@ export async function fetchDeepSeekUsage(
     },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await cancelUnreadResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider: "deepseek",
-      status: res.status,
-    });
-  }
-
-  const parsed = await readUsageJson("deepseek", res);
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }

@@ -149,8 +149,6 @@ describe("acp session lineage metadata", () => {
         },
       },
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("keeps snapshot lineage in the Gateway session key namespace", async () => {
@@ -216,7 +214,5 @@ describe("acp session lineage metadata", () => {
         },
       },
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 });

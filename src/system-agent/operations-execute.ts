@@ -4,15 +4,15 @@ import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-k
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
-import { isReservedSystemAgentId } from "./agent-id.js";
+import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
+import { redactSystemAgentConfig } from "./config-redaction.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
   applyPersistentOperation,
   assertConfigWriteDoesNotBypassInferenceVerification,
   createNoExitRuntime,
-  executePluginInstall,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
@@ -22,7 +22,6 @@ import {
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
-  redactConfigValue,
   resolveChannelSetupState,
   resolveTuiAgentId,
   runConfigSetOperation,
@@ -30,6 +29,7 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
+import { executePluginInstall } from "./plugin-install.js";
 
 const loadOverviewModule = async () => await import("./overview.js");
 
@@ -122,18 +122,19 @@ export async function executeSystemAgentOperation(
         runtime.log(`Config missing: ${shortenHomePath(snapshot.path)}`);
         return { applied: false };
       }
-      const cfg = snapshot.valid
-        ? (snapshot.sourceConfig ?? snapshot.config)
-        : snapshot.sourceConfig;
-      const lookup = readConfigValueAtPath(cfg ?? {}, operation.path);
+      const cfg = snapshot.sourceConfig;
+      // Redact before selecting a subtree so wildcard channel/plugin hints retain full paths.
+      const lookup = readConfigValueAtPath(
+        redactSystemAgentConfig(cfg, { config: cfg, valid: snapshot.valid }),
+        operation.path,
+      );
       if (!lookup.found) {
         runtime.log(
           `${operation.path}: not set. Use \`config schema ${operation.path}\` to see what is allowed.`,
         );
         return { applied: false };
       }
-      const redacted = redactConfigValue(lookup.value, operation.path);
-      const rendered = JSON.stringify(redacted, null, 2) ?? "null";
+      const rendered = JSON.stringify(lookup.value, null, 2) ?? "null";
       runtime.log(
         rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
           ? `${operation.path} = ${truncateUtf16Safe(rendered, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
@@ -294,6 +295,11 @@ export async function executeSystemAgentOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "model-accounts":
+      runtime.log(
+        "Manage your personal accounts in Settings → Profile → Connected accounts, or run `openclaw models accounts list` / `openclaw models accounts login <provider>`. Check the Gateway, person, and Personal scope before signing in. Nothing has changed. Enter credentials only in the protected sign-in controls, never in chat.",
+      );
+      return { applied: false };
     case "open-setup": {
       const command =
         operation.target === "guided"
@@ -345,6 +351,10 @@ export async function executeSystemAgentOperation(
       });
     case "plugin-install":
       return await executePluginInstall(operation, runtime, opts);
+    case "plugin-activate-artifact": {
+      const { executePluginArtifactActivation } = await import("./plugin-artifact.js");
+      return await executePluginArtifactActivation(operation, runtime, opts);
+    }
     case "plugin-uninstall": {
       if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
         const message = [
@@ -362,22 +372,32 @@ export async function executeSystemAgentOperation(
         run: async (ctx) => {
           const runPluginUninstall =
             ctx.deps?.runPluginUninstall ??
-            (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
+            (async (
+              pluginId: string,
+              pluginRuntime: RuntimeEnv,
+              options?: { beforePersistentApply?: () => void },
+            ) => {
               const { runPluginUninstallCommand } =
                 await import("../cli/plugins-uninstall-command.js");
-              await runPluginUninstallCommand(pluginId, {}, pluginRuntime);
+              await runPluginUninstallCommand(pluginId, options, pluginRuntime);
             });
-          await ctx.commit(async () => {
-            // A concurrent config write can retarget the default route between
-            // the pre-approval check and this commit; re-verify at the last
-            // moment so the destructive removal never hits the active route.
-            if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
-              throw new Error(
-                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
-              );
-            }
-            await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
-          });
+          // A concurrent config write can retarget the default route between
+          // the pre-approval check and this commit; re-verify before the
+          // command's asynchronous preparation starts.
+          if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+            throw new Error(
+              `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
+            );
+          }
+          await ctx.commit(() =>
+            runPluginUninstall(
+              operation.pluginId,
+              createNoExitRuntime(ctx.runtime),
+              ctx.assertPersistentApply
+                ? { beforePersistentApply: ctx.assertPersistentApply }
+                : undefined,
+            ),
+          );
           return {
             summary: `Uninstalled plugin ${operation.pluginId}`,
             details: { pluginId: operation.pluginId },
@@ -412,6 +432,13 @@ export async function executeSystemAgentOperation(
             return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
+              ...(ctx.assertPersistentApply
+                ? { beforePersistentApply: ctx.assertPersistentApply }
+                : {}),
+              provenance: {
+                createdVia: "agent",
+                creatorAgentId: operation.requesterAgentId ?? SYSTEM_AGENT_ID,
+              },
             });
           });
           if (result.status === "error") {
@@ -456,61 +483,72 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "gateway-start":
-      return await applyPersistentOperation({
-        auditOperation: "gateway.start",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runGatewayStart = ctx.deps?.runGatewayStart ?? (() => runGatewayLifecycle("start"));
-          await ctx.commit(runGatewayStart);
-          return { summary: "Started Gateway" };
-        },
-      });
     case "gateway-stop":
-      return await applyPersistentOperation({
-        auditOperation: "gateway.stop",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runGatewayStop = ctx.deps?.runGatewayStop ?? (() => runGatewayLifecycle("stop"));
-          await ctx.commit(runGatewayStop);
-          return { summary: "Stopped Gateway" };
-        },
-      });
     case "gateway-restart":
       return await applyPersistentOperation({
-        auditOperation: "gateway.restart",
+        auditOperation: operation.kind.replace("-", "."),
         operation,
         runtime,
         opts,
         run: async (ctx) => {
-          const gatewayHosted = ctx.deps?.setupSurface === "gateway";
-          const runGatewayRestart =
-            ctx.deps?.runGatewayRestart ??
-            (() => runGatewayLifecycle("restart", gatewayHosted ? "gateway" : undefined));
-          const restarted = await ctx.commit(runGatewayRestart);
-          if (restarted === false) {
+          const action =
+            operation.kind === "gateway-start"
+              ? "start"
+              : operation.kind === "gateway-stop"
+                ? "stop"
+                : "restart";
+          if (ctx.deps?.setupSurface === "gateway") {
+            const host = ctx.deps.gatewayHostLifecycle;
+            if (!host) {
+              throw new Error(
+                "Gateway host lifecycle is unavailable. Use the service manager on the Gateway host.",
+              );
+            }
+            const result = await host.request(action, () => ctx.assertPersistentApply?.());
+            if (!result.ok) {
+              throw new Error(result.error);
+            }
+            const summary =
+              result.value.outcome === "already-running"
+                ? "Gateway already running"
+                : `Scheduled Gateway ${action}`;
+            ctx.runtime.log(summary);
+            return { summary };
+          }
+          const run =
+            action === "start"
+              ? ctx.deps?.runGatewayStart
+              : action === "stop"
+                ? ctx.deps?.runGatewayStop
+                : ctx.deps?.runGatewayRestart;
+          const result = await ctx.commit(run ?? (() => runGatewayLifecycle(action)));
+          if (result === false) {
             throw new Error("Gateway restart did not complete");
           }
-          const summary = gatewayHosted ? "Scheduled Gateway restart" : "Restarted Gateway";
-          if (gatewayHosted) {
-            ctx.runtime.log(summary);
-          }
-          return { summary };
+          return {
+            summary:
+              action === "start"
+                ? "Started Gateway"
+                : action === "stop"
+                  ? "Stopped Gateway"
+                  : "Restarted Gateway",
+          };
         },
       });
     case "open-tui": {
-      const agentId = await resolveTuiAgentId({
+      const overview = await loadOverviewForOperation(opts.deps);
+      const agentId = resolveTuiAgentId({
         requestedAgentId: operation.agentId,
         requestedWorkspace: operation.workspace,
-        deps: opts.deps,
+        overview,
       });
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
       const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
+      // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
+      const useEmbeddedTui = !overview.gateway.reachable;
       const result = await runTui({
-        local: true,
+        local: useEmbeddedTui,
         session,
         deliver: false,
         historyLimit: 200,

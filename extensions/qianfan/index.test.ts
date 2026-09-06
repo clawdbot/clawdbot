@@ -42,7 +42,7 @@ describe("qianfan provider plugin", () => {
 
   it("builds the static Qianfan model catalog", async () => {
     const provider = await registerSingleProviderPlugin(qianfanPlugin);
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://qianfan.baidubce.com/v2");

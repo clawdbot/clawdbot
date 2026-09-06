@@ -18,6 +18,7 @@ public enum LocationCurrentRequest {
         let now = Date()
         if let maxAgeMs,
            let cached = manager.location,
+           cached.timestamp <= now,
            now.timeIntervalSince(cached.timestamp) * 1000 <= Double(maxAgeMs)
         {
             return cached

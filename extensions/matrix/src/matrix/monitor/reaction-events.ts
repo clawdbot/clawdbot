@@ -1,5 +1,6 @@
 // Matrix plugin module implements reaction events behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -11,10 +12,11 @@ import {
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
+import { resolveMatrixThreadRootId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import type { PluginRuntime } from "./runtime-api.js";
-import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
+import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 const loadApprovalReactionAuth = createLazyRuntimeModule(
@@ -51,7 +53,7 @@ async function retireMatrixApprovalReactionTargets(params: {
   roomId: string;
   targetEventId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   result: ApprovalResolveResult;
   logVerboseMessage: (message: string) => void;
 }): Promise<void> {
@@ -165,7 +167,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
     params.logVerboseMessage(
       `matrix: approval reaction failed id=${params.target.approvalId} sender=${params.senderId}: ${String(err)}`,
     );
-    return true;
+    throw err;
   }
 }
 
@@ -238,12 +240,7 @@ export async function handleInboundMatrixReaction(params: {
     targetEvent && targetEvent.content && typeof targetEvent.content === "object"
       ? (targetEvent.content as RoomMessageEventContent)
       : undefined;
-  const threadRootId = targetContent
-    ? resolveMatrixThreadRootId({
-        event: targetEvent as MatrixRawEvent,
-        content: targetContent,
-      })
-    : undefined;
+  const threadRootId = targetContent ? resolveMatrixThreadRootId(targetContent) : undefined;
   const accountConfig = resolveMatrixAccountConfig({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -263,11 +260,13 @@ export async function handleInboundMatrixReaction(params: {
     isDirectMessage: params.isDirectMessage,
     dmSessionScope: accountConfig.dm?.sessionScope ?? "per-user",
     threadId: thread.threadId,
-    eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });
   if (runtimeBindingId) {
-    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts);
+    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts, {
+      channel: "matrix",
+      accountId: params.accountId,
+    });
   }
   const text = `Matrix reaction added: ${reaction.key} by ${params.senderLabel} on msg ${reaction.eventId}`;
   params.core.system.enqueueSystemEvent(text, {

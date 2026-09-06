@@ -10,14 +10,8 @@ const sentMessages = vi.hoisted(() => {
   return msgs;
 });
 
-// Tracks whether emulation has been cleared so post-clear Runtime.evaluate
-// can return different values for the "emulated tab" vs "non-emulated tab" tests.
 const mockState = vi.hoisted(() => ({
   bringToFrontError: undefined as Error | undefined,
-  emulationCleared: false,
-  emulatedTab: true,
-  viewport: { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 } as Record<string, unknown>,
-  naturalViewport: { w: 1920, h: 1080, dpr: 1 },
 }));
 
 vi.mock("./cdp.helpers.js", () => ({
@@ -34,34 +28,6 @@ vi.mock("./cdp.helpers.js", () => ({
         }
         if (method === "Page.captureScreenshot") {
           return Promise.resolve({ data: "AAAA" });
-        }
-        if (method === "Page.getLayoutMetrics") {
-          return Promise.resolve({
-            cssContentSize: { width: 1200, height: 3000 },
-            contentSize: { width: 1200, height: 3000 },
-          });
-        }
-        if (method === "Emulation.clearDeviceMetricsOverride") {
-          mockState.emulationCleared = true;
-          return Promise.resolve({});
-        }
-        if (method === "Emulation.setDeviceMetricsOverride") {
-          mockState.emulationCleared = false;
-          return Promise.resolve({});
-        }
-        if (method === "Runtime.evaluate") {
-          if (mockState.emulationCleared && mockState.emulatedTab) {
-            return Promise.resolve({
-              result: {
-                value: mockState.naturalViewport,
-              },
-            });
-          }
-          return Promise.resolve({
-            result: {
-              value: mockState.viewport,
-            },
-          });
         }
         return Promise.resolve({});
       };
@@ -94,10 +60,6 @@ const localProfile: ResolvedBrowserProfile = {
 beforeEach(() => {
   sentMessages.length = 0;
   mockState.bringToFrontError = undefined;
-  mockState.emulationCleared = false;
-  mockState.emulatedTab = true;
-  mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
-  mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
 });
 
 function requireSentMessage(method: string) {
@@ -139,6 +101,21 @@ describe("CDP screenshot params", () => {
     requireSentMessage("Page.captureScreenshot");
   });
 
+  it.each([
+    { name: "headed managed browser", headless: false, activates: false },
+    { name: "headless managed browser", headless: true, activates: true },
+  ])("activates only when needed for a $name", async ({ headless, activates }) => {
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless,
+    });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods.includes("Page.bringToFront")).toBe(activates);
+    expect(methods).toContain("Page.captureScreenshot");
+  });
+
   it("uses the requested timeout as the raw CDP command timeout", async () => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",
@@ -154,66 +131,16 @@ describe("CDP screenshot params", () => {
     expect(options).toEqual({ commandTimeoutMs: 12_345 });
   });
 
-  it("fullPage on emulated tab: clears, detects drift, re-applies saved emulation", async () => {
-    mockState.emulatedTab = true;
-
+  it("captures the full document without writing or guessing emulation state", async () => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",
       format: "png",
       fullPage: true,
     });
 
-    const setCalls = sentMessages.filter((m) => m.method === "Emulation.setDeviceMetricsOverride");
-    expect(setCalls.length).toBe(2);
-    const [firstSetCall, secondSetCall] = setCalls;
-    if (!firstSetCall || !secondSetCall) {
-      throw new Error("expected two viewport updates");
-    }
-
-    // Expand: uses saved DPR, mobile defaults to false
-    expect(firstSetCall.params?.width).toBe(1200);
-    expect(firstSetCall.params?.height).toBe(3000);
-    expect(firstSetCall.params?.deviceScaleFactor).toBe(2);
-    expect(firstSetCall.params?.mobile).toBe(false);
-
-    // Clear is called first in the finally block
-    requireSentMessage("Emulation.clearDeviceMetricsOverride");
     const captureCall = requireSentMessage("Page.captureScreenshot");
     expect(captureCall.params?.captureBeyondViewport).toBe(true);
-
-    // Viewport drifted after clear → re-apply saved dimensions
-    expect(secondSetCall.params?.width).toBe(800);
-    expect(secondSetCall.params?.height).toBe(600);
-    expect(secondSetCall.params?.deviceScaleFactor).toBe(2);
-    expect(secondSetCall.params?.mobile).toBe(false);
-    expect(secondSetCall.params?.screenWidth).toBe(800);
-    expect(secondSetCall.params?.screenHeight).toBe(600);
-  });
-
-  it("fullPage on non-emulated tab: clears and does NOT re-apply emulation", async () => {
-    mockState.emulatedTab = false;
-    mockState.viewport = { w: 1920, h: 1080, dpr: 1, sw: 1920, sh: 1080 };
-    mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
-
-    await captureScreenshot({
-      wsUrl: "ws://localhost:9222/devtools/page/X",
-      format: "png",
-      fullPage: true,
-    });
-
-    const setCalls = sentMessages.filter((m) => m.method === "Emulation.setDeviceMetricsOverride");
-    // Only the expand call — no re-apply after clear
-    expect(setCalls).toHaveLength(1);
-
-    requireSentMessage("Emulation.clearDeviceMetricsOverride");
-  });
-
-  it("fullPage viewport dimensions never shrink below current innerWidth/Height", async () => {
-    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", fullPage: true });
-
-    const expandCall = requireSentMessage("Emulation.setDeviceMetricsOverride");
-    expect(Number(expandCall.params?.width)).toBeGreaterThanOrEqual(800);
-    expect(Number(expandCall.params?.height)).toBeGreaterThanOrEqual(600);
+    expect(sentMessages.some(({ method }) => method.startsWith("Emulation."))).toBe(false);
   });
 });
 

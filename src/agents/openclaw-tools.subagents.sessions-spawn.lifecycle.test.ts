@@ -2,8 +2,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { testing as bundleMcpRuntimeTesting } from "./agent-bundle-mcp-runtime.js";
-import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
   getCallGatewayMock,
   getSessionsSpawnTool,
@@ -26,7 +26,6 @@ const fastModeEnv = vi.hoisted(() => {
 });
 
 const hookRunnerMocks = vi.hoisted(() => ({
-  runSubagentSpawning: vi.fn(async () => undefined),
   runSubagentSpawned: vi.fn(async () => {}),
   runSubagentProgress: vi.fn(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
@@ -182,7 +181,6 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       },
     });
     resetSubagentRegistryForTests({ persist: false });
-    hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentProgress.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
@@ -191,7 +189,6 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         hookName === "subagent_spawned" ||
         hookName === "subagent_progress" ||
         hookName === "subagent_ended",
-      runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
       runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
       runSubagentProgress: hookRunnerMocks.runSubagentProgress,
       runSubagentEnded: hookRunnerMocks.runSubagentEnded,

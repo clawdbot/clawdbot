@@ -7,14 +7,14 @@ scenario:
     primary:
       - automation.cron-rpcs
       - automation.chat-announce-delivery
-      - automation.agent-cron-tool
+      - automation.isolated-cron-execution
     secondary:
       - channels.qa-channel-final-reply
-  objective: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
+  objective: Verify a Gateway cron reminder scheduled one minute in the future fires naturally and delivers its follow-up through the QA channel.
   successCriteria:
-    - Agent schedules a cron reminder roughly one minute ahead.
-    - Reminder returns through qa-channel.
-    - Agent recognizes the reminder as part of the original task.
+    - Gateway stores a one-shot cron reminder roughly one minute ahead.
+    - The scheduler executes the reminder no earlier than its scheduled due time without forcing the job.
+    - The isolated agent turn returns the reminder marker through qa-channel.
   docsRefs:
     - docs/help/testing.md
     - docs/channels/qa-channel.md
@@ -23,7 +23,8 @@ scenario:
     - extensions/qa-lab/src/self-check.ts
   execution:
     kind: flow
-    summary: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
+    timeoutMs: 180000
+    summary: Schedule a one-minute Gateway cron reminder, wait for its natural timer, and verify qa-channel delivery.
     channel: qa-channel
     config:
       channelId: qa-room
@@ -78,7 +79,7 @@ flow:
             expr: response.id
       detailsExpr: scheduledAt
 
-    - name: forces the reminder through QA channel delivery
+    - name: waits for the natural reminder and QA channel delivery
       actions:
         - assert:
             expr: "Boolean(jobId)"
@@ -89,14 +90,8 @@ flow:
         - set: runStartedAt
           value:
             expr: "Date.now()"
-        - call: env.gateway.call
-          args:
-            - cron.run
-            - id:
-                ref: jobId
-              mode: force
-            - timeoutMs: 30000
         - call: waitForCronRunCompletion
+          saveAs: completedRun
           args:
             - callGateway:
                 expr: "env.gateway.call.bind(env.gateway)"
@@ -105,7 +100,19 @@ flow:
               afterTs:
                 ref: runStartedAt
               timeoutMs:
-                expr: liveTurnTimeoutMs(env, 45000)
+                expr: liveTurnTimeoutMs(env, 120000)
+        - assert:
+            expr: "Number.isSafeInteger(completedRun?.runAtMs) && completedRun.runAtMs >= new Date(scheduledAt).getTime()"
+            message:
+              expr: "`cron reminder actually started before its scheduled time ${scheduledAt}: ${JSON.stringify(completedRun)}`"
+        - assert:
+            expr: "Number.isSafeInteger(completedRun?.ts) && completedRun.ts >= runStartedAt && completedRun.ts >= completedRun.runAtMs"
+            message:
+              expr: "`expected the current scheduled cron attempt's recorded completion, got ${JSON.stringify(completedRun)}`"
+        - assert:
+            expr: "completedRun?.status === 'ok'"
+            message:
+              expr: "`expected a successful naturally scheduled reminder, got ${JSON.stringify(completedRun)}`"
         - call: waitForOutboundMessage
           saveAs: outbound
           args:

@@ -28,19 +28,15 @@ export function registerBrowserNavigationCommands(
     .action(async (url: string, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
-        const result = await callBrowserRequest<{ url?: string }>(
-          parent,
-          {
-            method: "POST",
-            path: "/navigate",
-            query: profile ? { profile } : undefined,
-            body: {
-              url,
-              targetId: normalizeOptionalString(opts.targetId),
-            },
+        const result = await callBrowserRequest<{ url?: string }>(parent, {
+          method: "POST",
+          path: "/navigate",
+          query: profile ? { profile } : undefined,
+          body: {
+            url,
+            targetId: normalizeOptionalString(opts.targetId),
           },
-          { timeoutMs: 20000 },
-        );
+        });
         if (parent?.json) {
           defaultRuntime.writeJson(result);
           return;
@@ -72,7 +68,6 @@ export function registerBrowserNavigationCommands(
           width: normalizedWidth,
           height: normalizedHeight,
           targetId: opts.targetId,
-          timeoutMs: 20000,
           successMessage: `resized to ${normalizedWidth}x${normalizedHeight}`,
         });
       } catch (err) {

@@ -1,3 +1,4 @@
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   OutboundPayloadDeliveryOutcome,
@@ -37,6 +38,7 @@ export type PreparedOutboundBatch = {
   /** True only when accepted payloads already passed post-policy channel normalization. */
   channelNormalized?: true;
   runId?: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   entries: PreparedOutboundBatchEntry[];
 };
 

@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

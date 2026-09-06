@@ -2,11 +2,13 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confirm, select, text } from "@clack/prompts";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -20,7 +22,6 @@ import {
   type SecretRefSource,
 } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
@@ -64,13 +65,6 @@ function isAbsolutePathValue(value: string): boolean {
     WINDOWS_ABS_PATH_PATTERN.test(value) ||
     WINDOWS_UNC_PATH_PATTERN.test(value)
   );
-}
-
-function parseCsv(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
 }
 
 function parseOptionalPositiveInt(value: string, max: number): number | undefined {
@@ -216,7 +210,7 @@ function assertNoCancel<T>(value: T | symbol, message: string): T {
 const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
 
 function validateEnvNameCsv(value: string): string | undefined {
-  const entries = parseCsv(value);
+  const entries = normalizeCsvOrLooseStringList(value);
   for (const entry of entries) {
     if (!isValidEnvSecretRefId(entry)) {
       return `Invalid env name: ${entry}`;
@@ -237,7 +231,7 @@ async function promptEnvNameCsv(params: {
     }),
     "Secrets configure cancelled.",
   );
-  return parseCsv(raw ?? "");
+  return normalizeCsvOrLooseStringList(raw ?? "");
 }
 
 async function promptOptionalPositiveInt(params: {
@@ -271,11 +265,11 @@ async function promptOptionalPositiveInt(params: {
 }
 
 function configureCandidateKey(candidate: {
-  configFile: "openclaw.json" | "auth-profiles.json";
+  configFile: "openclaw.json" | "auth-profile-store";
   path: string;
   agentId?: string;
 }): string {
-  if (candidate.configFile === "auth-profiles.json") {
+  if (candidate.configFile === "auth-profile-store") {
     return `auth-profiles:${normalizeOptionalString(candidate.agentId) ?? ""}:${candidate.path}`;
   }
   return `openclaw:${candidate.path}`;
@@ -380,7 +374,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
       path: `profiles.${profileIdTrimmed}.token`,
       pathSegments: ["profiles", profileIdTrimmed, "token"],
       label: `profiles.${profileIdTrimmed}.token (auth profile, agent ${agentId})`,
-      configFile: "auth-profiles.json",
+      configFile: "auth-profile-store",
       agentId,
       authProfileProvider: providerTrimmed,
       expectedResolvedValue: "string",
@@ -391,7 +385,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
     path: `profiles.${profileIdTrimmed}.key`,
     pathSegments: ["profiles", profileIdTrimmed, "key"],
     label: `profiles.${profileIdTrimmed}.key (auth profile, agent ${agentId})`,
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     agentId,
     authProfileProvider: providerTrimmed,
     expectedResolvedValue: "string",
@@ -599,7 +593,7 @@ async function promptExecProvider(
       message: "Trusted dirs (comma-separated absolute paths, blank for none)",
       initialValue: base?.trustedDirs?.join(",") ?? "",
       validate: (value) => {
-        const entries = parseCsv(value ?? "");
+        const entries = normalizeCsvOrLooseStringList(value ?? "");
         for (const entry of entries) {
           if (!isAbsolutePathValue(entry)) {
             return `Trusted dir must be absolute: ${entry}`;
@@ -612,7 +606,7 @@ async function promptExecProvider(
   );
 
   const args = await parseArgsInput(normalizeStringifiedOptionalString(argsRaw) ?? "");
-  const trustedDirs = parseCsv(trustedDirsRaw ?? "");
+  const trustedDirs = normalizeCsvOrLooseStringList(trustedDirsRaw ?? "");
 
   return {
     source: "exec",
@@ -868,7 +862,9 @@ export async function runSecretsConfigureInteractive(
         value: configureCandidateKey(candidate),
         label: candidate.label,
         hint: [
-          candidate.configFile === "auth-profiles.json" ? "auth-profiles.json" : "openclaw.json",
+          // Auth profiles live in the agent's SQLite store; naming the retired
+          // JSON file here sent operators looking for a file that no longer exists.
+          candidate.configFile === "auth-profile-store" ? "auth profile store" : "openclaw.json",
           candidate.isDerived === true ? "derived" : undefined,
         ]
           .filter(Boolean)

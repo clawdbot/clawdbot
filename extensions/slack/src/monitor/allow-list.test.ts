@@ -5,6 +5,7 @@ import {
   normalizeAllowListLower,
   normalizeSlackSlug,
   resolveSlackAllowListMatch,
+  resolveSlackUserAllowListForTeam,
   resolveSlackUserAllowed,
 } from "./allow-list.js";
 
@@ -91,14 +92,6 @@ describe("slack/allow-list", () => {
         teamId: "T22222222",
         id: "U01234567",
       }),
-    ).toEqual({ allowed: false });
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["u01234567"],
-        teamId: "T22222222",
-        id: "U01234567",
-        allowUnscoped: true,
-      }),
     ).toEqual({ allowed: true, matchKey: "u01234567", matchSource: "id" });
   });
 
@@ -123,5 +116,14 @@ describe("slack/allow-list", () => {
         id: "B01234567",
       }),
     ).toEqual({ allowed: false });
+  });
+
+  it("preserves org-wide IDs and workspace-qualified user identities", () => {
+    expect(
+      resolveSlackUserAllowListForTeam({
+        allowList: ["W01234567", "team:T11111111:user:U01234567", "team:T22222222:user:U01234567"],
+        teamId: "T11111111",
+      }),
+    ).toEqual(["w01234567", "team:t11111111:user:u01234567"]);
   });
 });

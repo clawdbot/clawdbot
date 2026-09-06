@@ -47,10 +47,6 @@ vi.mock("../tools/tts-tool.js", () => ({
   createTtsTool: () => stubTool("tts"),
 }));
 
-vi.mock("../tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => stubTool("update_plan"),
-}));
-
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => null,
   normalizeChannelId: (channel?: string) => normalizeOptionalLowercaseString(channel),

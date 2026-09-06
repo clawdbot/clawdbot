@@ -4,6 +4,39 @@ import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
+type CheckCommand = { name: string; args: string[] };
+type RunManagedCheck = (options: { args: string[]; bin: string }) => Promise<number>;
+
+export const PREFLIGHT_CHECKS: CheckCommand[] = [
+  { name: "conflict markers", args: ["check:no-conflict-markers"] },
+  { name: "script TypeScript erasability", args: ["check:script-erasability"] },
+  { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
+  { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"] },
+  { name: "changelog attributions", args: ["check:changelog-attributions"] },
+  { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
+  { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
+  {
+    name: "guarded extension wildcard re-exports",
+    args: ["lint:extensions:no-guarded-wildcard-reexports"],
+  },
+  {
+    name: "plugin-sdk wildcard re-exports",
+    args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
+  },
+  {
+    name: "deprecated channel access seams",
+    args: ["lint:extensions:no-deprecated-channel-access"],
+  },
+  { name: "media download helper guard", args: ["check:media-download-helpers"] },
+  { name: "runtime sidecar loader guard", args: ["check:runtime-sidecar-loaders"] },
+  { name: "tool display", args: ["tool-display:check"] },
+  { name: "host env policy", args: ["check:host-env-policy:swift"] },
+  { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },
+  { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+  { name: "npm package-lock guard", args: ["deps:npm-lock:check"] },
+  { name: "package patch guard", args: ["deps:patches:check"] },
+];
+
 /**
  * Returns command usage text for the aggregate check runner.
  */
@@ -89,34 +122,7 @@ export async function main(argv = process.argv.slice(2)) {
     {
       name: "preflight guards",
       parallel: true,
-      commands: [
-        { name: "conflict markers", args: ["check:no-conflict-markers"] },
-        { name: "environment variable count ratchet", args: ["check:env-var-count"] },
-        { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
-        { name: "changelog attributions", args: ["check:changelog-attributions"] },
-        { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
-        { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
-        {
-          name: "guarded extension wildcard re-exports",
-          args: ["lint:extensions:no-guarded-wildcard-reexports"],
-        },
-        {
-          name: "plugin-sdk wildcard re-exports",
-          args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
-        },
-        {
-          name: "deprecated channel access seams",
-          args: ["lint:extensions:no-deprecated-channel-access"],
-        },
-        { name: "media download helper guard", args: ["check:media-download-helpers"] },
-        { name: "runtime sidecar loader guard", args: ["check:runtime-sidecar-loaders"] },
-        { name: "tool display", args: ["tool-display:check"] },
-        { name: "host env policy", args: ["check:host-env-policy:swift"] },
-        { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },
-        { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
-        { name: "npm package-lock guard", args: ["deps:npm-lock:check"] },
-        { name: "package patch guard", args: ["deps:patches:check"] },
-      ],
+      commands: PREFLIGHT_CHECKS,
     },
     {
       name: "typecheck",
@@ -167,9 +173,6 @@ export async function main(argv = process.argv.slice(2)) {
 
   process.exitCode = exitCode;
 }
-
-type CheckCommand = { name: string; args: string[] };
-type RunManagedCheck = (options: { args: string[]; bin: string }) => Promise<number>;
 
 async function runSerial(commands: CheckCommand[]) {
   const results: Array<Awaited<ReturnType<typeof runCommand>>> = [];

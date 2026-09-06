@@ -1,5 +1,6 @@
 // Migrate Hermes plugin module implements source behavior.
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { exists, isDirectory, readText, resolveHomePath } from "./helpers.js";
 
 export type HermesSource = {
@@ -67,11 +68,6 @@ const HERMES_STATE_MARKERS = [
   ...HERMES_ARCHIVE_FILES,
 ] as const;
 
-function isSameOrInside(parent: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function resolveOpenCodeXdgAuthPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const xdgDataHome = env.XDG_DATA_HOME?.trim();
   return xdgDataHome ? path.join(resolveHomePath(xdgDataHome), "opencode", "auth.json") : undefined;
@@ -88,7 +84,7 @@ async function discoverOpenCodeAuthPath(params: {
   const candidates = Array.from(
     new Set(
       [
-        ...(xdgAuthPath && (params.includeGlobalFallback || isSameOrInside(rootParent, xdgAuthPath))
+        ...(xdgAuthPath && (params.includeGlobalFallback || isPathInside(rootParent, xdgAuthPath))
           ? [xdgAuthPath]
           : []),
         path.join(rootParent, OPENCODE_AUTH_RELATIVE_PATH),

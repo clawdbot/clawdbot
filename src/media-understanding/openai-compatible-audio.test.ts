@@ -1,7 +1,6 @@
-// OpenAI-compatible audio tests cover attribution headers, auth selection,
+// OpenAI-compatible audio tests cover attribution headers,
 // filename normalization, and stable malformed-response errors.
 import { describe, expect, it, vi } from "vitest";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { VERSION } from "../version.js";
 import {
   createRequestCaptureJsonFetch,
@@ -75,85 +74,31 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect((file as File).name).toBe("voice-note.m4a");
   });
 
-  it("omits the optional prompt field while preserving language hints", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+  it.each([undefined, "ru"])(
+    "omits the optional prompt field with language %j",
+    async (language) => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.ogg",
-      mime: "audio/ogg",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "groq",
-      baseUrl: "https://api.groq.com/openai/v1",
-      defaultBaseUrl: "https://api.groq.com/openai/v1",
-      defaultModel: "whisper-large-v3-turbo",
-      language: "ru",
-    });
-
-    const form = getRequest().init?.body;
-    expect(form).toBeInstanceOf(FormData);
-    expect((form as FormData).get("language")).toBe("ru");
-    expect((form as FormData).get("prompt")).toBeNull();
-  });
-
-  it("omits bearer auth for explicit no-auth requests", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
-
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.mp3",
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      auth: { kind: "none", source: "local provider" },
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "local-audio",
-      baseUrl: "https://audio.example.com/v1",
-      defaultBaseUrl: "https://audio.example.com/v1",
-      defaultModel: "whisper-local",
-    });
-
-    const headers = new Headers(getRequest().init?.headers);
-    expect(headers.get("authorization")).toBeNull();
-  });
-
-  it("uses typed api-key auth for bearer headers", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
-
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.mp3",
-      apiKey: "legacy-key",
-      auth: { kind: "api-key", apiKey: "typed-key", source: "test" },
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "local-audio",
-      baseUrl: "https://audio.example.com/v1",
-      defaultBaseUrl: "https://audio.example.com/v1",
-      defaultModel: "whisper-local",
-    });
-
-    const headers = new Headers(getRequest().init?.headers);
-    expect(headers.get("authorization")).toBe("Bearer typed-key");
-  });
-
-  it("wraps malformed transcription JSON with a stable provider error", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
-
-    await expect(
-      transcribeOpenAiCompatibleAudio({
+      await transcribeOpenAiCompatibleAudio({
         buffer: Buffer.from("audio"),
-        fileName: "note.mp3",
+        fileName: "note.ogg",
+        mime: "audio/ogg",
         apiKey: "test-key",
         timeoutMs: 1000,
         fetchFn,
-        provider: "openai",
-        defaultBaseUrl: "https://api.openai.com/v1",
-        defaultModel: "gpt-4o-transcribe",
-      }),
-    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
-  });
+        provider: "groq",
+        baseUrl: "https://api.groq.com/openai/v1",
+        defaultBaseUrl: "https://api.groq.com/openai/v1",
+        defaultModel: "whisper-large-v3-turbo",
+        language,
+      });
+
+      const form = getRequest().init?.body;
+      expect(form).toBeInstanceOf(FormData);
+      expect((form as FormData).get("language")).toBe(language ?? null);
+      expect((form as FormData).get("prompt")).toBeNull();
+    },
+  );
 
   it("rejects non-object successful transcription JSON with a stable provider error", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));

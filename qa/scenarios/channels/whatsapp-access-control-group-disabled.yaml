@@ -34,36 +34,4 @@ scenario:
       timeoutMs: 8000
 
 flow:
-  steps:
-    - name: enforces configured access policy
-      actions:
-        - call: waitForGatewayHealthy
-          args: [{ ref: env }, 60000]
-        - call: waitForTransportReady
-          args: [{ ref: env }, 60000]
-        - resetTransport: true
-        - set: marker
-          value:
-            expr: "`${config.markerPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`"
-        - set: outboundCount
-          value:
-            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
-        - sendInbound:
-            conversation:
-              id: { ref: config.conversationId }
-              kind: { ref: config.conversationKind }
-            senderId: { ref: config.senderId }
-            senderName: QA Driver
-            text:
-              expr: "`${config.mentionPrefix}Reply with only this exact marker: ${marker}`"
-        - if:
-            expr: config.expectReply
-            then:
-              - waitForOutbound:
-                  textIncludes: { ref: marker }
-                  timeoutMs: { ref: config.timeoutMs }
-            else:
-              - waitForNoOutbound:
-                  quietMs: { ref: config.timeoutMs }
-                  sinceIndex: { ref: outboundCount }
-      detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`"
+  shared: channel-access-control

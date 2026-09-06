@@ -1,8 +1,11 @@
 import {
-  buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
@@ -11,6 +14,7 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { resolveMatrixReplyToEventId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
@@ -22,7 +26,7 @@ import type { HistoryEntry } from "./room-history.js";
 import type { resolveMatrixInboundRoute } from "./route.js";
 import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
-import { resolveMatrixReplyToEventId, resolveMatrixThreadRouting } from "./threads.js";
+import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 type MatrixInboundRoute = ReturnType<typeof resolveMatrixInboundRoute>["route"];
@@ -32,6 +36,10 @@ export async function resolveMatrixInboundContext(config: {
   core: PluginRuntime;
   cfg: CoreConfig;
   accountId: string;
+  resolveMessageIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { kind: "direct" | "channel"; id: string; threadId?: string },
+  ) => Promise<ResolvedChannelMessageIngress>;
   runtime: RuntimeEnv;
   logVerboseMessage: (message: string) => void;
   roomId: string;
@@ -81,6 +89,7 @@ export async function resolveMatrixInboundContext(config: {
     core,
     cfg,
     accountId,
+    resolveMessageIngress,
     runtime,
     logVerboseMessage,
     roomId,
@@ -219,7 +228,22 @@ export async function resolveMatrixInboundContext(config: {
       senderAllowed: replySenderAllowed,
     }).include,
   );
-  const ctxPayload = buildChannelInboundEventContext({
+  // Thread and conversation bindings finalize the Matrix session after the access preflight.
+  const channelIngress = await resolveMessageIngress(
+    {
+      agentId: _route.agentId,
+      sessionKey: _route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    },
+    {
+      kind: isDirectMessage ? "direct" : "channel",
+      id: roomId,
+      threadId: threadTarget,
+    },
+  );
+  const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress,
     channel: "matrix",
     contextVisibility: contextVisibilityMode,
     finalize: finalizeInboundContext,
@@ -270,6 +294,8 @@ export async function resolveMatrixInboundContext(config: {
       dmScope: _route.dmScope,
       accountId: _route.accountId,
       routeSessionKey: _route.sessionKey,
+      parentSessionKey:
+        threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,
     },
     reply: {
       to: `room:${roomId}`,

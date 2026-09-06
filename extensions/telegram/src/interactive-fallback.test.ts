@@ -127,12 +127,13 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       | undefined;
     const rows = telegram?.buttons;
 
-    expect(rows?.map((row) => row.length)).toEqual([3, 1]);
+    expect(rows?.map((row) => row.length)).toEqual([1, 1, 1, 1]);
     expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual(
       optionValues.map((_, optionIndex) => `tgq1:${questionId}:${optionIndex}`),
     );
-    expect(parseTelegramQuestionCallbackData(rows?.[1]?.[0]?.callback_data)).toEqual({
+    expect(parseTelegramQuestionCallbackData(rows?.[3]?.[0]?.callback_data)).toEqual({
       questionId,
+      intent: "select",
       optionIndex: 3,
     });
   });
@@ -158,16 +159,17 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       | undefined;
     const rows = telegram?.buttons;
 
-    expect(rows?.map((row) => row.length)).toEqual([2, 2]);
+    expect(rows?.map((row) => row.length)).toEqual([1, 1, 1, 1]);
     expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual([
       `tgq1:${questionId}:0`,
       `tgq1:${questionId}:0`,
       `tgq1:${questionId}:1`,
       `tgq1:${questionId}:2`,
     ]);
-    const callback = parseTelegramQuestionCallbackData(rows?.[1]?.[1]?.callback_data);
+    const callback = parseTelegramQuestionCallbackData(rows?.[3]?.[0]?.callback_data);
     expect(callback).toEqual({
       questionId,
+      intent: "select",
       optionIndex: 2,
     });
     if (!callback) {
@@ -196,7 +198,7 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       questionId: "destination",
       optionValue: "C",
     });
-    expect(feedback).toHaveBeenCalledWith("Answer submitted.", true);
+    expect(feedback).toHaveBeenCalledWith("Answer submitted.", "terminal");
   });
 
   it.each([

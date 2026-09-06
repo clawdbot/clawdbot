@@ -4,6 +4,7 @@ import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-
 import { SLACK_BUTTON_VALUE_MAX } from "./presentation.js";
 
 const SLACK_APPROVAL_VALUE_PREFIX = "openclaw:approval:v1:";
+export const SLACK_APPROVAL_HEADER_BLOCK_ID = "openclaw_approval_header";
 
 export type SlackApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 

@@ -1,9 +1,8 @@
-// Opencode API module exposes the plugin public contract.
+import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/provider-model-shared";
 
 const FIXED_REASONING_PROFILE = {
   levels: [{ id: "off", label: "always on" }],

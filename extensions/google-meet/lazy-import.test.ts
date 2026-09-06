@@ -108,7 +108,7 @@ describe("google-meet lazy imports", () => {
     vi.doMock("openclaw/plugin-sdk/routing", () => {
       routingImports += 1;
       return {
-        normalizeAgentId: (value: string) => value,
+        normalizeAgentId: vi.fn((value: string) => value),
         parseAgentSessionKey: () => ({ agentId: "main" }),
       };
     });

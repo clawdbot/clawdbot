@@ -1,32 +1,17 @@
 import { nonEmptyString } from "./crabbox-worker-profile.js";
 
-const MAX_SSH_FALLBACK_PORTS = 10;
-
 type CrabboxInspect = {
-  host?: unknown;
   id?: unknown;
   providerMetadata?: unknown;
   ready?: unknown;
-  sshHost?: unknown;
-  sshHostKey?: unknown;
-  sshKey?: unknown;
-  sshFallbackPorts?: unknown;
-  sshPort?: unknown;
-  sshUser?: unknown;
   state?: unknown;
   tailscale?: unknown;
 };
 
 export type ParsedInspect = {
   awsInstanceProfileAttached?: boolean;
-  host?: string;
   id: string;
   ready?: boolean;
-  sshHostKey?: string;
-  sshKey?: string;
-  sshFallbackPorts: number[];
-  sshPort?: number;
-  sshUser?: string;
   state: string;
   tailscaleEnabled: boolean;
 };
@@ -76,75 +61,11 @@ export function parseInspectJson(stdout: string): ParsedInspect {
     awsInstanceProfileAttached = attached as boolean | undefined;
   }
 
-  const sshHost = inspectString(value.sshHost, "sshHost");
-  const fallbackHost = inspectString(value.host, "host");
-  const host = sshHost ?? fallbackHost;
-  const sshUser = inspectString(value.sshUser, "sshUser");
-  const sshHostKey = inspectString(value.sshHostKey, "sshHostKey");
-  const sshKey = inspectString(value.sshKey, "sshKey");
-  const sshPort = inspectPort(value.sshPort);
-  const sshFallbackPorts = inspectFallbackPorts(value.sshFallbackPorts, sshPort);
   return {
     id,
     state,
     tailscaleEnabled,
-    sshFallbackPorts,
     ...(awsInstanceProfileAttached !== undefined ? { awsInstanceProfileAttached } : {}),
-    ...(host ? { host } : {}),
-    ...(sshUser ? { sshUser } : {}),
-    ...(sshHostKey ? { sshHostKey } : {}),
-    ...(sshKey ? { sshKey } : {}),
-    ...(sshPort ? { sshPort } : {}),
     ...(typeof value.ready === "boolean" ? { ready: value.ready } : {}),
   };
-}
-
-function inspectString(value: unknown, field: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error(`Crabbox inspect returned an invalid ${field}`);
-  }
-  return nonEmptyString(value);
-}
-
-function inspectPort(value: unknown): number | undefined {
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  return inspectRequiredPort(value, "sshPort");
-}
-
-function inspectFallbackPorts(value: unknown, primaryPort: number | undefined): number[] {
-  if (value === undefined) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new Error("Crabbox inspect returned invalid sshFallbackPorts");
-  }
-  const seen = new Set(primaryPort === undefined ? [] : [primaryPort]);
-  const ports: number[] = [];
-  for (const entry of value) {
-    const port = inspectRequiredPort(entry, "sshFallbackPorts");
-    if (!seen.has(port)) {
-      seen.add(port);
-      ports.push(port);
-    }
-  }
-  if (ports.length > MAX_SSH_FALLBACK_PORTS) {
-    throw new Error("Crabbox inspect returned invalid sshFallbackPorts: maximum 10");
-  }
-  return ports;
-}
-
-function inspectRequiredPort(value: unknown, field: "sshPort" | "sshFallbackPorts"): number {
-  if (typeof value !== "number" && (typeof value !== "string" || !/^\d+$/u.test(value))) {
-    throw new Error(`Crabbox inspect returned an invalid ${field}`);
-  }
-  const port = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error(`Crabbox inspect returned an invalid ${field}`);
-  }
-  return port;
 }

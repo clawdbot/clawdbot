@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -19,10 +20,21 @@ import {
   validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createAgent } from "../../agents/agent-create.js";
-import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
 import {
-  isPathOwnedByAnotherRegisteredAgent,
+  isPathOwnedBySurvivingAgent,
+  prepareAgentDeleteDatabases,
+  readAgentDeleteDatabaseRegistry,
+  resolveSurvivingDatabaseFilePaths,
+  type AgentDeleteDatabasePlan,
+} from "../../agents/agent-delete-databases.js";
+import {
+  formatSharedAuthStoreOwnerDeleteError,
+  isInheritedAuthStoreOwner,
+  isSharedAuthStoreOwner,
+} from "../../agents/agent-delete-safety.js";
+import {
   normalizeAgentDirRegistryPath,
   registerResolvedAgentDir,
   resolveRegisteredAgentIdForDir,
@@ -34,12 +46,17 @@ import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveSoleAgentId,
 } from "../../agents/agent-scope.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../../agents/auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import {
   createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
@@ -76,20 +93,13 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
 } from "../../state/agent-deletion-journal.js";
-import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  listOpenClawRegisteredAgentDatabases,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
@@ -160,7 +170,7 @@ function resolveAgentWorkspaceFileOrRespondError(
     cfg,
   );
   if (!agentId) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+    respondAgentNotFound(respond, String(rawAgentId));
     return null;
   }
   const rawName = params.name;
@@ -289,7 +299,11 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
 }
 
 function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
-  const agentId = normalizeAgentId(agentIdRaw);
+  const normalized = normalizeAgentIdStrict(agentIdRaw);
+  if (!normalized.ok) {
+    return null;
+  }
+  const agentId = normalized.value;
   const allowed = new Set(listAgentIds(cfg));
   if (!allowed.has(agentId)) {
     return null;
@@ -316,15 +330,8 @@ function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
 }
 
-type AgentDeleteRemovedPath = {
-  path: string;
-  method: "trash" | "missing";
-};
-
-type AgentDeleteFailedPath = {
-  path: string;
-  reason: string;
-};
+type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
+type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
 
 type AgentDeletePathOutcome =
   | { removed: AgentDeleteRemovedPath }
@@ -332,6 +339,16 @@ type AgentDeletePathOutcome =
   | { failed: AgentDeleteFailedPath };
 
 class AgentCleanupIdentityMismatchError extends Error {}
+class AgentSharedAuthStoreOwnerError extends Error {}
+
+function agentOwnsSharedAuthStore(cfg: OpenClawConfig, agentId: string): boolean {
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return isSharedAuthStoreOwner({
+    ownership: resolveSharedAuthStoreOwnership(),
+    agentAuthDbPath: resolveAuthProfileDatabasePath(agentDir),
+    sharedAuthDbPath: resolveSharedAuthStorePath(),
+  });
+}
 
 function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcome {
   const reason = error instanceof Error && error.message ? error.message : String(error);
@@ -374,11 +391,11 @@ async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
   }
   const identity = cleanupPathIdentity(stat);
   if (cleanupPath.preparedIdentity === null) {
-    if (identity !== null) {
-      throw new AgentCleanupIdentityMismatchError(
-        "cleanup path appeared after deletion preparation",
-      );
-    }
+    // The journal fence blocks legitimate claims on prepared-absent paths, so a
+    // file that appeared here is leaked deleted-agent state (recreated WAL
+    // sidecars, runtime home rewrites). Adopt it and sweep it; preserving it
+    // cascades ancestor protection and finishes over a surviving tree.
+    cleanupPath.preparedIdentity = identity;
   } else if (
     identity === null ||
     identity.dev !== cleanupPath.preparedIdentity.dev ||
@@ -642,88 +659,6 @@ function cleanupPathCovers(
   );
 }
 
-type AgentDeleteDatabasePlan = {
-  paths: string[];
-  registrationPaths: string[];
-  fileGroups: string[][];
-  relocatedFileGroups: string[][];
-};
-
-function resolveSurvivingDatabaseFilePaths(
-  registeredDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases>,
-  agentId: string,
-): string[] {
-  return [
-    ...new Set(
-      registeredDatabases
-        .filter((entry) => normalizeAgentId(entry.agentId) !== agentId)
-        .flatMap((entry) => resolveSqliteDatabaseFilePaths(entry.path))
-        .map((pathname) => normalizeAgentDirRegistryPath(pathname)),
-    ),
-  ];
-}
-
-function isPathOwnedBySurvivingAgent(
-  cfg: OpenClawConfig,
-  agentId: string,
-  pathname: string,
-  survivingDatabaseFilePaths: readonly string[] = [],
-): boolean {
-  const canonicalPath = normalizeAgentDirRegistryPath(pathname);
-  return (
-    isPathOwnedByAnotherRegisteredAgent({ agentId, pathname }) ||
-    findOverlappingWorkspaceAgentIds(cfg, agentId, pathname).length > 0 ||
-    survivingDatabaseFilePaths.some(
-      (databasePath) =>
-        databasePath === canonicalPath ||
-        isPathInside(databasePath, canonicalPath) ||
-        isPathInside(canonicalPath, databasePath),
-    )
-  );
-}
-
-function prepareAgentDeleteDatabases(
-  cfg: OpenClawConfig,
-  agentId: string,
-  agentDir: string,
-): AgentDeleteDatabasePlan {
-  const registeredDatabases = listOpenClawRegisteredAgentDatabases();
-  const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-    registeredDatabases,
-    agentId,
-  );
-  const registeredDatabasePaths = new Set([
-    resolveOpenClawAgentSqlitePath({
-      agentId,
-      path: path.join(agentDir, "openclaw-agent.sqlite"),
-    }),
-    ...registeredDatabases
-      .filter((entry) => normalizeAgentId(entry.agentId) === agentId)
-      .map((entry) => entry.path),
-  ]);
-  const databasePaths = [...registeredDatabasePaths].filter((pathname) =>
-    resolveSqliteDatabaseFilePaths(pathname).every(
-      (filePath) =>
-        !isPathOwnedBySurvivingAgent(cfg, agentId, filePath, survivingDatabaseFilePaths),
-    ),
-  );
-  for (const databasePath of databasePaths) {
-    closeOpenClawAgentDatabaseByPath(databasePath);
-  }
-  assertNoOpenClawAgentDatabaseLeases(agentId);
-  const fileGroups = databasePaths.map(resolveSqliteDatabaseFilePaths);
-  const relocatedFileGroups = fileGroups.filter((fileGroup) => {
-    const relative = path.relative(agentDir, fileGroup[0] ?? agentDir);
-    return relative.startsWith("..") || path.isAbsolute(relative);
-  });
-  return {
-    paths: databasePaths,
-    registrationPaths: [...registeredDatabasePaths],
-    fileGroups,
-    relocatedFileGroups,
-  };
-}
-
 function unregisterAgentDeleteDatabases(agentId: string, databasePaths: string[]): void {
   for (const databasePath of databasePaths) {
     unregisterOpenClawAgentDatabase({ agentId, path: databasePath });
@@ -873,11 +808,26 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const modelCatalog = await readPreparedServerMethodModelCatalog(context);
-    const result = listAgentsForGateway(cfg, modelCatalog, {
-      includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
-    });
-    respond(true, result, undefined);
+    const modelCatalogByAgentId = new Map(
+      await Promise.all(
+        listAgentIds(cfg).map(
+          async (agentId) =>
+            [agentId, await readPreparedServerMethodModelCatalog(context, { agentId })] as const,
+        ),
+      ),
+    );
+    respond(
+      true,
+      listAgentsForGateway(cfg, undefined, {
+        modelCatalogByAgentId,
+        includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+        httpAvatarBasePath:
+          client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
+            ? (cfg.gateway?.controlUi?.basePath ?? "")
+            : undefined,
+      }),
+      undefined,
+    );
   },
   "agents.create": async ({ params, respond }) => {
     if (!validateAgentsCreateParams(params)) {
@@ -915,7 +865,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const agentId = normalizeAgentId(params.agentId);
+    const normalized = normalizeAgentIdStrict(params.agentId);
+    if (!normalized.ok) {
+      respondAgentNotFound(respond, params.agentId);
+      return;
+    }
+    const agentId = normalized.value;
     if (!isConfiguredAgent(cfg, agentId)) {
       respondAgentNotFound(respond, agentId);
       return;
@@ -1009,14 +964,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const agentId = normalizeAgentId(params.agentId);
-    // agents/main/agent also owns the shipped shared legacy auth store.
-    // Keep main undeletable until named agents make auth-store ownership explicit.
-    if (agentId === LEGACY_IMPLICIT_AGENT_ID) {
+    const normalized = normalizeAgentIdStrict(params.agentId);
+    if (!normalized.ok) {
+      respondAgentNotFound(respond, params.agentId);
+      return;
+    }
+    const agentId = normalized.value;
+    if (agentOwnsSharedAuthStore(cfg, agentId)) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `"${LEGACY_IMPLICIT_AGENT_ID}" cannot be deleted`),
+        errorShape(ErrorCodes.INVALID_REQUEST, formatSharedAuthStoreOwnerDeleteError(agentId)),
       );
       return;
     }
@@ -1028,13 +986,24 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondAgentNotFound(respond, agentId);
       return;
     }
-    if (agentId === resolveDefaultAgentId(cfg)) {
+    if (agentId === tryResolveSoleAgentId(cfg)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+          `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
+        ),
+      );
+      return;
+    }
+    if (isInheritedAuthStoreOwner(cfg, agentId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
         ),
       );
       return;
@@ -1046,12 +1015,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
       const result = await withConfigMutationExclusive(async (lockedConfig) => {
         let lockedJournal = readAgentDeletionJournal(agentId);
         const configured = isConfiguredAgent(lockedConfig, agentId);
+        if (agentOwnsSharedAuthStore(lockedConfig, agentId)) {
+          throw new AgentSharedAuthStoreOwnerError(formatSharedAuthStoreOwnerDeleteError(agentId));
+        }
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
-        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+        if (agentId === tryResolveSoleAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(`agent "${agentId}" is the only configured agent`);
+        }
+        if (isInheritedAuthStoreOwner(lockedConfig, agentId)) {
           throw new AgentConfigPreconditionError(
-            `agent "${agentId}" is the default; reassign default first`,
+            `agent "${agentId}" owns agents.defaults.authInheritance.agentId; relocate credentials and re-point it first`,
           );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
@@ -1182,7 +1157,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 }
               }),
           );
-          deletion.commit();
         } catch (error) {
           let canReleaseFence =
             !rosterCommitted &&
@@ -1214,14 +1188,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
         // A journaled path is trash-eligible only while registry ownership still points at the
         // deleted agent; recovery must not consume a path claimed by a surviving agent.
         const agentDirRegistryPath = normalizeAgentDirRegistryPath(deleteResult.agentDir);
-        await purgeAgentSessionStoreEntries(lockedConfig, agentId);
+        const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId, {
+          runDatabaseCleanup: deletion.runDatabaseCleanup,
+        });
 
         const removed: AgentDeleteRemovedPath[] = [];
         const failed: AgentDeleteFailedPath[] = [];
 
-        if (deleteFiles) {
+        if (deleteFiles && !purgeFailed) {
           const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-            listOpenClawRegisteredAgentDatabases(),
+            readAgentDeleteDatabaseRegistry(),
             agentId,
           );
           const workspaceTrashEligible = !isPathOwnedBySurvivingAgent(
@@ -1349,7 +1325,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               continue;
             }
             const refreshedDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-              listOpenClawRegisteredAgentDatabases(),
+              readAgentDeleteDatabaseRegistry(),
               agentId,
             );
             const blockingProtection = protectedCleanupPaths.find(
@@ -1446,7 +1422,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
             unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
           }
         }
-        if (failed.length === 0) {
+        if (failed.length === 0 && !purgeFailed) {
           unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
           if (deleteFiles) {
             unregisterAgentDeleteDatabases(agentId, databasePlan?.registrationPaths ?? []);
@@ -1459,10 +1435,15 @@ export const agentsHandlers: GatewayRequestHandlers = {
           removedBindings: deleteResult.removedBindings,
           removed,
           failed,
+          ...(purgeFailed ? { purgeFailed: true as const } : {}),
         };
       });
       respond(true, result, undefined);
     } catch (error) {
+      if (error instanceof AgentSharedAuthStoreOwnerError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
       if (error instanceof AgentConfigPreconditionError) {
         respondAgentNotFound(respond, agentId);
         return;
@@ -1482,7 +1463,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const agentId = resolveAgentIdOrError(params.agentId, cfg);
     if (!agentId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      respondAgentNotFound(respond, params.agentId);
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);

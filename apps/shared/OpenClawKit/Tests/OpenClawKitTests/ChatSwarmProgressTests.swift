@@ -62,7 +62,7 @@ struct ChatSwarmProgressTests {
         let activeGroup = "swarm:agent:main:parent:active"
         let finishedGroup = "swarm:agent:main:parent:finished"
         let sessions = [
-            session(key: "queued", status: nil, groupID: activeGroup, subagentRunState: "active"),
+            session(key: "queued", status: "queued", groupID: activeGroup, hasActiveRun: true),
             session(key: "running", status: "running", groupID: activeGroup),
             session(key: "done", status: "done", groupID: activeGroup),
             session(key: "failed", status: "timeout", groupID: activeGroup),
@@ -202,7 +202,8 @@ struct ChatSwarmProgressTests {
         key: String,
         status: String?,
         groupID: String,
-        subagentRunState: String? = nil) -> OpenClawChatSessionEntry
+        subagentRunState: String? = nil,
+        hasActiveRun: Bool? = nil) -> OpenClawChatSessionEntry
     {
         OpenClawChatSessionEntry(
             key: key,
@@ -226,6 +227,7 @@ struct ChatSwarmProgressTests {
             contextTokens: nil,
             parentSessionKey: "agent:main:parent",
             status: status,
+            hasActiveRun: hasActiveRun,
             subagentRunState: subagentRunState,
             swarmGroupId: groupID)
     }

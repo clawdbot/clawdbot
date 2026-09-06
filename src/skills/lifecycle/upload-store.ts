@@ -31,12 +31,13 @@ import {
   hasLiveSkillUploadInstallLease,
   openSkillUploadDatabase,
   readSkillUploadArchiveChunks,
-  readSkillUploadRow,
+  readSkillUploadMetadata,
   renewSkillUploadInstallLease,
   resolveSkillUploadDatabaseOptions,
+  selectSkillUploadMetadata,
   SKILL_UPLOAD_LEASE_SCOPE,
   type SkillUploadDatabase,
-  type SkillUploadRow,
+  type SkillUploadMetadataRow,
 } from "./upload-store.sqlite.js";
 
 /** Time window in which uploaded skill archive chunks may be committed. */
@@ -217,8 +218,11 @@ function decodeBase64Chunk(dataBase64: string): Buffer {
   return decoded;
 }
 
-function requireUploadRow(uploadId: string, options: OpenClawStateDatabaseOptions): SkillUploadRow {
-  const row = readSkillUploadRow(uploadId, options);
+function requireUploadMetadata(
+  uploadId: string,
+  options: OpenClawStateDatabaseOptions,
+): SkillUploadMetadataRow {
+  const row = readSkillUploadMetadata(uploadId, options);
   if (!row) {
     throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
   }
@@ -226,7 +230,7 @@ function requireUploadRow(uploadId: string, options: OpenClawStateDatabaseOption
 }
 
 function assertNotExpired(
-  row: SkillUploadRow,
+  row: SkillUploadMetadataRow,
   nowMs: number,
   options: OpenClawStateDatabaseOptions,
 ): void {
@@ -241,7 +245,7 @@ function assertNotExpired(
 }
 
 function matchesBegin(
-  row: SkillUploadRow,
+  row: SkillUploadMetadataRow,
   params: {
     kind: "skill-archive";
     slug: string;
@@ -304,9 +308,9 @@ function assembleArchive(
   expectedSize: number,
 ): Buffer {
   let offset = 0;
-  const buffers: Buffer[] = [];
+  const buffers: Uint8Array[] = [];
   for (const chunk of chunks) {
-    const bytes = Buffer.from(chunk.chunk_blob);
+    const bytes = chunk.chunk_blob;
     if (chunk.byte_offset !== offset || chunk.size_bytes !== bytes.length || bytes.length < 1) {
       throw new SkillUploadRequestError("uploaded archive chunks are incomplete");
     }
@@ -319,7 +323,7 @@ function assembleArchive(
   return Buffer.concat(buffers, expectedSize);
 }
 
-function toSkillUploadRecord(row: SkillUploadRow, archivePath: string): SkillUploadRecord {
+function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string): SkillUploadRecord {
   return {
     version: 1,
     kind: "skill-archive",
@@ -339,7 +343,7 @@ function toSkillUploadRecord(row: SkillUploadRow, archivePath: string): SkillUpl
   };
 }
 
-function toCommitResult(row: SkillUploadRow, requestedSha: string | undefined) {
+function toCommitResult(row: SkillUploadMetadataRow, requestedSha: string | undefined) {
   if (!row.actual_sha256) {
     throw new SkillUploadRequestError("committed upload is missing sha256");
   }
@@ -398,10 +402,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
           if (keyHash) {
             const existing = executeSqliteQueryTakeFirstSync(
               db,
-              kysely
-                .selectFrom("skill_uploads")
-                .selectAll()
-                .where("idempotency_key_hash", "=", keyHash),
+              selectSkillUploadMetadata(kysely).where("idempotency_key_hash", "=", keyHash),
             );
             if (existing) {
               if (!matchesBegin(existing, { kind: params.kind, slug, force, sizeBytes, sha256 })) {
@@ -473,12 +474,12 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       });
       return await withLock(`${root}:upload:${uploadId}`, async () => {
         const currentTime = now();
-        assertNotExpired(requireUploadRow(uploadId, stateOptions), currentTime, stateOptions);
+        assertNotExpired(requireUploadMetadata(uploadId, stateOptions), currentTime, stateOptions);
         return runOpenClawStateWriteTransaction(({ db }) => {
           const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
           const row = executeSqliteQueryTakeFirstSync(
             db,
-            kysely.selectFrom("skill_uploads").selectAll().where("upload_id", "=", uploadId),
+            selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
           );
           if (!row) {
             throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
@@ -528,7 +529,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       const requestedSha = normalizeSkillUploadSha256(params.sha256);
       const root = lockRoot();
       return await withLock(`${root}:upload:${uploadId}`, async () => {
-        const row = requireUploadRow(uploadId, stateOptions);
+        const row = requireUploadMetadata(uploadId, stateOptions);
         assertNotExpired(row, now(), stateOptions);
         if (row.committed === 1) {
           return toCommitResult(row, requestedSha);
@@ -551,7 +552,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
         } catch (err) {
           // Another process may commit and delete chunks after our metadata read.
           // The committed parent row is the idempotent authority in that race.
-          const current = requireUploadRow(uploadId, stateOptions);
+          const current = requireUploadMetadata(uploadId, stateOptions);
           if (current.committed === 1) {
             return toCommitResult(current, requestedSha);
           }
@@ -563,13 +564,13 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
           throw new SkillUploadRequestError("upload sha256 mismatch");
         }
         const committedAt = now();
-        assertNotExpired(requireUploadRow(uploadId, stateOptions), committedAt, stateOptions);
+        assertNotExpired(requireUploadMetadata(uploadId, stateOptions), committedAt, stateOptions);
 
         return runOpenClawStateWriteTransaction(({ db }) => {
           const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
           const current = executeSqliteQueryTakeFirstSync(
             db,
-            kysely.selectFrom("skill_uploads").selectAll().where("upload_id", "=", uploadId),
+            selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
           );
           if (!current) {
             throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
@@ -621,7 +622,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       return await withLock(`${root}:upload:${uploadId}`, async () => {
         const leaseOwner = randomUUID();
         const currentTime = now();
-        assertNotExpired(requireUploadRow(uploadId, stateOptions), currentTime, stateOptions);
+        assertNotExpired(requireUploadMetadata(uploadId, stateOptions), currentTime, stateOptions);
         const row = runOpenClawStateWriteTransaction(({ db }) => {
           const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
           const current = executeSqliteQueryTakeFirstSync(
@@ -644,7 +645,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
           if (!current.actual_sha256) {
             throw new SkillUploadRequestError("committed upload is missing sha256");
           }
-          if (Buffer.from(current.archive_blob).length !== current.size_bytes) {
+          if (current.archive_blob.byteLength !== current.size_bytes) {
             throw new SkillUploadRequestError("uploaded archive is missing or incomplete");
           }
           executeSqliteQuerySync(
@@ -703,7 +704,8 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
             },
             async (tmp) => {
               const archivePath = path.join(tmp.dir, "archive.zip");
-              await fs.writeFile(archivePath, Buffer.from(row.archive_blob), { mode: 0o600 });
+              // SQLite returned a private byte snapshot that remains stable across this await.
+              await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
               return await action(toSkillUploadRecord(row, archivePath), {
                 remove: async () => {
                   // Only the callback that still owns the install lease may consume the upload.

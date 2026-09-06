@@ -1,11 +1,19 @@
+import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
+import type { ChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../get-reply-options.types.js";
+import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 
@@ -15,10 +23,16 @@ type ReplyBackendKind = "embedded" | "cli";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
+export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
+
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  /** Exact tool authority resolved for an inbound user turn before steering. */
+  toolAuthorityFingerprint?: string;
+  /** Internal proof that a mismatched route recomputes to the active run's full authority. */
+  pendingInputAuthorityFingerprint?: string;
   debounceMs?: number;
   /** Ordered current-turn images to inject with the steering text. */
   images?: ImageContent[];
@@ -38,8 +52,54 @@ export type ReplyBackendQueueMessageOptions = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
+export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Consumed by reply ownership and never forwarded to the active backend. */
+  toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+};
+
+export type ReplyToolAuthorityRoute = Readonly<{
+  provider: string;
+  model: string;
+}>;
+
+/** Per-message authority facts projected against an active run's frozen owner state. */
+export type ReplyToolAuthorityOverlay = Readonly<{
+  permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
+  originatingChannel?: OriginatingChannelType;
+  messageProvider?: string;
+  chatType?: ChatType;
+  agentAccountId?: string;
+  conversationToolPolicy?: GroupToolPolicyConfig;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  memberRoleIds?: string[];
+  spawnedBy?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  senderIsOwner: boolean;
+  inputProvenance?: InputProvenance;
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  toolsAllow?: string[];
+  disableTools: boolean;
+  traceAuthorized: boolean;
+  approvalReviewerDeviceId?: string;
+  clientCaps?: string[];
+  toolBindings?: Readonly<Record<string, unknown>>;
+}>;
+
+export type ReplyToolAuthoritySnapshot = Readonly<{
+  fingerprint(route?: ReplyToolAuthorityRoute): string;
+  project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
+}>;
+
 export type ReplyBackendQueueMessageResult = {
-  /** Acceptance was irreversible, but the harness could not prove transcript commitment. */
+  /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
   transcriptCommit: "unconfirmed";
   errorMessage: string;
 };
@@ -53,15 +113,47 @@ export type ReplyBackendMessageInjection = {
   ): Promise<void | ReplyBackendQueueMessageResult>;
 };
 
+/** V2 sinks invoke the host-owned, per-injection assertion at their final effect. */
+export type ReplyBackendMessageInjectionV2 = {
+  readonly version: 2;
+  isAvailable(): boolean;
+  queueMessage(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<void | ReplyBackendQueueMessageResult>;
+  claimPendingUserInputAnswer?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  cancelPendingUserInput?(
+    resolvedBy: string,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+};
+
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   readonly runId?: string;
+  /** Exact authority of this concrete backend attempt, after fallback selection. */
+  readonly toolAuthorityFingerprint?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
+  claimPendingUserInputAnswer?: (
+    text: string,
+    options?: ReplyBackendQueueMessageOptions,
+  ) => Promise<boolean>;
+  cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   cancel(reason?: ReplyBackendCancelReason): void;
   readonly messageInjection?: ReplyBackendMessageInjection;
+  /** V1 remains compatible with v2026.8.1; source-bound input requires V2. */
+  readonly messageInjectionV2?: ReplyBackendMessageInjectionV2;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
   isStreaming?: () => boolean;
   isStopped?: () => boolean;
@@ -81,31 +173,30 @@ export type ReplyBackendHandle = {
 export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectionTargetOperation");
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
-  /** Legacy targets stay leaf-bound even when their backend exposes a run id. */
-  readonly identity: "leaf" | "run";
   readonly runId?: string;
-  readonly originatingLeafEntryId: string | null | undefined;
+};
+
+export const replyRunInterruptTargetOperation = Symbol("replyRunInterruptTargetOperation");
+export type ReplyRunInterruptTarget = {
+  readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
 type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
   | "stale_run"
-  | "leaf_mismatch"
-  | "run_mismatch"
   | "injection_unavailable"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
 
 export type ReplyMessageInjectionOutcome =
+  | { status: "indeterminate"; errorMessage: string }
   | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque operation target. */
   targetRunId: string | undefined;
-  /** Leaf-bound compatibility must reject before ACK instead of falling through. */
-  rejectBeforeAck?: true;
   /** Settles once the runtime accepts or rejects ownership of this exact message. */
   acceptance: Promise<boolean>;
   /** Settles after the backend confirms or rejects this exact injection. */
@@ -113,6 +204,7 @@ export type ReplyMessageInjectionAttempt = {
 };
 
 type ReplyBackendQueueMessageMismatch =
+  | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
@@ -138,7 +230,10 @@ type ReplyOperationFailureCode =
   | "run_stalled"
   | "run_failed";
 
-type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+type ReplyOperationAbortCode =
+  | "aborted_by_user"
+  | "aborted_for_restart"
+  | "aborted_for_supersession";
 
 type ReplyOperationResult =
   | { kind: "completed" }
@@ -148,6 +243,7 @@ type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  readonly turnKind: ReplyTurnKind;
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
   readonly routeThreadId?: string | number;
@@ -167,6 +263,10 @@ export type ReplyOperation = {
    * Final delivery reads it because the original dispatch context cannot change.
    */
   readonly acceptedSteeredInboundAudio: boolean;
+  /** Immutable tool authority accepted by the active backend for steered user turns. */
+  readonly toolAuthorityFingerprint?: string;
+  /** Concrete provider/model route currently selected for this operation. */
+  readonly toolAuthorityRoute?: ReplyToolAuthorityRoute;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
   /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
@@ -196,6 +296,12 @@ export type ReplyOperation = {
   /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
   markAcceptedSteeredInboundAudio(): void;
+  /** Freeze the complete caller policy before a concrete backend attempt attaches. */
+  bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
+  /** Project an inbound turn through the current concrete route; settled owners fail closed. */
+  projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
+  /** Prepare fingerprint and projection together for the final concrete attempt route. */
+  bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): string;
   updateSessionId(nextSessionId: string): void;
   /**
    * Move this queued operation to another session key's run slot. Native command
@@ -233,6 +339,7 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): boolean;
   abortForRestart(): boolean;
+  supersede(beforeSupersede?: () => void): boolean;
 };
 
 export type ReplyRunRegistry = {
@@ -246,11 +353,10 @@ export type ReplyRunRegistry = {
   }): ReplyOperation;
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
-  resolveMessageInjectionTarget(params: {
-    sessionKey: string;
-    originatingLeafEntryId: string | null | undefined;
-    expectedRunId?: string;
-  }): ReplyMessageInjectionTarget | undefined;
+  /** Captures the current direct owner without requiring client-supplied run identity. */
+  resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
+  /** Captures the current direct owner for exact-instance interruption. */
+  resolveCurrentInterruptTarget(sessionKey: string): ReplyRunInterruptTarget | undefined;
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,

@@ -4,13 +4,16 @@ import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseMusicGenerationModelRef } from "../media-generation/model-ref.js";
-import { getMusicGenerationProvider } from "../media-generation/registry.js";
-import { listMusicGenerationProviders } from "../media-generation/registry.js";
+import {
+  getMusicGenerationProvider,
+  listMusicGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
+  resolveReferenceImageCapabilityError,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
@@ -89,6 +92,23 @@ export async function generateMusic(
         error,
       });
       lastError = new Error(error);
+      continue;
+    }
+
+    const referenceImageError = resolveReferenceImageCapabilityError({
+      candidateRef: `${candidate.provider}/${candidate.model}`,
+      inputImageCount: params.inputImages?.length ?? 0,
+      edit: provider.capabilities.edit,
+    });
+    if (referenceImageError) {
+      recordCapabilityCandidateFailure({
+        attempts,
+        provider: candidate.provider,
+        model: candidate.model,
+        error: referenceImageError,
+      });
+      lastError = new Error(referenceImageError);
+      logger.debug(`music-generation candidate skipped: ${referenceImageError}`);
       continue;
     }
 

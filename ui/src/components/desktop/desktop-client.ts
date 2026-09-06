@@ -1,4 +1,5 @@
-type DesktopDisconnectDetail = {
+export type DesktopDisconnectDetail = {
+  clean: boolean;
   code?: number;
   reason?: string;
 };
@@ -10,11 +11,13 @@ type DesktopSecurityFailureDetail = {
 
 type DesktopConnectOptions = {
   background?: string;
+  credentials?: { username?: string; password?: string };
   gatewayUrl?: string;
+  isCurrent: () => boolean;
   onConnect?: () => void;
   onDisconnect?: (detail: DesktopDisconnectDetail) => void;
   onSecurityFailure?: (detail: DesktopSecurityFailureDetail) => void;
-  password?: string;
+  scaleViewport?: boolean;
   target: HTMLElement;
   viewOnly: boolean;
   wsUrl: string;
@@ -22,6 +25,11 @@ type DesktopConnectOptions = {
 
 export type DesktopConnectionHandle = {
   disconnect(): void;
+  disableInput(): void;
+  sendBackspace(): void;
+  sendKeyboardEvent(event: KeyboardEvent): void;
+  sendText(text: string): void;
+  setScaleViewport(enabled: boolean): void;
 };
 
 type RfbClient = EventTarget & {
@@ -34,7 +42,7 @@ type RfbClient = EventTarget & {
 type RfbConstructor = new (
   target: HTMLElement,
   channel: string | WebSocket,
-  options?: { credentials?: { password: string } },
+  options?: { credentials?: { username?: string; password?: string } },
 ) => RfbClient;
 
 type RfbLoader = () => Promise<RfbConstructor>;
@@ -77,27 +85,98 @@ export class DesktopClient {
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
     const Rfb = this.rfbConstructor ?? (await this.loadRfb());
     const wsUrl = resolveDesktopWebSocketUrl(options.wsUrl, options.gatewayUrl);
+    // The socket claims control before RFB authentication; canceled lazy loads must not open it.
+    if (!options.isCurrent()) {
+      throw new DOMException("Desktop connection is no longer current", "AbortError");
+    }
     const socket = this.createWebSocket(wsUrl);
-    let closeDetail: DesktopDisconnectDetail = {};
+    let closeDetail: Pick<CloseEvent, "code" | "reason"> | undefined;
     socket.addEventListener("close", (event) => {
       closeDetail = { code: event.code, reason: event.reason };
     });
     const rfb = new Rfb(
       options.target,
       socket,
-      options.password ? { credentials: { password: options.password } } : undefined,
+      options.credentials ? { credentials: options.credentials } : undefined,
     );
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
-    rfb.scaleViewport = true;
+    rfb.scaleViewport = options.scaleViewport ?? true;
+    let retired = false;
     rfb.addEventListener("connect", () => options.onConnect?.());
-    rfb.addEventListener("disconnect", () => options.onDisconnect?.(closeDetail));
+    rfb.addEventListener("disconnect", (event) => {
+      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
+      retired = true;
+      // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
+      const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
+      options.onDisconnect?.({ ...closeDetail, clean });
+    });
     rfb.addEventListener("securityfailure", (event) => {
       const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
       options.onSecurityFailure?.(detail);
     });
+    const dispatchKeyboardEvent = (event: KeyboardEvent) => {
+      // noVNC owns keyboard translation and attaches its listeners to the
+      // canvas. Forward the offscreen mobile input's event to that same
+      // boundary so virtual-keyboard input follows the canonical RFB path.
+      options.target.querySelector("canvas")?.dispatchEvent(event);
+    };
+    const cloneKeyboardEvent = (event: KeyboardEvent) =>
+      new KeyboardEvent(event.type, {
+        key: event.key,
+        code: event.code,
+        location: event.location,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+        repeat: event.repeat,
+        isComposing: event.isComposing,
+        bubbles: true,
+        cancelable: true,
+      });
     return {
-      disconnect: () => rfb.disconnect(),
+      disconnect: () => {
+        if (!retired) {
+          retired = true;
+          rfb.disconnect();
+        }
+      },
+      disableInput: () => {
+        rfb.viewOnly = true;
+      },
+      setScaleViewport: (enabled) => {
+        rfb.scaleViewport = enabled;
+      },
+      sendKeyboardEvent: (event) => dispatchKeyboardEvent(cloneKeyboardEvent(event)),
+      sendText: (text) => {
+        // Mobile IMEs can omit keydown/keyup. "Unidentified" asks noVNC's
+        // keyboard owner to translate each inserted character and emit a
+        // balanced press/release. Line breaks need Enter rather than Unicode LF.
+        const normalizedText = text.replace(/\r\n?/g, "\n");
+        for (let index = 0; index < normalizedText.length; index += 1) {
+          dispatchKeyboardEvent(
+            new KeyboardEvent("keydown", {
+              key: normalizedText.charAt(index) === "\n" ? "Enter" : normalizedText.charAt(index),
+              code: "Unidentified",
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        }
+      },
+      sendBackspace: () => {
+        for (const type of ["keydown", "keyup"]) {
+          dispatchKeyboardEvent(
+            new KeyboardEvent(type, {
+              key: "Backspace",
+              code: "Backspace",
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        }
+      },
     };
   }
 }

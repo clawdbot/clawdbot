@@ -11,11 +11,13 @@ import {
   type MessagePresentationInteractiveBlock,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveAskUserQuestionOptionIndices,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import {
   buildTelegramPresentationButtons,
   resolveTelegramInlineButtons,
-  resolveTelegramQuestionOptionIndices,
   type TelegramButtonBuildOptions,
 } from "./button-types.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -28,7 +30,7 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
   selects: true,
   context: true,
   divider: false,
-  // Native table blocks require the account's Bot API 10.2 rich-message path;
+  // Native table blocks require the account's Bot API 10.3 rich-message path;
   // per-account capability resolution flips this on when richMessages is enabled.
   tables: false,
   limits: {
@@ -67,7 +69,7 @@ function escapeTelegramTableCellText(value: string | number): string {
 }
 
 // The `<table>` HTML island feeds the existing island -> rich-block converter,
-// which emits native Bot API 10.2 table blocks (bordered, striped, native
+// which emits native Bot API 10.3 table blocks (bordered, striped, native
 // caption, header cells) on rich accounts. Markdown pipe tables cannot express
 // row-header columns or native captions, so the island form is canonical here.
 function renderTelegramTableIsland(block: MessagePresentationTableBlock): string {
@@ -223,7 +225,7 @@ export function canonicalizeTelegramPresentationPayload(
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
-    questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+    questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {

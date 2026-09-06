@@ -1,103 +1,34 @@
 // Openai tests cover realtime voice provider plugin behavior.
-import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceResponseOutcome,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const {
-  FakeWebSocket,
-  execFileSyncMock,
-  fetchWithSsrFGuardMock,
-  isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKeyMock,
-} = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-
-    readonly listeners = new Map<string, Listener[]>();
-    readyState = 0;
-    sent: string[] = [];
-    closed = false;
-    terminated = false;
-    deferClose = false;
-    deferredClose: (() => void) | undefined;
-    args: unknown[];
-
-    constructor(...args: unknown[]) {
-      this.args = args;
-      MockWebSocket.instances.push(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      const emitClose = () => this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-      if (this.deferClose) {
-        this.deferredClose = emitClose;
-        return;
-      }
-      emitClose();
-    }
-
-    terminate(): void {
-      this.terminated = true;
-      this.close(1006, "terminated");
-    }
-
-    emitDeferredClose(): void {
-      const emitClose = this.deferredClose;
-      this.deferredClose = undefined;
-      emitClose?.();
-    }
-  }
-
-  return {
-    FakeWebSocket: MockWebSocket,
-    execFileSyncMock: vi.fn(),
-    fetchWithSsrFGuardMock: vi.fn(),
-    isProviderAuthProfileConfiguredMock: vi.fn(),
-    resolveProviderAuthProfileApiKeyMock: vi.fn(),
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
+  return createOpenAIRealtimeMockState();
 });
-
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
-    execFileSync: execFileSyncMock,
+    execFileSync: mocks.execFileSyncMock,
   };
 });
 
 vi.mock("ws", () => ({
-  default: FakeWebSocket,
+  default: mocks.FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
+  isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
@@ -108,29 +39,24 @@ const {
   beginBridgeConnection,
   openSocket,
   emitServerEvent,
+  emitAssistantPlayback,
   emitSessionUpdated,
   emitCompletedToolCalls,
   connectReadyBridge,
   expectedResponseCreateEvent,
   requireNestedRecord,
   expectRecordFields,
-} = createOpenAIRealtimeTestSupport({ FakeWebSocket, fetchWithSsrFGuardMock });
+  resetTestState,
+  restoreTestEnvironment,
+} = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 describe("OpenAI realtime voice response control", () => {
   beforeEach(() => {
-    FakeWebSocket.instances = [];
-    vi.stubEnv("OPENAI_API_KEY", "");
-    execFileSyncMock.mockReset();
-    fetchWithSsrFGuardMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
-    resolveProviderAuthProfileApiKeyMock.mockReset();
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
+    resetTestState();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+    restoreTestEnvironment();
   });
 
   it("suppresses auto responses before draining queued initial greeting audio", async () => {
@@ -264,10 +190,7 @@ describe("OpenAI realtime voice response control", () => {
   it("defers manual response.create while a realtime response is active", async () => {
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
+    emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
 
     bridge.sendUserMessage?.("queued manual response");
 
@@ -310,18 +233,13 @@ describe("OpenAI realtime voice response control", () => {
       },
     );
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: {
-            event_id: responseCreateEvent.event_id,
-            message: "bad response request",
-          },
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "error",
+      error: {
+        event_id: responseCreateEvent.event_id,
+        message: "bad response request",
+      },
+    });
 
     expect(onError).toHaveBeenCalledWith(new Error("bad response request"));
     expectRecordFields(
@@ -334,42 +252,127 @@ describe("OpenAI realtime voice response control", () => {
     );
   });
 
-  it("keeps automatic audio suppressed for unrelated errors during a manual response", async () => {
-    const onError = vi.fn();
-    const bridge = createNativeBridge({ onError });
-    const socket = await connectReadyBridge(bridge);
+  it.each([
+    { mode: "manual", hasEventId: true },
+    { mode: "standalone", hasEventId: true },
+    { mode: "manual", hasEventId: false },
+    { mode: "standalone", hasEventId: false },
+  ] as const)(
+    "settles rejected $mode speech (eventId=$hasEventId) before dispatching the consumer's next message",
+    async ({ mode, hasEventId }) => {
+      const onError = vi.fn();
+      const onResponseDone = vi.fn((outcome: RealtimeVoiceResponseOutcome) => {
+        if (outcome.status === "failed") {
+          bridge.sendUserMessage?.("Say exactly: the next answer.");
+        }
+      });
+      const bridge = createNativeBridge({ onError, onResponseDone, onToolCall: vi.fn() });
+      const socket = await connectReadyBridge(bridge);
+      if (mode === "standalone") {
+        emitCompletedToolCalls(socket);
+        onResponseDone.mockClear();
+      }
+      bridge.sendUserMessage?.("Say exactly: the first answer.");
+      const rejected = parseSent(socket).findLast((event) => event.type === "response.create");
+      if (!rejected?.event_id) {
+        throw new Error("expected speech response.create event id");
+      }
+      const rejection = {
+        type: "error",
+        error: {
+          ...(hasEventId ? { event_id: rejected.event_id } : {}),
+          type: "invalid_request_error",
+          code: "invalid_value",
+          param: "response.tool_choice",
+          message: "Speech request rejected",
+        },
+      };
 
-    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
-    const sessionUpdatesBeforeError = parseSent(socket).filter(
-      (event) => event.type === "session.update",
-    );
+      emitServerEvent(socket, rejection);
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: { event_id: "unrelated-audio-event", message: "bad audio append" },
-        }),
-      ),
-    );
+      expect(onResponseDone).toHaveBeenCalledExactlyOnceWith({
+        status: "failed",
+        error: {
+          type: "invalid_request_error",
+          code: "invalid_value",
+          message: "Speech request rejected",
+        },
+        message: "OpenAI realtime voice response failed: Speech request rejected",
+      });
+      expect(onError).toHaveBeenCalledExactlyOnceWith(new Error("Speech request rejected"));
+      const responseCreates = parseSent(socket).filter((event) => event.type === "response.create");
+      expect(responseCreates).toHaveLength(2);
+      expect(responseCreates[1]?.event_id).not.toBe(rejected.event_id);
+      expect(bridge.isConnected()).toBe(true);
 
-    expect(onError).toHaveBeenCalledWith(new Error("bad audio append"));
-    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(
-      sessionUpdatesBeforeError.length,
-    );
+      emitServerEvent(socket, {
+        ...rejection,
+        error: { ...rejection.error, event_id: rejected.event_id },
+      });
+      expect(onResponseDone).toHaveBeenCalledOnce();
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
+      emitServerEvent(socket, { type: "response.created", response: { id: "response-next" } });
+      emitServerEvent(socket, {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          param: "response.tool_choice",
+          message: "Late error",
+        },
+      });
+      expect(onResponseDone).toHaveBeenCalledOnce();
+      bridge.close();
+    },
+  );
 
-    emitServerEvent(socket, { type: "response.done" });
+  it.each([
+    {
+      event_id: "unrelated-audio-event",
+      type: "invalid_request_error",
+      param: "response.tool_choice",
+    },
+    { type: "invalid_request_error", param: "audio" },
+    { type: "server_error", param: "response.tool_choice" },
+  ])(
+    "keeps automatic audio suppressed for unrelated errors during a manual response: %j",
+    async (error) => {
+      const onError = vi.fn();
+      const onResponseDone = vi.fn();
+      const bridge = createNativeBridge({ onError, onResponseDone });
+      const socket = await connectReadyBridge(bridge);
 
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
-      "restored turn detection",
-      {
-        create_response: true,
-        interrupt_response: true,
-      },
-    );
-  });
+      bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
+      const sessionUpdatesBeforeError = parseSent(socket).filter(
+        (event) => event.type === "session.update",
+      );
+
+      emitServerEvent(socket, {
+        type: "error",
+        error: { ...error, message: "bad audio append" },
+      });
+
+      expect(onError).toHaveBeenCalledWith(new Error("bad audio append"));
+      expect(onResponseDone).not.toHaveBeenCalled();
+      expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(
+        sessionUpdatesBeforeError.length,
+      );
+
+      emitServerEvent(socket, { type: "response.done" });
+
+      expectRecordFields(
+        requireNestedRecord(parseSent(socket).at(-1)?.session, [
+          "audio",
+          "input",
+          "turn_detection",
+        ]),
+        "restored turn detection",
+        {
+          create_response: true,
+          interrupt_response: true,
+        },
+      );
+    },
+  );
 
   it("flushes a queued manual response after the prior request is rejected", async () => {
     const onError = vi.fn();
@@ -388,18 +391,13 @@ describe("OpenAI realtime voice response control", () => {
     ).length;
 
     bridge.sendUserMessage?.("Say exactly: queued follow-up.");
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: {
-            event_id: firstResponseCreate.event_id,
-            message: "bad response request",
-          },
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "error",
+      error: {
+        event_id: firstResponseCreate.event_id,
+        message: "bad response request",
+      },
+    });
 
     const responseCreates = parseSent(socket).filter((event) => event.type === "response.create");
     expect(responseCreates).toHaveLength(2);
@@ -433,12 +431,10 @@ describe("OpenAI realtime voice response control", () => {
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
 
     for (let index = 0; index < 3; index += 1) {
-      socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({ type: "response.created", response: { id: `resp_control_${index}` } }),
-        ),
-      );
+      emitServerEvent(socket, {
+        type: "response.created",
+        response: { id: `resp_control_${index}` },
+      });
       emitServerEvent(socket, {
         type: "response.done",
         response: { id: `resp_control_${index}`, status: "completed", output: [] },
@@ -452,13 +448,10 @@ describe("OpenAI realtime voice response control", () => {
   it("drains deferred response.create after response.cancelled", async () => {
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
+    emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
 
     bridge.sendUserMessage?.("queued after cancellation");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.cancelled" })));
+    emitServerEvent(socket, { type: "response.cancelled" });
 
     expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
   });
@@ -467,10 +460,7 @@ describe("OpenAI realtime voice response control", () => {
     const onError = vi.fn();
     const bridge = createNativeBridge({ onError });
     const socket = await connectReadyBridge(bridge);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
+    emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
 
     bridge.sendUserMessage?.("queued after cancellation error");
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
@@ -480,18 +470,13 @@ describe("OpenAI realtime voice response control", () => {
     if (!responseCancelEvent?.event_id) {
       throw new Error("expected response.cancel event id");
     }
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: {
-            event_id: responseCancelEvent.event_id,
-            message: "Cancellation failed: no active response found",
-          },
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "error",
+      error: {
+        event_id: responseCancelEvent.event_id,
+        message: "Cancellation failed: no active response found",
+      },
+    });
 
     expect(onError).not.toHaveBeenCalled();
     expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
@@ -502,20 +487,7 @@ describe("OpenAI realtime voice response control", () => {
     const bridge = createNativeBridge({ onError });
     const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
+    emitAssistantPlayback(socket, { audio: Buffer.alloc(2_400) });
     bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
@@ -531,18 +503,13 @@ describe("OpenAI realtime voice response control", () => {
       (event) => event.type === "session.update",
     ).length;
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: {
-            event_id: responseCancelEvent.event_id,
-            message: "Cancellation failed: no active response found",
-          },
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "error",
+      error: {
+        event_id: responseCancelEvent.event_id,
+        message: "Cancellation failed: no active response found",
+      },
+    });
 
     expect(onError).not.toHaveBeenCalled();
     expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(
@@ -565,10 +532,7 @@ describe("OpenAI realtime voice response control", () => {
     vi.useFakeTimers();
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
+    emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
     bridge.sendUserMessage?.("queued before reconnect");
 
     expect(parseSent(socket).slice(-1)[0]?.type).toBe("conversation.item.create");
@@ -596,7 +560,8 @@ describe("OpenAI realtime voice response control", () => {
 
   it("turns active-response errors into a deferred response.create retry", async () => {
     const onError = vi.fn();
-    const bridge = createNativeBridge({ onError });
+    const onResponseDone = vi.fn();
+    const bridge = createNativeBridge({ onError, onResponseDone });
     const socket = await connectReadyBridge(bridge);
 
     bridge.sendUserMessage?.("trigger active-response retry");
@@ -606,19 +571,15 @@ describe("OpenAI realtime voice response control", () => {
     if (!responseCreateEvent?.event_id) {
       throw new Error("expected response.create event id");
     }
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: {
-            event_id: responseCreateEvent.event_id,
-            message: "Conversation already has an active response in progress: resp_1",
-          },
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "error",
+      error: {
+        event_id: responseCreateEvent.event_id,
+        message: "Conversation already has an active response in progress: resp_1",
+      },
+    });
     const afterError = parseSent(socket);
+    expect(onResponseDone).not.toHaveBeenCalled();
     expect(afterError.filter((event) => event.type === "session.update")).toHaveLength(2);
     expectRecordFields(
       requireNestedRecord(afterError.at(-2)?.session, ["audio", "input", "turn_detection"]),

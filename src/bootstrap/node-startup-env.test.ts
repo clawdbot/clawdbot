@@ -41,6 +41,29 @@ describe("resolveNodeStartupTlsEnvironment", () => {
     });
   });
 
+  it.each([
+    ["empty Linux value", "", "linux", FEDORA_CA_BUNDLE_PATH],
+    ["whitespace macOS value", " \t ", "darwin", "/etc/ssl/cert.pem"],
+  ] as const)("treats %s as unset", (_label, value, platform, expected) => {
+    const startupEnv = resolveNodeStartupTlsEnvironment({
+      env: { NODE_EXTRA_CA_CERTS: value, NVM_DIR: "/home/test/.nvm" },
+      platform,
+      execPath: "/usr/bin/node",
+      accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
+    });
+
+    expect(startupEnv.NODE_EXTRA_CA_CERTS).toBe(expected);
+  });
+
+  it("preserves a nonblank CA path byte-for-byte", () => {
+    expect(
+      resolveNodeStartupTlsEnvironment({
+        env: { NODE_EXTRA_CA_CERTS: " /custom/ca.pem " },
+        platform: "darwin",
+      }).NODE_EXTRA_CA_CERTS,
+    ).toBe(" /custom/ca.pem ");
+  });
+
   it("resolves Linux CA env for version-manager Node runtimes", () => {
     expect(
       resolveNodeStartupTlsEnvironment({

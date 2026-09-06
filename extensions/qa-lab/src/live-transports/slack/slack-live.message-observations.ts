@@ -1,8 +1,7 @@
 // QA Lab Slack scenario reply observation and channel readiness.
-import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type { startQaGatewayChild } from "../../gateway-child.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
 import {
   type SlackChannelStatus,
   type SlackChannelReadinessMode,
@@ -11,6 +10,7 @@ import {
   type SlackAuthIdentity,
   type SlackObservedMessage,
   type SlackMessage,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import {
   listSlackMessages,
@@ -225,7 +225,7 @@ export async function waitForSlackNoReply(params: {
 }
 
 async function waitForSlackChannelRunning(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   accountId: string,
   mode: SlackChannelReadinessMode,
 ): Promise<SlackChannelStatus> {
@@ -284,7 +284,7 @@ async function waitForSlackChannelRunning(
 }
 
 export async function waitForSlackChannelStable(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   accountId: string,
   mode: SlackChannelReadinessMode,
 ) {

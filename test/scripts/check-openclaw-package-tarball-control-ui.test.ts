@@ -1,12 +1,15 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +35,18 @@ function writeFixtureFile(packageRoot: string, relativePath: string, content: st
   const filePath = join(packageRoot, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content);
+}
+
+function chmodTreeWorldReadable(dir: string): void {
+  chmodSync(dir, 0o755);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      chmodTreeWorldReadable(entryPath);
+    } else {
+      chmodSync(entryPath, statSync(entryPath).mode & 0o111 ? 0o755 : 0o644);
+    }
+  }
 }
 
 function withPackedPackage(
@@ -81,11 +96,7 @@ function withPackedPackage(
     for (const assetPath of CONTROL_UI_ASSETS) {
       writeFixtureFile(packageRoot, assetPath, "shipped Control UI asset\n");
     }
-    writeFixtureFile(
-      packageRoot,
-      "dist/openclaw-install-guard",
-      "OpenClaw package preinstall has not completed.\n",
-    );
+    writeFixtureFile(packageRoot, ".openclaw-lifecycle-pending", "pending\n");
     for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
       writeFixtureFile(packageRoot, relativePath, `# ${relativePath}\n`);
     }
@@ -93,6 +104,7 @@ function withPackedPackage(
       "scripts/postinstall-bundled-plugins.mjs",
       "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/package-lifecycle-marker.mjs",
     ]) {
       const destination = join(packageRoot, relativePath);
       mkdirSync(dirname(destination), { recursive: true });
@@ -100,11 +112,14 @@ function withPackedPackage(
     }
     if (options.postinstall !== false) {
       // Offline npm must exercise the same bundled TypeScript AST dependency
-      // that the real postinstall uses to preserve its complete import graph.
+      // that the real postinstall uses. Dereference pnpm's package-root link so
+      // mode normalization stays inside the fixture instead of touching the source.
       cpSync(typescriptRoot, join(packageRoot, "node_modules/typescript"), {
+        dereference: true,
         recursive: true,
       });
     }
+    chmodTreeWorldReadable(packageRoot);
 
     const packed = spawnSync(
       "npm",
@@ -180,23 +195,6 @@ function installPackedPackage(root: string, tarball: string) {
 }
 
 describe("packaged Control UI postinstall inventory", () => {
-  it.each(CONTROL_UI_FILES)(
-    "rejects a real npm package when postinstall would delete %s",
-    (omittedFile) => {
-      const inventory = ["dist/index.js", ...CONTROL_UI_FILES].filter(
-        (relativePath) => relativePath !== omittedFile,
-      );
-      withPackedPackage(inventory, ({ tarball }) => {
-        const result = checkPackedPackage(tarball);
-
-        expect(result.status, result.stdout).not.toBe(0);
-        expect(result.stderr).toContain(
-          `postinstall inventory omits Control UI file ${omittedFile}`,
-        );
-      });
-    },
-  );
-
   it("proves actual npm postinstall deletes an omitted dashboard from a falsely accepted package", () => {
     withPackedPackage(["dist/index.js"], ({ root, tarball }) => {
       const validation = checkPackedPackage(tarball);
@@ -207,9 +205,12 @@ describe("packaged Control UI postinstall inventory", () => {
       }
 
       expect(validation.status, validation.stdout).not.toBe(0);
-      expect(validation.stderr).toContain(
-        "postinstall inventory omits Control UI file dist/control-ui/index.html",
-      );
+      const validationErrors = validation.stderr.split(/\r?\n/u);
+      for (const relativePath of CONTROL_UI_FILES) {
+        expect
+          .soft(validationErrors)
+          .toContain(`postinstall inventory omits packaged dist file ${relativePath}`);
+      }
     });
   });
 

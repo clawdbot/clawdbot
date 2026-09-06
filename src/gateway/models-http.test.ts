@@ -3,6 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import { getGatewayTestPort, installGatewayTestHooks } from "./test-helpers.js";
+import { testState } from "./test-helpers.runtime-state.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -93,6 +94,36 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     const json = (await res.json()) as { id?: string; object?: string };
     expect(json.object).toBe("model");
     expect(json.id).toBe(firstId);
+  });
+
+  it("rejects agent-specific model ids outside the configured roster", async () => {
+    const res = await getModels("/v1/models/openclaw%2Fnonexistent");
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({
+      error: {
+        message: "Model 'openclaw/nonexistent' not found.",
+        type: "invalid_request_error",
+      },
+    });
+  });
+
+  it("keeps generic aliases available for ownerless explicit fleets", async () => {
+    try {
+      testState.agentsConfig = {
+        ownership: "explicit",
+        entries: { main: {}, research: {} },
+      };
+      const list = await getModels("/v1/models");
+      expect(list.status).toBe(200);
+      const listJson = (await list.json()) as { data?: Array<{ id?: string }> };
+      expect(listJson.data?.map((entry) => entry.id)).toContain("openclaw/default");
+
+      const detail = await getModels("/v1/models/openclaw%2Fdefault");
+      expect(detail.status).toBe(200);
+      await expect(detail.json()).resolves.toMatchObject({ id: "openclaw/default" });
+    } finally {
+      testState.agentsConfig = undefined;
+    }
   });
 
   it("rejects operator scopes that lack read access", async () => {

@@ -66,6 +66,39 @@ describe("sanitizeSessionHistory e2e smoke", () => {
     expect(result).toEqual(mockMessages);
   });
 
+  it.each(["openai-responses", "openai-chatgpt-responses", "azure-openai-responses"])(
+    "preserves paired tool-call ids for an unowned %s provider",
+    async (modelApi) => {
+      const id = "call_gateway_0|fc_gateway_0";
+      const messages = [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "reasoning",
+              thinkingSignature: { id: "rs_1", type: "reasoning" },
+            },
+            { type: "toolCall", id, name: "gateway", arguments: {} },
+          ],
+        },
+        { role: "toolResult", toolCallId: id, toolName: "gateway", content: [], isError: false },
+      ] as Parameters<typeof sanitizeSessionHistory>[0]["messages"];
+
+      const result = await sanitizeSessionHistory({
+        messages,
+        modelApi,
+        provider: "custom-compatible",
+        sessionManager: mockSessionManager,
+        sessionId: "test-session",
+      });
+
+      const assistant = result[0] as { content: Array<{ type: string; id?: string }> };
+      expect(assistant.content.find((block) => block.type === "toolCall")?.id).toBe(id);
+      expect((result[1] as { toolCallId: string }).toolCallId).toBe(id);
+    },
+  );
+
   it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
     // Snapshot changes are the public safety boundary: reasoning that was valid
     // for one provider must be replayed as text-only when the model family moves.

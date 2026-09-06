@@ -1,9 +1,15 @@
 // Audit command registration for privacy-preserving activity history.
 import type { Command } from "commander";
+import {
+  AUDIT_ACTIVITY_DIRECTIONS,
+  AUDIT_ACTIVITY_KINDS,
+  AUDIT_ACTIVITY_STATUSES,
+} from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { auditListCommand, type AuditListCommandOptions } from "../../commands/audit.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatHumanList } from "../../shared/human-list.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
 /** Register the bounded operator audit query command. */
@@ -15,12 +21,12 @@ export function registerAuditCommand(program: Command): void {
     .option("--session <key>", "Filter by exact session key")
     .option("--run <id>", "Filter by run id")
     .option("--execution <id>", "Inspect one exact execution id")
-    .option("--kind <kind>", "Filter by kind (agent_run, tool_action, or message)")
+    .option("--kind <kind>", `Filter by kind (${formatHumanList(AUDIT_ACTIVITY_KINDS)})`)
+    .option("--status <status>", `Filter by status (${formatHumanList(AUDIT_ACTIVITY_STATUSES)})`)
     .option(
-      "--status <status>",
-      "Filter by status (started, succeeded, failed, cancelled, timed_out, blocked, unknown)",
+      "--direction <direction>",
+      `Filter message direction (${formatHumanList(AUDIT_ACTIVITY_DIRECTIONS)})`,
     )
-    .option("--direction <direction>", "Filter message direction (inbound or outbound)")
     .option("--channel <channel>", "Filter message channel")
     .option("--after <timestamp>", "Include records at/after ISO time or Unix milliseconds")
     .option("--before <timestamp>", "Include records at/before ISO time or Unix milliseconds")

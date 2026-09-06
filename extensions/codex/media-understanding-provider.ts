@@ -76,6 +76,7 @@ async function describeCodexImages(
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
+    modelProvider: "openai",
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     signal: req.signal,
@@ -121,6 +122,7 @@ async function extractCodexStructured(
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
+    modelProvider: "openai",
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     signal: req.signal,

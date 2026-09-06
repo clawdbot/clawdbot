@@ -1,6 +1,5 @@
 // Tests task command routing and persisted task state replies.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   completeTaskRunByRunIdCore,
   createQueuedTaskRunCore,
@@ -15,20 +14,16 @@ import {
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
 
-vi.mock("../../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-    "../../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
-  };
-});
-
 const baseCfg = baseCommandTestConfig;
 
-async function buildTasksReplyForTest(params: { agentId?: string; sessionKey?: string } = {}) {
-  const commandParams = buildCommandTestParams("/tasks", baseCfg);
+async function buildTasksReplyForTest(
+  params: {
+    agentId?: string;
+    sessionKey?: string;
+    cfg?: Parameters<typeof buildCommandTestParams>[1];
+  } = {},
+) {
+  const commandParams = buildCommandTestParams("/tasks", params.cfg ?? baseCfg);
   const result = await handleTasksCommand(
     {
       ...commandParams,
@@ -91,6 +86,58 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).toContain("🟡 queued background task");
     expect(reply.text).toContain("🔴 failed background task");
     expect(reply.text).toContain("approval denied");
+  });
+
+  it("shows blocked completions as warnings instead of successes", async () => {
+    createRunningTaskRunCore({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:tasks-blocked",
+      runId: "run-tasks-blocked",
+      task: "Incomplete background task",
+    });
+    completeTaskRunByRunIdCore({
+      runId: "run-tasks-blocked",
+      endedAt: Date.now(),
+      terminalOutcome: "blocked",
+      terminalSummary: "Required completion did not produce a final deliverable.",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("⚠️ Incomplete background task");
+    expect(reply.text).toContain("Subagent · blocked");
+    expect(reply.text).not.toContain("✅ Incomplete background task");
+  });
+
+  it.each(["research", "ops"])("isolates the global task board for %s", async (agentId) => {
+    for (const requesterAgentId of ["research", "ops", undefined]) {
+      const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
+      createRunningTaskRunCore({
+        runtime: "cli",
+        requesterSessionKey: "global",
+        requesterAgentId,
+        agentId: executorAgentId,
+        childSessionKey: `agent:${executorAgentId}:subagent:${requesterAgentId ?? "unknown"}`,
+        runId: `global-board-task-${requesterAgentId ?? "unknown"}`,
+        task: `${requesterAgentId ?? "unknown"} private task`,
+      });
+    }
+
+    const reply = await buildTasksReplyForTest({
+      sessionKey: "global",
+      agentId,
+      cfg: {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+      },
+    });
+
+    expect(reply.text).toContain("Current session: 1 active · 1 total");
+    expect(reply.text).toContain(`${agentId} private task`);
+    expect(reply.text).not.toContain(`${agentId === "research" ? "ops" : "research"} private task`);
+    expect(reply.text).not.toContain("unknown private task");
   });
 
   it("lists session-backed video generation tasks for the current session", async () => {
@@ -274,10 +321,8 @@ describe("handleTasksCommand task board", () => {
       task: "target hidden background task",
       progressSummary: "hidden target progress detail",
     });
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
-
     const reply = await buildTasksReplyForTest({
-      agentId: "main",
+      agentId: "target",
       sessionKey: "agent:target:empty-session",
     });
 

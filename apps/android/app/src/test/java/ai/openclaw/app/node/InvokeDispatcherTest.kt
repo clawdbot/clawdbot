@@ -4,7 +4,6 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
-import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMobileUiCommand
@@ -14,11 +13,13 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
-import android.webkit.WebView
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -28,82 +29,10 @@ import org.robolectric.Shadows.shadowOf
 @RunWith(RobolectricTestRunner::class)
 class InvokeDispatcherTest {
   @Test
-  fun classifySmsSearchAvailability_returnsAvailable_whenReadSmsIsAvailable() {
-    assertEquals(
-      SmsSearchAvailabilityReason.Available,
-      classifySmsSearchAvailability(
-        readSmsAvailable = true,
-        smsFeatureEnabled = true,
-        smsTelephonyAvailable = true,
-      ),
-    )
-  }
-
-  @Test
-  fun classifySmsSearchAvailability_returnsUnavailable_whenSmsFeatureDisabled() {
-    assertEquals(
-      SmsSearchAvailabilityReason.Unavailable,
-      classifySmsSearchAvailability(
-        readSmsAvailable = false,
-        smsFeatureEnabled = false,
-        smsTelephonyAvailable = true,
-      ),
-    )
-  }
-
-  @Test
-  fun classifySmsSearchAvailability_returnsUnavailable_whenTelephonyUnavailable() {
-    assertEquals(
-      SmsSearchAvailabilityReason.Unavailable,
-      classifySmsSearchAvailability(
-        readSmsAvailable = false,
-        smsFeatureEnabled = true,
-        smsTelephonyAvailable = false,
-      ),
-    )
-  }
-
-  @Test
-  fun classifySmsSearchAvailability_returnsPermissionRequired_whenOnlyReadSmsPermissionIsMissing() {
-    assertEquals(
-      SmsSearchAvailabilityReason.PermissionRequired,
-      classifySmsSearchAvailability(
-        readSmsAvailable = false,
-        smsFeatureEnabled = true,
-        smsTelephonyAvailable = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsSearchAvailabilityError_returnsNull_whenReadSmsPermissionIsRequestable() {
-    assertNull(
-      smsSearchAvailabilityError(
-        readSmsAvailable = false,
-        smsFeatureEnabled = true,
-        smsTelephonyAvailable = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsSearchAvailabilityError_returnsUnavailable_whenSmsSearchIsImpossible() {
-    val result =
-      smsSearchAvailabilityError(
-        readSmsAvailable = false,
-        smsFeatureEnabled = false,
-        smsTelephonyAvailable = true,
-      )
-
-    assertEquals("SMS_UNAVAILABLE", result?.error?.code)
-    assertEquals("SMS_UNAVAILABLE: SMS not available on this device", result?.error?.message)
-  }
-
-  @Test
   fun handleInvoke_allowsRequestableSmsSearchToReachHandler() =
     runTest {
       val result =
-        newDispatcher(
+        newInvokeDispatcher(
           readSmsAvailable = false,
           smsFeatureEnabled = true,
           smsTelephonyAvailable = true,
@@ -117,7 +46,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksSmsSearchWhenFeatureIsUnavailable() =
     runTest {
       val result =
-        newDispatcher(
+        newInvokeDispatcher(
           readSmsAvailable = false,
           smsFeatureEnabled = false,
           smsTelephonyAvailable = true,
@@ -131,7 +60,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_allowsAvailableSmsSendToReachHandler() =
     runTest {
       val result =
-        newDispatcher(
+        newInvokeDispatcher(
           sendSmsAvailable = true,
           smsFeatureEnabled = true,
           smsTelephonyAvailable = true,
@@ -145,7 +74,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksSmsSendWhenUnavailable() =
     runTest {
       val result =
-        newDispatcher(
+        newInvokeDispatcher(
           sendSmsAvailable = false,
           smsFeatureEnabled = true,
           smsTelephonyAvailable = true,
@@ -158,7 +87,7 @@ class InvokeDispatcherTest {
   @Test
   fun handleInvoke_blocksCameraCommandsWhenCameraDisabled() =
     runTest {
-      val result = newDispatcher(cameraEnabled = false).handleInvoke(OpenClawCameraCommand.List.rawValue, null)
+      val result = newInvokeDispatcher(cameraEnabled = { false }).handleInvoke(OpenClawCameraCommand.List.rawValue, null)
 
       assertEquals("CAMERA_DISABLED", result.error?.code)
       assertEquals("CAMERA_DISABLED: enable Camera in Settings", result.error?.message)
@@ -167,7 +96,7 @@ class InvokeDispatcherTest {
   @Test
   fun handleInvoke_blocksLocationCommandWhenLocationDisabled() =
     runTest {
-      val result = newDispatcher(locationEnabled = false).handleInvoke(OpenClawLocationCommand.Get.rawValue, null)
+      val result = newInvokeDispatcher(locationEnabled = false).handleInvoke(OpenClawLocationCommand.Get.rawValue, null)
 
       assertEquals("LOCATION_DISABLED", result.error?.code)
       assertEquals("LOCATION_DISABLED: enable Location in Settings", result.error?.message)
@@ -177,7 +106,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksDeviceAppsWhenSharingDisabled() =
     runTest {
       val result =
-        newDispatcher(installedAppsSharingEnabled = false)
+        newInvokeDispatcher(installedAppsSharingEnabled = false)
           .handleInvoke(OpenClawDeviceCommand.Apps.rawValue, """{"limit":1}""")
 
       assertEquals("INSTALLED_APPS_SHARING_DISABLED", result.error?.code)
@@ -191,7 +120,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksMotionActivityWhenUnavailable() =
     runTest {
       val result =
-        newDispatcher(motionActivityAvailable = false)
+        newInvokeDispatcher(motionActivityAvailable = false)
           .handleInvoke(OpenClawMotionCommand.Activity.rawValue, null)
 
       assertEquals("MOTION_UNAVAILABLE", result.error?.code)
@@ -202,7 +131,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksMotionPedometerWhenUnavailable() =
     runTest {
       val result =
-        newDispatcher(motionPedometerAvailable = false)
+        newInvokeDispatcher(motionPedometerAvailable = false)
           .handleInvoke(OpenClawMotionCommand.Pedometer.rawValue, null)
 
       assertEquals("PEDOMETER_UNAVAILABLE", result.error?.code)
@@ -213,7 +142,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksCallLogWhenUnavailable() =
     runTest {
       val result =
-        newDispatcher(callLogAvailable = false).handleInvoke(OpenClawCallLogCommand.Search.rawValue, null)
+        newInvokeDispatcher(callLogAvailable = false).handleInvoke(OpenClawCallLogCommand.Search.rawValue, null)
 
       assertEquals("CALL_LOG_UNAVAILABLE", result.error?.code)
       assertEquals("CALL_LOG_UNAVAILABLE: call log not available on this build", result.error?.message)
@@ -222,7 +151,7 @@ class InvokeDispatcherTest {
   @Test
   fun handleInvoke_blocksPhotosWhenUnavailable() =
     runTest {
-      val result = newDispatcher(photosAvailable = false).handleInvoke(OpenClawPhotosCommand.Latest.rawValue, null)
+      val result = newInvokeDispatcher(photosAvailable = false).handleInvoke(OpenClawPhotosCommand.Latest.rawValue, null)
 
       assertEquals("PHOTOS_UNAVAILABLE", result.error?.code)
       assertEquals("PHOTOS_UNAVAILABLE: photos not available on this build", result.error?.message)
@@ -232,7 +161,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksMobileUiWhenServiceIsUnavailable() =
     runTest {
       val result =
-        newDispatcher(mobileUiAvailable = false)
+        newInvokeDispatcher(mobileUiAvailable = false)
           .handleInvoke(OpenClawMobileUiCommand.Observe.rawValue, null)
 
       assertEquals("MOBILE_UI_UNAVAILABLE", result.error?.code)
@@ -245,7 +174,7 @@ class InvokeDispatcherTest {
   @Test
   fun handleInvoke_treatsDebugCommandsAsUnknownOutsideDebugBuilds() =
     runTest {
-      val result = newDispatcher(debugBuild = false).handleInvoke("debug.logs", null)
+      val result = newInvokeDispatcher(debugBuild = false).handleInvoke("debug.logs", null)
 
       assertEquals("INVALID_REQUEST", result.error?.code)
       assertEquals("INVALID_REQUEST: unknown command", result.error?.message)
@@ -255,7 +184,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_routesTalkPttCommands() =
     runTest {
       val talk = InvokeDispatcherFakeTalkHandler()
-      val dispatcher = newDispatcher(talkHandler = talk)
+      val dispatcher = newInvokeDispatcher(talkHandler = talk)
 
       val start = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
       val stop = dispatcher.handleInvoke(OpenClawTalkCommand.PttStop.rawValue, null)
@@ -276,7 +205,7 @@ class InvokeDispatcherTest {
   fun handleInvoke_blocksTalkOnceButLeavesPttStartToRuntimeStateGateWhenBackgrounded() =
     runTest {
       val talk = InvokeDispatcherFakeTalkHandler()
-      val dispatcher = newDispatcher(isForeground = false, talkHandler = talk)
+      val dispatcher = newInvokeDispatcher(isForeground = { false }, talkHandler = talk)
 
       val start = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
       val once = dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null)
@@ -292,134 +221,169 @@ class InvokeDispatcherTest {
     }
 
   @Test
-  fun handleInvoke_presentAndHideDriveTheShellOwnedCanvasState() =
+  fun foregroundAndAvailabilityGatesReadCurrentStateBeforeInvokingHandlers() =
     runTest {
-      val appContext = RuntimeEnvironment.getApplication()
-      val canvas = CanvasController()
-      val webView = WebView(appContext)
-      canvas.attach(webView)
-      val dispatcher = newDispatcher(canvas = canvas)
-
-      val present =
-        dispatcher.handleInvoke(
-          OpenClawCanvasCommand.Present.rawValue,
-          """{"url":"https://example.com/canvas"}""",
+      var foreground = false
+      var cameraEnabled = false
+      var cameraReads = 0
+      val dispatcher =
+        newInvokeDispatcher(
+          isForeground = { foreground },
+          cameraEnabled = {
+            cameraReads += 1
+            cameraEnabled
+          },
         )
 
-      assertNull(present.error)
-      assertEquals("https://example.com/canvas", canvas.currentUrl())
-      assertEquals(CanvasController.PresentationState.Visible, canvas.presentationState.value)
+      assertEquals("INVALID_REQUEST", dispatcher.handleInvoke("not.real", null).error?.code)
+      assertEquals(
+        "NODE_BACKGROUND_UNAVAILABLE",
+        dispatcher.handleInvoke(OpenClawCameraCommand.List.rawValue, null).error?.code,
+      )
+      assertEquals(0, cameraReads)
 
-      val hide = dispatcher.handleInvoke(OpenClawCanvasCommand.Hide.rawValue, null)
+      foreground = true
+      assertEquals("CAMERA_DISABLED", dispatcher.handleInvoke(OpenClawCameraCommand.List.rawValue, null).error?.code)
+      assertEquals(1, cameraReads)
 
-      assertNull(hide.error)
-      assertEquals(CanvasController.PresentationState.Hidden, canvas.presentationState.value)
-      canvas.releaseHost()
-      webView.destroy()
+      cameraEnabled = true
+      assertTrue(dispatcher.buildInvokeCommands().contains(OpenClawCameraCommand.List.rawValue))
+      assertTrue(dispatcher.buildCapabilities().contains("camera"))
+      cameraEnabled = false
+      assertFalse(dispatcher.buildInvokeCommands().contains(OpenClawCameraCommand.List.rawValue))
+      assertEquals("CAMERA_DISABLED", dispatcher.handleInvoke(OpenClawCameraCommand.List.rawValue, null).error?.code)
     }
 
   @Test
-  fun handleInvoke_rejectsBackgroundCanvasPresentationBeforeMountingAHost() =
-    runTest {
-      val canvas = CanvasController()
-      val result =
-        newDispatcher(isForeground = false, canvas = canvas)
-          .handleInvoke(OpenClawCanvasCommand.Present.rawValue, """{"url":"https://example.com"}""")
+  fun advertisementSamplesEachCommandFamilyOnceAndRefreshesOnNextBuild() {
+    var cameraReads = 0
+    val dispatcher =
+      newInvokeDispatcher(
+        cameraEnabled = {
+          cameraReads += 1
+          cameraReads % 2 == 1
+        },
+      )
 
-      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
-      assertEquals(CanvasController.PresentationState.Unmounted, canvas.presentationState.value)
-    }
+    val cameras = listOf(OpenClawCameraCommand.List, OpenClawCameraCommand.Snap, OpenClawCameraCommand.Clip).map { it.rawValue }
+    val enabled = dispatcher.buildInvokeCommands()
+    assertEquals(1, cameraReads)
+    assertEquals(cameras, enabled.filter { it in cameras })
 
-  @Test
-  fun handleInvoke_doesNotCommitNavigationWhenTheShellHostCannotAttach() =
-    runTest {
-      val canvas = CanvasController()
-      val result =
-        newDispatcher(canvas = canvas)
-          .handleInvoke(OpenClawCanvasCommand.Present.rawValue, """{"url":"https://example.com"}""")
-
-      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
-      assertNull(canvas.currentUrl())
-      assertEquals(CanvasController.PresentationState.Unmounted, canvas.presentationState.value)
-    }
-
-  private fun newDispatcher(
-    isForeground: Boolean = true,
-    cameraEnabled: Boolean = false,
-    locationEnabled: Boolean = false,
-    sendSmsAvailable: Boolean = false,
-    readSmsAvailable: Boolean = false,
-    smsFeatureEnabled: Boolean = true,
-    smsTelephonyAvailable: Boolean = true,
-    callLogAvailable: Boolean = false,
-    photosAvailable: Boolean = true,
-    installedAppsSharingEnabled: Boolean = true,
-    debugBuild: Boolean = false,
-    motionActivityAvailable: Boolean = false,
-    motionPedometerAvailable: Boolean = false,
-    mobileUiAvailable: Boolean = false,
-    talkHandler: TalkHandler = InvokeDispatcherFakeTalkHandler(),
-    canvas: CanvasController = CanvasController(),
-  ): InvokeDispatcher {
-    val appContext = RuntimeEnvironment.getApplication()
-    shadowOf(appContext.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, smsTelephonyAvailable)
-    return InvokeDispatcher(
-      canvas = canvas,
-      cameraHandler = newCameraHandler(appContext),
-      locationHandler =
-        LocationHandler.forTesting(
-          appContext = appContext,
-          dataSource = InvokeDispatcherFakeLocationDataSource(),
-        ),
-      deviceHandler = DeviceHandler(appContext),
-      notificationsHandler =
-        NotificationsHandler.forTesting(
-          appContext = appContext,
-          stateProvider = InvokeDispatcherFakeNotificationsStateProvider(),
-        ),
-      systemHandler = SystemHandler.forTesting(InvokeDispatcherFakeSystemNotificationPoster()),
-      talkHandler = talkHandler,
-      photosHandler = PhotosHandler.forTesting(appContext, InvokeDispatcherFakePhotosDataSource()),
-      contactsHandler = ContactsHandler.forTesting(appContext, InvokeDispatcherFakeContactsDataSource()),
-      calendarHandler = CalendarHandler.forTesting(appContext, InvokeDispatcherFakeCalendarDataSource()),
-      motionHandler = MotionHandler.forTesting(appContext, InvokeDispatcherFakeMotionDataSource()),
-      smsHandler = SmsHandler(SmsManager(appContext)),
-      a2uiHandler =
-        A2UIHandler(
-          canvas = canvas,
-          json = Json { ignoreUnknownKeys = true },
-        ),
-      debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
-      callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
-      mobileUiHandler = MobileUiHandler(),
-      isForeground = { isForeground },
-      cameraEnabled = { cameraEnabled },
-      locationEnabled = { locationEnabled },
-      sendSmsAvailable = { sendSmsAvailable },
-      readSmsAvailable = { readSmsAvailable },
-      smsFeatureEnabled = { smsFeatureEnabled },
-      smsTelephonyAvailable = { smsTelephonyAvailable },
-      callLogAvailable = { callLogAvailable },
-      photosAvailable = { photosAvailable },
-      installedAppsSharingEnabled = { installedAppsSharingEnabled },
-      debugBuild = { debugBuild },
-      onCanvasA2uiPush = {},
-      onCanvasA2uiReset = {},
-      motionActivityAvailable = { motionActivityAvailable },
-      motionPedometerAvailable = { motionPedometerAvailable },
-      mobileUiAvailable = { mobileUiAvailable },
-    )
+    val disabled = dispatcher.buildInvokeCommands()
+    assertEquals(2, cameraReads)
+    assertTrue(disabled.none { it in cameras })
   }
 
-  private fun newCameraHandler(appContext: Context): CameraHandler =
-    CameraHandler(
-      appContext = appContext,
-      camera = CameraCaptureManager(appContext),
-      setCameraAudioCaptureActive = { true },
-      showCameraHud = { _, _, _ -> },
-      invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
-    )
+  @Test
+  fun boundHandlerReceivesOpaqueParamsAndPropagatesFailureAndCancellation() =
+    runTest {
+      val talk = InvokeDispatcherFakeTalkHandler()
+      val dispatcher = newInvokeDispatcher(talkHandler = talk)
+      val params = "opaque handler-owned params"
+      dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, params)
+      assertEquals(listOf(params), talk.params)
+
+      for (failure in listOf(IllegalStateException("synthetic failure"), CancellationException("synthetic cancellation"))) {
+        talk.failure = failure
+        val result = runCatching { dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, params) }
+        assertSame(failure, result.exceptionOrNull())
+      }
+    }
+
+  @Test
+  fun advertisedCommandsReachBoundHandlersInsteadOfUnknownCommandFallbacks() =
+    runTest {
+      val dispatcher =
+        newInvokeDispatcher(
+          isForeground = { false },
+          cameraEnabled = { true },
+          locationEnabled = true,
+          sendSmsAvailable = true,
+          readSmsAvailable = true,
+          callLogAvailable = true,
+          photosAvailable = true,
+          installedAppsSharingEnabled = true,
+          motionActivityAvailable = true,
+          motionPedometerAvailable = true,
+          mobileUiAvailable = true,
+        )
+
+      for (command in dispatcher.buildInvokeCommands()) {
+        val result = dispatcher.handleInvoke(command, "{}")
+        assertNotEquals(command, "INVALID_REQUEST: unknown command", result.error?.message)
+      }
+    }
 }
+
+internal fun newInvokeDispatcher(
+  isForeground: () -> Boolean = { true },
+  cameraEnabled: () -> Boolean = { false },
+  locationEnabled: Boolean = false,
+  sendSmsAvailable: Boolean = false,
+  readSmsAvailable: Boolean = false,
+  smsFeatureEnabled: Boolean = true,
+  smsTelephonyAvailable: Boolean = true,
+  callLogAvailable: Boolean = false,
+  photosAvailable: Boolean = true,
+  installedAppsSharingEnabled: Boolean = true,
+  debugBuild: Boolean = false,
+  motionActivityAvailable: Boolean = false,
+  motionPedometerAvailable: Boolean = false,
+  mobileUiAvailable: Boolean = false,
+  talkHandler: TalkHandler = InvokeDispatcherFakeTalkHandler(),
+  smsSearchPossible: () -> Boolean = { smsFeatureEnabled && smsTelephonyAvailable },
+  voiceWakeAvailable: () -> Boolean = { false },
+): InvokeDispatcher {
+  val appContext = RuntimeEnvironment.getApplication()
+  shadowOf(appContext.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, smsTelephonyAvailable)
+  return InvokeDispatcher(
+    cameraHandler = newCameraHandler(appContext),
+    locationHandler =
+      LocationHandler.forTesting(
+        appContext = appContext,
+        dataSource = InvokeDispatcherFakeLocationDataSource(),
+      ),
+    deviceHandler = DeviceHandler(appContext),
+    notificationsHandler =
+      NotificationsHandler(
+        appContext = appContext,
+        stateProvider = InvokeDispatcherFakeNotificationsStateProvider(),
+      ),
+    systemHandler = SystemHandler(InvokeDispatcherFakeSystemNotificationPoster()),
+    talkHandler = talkHandler,
+    photosHandler = PhotosHandler(appContext, InvokeDispatcherFakePhotosDataSource()),
+    contactsHandler = ContactsHandler(appContext, InvokeDispatcherFakeContactsDataSource()),
+    calendarHandler = CalendarHandler(appContext, InvokeDispatcherFakeCalendarDataSource()),
+    motionHandler = MotionHandler(appContext, InvokeDispatcherFakeMotionDataSource()),
+    smsHandler = SmsHandler(SmsManager(appContext)),
+    debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
+    callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
+    mobileUiHandler = MobileUiHandler(),
+    isForeground = isForeground,
+    cameraEnabled = cameraEnabled,
+    locationEnabled = { locationEnabled },
+    sendSmsAvailable = { sendSmsAvailable },
+    readSmsAvailable = { readSmsAvailable },
+    smsSearchPossible = smsSearchPossible,
+    callLogAvailable = { callLogAvailable },
+    photosAvailable = { photosAvailable },
+    installedAppsSharingEnabled = { installedAppsSharingEnabled },
+    debugBuild = { debugBuild },
+    motionActivityAvailable = { motionActivityAvailable },
+    motionPedometerAvailable = { motionPedometerAvailable },
+    mobileUiAvailable = { mobileUiAvailable },
+    voiceWakeAvailable = voiceWakeAvailable,
+  )
+}
+
+private fun newCameraHandler(appContext: Context): CameraHandler =
+  CameraHandler(
+    appContext = appContext,
+    camera = CameraCaptureManager(appContext),
+    setCameraAudioCaptureActive = { true },
+    invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
+  )
 
 private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
   override fun hasFinePermission(context: Context): Boolean = false
@@ -450,16 +414,18 @@ private class InvokeDispatcherFakeNotificationsStateProvider : NotificationsStat
 }
 
 private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationPoster {
-  override fun isAuthorized(): Boolean = true
-
   override fun post(request: SystemNotifyRequest) = Unit
 }
 
 private class InvokeDispatcherFakeTalkHandler : TalkHandler {
   val calls = mutableListOf<String>()
+  val params = mutableListOf<String?>()
+  var failure: Throwable? = null
 
   override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult {
     calls.add("start")
+    params.add(paramsJson)
+    failure?.let { throw it }
     return GatewaySession.InvokeResult.ok("""{"captureId":"start"}""")
   }
 

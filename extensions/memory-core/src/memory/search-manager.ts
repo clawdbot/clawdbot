@@ -14,6 +14,7 @@ type MemorySearchManagerParams = {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemorySearchManagerPurpose;
+  inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 

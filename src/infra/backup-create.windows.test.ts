@@ -181,36 +181,46 @@ describe("writeArchiveStreamToFile", () => {
     expect(reportProgress).toHaveBeenCalledTimes(2);
   });
 
-  it("cleans a partial archive when one entry stops producing raw bytes", async () => {
-    vi.useFakeTimers();
-    try {
-      const tempDir = tempDirs.make("openclaw-backup-stream-entry-timeout-");
-      const archivePath = path.join(tempDir, "partial.tar.gz");
-      const archiveStream = new PassThrough();
-      const entry = new Minipass();
-      let reportProgress: ReportBackupProgress | undefined;
-      const writePromise = writeArchiveStreamToFile({
-        archivePath,
-        createArchiveStream: (progress) => {
-          reportProgress = progress;
-          return archiveStream;
-        },
-      });
-      observeBackupTarEntryProgress(entry, (bytes) => {
-        reportProgress?.({ phase: "raw", entryPath: "/source/stalled.pack", bytes });
-      });
-      entry.on("data", () => {});
-      entry.write(Buffer.alloc(16));
-      archiveStream.write("partial archive");
+  it.each([
+    { entryPath: "/source/stalled.pack", expectedPath: "/source/stalled.pack" },
+    {
+      entryPath: `/source/🤖${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`,
+      expectedPath: `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`,
+    },
+    { entryPath: "/source/🤖/stalled.pack", expectedPath: "/source/🤖/stalled.pack" },
+  ])(
+    "cleans a stalled archive and preserves its entry suffix: $entryPath",
+    async ({ entryPath, expectedPath }) => {
+      vi.useFakeTimers();
+      try {
+        const tempDir = tempDirs.make("openclaw-backup-stream-entry-timeout-");
+        const archivePath = path.join(tempDir, "partial.tar.gz");
+        const archiveStream = new PassThrough();
+        const entry = new Minipass();
+        let reportProgress: ReportBackupProgress | undefined;
+        const writePromise = writeArchiveStreamToFile({
+          archivePath,
+          createArchiveStream: (progress) => {
+            reportProgress = progress;
+            return archiveStream;
+          },
+        });
+        observeBackupTarEntryProgress(entry, (bytes) => {
+          reportProgress?.({ phase: "raw", entryPath, bytes });
+        });
+        entry.on("data", () => {});
+        entry.write(Buffer.alloc(16));
+        archiveStream.write("partial archive");
 
-      const rejection = expect(writePromise).rejects.toThrow(
-        'Backup archive write stalled: no progress observed for 300000ms (phase=output, entry="/source/stalled.pack", rawBytes=16, outputBytes=15)',
-      );
-      await vi.advanceTimersByTimeAsync(300_001);
-      await rejection;
-      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        const rejection = expect(writePromise).rejects.toThrow(
+          `Backup archive write stalled: no progress observed for 300000ms (phase=output, entry=${JSON.stringify(expectedPath)}, rawBytes=16, outputBytes=15)`,
+        );
+        await vi.advanceTimersByTimeAsync(300_001);
+        await rejection;
+        await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

@@ -68,7 +68,7 @@ afterEach(() => {
 });
 
 describe("retired agent state lease repair", () => {
-  it("repairs a mis-stamped v17 database while preserving auth and ownership", () => {
+  it("repairs a mis-stamped v17 database while preserving auth and ownership", async () => {
     const { databasePath, env } = createCurrentAgentDatabase();
     installRetiredLeaseSchema(databasePath);
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
@@ -88,8 +88,8 @@ describe("retired agent state lease repair", () => {
       database.close();
     }
 
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
     const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
     try {

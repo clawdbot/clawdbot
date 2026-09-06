@@ -46,7 +46,6 @@ function createProps(overrides: Partial<SecurityViewProps> = {}): SecurityViewPr
     security: {
       gatewayAuth: "token",
       execPolicy: "allowlist",
-      deviceAuth: true,
       browserEnabled: true,
       browserEnabledOverridden: true,
       toolProfile: "coding",
@@ -74,7 +73,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "token",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: false,
             browserEnabledOverridden: true,
             toolProfile: "messaging",
@@ -120,7 +118,7 @@ describe("renderSecurity", () => {
     expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
   });
 
-  it("shows gateway auth and device auth as dot statuses, not pills", () => {
+  it("shows gateway auth as a dot status, not a pill", () => {
     const container = document.createElement("div");
 
     render(
@@ -129,7 +127,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "none",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: true,
             browserEnabledOverridden: false,
             toolProfile: "full",
@@ -144,8 +141,6 @@ describe("renderSecurity", () => {
     const authStatus = authRow.querySelector(".settings-status");
     expect(authStatus?.textContent?.trim()).toBe("none");
     expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
-    const deviceRow = expectRowByTitle(container, "Device auth");
-    expect(deviceRow.querySelector(".settings-status--ok")?.textContent?.trim()).toBe("Enabled");
   });
 
   it("opens mobile pairing from the overview", () => {
@@ -174,7 +169,7 @@ describe("renderSecurity", () => {
     expect(page?.querySelector("[data-testid='security-editor']")).not.toBeNull();
   });
 
-  it("shows inherited defaults without reset actions", () => {
+  it("shows inherited default descriptions", () => {
     const container = document.createElement("div");
 
     render(
@@ -183,7 +178,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "token",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: true,
             browserEnabledOverridden: false,
             toolProfile: "full",
@@ -200,40 +194,5 @@ describe("renderSecurity", () => {
     expect(expectRowByTitle(container, "Tool profile").textContent).toContain(
       "Using default: Full",
     );
-    expect(container.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(0);
-  });
-
-  it("resets explicit browser and tool-profile overrides", () => {
-    const onBrowserEnabledReset = vi.fn();
-    const onToolProfileReset = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderSecurity(
-        createProps({
-          security: {
-            gatewayAuth: "token",
-            execPolicy: "allowlist",
-            deviceAuth: true,
-            browserEnabled: true,
-            browserEnabledOverridden: true,
-            toolProfile: "full",
-            toolProfileOverridden: true,
-          },
-          onBrowserEnabledReset,
-          onToolProfileReset,
-        }),
-      ),
-      container,
-    );
-
-    const browserRow = expectRowByTitle(container, "Browser enabled");
-    const profileRow = expectRowByTitle(container, "Tool profile");
-    expect(browserRow.textContent).toContain("Default: Enabled");
-    expect(profileRow.textContent).toContain("Default: Full");
-    browserRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
-    profileRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
-    expect(onBrowserEnabledReset).toHaveBeenCalledOnce();
-    expect(onToolProfileReset).toHaveBeenCalledOnce();
   });
 });

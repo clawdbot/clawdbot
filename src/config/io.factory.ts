@@ -1,7 +1,6 @@
 import { createConfigIoContext } from "./io.context.js";
 import { loadConfigFromContext } from "./io.load.js";
 import {
-  preserveConfigSnapshotAsClobberedCore,
   promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
@@ -15,7 +14,7 @@ import {
   readSourceConfigBestEffortFromContext,
 } from "./io.snapshot.js";
 import type { ConfigIoFactoryOptions, ConfigSnapshotReadOptions } from "./io.types.js";
-import { writeConfigFileFromContext } from "./io.write.js";
+import type { writeConfigFileFromContext } from "./io.write.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
@@ -24,6 +23,7 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
   return {
     configPath: context.configPath,
     env: context.deps.env,
+    logger: context.deps.logger,
     loadConfig: (loadOptions?: { skipSuspiciousRecovery?: boolean }) =>
       loadConfigFromContext(context, loadOptions),
     readBestEffortConfig: async () =>
@@ -48,13 +48,14 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
         reason: params.reason,
         prepareCandidate: context.prepareRecoveryBackupCandidate,
       }),
-    preserveConfigSnapshotAsClobbered: (snapshot: ConfigFileSnapshot) =>
-      preserveConfigSnapshotAsClobberedCore({ deps: context.deps, snapshot }),
     recoverConfigFromJsonRootSuffix: (snapshot: ConfigFileSnapshot) =>
       recoverConfigFromJsonRootSuffixWithContext(context, snapshot),
-    writeConfigFile: (
+    writeConfigFile: async (
       config: Parameters<typeof writeConfigFileFromContext>[1],
       writeOptions: Parameters<typeof writeConfigFileFromContext>[2] = {},
-    ) => writeConfigFileFromContext(context, config, writeOptions, readInternal),
+    ) => {
+      const { writeConfigFileFromContext } = await import("./io.write.js");
+      return writeConfigFileFromContext(context, config, writeOptions, readInternal);
+    },
   };
 }

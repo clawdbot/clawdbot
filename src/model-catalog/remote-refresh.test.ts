@@ -3,11 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  refreshRemoteModelCatalog,
-  REMOTE_MODEL_CATALOG_TTL_MS,
-  resolveRemoteCatalogUrl,
-} from "./remote-refresh.js";
+import { resolveRemoteCatalogUrl } from "./remote-config.js";
+import { refreshRemoteModelCatalog, REMOTE_MODEL_CATALOG_TTL_MS } from "./remote-refresh.js";
 import { readRemoteModelCatalog, writeRemoteModelCatalog } from "./remote-store.js";
 
 const roots: string[] = [];

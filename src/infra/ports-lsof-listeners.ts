@@ -1,4 +1,4 @@
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { parseTcpEndpoint } from "./ports-netstat.js";
 import type { PortListener } from "./ports-types.js";
 

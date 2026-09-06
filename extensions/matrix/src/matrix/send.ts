@@ -4,7 +4,7 @@ import {
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { PollInput } from "../runtime-api.js";
+import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { CoreConfig } from "../types.js";
 import {
   createMatrixPlannedEvents,
@@ -16,6 +16,7 @@ import {
 import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
+import { buildMatrixMessageRelation, resolveMatrixReplyToEventId } from "./relations.js";
 import type { MatrixClient } from "./sdk.js";
 import { chunkMatrixText, prepareMatrixSingleText } from "./send/chunking.js";
 import {
@@ -24,9 +25,7 @@ import {
   withResolvedMatrixSendClient,
 } from "./send/client.js";
 import {
-  buildReplyRelation,
   buildTextContent,
-  buildThreadRelation,
   diffMatrixMentions,
   enrichMatrixFormattedContent,
   extractMatrixMentions,
@@ -227,14 +226,14 @@ export async function sendMessageMatrix(
         : null;
       let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
-        const { chunks, tableMode } = chunkMatrixText(messageText, {
+        const preparedText = chunkMatrixText(messageText, {
           cfg,
           accountId: opts.accountId,
           preserveWhitespace: true,
         });
-        const relation = threadId
-          ? buildThreadRelation(threadId, opts.replyToId)
-          : buildReplyRelation(opts.replyToId);
+        const { chunks, convertedText, preparedBody, fitsInSingleEvent, tableMode } = preparedText;
+        const singleEventBody = fitsInSingleEvent ? preparedBody : undefined;
+        const relation = buildMatrixMessageRelation({ ...opts, threadId });
         let pendingExtraContent = opts.extraContent;
         const events: Omit<MatrixPreparedEvent, "transactionId">[] = [];
         const prepareContent = (
@@ -301,6 +300,7 @@ export async function sendMessageMatrix(
             client,
             content,
             markdown: captionMarkdown,
+            preparedBody: captionMarkdown === convertedText ? singleEventBody : undefined,
             tableMode,
           });
           prepareContent(content, receiptKind);
@@ -315,6 +315,7 @@ export async function sendMessageMatrix(
               client,
               content: followup,
               markdown: chunk,
+              preparedBody: chunk === convertedText ? singleEventBody : undefined,
               tableMode,
             });
             prepareContent(followup, "text");
@@ -329,6 +330,7 @@ export async function sendMessageMatrix(
               client,
               content,
               markdown: chunk,
+              preparedBody: chunk === convertedText ? singleEventBody : undefined,
               tableMode,
             });
             prepareContent(content, "text");
@@ -382,7 +384,7 @@ export async function sendMessageMatrix(
           continue;
         }
         // Media captions and text follow-ups can intentionally have different reply relations.
-        const eventReplyToId = planned.content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+        const eventReplyToId = resolveMatrixReplyToEventId(planned.content);
         const acceptedEvent: MatrixReceiptEvent = {
           messageId: eventId,
           kind: planned.receiptKind,
@@ -448,7 +450,7 @@ export async function sendPollMatrix(
       });
       const threadId = normalizeThreadId(opts.threadId);
       const pollPayload: Record<string, unknown> = threadId
-        ? { ...pollContent, "m.relates_to": buildThreadRelation(threadId) }
+        ? { ...pollContent, "m.relates_to": buildMatrixMessageRelation({ threadId }) }
         : { ...pollContent };
       pollPayload["m.mentions"] = mentions;
       const eventId = await client.sendEvent(roomId, M_POLL_START, pollPayload);
@@ -522,6 +524,7 @@ export async function sendSingleTextMessageMatrix(
   const {
     trimmedText,
     convertedText,
+    preparedBody,
     singleEventLimit,
     eventTextLength,
     fitsInSingleEvent,
@@ -548,9 +551,7 @@ export async function sendSingleTextMessageMatrix(
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
       const normalizedThreadId = normalizeThreadId(opts.threadId);
-      const relation = normalizedThreadId
-        ? buildThreadRelation(normalizedThreadId, opts.replyToId)
-        : buildReplyRelation(opts.replyToId);
+      const relation = buildMatrixMessageRelation({ ...opts, threadId: normalizedThreadId });
       const content = withMatrixExtraContentFields(
         buildTextContent(convertedText, relation, {
           msgtype: opts.msgtype,
@@ -561,6 +562,7 @@ export async function sendSingleTextMessageMatrix(
         client,
         content,
         markdown: convertedText,
+        preparedBody,
         includeMentions: opts.includeMentions,
         tableMode,
       });
@@ -570,7 +572,7 @@ export async function sendSingleTextMessageMatrix(
         (content as Record<string, unknown>)[MSC4357_LIVE_KEY] = {};
       }
       const eventId = await client.sendMessage(resolvedRoom, content);
-      const replyToId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+      const replyToId = resolveMatrixReplyToEventId(content);
       return {
         messageId: eventId ?? "unknown",
         roomId: resolvedRoom,
@@ -631,7 +633,7 @@ export async function editMessageMatrix(
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
       const cfg = requireRuntimeConfig(opts.cfg, "Matrix message edit") as CoreConfig;
-      const { convertedText, tableMode } = prepareMatrixSingleText(newText, {
+      const { convertedText, preparedBody, tableMode } = prepareMatrixSingleText(newText, {
         cfg,
         accountId: opts.accountId,
         preserveWhitespace: true,
@@ -646,6 +648,7 @@ export async function editMessageMatrix(
         client,
         content: newContent,
         markdown: convertedText,
+        preparedBody,
         includeMentions: opts.includeMentions,
         tableMode,
       });

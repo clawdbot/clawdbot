@@ -1,4 +1,5 @@
 // Release-era repair for configs that imply official plugin installs before install records existed.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
@@ -24,7 +25,6 @@ import { VERSION } from "../../../version.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
-import { asObjectRecord } from "./object.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
@@ -59,9 +59,9 @@ function collectBlockedPluginIds(cfg: OpenClawConfig): string[] {
       }
     }
   }
-  const entries = asObjectRecord(cfg.plugins?.entries);
+  const entries = asNullableRecord(cfg.plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asObjectRecord(entry)?.enabled === false && pluginId.trim()) {
+    if (asNullableRecord(entry)?.enabled === false && pluginId.trim()) {
       ids.add(pluginId.trim());
     }
   }
@@ -73,8 +73,8 @@ function isPluginEntryDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
 }
 
 function isChannelDisabled(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = asObjectRecord(cfg.channels);
-  const entry = asObjectRecord(channels?.[channelId]);
+  const channels = asNullableRecord(cfg.channels);
+  const entry = asNullableRecord(channels?.[channelId]);
   return entry?.enabled === false;
 }
 
@@ -87,22 +87,22 @@ function isDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
 }
 
 function hasMaterialPluginEntry(entry: unknown): boolean {
-  const record = asObjectRecord(entry);
+  const record = asNullableRecord(entry);
   if (!record) {
     return false;
   }
   return (
     record.enabled === true ||
-    asObjectRecord(record.config) !== null ||
-    asObjectRecord(record.hooks) !== null ||
-    asObjectRecord(record.subagent) !== null ||
+    asNullableRecord(record.config) !== null ||
+    asNullableRecord(record.hooks) !== null ||
+    asNullableRecord(record.subagent) !== null ||
     record.apiKey !== undefined ||
     record.env !== undefined
   );
 }
 
 function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
-  const entries = asObjectRecord(cfg.plugins?.entries);
+  const entries = asNullableRecord(cfg.plugins?.entries);
   if (!entries) {
     return [];
   }
@@ -113,7 +113,7 @@ function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
 }
 
 function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
-  const slots = asObjectRecord(cfg.plugins?.slots);
+  const slots = asNullableRecord(cfg.plugins?.slots);
   return ["memory", "contextEngine"]
     .map((key) => normalizeId(slots?.[key]))
     .filter(
@@ -197,13 +197,13 @@ function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
 }
 
 function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
-  const acp = asObjectRecord(cfg.acp);
+  const acp = asNullableRecord(cfg.acp);
   if (!acp) {
     return [];
   }
   const backend = normalizeId(acp.backend)?.toLowerCase() ?? "";
   const configured =
-    acp.enabled === true || asObjectRecord(acp.dispatch)?.enabled === true || backend === "acpx";
+    acp.enabled === true || asNullableRecord(acp.dispatch)?.enabled === true || backend === "acpx";
   if (!configured || (backend && backend !== "acpx")) {
     return [];
   }

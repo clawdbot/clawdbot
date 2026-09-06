@@ -1,7 +1,7 @@
 // Entry capability helpers validate explicit media capability tags and infer
 // shared provider entries from registry metadata.
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   MediaUnderstandingCapability,
   MediaUnderstandingCapabilityRegistry,

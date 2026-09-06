@@ -8,7 +8,10 @@ import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerMessageIdentityTest {
   @Test
   fun reconcileMessageIdsKeepsCanonicalEntryIdentityFromReload() {
@@ -91,22 +94,28 @@ class ChatControllerMessageIdentityTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, _ ->
             if (method == "chat.history") {
               """
               {
                 "messages": [
-                  { "role": "user", "content": "hello" },
+                  { "role": "user", "content": "hello", "senderLabel": "  Alex (Slack)  " },
+                  { "role": "user", "content": "numeric sender", "senderLabel": 42 },
+                  { "role": "user", "content": "boolean sender", "senderLabel": true },
+                  { "role": "user", "content": "blank sender", "senderLabel": "  " },
+                  { "role": "user", "content": "null sender", "senderLabel": null },
                   { "role": "toolResult", "content": "private tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
-                  { "role": "Assistant", "content": "reply" }
+                  { "role": "Assistant", "content": "reply", "senderLabel": "Spoofed sender" }
                 ]
               }
               """.trimIndent()
             } else {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           },
         )
@@ -114,11 +123,15 @@ class ChatControllerMessageIdentityTest {
       controller.load("main")
       advanceUntilIdle()
 
-      assertEquals(listOf("user", "custom", "assistant"), controller.messages.value.map { it.role })
       assertEquals(
-        listOf("hello", "visible plugin notice", "reply"),
+        listOf("user", "user", "user", "user", "user", "custom", "assistant"),
+        controller.messages.value.map { it.role },
+      )
+      assertEquals(
+        listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null, null, null, null, null, null), controller.messages.value.map { it.senderLabel })
     }
 
   @Test
@@ -128,6 +141,8 @@ class ChatControllerMessageIdentityTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, _ ->
             if (method == "chat.history") {
@@ -156,7 +171,7 @@ class ChatControllerMessageIdentityTest {
               }
               """.trimIndent()
             } else {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           },
         )

@@ -116,6 +116,10 @@ Notes:
     `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
     or `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
 
+Here, `fs.listDir` is the node command relayed through `node.invoke`. The
+top-level Gateway `fs.listDir` RPC needs `operator.write` for
+workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
 
@@ -220,6 +224,12 @@ While a probe is running, the node client is told to keep retrying
 fails, the next attempt falls back to the normal prompt flow. Failed targets
 get a short cooldown (5 minutes after a key mismatch).
 
+Pairing settings hot-apply without restarting the Gateway. Automatic approvals
+recheck the current policy immediately before granting access, even if an SSH
+probe or store lock was already pending when the policy changed. Changes to SSH
+verification settings use a fresh probe and do not inherit the previous policy’s
+cooldown. Already paired devices remain paired.
+
 Approved devices record `approvedVia: "ssh-verified"` and their first declared
 capability surface is approved in the same step — the key match already proves
 the node runs under the operator's account on a machine they own, which is the
@@ -242,6 +252,24 @@ Harden or disable:
   },
 }
 ```
+
+## Manual approval (macOS app)
+
+The macOS app shows node and device requests in one OpenClaw approval panel.
+Each request keeps the name, platform, source address, and all requested access
+visible. System-command execution and device admin access are highlighted.
+Node requests that Gateway classifies as requiring administrator approval also
+show a warning for the whole request. Expand **Details**
+for the full identity, app/core versions, and request metadata.
+
+**Approve Node** approves the node's declared capabilities; it does not rotate
+the device's access token. **Command-Return** approves only a single displayed
+request. Return alone does not approve. **Not Now** or **Escape** hides the panel
+without resolving requests; they remain pending until resolved or expired.
+
+For multiple requests, **Approve All** and **Reject All** apply only to the
+displayed requests. Requests arriving after that view was displayed are not
+included in the decision.
 
 ## Auto-approval (macOS app)
 

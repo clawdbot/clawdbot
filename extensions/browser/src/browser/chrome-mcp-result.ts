@@ -78,19 +78,55 @@ export function extractStructuredPages(result: ChromeMcpToolResult): ChromeMcpSt
   return structured.length > 0 ? structured : extractTextPages(result);
 }
 
+function normalizeSnapshotFields(record: Record<string, unknown>): ChromeMcpSnapshotNode {
+  const snapshotValue = record.value;
+  return {
+    id: readStringValue(record.id),
+    role: readStringValue(record.role),
+    name: readStringValue(record.name),
+    ...(typeof snapshotValue === "string" ||
+    typeof snapshotValue === "number" ||
+    typeof snapshotValue === "boolean"
+      ? { value: snapshotValue }
+      : {}),
+    description: readStringValue(record.description),
+  };
+}
+
+function normalizeSnapshotNode(value: unknown): ChromeMcpSnapshotNode | null {
+  const rootRecord = asNullableRecord(value);
+  if (!rootRecord) {
+    return null;
+  }
+  const root = normalizeSnapshotFields(rootRecord);
+  const pending = [{ record: rootRecord, node: root }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || !Array.isArray(current.record.children)) {
+      continue;
+    }
+    const children: ChromeMcpSnapshotNode[] = [];
+    for (const child of current.record.children) {
+      const record = asNullableRecord(child);
+      if (!record) {
+        continue;
+      }
+      const node = normalizeSnapshotFields(record);
+      children.push(node);
+      pending.push({ record, node });
+    }
+    current.node.children = children;
+  }
+  return root;
+}
+
 export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
   const structured = extractStructuredContent(result);
-  const snapshot = asNullableRecord(structured.snapshot);
+  const snapshot = normalizeSnapshotNode(structured.snapshot);
   if (!snapshot) {
     throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
   }
-  return snapshot as unknown as ChromeMcpSnapshotNode;
-}
-
-function extractJsonBlock(text: string): unknown {
-  const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
-  const raw = match?.[1]?.trim() || text.trim();
-  return raw ? JSON.parse(raw) : null;
+  return snapshot;
 }
 
 function extractMessageText(result: ChromeMcpToolResult): string {
@@ -153,7 +189,11 @@ export function extractJsonMessage(result: ChromeMcpToolResult): unknown {
   let lastError: unknown;
   for (const candidate of candidates) {
     try {
-      return extractJsonBlock(candidate);
+      // MCP fence delimiters occupy lines; backticks inside JSON strings are data.
+      const match = candidate.match(
+        /^[\t ]*```json[\t ]*\r?\n([\s\S]*?)\r?\n[\t ]*```[\t ]*\r?$/im,
+      );
+      return JSON.parse(match?.[1]?.trim() || candidate.trim());
     } catch (err) {
       lastError = err;
     }

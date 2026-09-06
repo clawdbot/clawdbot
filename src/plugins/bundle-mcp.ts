@@ -1,11 +1,10 @@
 // Bundles MCP metadata exposed by plugins for package output.
-import fs from "node:fs";
 import path from "node:path";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { isRecord } from "../utils.js";
 import {
   loadEnabledBundleConfig,
@@ -24,6 +23,7 @@ import { encodePluginInstallDirName } from "./install-paths.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
 
@@ -79,13 +79,12 @@ function resolveBundleMcpConfigPaths(params: {
   bundleFormat: PluginBundleFormat;
 }): string[] {
   if (params.bundleFormat === "agent") {
-    return fs.existsSync(path.join(params.rootDir, "mcp.json")) ? ["mcp.json"] : [];
+    return pluginCacheExistsSync(path.join(params.rootDir, "mcp.json")) ? ["mcp.json"] : [];
   }
   const declared = normalizeBundlePathList(params.raw.mcpServers);
-  const defaults = fs.existsSync(path.join(params.rootDir, ".mcp.json")) ? [".mcp.json"] : [];
-  if (params.bundleFormat === "claude") {
-    return mergeBundlePathLists(defaults, declared);
-  }
+  const defaults = pluginCacheExistsSync(path.join(params.rootDir, ".mcp.json"))
+    ? [".mcp.json"]
+    : [];
   return mergeBundlePathLists(defaults, declared);
 }
 
@@ -240,20 +239,12 @@ function hasOnlyKeys(raw: Record<string, unknown>, allowed: ReadonlySet<string>)
   return Object.keys(raw).every((key) => allowed.has(key));
 }
 
-function isPathWithin(baseDir: string, targetPath: string): boolean {
-  const relative = path.relative(baseDir, targetPath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
-}
-
 function isValidAgentCommand(command: unknown, rootDir: string): command is string {
   if (typeof command !== "string" || command.length === 0) {
     return false;
   }
   if (command.startsWith("./")) {
-    return command.length > 2 && isPathWithin(rootDir, path.resolve(rootDir, command));
+    return command.length > 2 && isPathInside(rootDir, path.resolve(rootDir, command));
   }
   return !/[\s/\\]/.test(command);
 }
@@ -279,7 +270,7 @@ function isValidAgentCwd(cwd: unknown, rootDir: string, pluginDataDir: string): 
     return false;
   }
   const expanded = expandBundleRootPlaceholders({ value: cwd, rootDir, pluginDataDir });
-  return isPathWithin(baseDir, path.resolve(baseDir, expanded));
+  return isPathInside(baseDir, path.resolve(baseDir, expanded));
 }
 
 function validateAgentMcpServer(params: {
@@ -400,41 +391,39 @@ function loadBundleFileBackedMcpConfig(params: {
 } {
   const rootDir =
     params.bundleFormat === "agent"
-      ? fs.realpathSync(params.rootDir)
+      ? // SAFETY: The required Agent Plugins manifest already established this canonical root.
+        pluginCacheRealpathSync(params.rootDir)!
       : normalizeBundlePath(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
-  const result = readRootJsonObjectSync({
+  const result = readBundleJsonObject({
     rootDir,
     relativePath: params.relativePath,
-    boundaryLabel: "plugin root",
-    rejectHardlinks: true,
+    onOpenFailure: (failure) =>
+      resolveBundleJsonOpenFailure({
+        failure,
+        relativePath: params.relativePath,
+        allowMissing: params.bundleFormat !== "agent",
+      }),
   });
   if (!result.ok) {
-    if (result.reason === "open") {
-      return {
-        config: { mcpServers: {}, prepareDataDirsByServer: {} },
-        diagnostics:
-          result.failure.reason === "path"
-            ? params.bundleFormat === "agent"
-              ? [`unable to read ${params.relativePath}: path`]
-              : []
-            : [`unable to read ${params.relativePath}: ${result.failure.reason}`],
-      };
-    }
     return {
       config: { mcpServers: {}, prepareDataDirsByServer: {} },
-      diagnostics: [`unable to read ${params.relativePath}: ${result.error}`],
+      diagnostics: [
+        result.reason === "open"
+          ? result.error
+          : `unable to read ${params.relativePath}: ${result.error}`,
+      ],
     };
   }
   const agentLoaded =
     params.bundleFormat === "agent"
       ? extractAgentMcpServerMap({
-          raw: result.value,
+          raw: result.raw,
           pluginId: params.pluginId,
           rootDir,
         })
       : undefined;
-  const servers = agentLoaded?.servers ?? extractMcpServerMap(result.value);
+  const servers = agentLoaded?.servers ?? extractMcpServerMap(result.raw);
   const baseDir = normalizeBundlePath(path.dirname(absolutePath));
   return {
     config: {

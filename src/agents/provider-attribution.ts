@@ -8,7 +8,6 @@ import type {
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -66,6 +65,7 @@ export type ProviderEndpointClass =
   | "openai-public"
   | "openai"
   | "opencode-native"
+  | "opencode-go-native"
   | "azure-openai"
   | "openrouter"
   | "xai-native"
@@ -180,47 +180,19 @@ type ProviderMetadataOwners = {
   providerRequests: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
 
-let fallbackProviderMetadataOwnersMemo: ProviderMetadataOwners | undefined;
-
-function clearFallbackProviderMetadataOwnersMemo(): void {
-  fallbackProviderMetadataOwnersMemo = undefined;
-}
-
-// This input-free fallback is process-stable until plugin metadata lifecycle reset.
-// Without the memo, model catalog normalization rescans every manifest per model.
-registerPluginMetadataProcessMemoLifecycleClear(clearFallbackProviderMetadataOwnersMemo);
-
-function resolveFallbackProviderMetadataOwners(): ProviderMetadataOwners {
-  if (fallbackProviderMetadataOwnersMemo) {
-    return fallbackProviderMetadataOwnersMemo;
-  }
-  const fallback = loadPluginMetadataSnapshot({ config: {} }).owners;
-  fallbackProviderMetadataOwnersMemo = {
-    providerEndpoints: fallback.providerEndpoints ?? [],
-    providerRequests: fallback.providerRequests ?? new Map(),
-  };
-  return fallbackProviderMetadataOwnersMemo;
-}
-
 function resolveProviderMetadataOwners(
   prepared?: PluginMetadataSnapshotOwnerMaps,
 ): ProviderMetadataOwners {
-  if (prepared) {
-    return {
-      providerEndpoints: prepared.providerEndpoints ?? [],
-      providerRequests: prepared.providerRequests ?? new Map(),
-    };
-  }
-  const current = getCurrentPluginMetadataSnapshot({
-    allowWorkspaceScopedSnapshot: true,
-  });
-  if (current) {
-    return {
-      providerEndpoints: current.owners?.providerEndpoints ?? [],
-      providerRequests: current.owners?.providerRequests ?? new Map(),
-    };
-  }
-  return resolveFallbackProviderMetadataOwners();
+  const owners =
+    prepared ??
+    getCurrentPluginMetadataSnapshot({
+      allowWorkspaceScopedSnapshot: true,
+    })?.owners ??
+    loadPluginMetadataSnapshot({ config: {} }).owners;
+  return {
+    providerEndpoints: owners.providerEndpoints ?? [],
+    providerRequests: owners.providerRequests ?? new Map(),
+  };
 }
 
 function resolveManifestProviderRequest(params: {
@@ -429,6 +401,23 @@ function buildOpenAIAttributionPolicy(
   };
 }
 
+function buildOpenCodeGoAttributionPolicy(env: RuntimeVersionEnv): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "opencode-go",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://opencode.ai/docs/go/",
+    reviewNote:
+      "OpenCode Go requires coding agents to identify themselves with a specific User-Agent.",
+    ...identity,
+    headers: {
+      "User-Agent": formatOpenClawUserAgent(identity.version),
+    },
+  };
+}
+
 function buildXaiAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
@@ -473,6 +462,7 @@ function listProviderAttributionPolicies(
     buildNvidiaAttributionPolicy(env),
     buildGoogleAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
+    buildOpenCodeGoAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
@@ -544,6 +534,14 @@ export function resolveProviderRequestPolicy(
     if (usesXaiNativeAttributionHost || endpointClass === "default") {
       attributionProvider = "xai";
     }
+  } else if (
+    provider === "opencode-go" &&
+    policy?.enabledByDefault &&
+    endpointClass === "opencode-go-native"
+  ) {
+    // The documented identification contract belongs to Go's native endpoint.
+    // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
+    attributionProvider = "opencode-go";
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
@@ -607,6 +605,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||

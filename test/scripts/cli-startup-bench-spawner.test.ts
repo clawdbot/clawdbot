@@ -34,7 +34,7 @@ describe("CLI startup benchmark script spawners", () => {
     );
   });
 
-  it("reuses warmed state for gateway health while isolating first-device samples", () => {
+  it("reuses warm state for gateway health while isolating fresh-state samples", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-state-scope-test-"));
     try {
       const fixturePath = path.join(tmpDir, "record-home.mjs");
@@ -49,67 +49,68 @@ describe("CLI startup benchmark script spawners", () => {
         ].join("\n"),
       );
 
-      const runCase = (caseId: string) => {
-        fs.rmSync(homeLogPath, { force: true });
-        const reportPath = path.join(tmpDir, `${caseId}.json`);
-        execFileSync(
-          process.execPath,
-          [
-            "--import",
-            "tsx",
-            "scripts/bench-cli-startup.ts",
-            "--entry",
-            fixturePath,
-            "--case",
-            caseId,
-            "--runs",
-            "2",
-            "--warmup",
-            "1",
-            "--output",
-            reportPath,
-          ],
-          {
-            cwd: process.cwd(),
-            env: {
-              ...process.env,
-              OPENCLAW_BENCH_HOME_LOG: homeLogPath,
-            },
-            stdio: "pipe",
+      const caseIds = [
+        "gatewayHealthJsonWarmState",
+        "gatewayHealthJson",
+        "gatewayHealthJsonFreshState",
+      ];
+      const reportPath = path.join(tmpDir, "state-scopes.json");
+      execFileSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "scripts/bench-cli-startup.ts",
+          "--entry",
+          fixturePath,
+          ...caseIds.flatMap((caseId) => ["--case", caseId]),
+          "--runs",
+          "2",
+          "--warmup",
+          "1",
+          "--output",
+          reportPath,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_BENCH_HOME_LOG: homeLogPath,
           },
-        );
-        return {
-          homes: fs.readFileSync(homeLogPath, "utf8").trim().split("\n"),
-          report: JSON.parse(fs.readFileSync(reportPath, "utf8")),
-        };
-      };
+          stdio: "pipe",
+        },
+      );
+      const homes = fs.readFileSync(homeLogPath, "utf8").trim().split("\n");
+      const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
 
-      const warmed = runCase("gatewayHealthJsonConnected");
-      const warmedHomes = warmed.homes;
-      expect(warmedHomes).toHaveLength(3);
+      expect(report.primary.cases.map((commandCase: { id: string }) => commandCase.id)).toEqual(
+        caseIds,
+      );
+      expect(homes).toHaveLength(9);
+      expect(new Set(homes).size).toBe(7);
+      expect(homes.every((home) => !fs.existsSync(home))).toBe(true);
+      const warmedHomes = homes.slice(0, 3);
       expect(new Set(warmedHomes).size).toBe(1);
-      expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
-      const warmedCase = warmed.report.primary.cases[0];
-      expect(warmedCase.warmupSamples).toHaveLength(1);
-      expect(warmedCase.samples).toHaveLength(2);
-      for (const sample of [...warmedCase.warmupSamples, ...warmedCase.samples]) {
-        expect(new Date(sample.startedAt).toISOString()).toBe(sample.startedAt);
-        expect(new Date(sample.endedAt).toISOString()).toBe(sample.endedAt);
-        expect(Date.parse(sample.endedAt)).toBeGreaterThanOrEqual(Date.parse(sample.startedAt));
+      for (const commandCase of report.primary.cases) {
+        expect(commandCase.warmupSamples).toHaveLength(1);
+        expect(commandCase.samples).toHaveLength(2);
+        for (const sample of [...commandCase.warmupSamples, ...commandCase.samples]) {
+          expect(new Date(sample.startedAt).toISOString()).toBe(sample.startedAt);
+          expect(new Date(sample.endedAt).toISOString()).toBe(sample.endedAt);
+          expect(Date.parse(sample.endedAt)).toBeGreaterThanOrEqual(Date.parse(sample.startedAt));
+        }
       }
 
-      for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFirstDevice"]) {
-        const sampleHomes = runCase(caseId).homes;
-        expect(sampleHomes).toHaveLength(3);
+      for (const start of [3, 6]) {
+        const sampleHomes = homes.slice(start, start + 3);
         expect(new Set(sampleHomes).size).toBe(3);
-        expect(sampleHomes.every((home) => !fs.existsSync(home))).toBe(true);
       }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("requires connected gateway health probes to exit successfully", () => {
+  it("requires authenticated gateway health probes to exit successfully", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-connected-test-"));
     try {
       const fixturePath = path.join(tmpDir, "transport-error.mjs");
@@ -142,7 +143,7 @@ describe("CLI startup benchmark script spawners", () => {
         );
 
       expect(runCase("gatewayHealthJson").status).toBe(0);
-      for (const caseId of ["gatewayHealthJsonConnected", "gatewayHealthJsonFirstDevice"]) {
+      for (const caseId of ["gatewayHealthJsonWarmState", "gatewayHealthJsonFreshState"]) {
         const result = runCase(caseId);
         expect(result.status).toBe(1);
         expect(result.stderr).toContain(`${caseId} sample 1: exited with code 1`);

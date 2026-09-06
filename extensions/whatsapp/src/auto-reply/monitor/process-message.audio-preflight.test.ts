@@ -205,10 +205,6 @@ function makeParams(msgOverrides: AudioMessageOverrides = {}) {
       error: () => {},
     } as never,
     backgroundTasks: new Set<Promise<unknown>>(),
-    rememberSentText: () => {},
-    echoHas: () => false,
-    echoForget: () => {},
-    buildCombinedEchoKey: (p: { combinedBody: string }) => p.combinedBody,
   };
 }
 

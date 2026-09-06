@@ -2,7 +2,9 @@
  * Sanitizes and validates replayed session history before model calls.
  */
 import { isDeepStrictEqual } from "node:util";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -25,7 +27,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcrip
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -40,11 +42,12 @@ import {
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
-  sanitizeToolUseResultPairing,
+  sanitizeToolUseResultPairingForModel,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+import { isStreamErrorFallbackContent } from "../stream-message-shared.js";
+import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -55,6 +58,7 @@ import {
   providerRequiresSignedThinking,
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
 } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
@@ -69,10 +73,16 @@ import {
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
-  stripStaleThinkingSignaturesForCompactionReplay,
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
+const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
+  "attachment",
+  "attachment_error",
+  "audio",
+  "image",
+  "video",
+]);
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
   timestamp: number;
@@ -135,7 +145,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       }
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: annotated,
       } as AgentMessage);
       continue;
@@ -167,7 +177,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       };
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: nextContent,
       } as AgentMessage);
       continue;
@@ -175,7 +185,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
 
     touched = true;
     out.push({
-      ...(msg as unknown as Record<string, unknown>),
+      ...msg,
       content: [
         {
           type: "text",
@@ -221,28 +231,37 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }
 
-function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
+function normalizeAssistantReplayTextContent(
+  message: AssistantReplayMessage,
+  replayContent: string,
+): AssistantReplayMessage | null {
   const strippedText = stripInternalMetadataForDisplay(replayContent);
   const trimmed = strippedText.trim();
   if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
     return null;
   }
-  return {
-    ...message,
-    content: [{ type: "text", text: strippedText }],
-  } as AgentMessage;
+  return replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
 }
 
-function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
+function normalizeAssistantReplayBlockContent(
+  message: AssistantReplayMessage,
+  replayContent: unknown[],
+): AssistantReplayMessage | null {
   let touched = false;
   let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
-    if (!block || typeof block !== "object") {
+    const record = asOptionalRecord(block);
+    if (!record) {
       sanitizedContent.push(block);
       continue;
     }
-    const text = (block as { text?: unknown }).text;
+    const type = record.type;
+    if (typeof type === "string" && MANAGED_DISPLAY_BLOCK_TYPES.has(type)) {
+      touched = true;
+      continue;
+    }
+    const text = record.text;
     if (typeof text !== "string") {
       sanitizedContent.push(block);
       continue;
@@ -262,7 +281,7 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
     const isSilentText =
       trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
     if (trimmed && !isSilentText) {
-      sanitizedContent.push({ ...block, text: strippedText });
+      sanitizedContent.push({ ...record, text: strippedText });
     }
     removedSilentText ||= isSilentText;
   }
@@ -272,7 +291,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   if (sanitizedContent.length === 0) {
     return null;
   }
-  const normalized = { ...message, content: sanitizedContent } as AgentMessage;
+  const normalized = replaceCompactionReplayOwnerContent(
+    message,
+    sanitizedContent as AssistantReplayMessage["content"],
+  );
   // A silent reply has no visible assistant output. Do not let its signed
   // reasoning merge into the next assistant turn during strict replay.
   return removedSilentText && hasOnlyAssistantReasoningContent(normalized) ? null : normalized;
@@ -328,6 +350,16 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
+    // Failed attempts have no model content; discard the legacy placeholder too.
+    // Keep billed silent replies and incomplete tool/length states unchanged.
+    if (
+      isStreamErrorFallbackContent(message.content) &&
+      (message.stopReason === "error" ||
+        isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }))
+    ) {
+      touched = true;
+      continue;
+    }
     let assistantMessage: AssistantReplayMessage = message;
     let replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
@@ -341,7 +373,10 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (!Array.isArray(replayContent)) {
       replayContent =
         replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
-      assistantMessage = { ...message, content: replayContent } as AssistantReplayMessage;
+      assistantMessage = replaceCompactionReplayOwnerContent(
+        message,
+        replayContent as typeof message.content,
+      ) as AssistantReplayMessage;
       touched = true;
     }
     if (Array.isArray(replayContent)) {
@@ -352,7 +387,6 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
           continue;
         }
         assistantMessage = normalized as AssistantReplayMessage;
-        replayContent = assistantMessage.content;
       }
     }
     if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
@@ -360,33 +394,6 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // resend a partial signature, while visible text or tool calls remain useful.
       touched = true;
       continue;
-    }
-    if (Array.isArray(replayContent) && replayContent.length === 0) {
-      // An assistant turn can legitimately end with `content: []` — for
-      // example the silent-reply / NO_REPLY path locked in by
-      // run.shared-integration.test.ts ("Clean stop with no output is a
-      // legitimate silent reply, not a crash"). We must NOT inject the
-      // failure sentinel into those turns: doing so would fabricate a
-      // failure statement in the next provider request and change model
-      // behavior even when no failure occurred.
-      //
-      // `stopReason: "error"` turns are Bedrock-Converse replay poison:
-      // the provider rejects assistant messages with no ContentBlock, and
-      // the persisted error turn was never going to render anything useful
-      // to the model anyway. A zero-token `stop` turn is the same shape from
-      // the next run's perspective: the provider produced no billable prompt
-      // or completion and no content. Leaving other non-error empty-content
-      // turns untouched preserves silent-reply semantics on every other code
-      // path.
-      const stopReason = (assistantMessage as { stopReason?: unknown }).stopReason;
-      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(assistantMessage)) {
-        out.push({
-          ...assistantMessage,
-          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
-        });
-        touched = true;
-        continue;
-      }
     }
     // Historical side-branch rebuilds could strip every mirror marker while
     // retaining the zero-usage receipt immediately after its source reply.
@@ -398,72 +405,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     out.push(assistantMessage);
   }
 
-  // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The
-  // sentinel was synthesized to satisfy Bedrock Converse's "ContentBlock must
-  // not be empty" rule for *non-trailing* error turns; when it is the trailing
-  // entry, prefill-strict providers (e.g. github-copilot/claude-opus-4.6 — the
-  // exact path reported in #77228) reject the request with
-  // `400 This model does not support assistant message prefill. The
-  // conversation must end with a user message.`. The original turn carried
-  // `content: []` and zero usage — there is no information to lose by
-  // dropping it. This trim runs after the main loop so it also catches a
-  // sentinel that was *persisted* to disk by an earlier session-file repair
-  // pass (matching the same content shape the loop above produces).
-  while (out.length > 0) {
-    const last = out[out.length - 1];
-    if (!isReplayDroppableTrailingAssistant(last)) {
-      break;
-    }
-    out.pop();
-    touched = true;
-  }
   return touched ? out : messages;
-}
-
-function isReplayDroppableTrailingAssistant(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  if (content.length === 0) {
-    const stopReason = (message as { stopReason?: unknown }).stopReason;
-    return stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message);
-  }
-  // Sentinel-text content is the post-rewrite shape produced by either a
-  // doctor-imported legacy repair (always stopReason="error") or the in-memory rewrite earlier in this same
-  // normalizeAssistantReplayContent loop (preserves the original
-  // stopReason — "error" or zero-usage "stop"). Drop only when the trailing
-  // turn carries that synthetic provenance: without this guard, a real
-  // model reply that happens to consist of exactly the sentinel string
-  // would be silently removed on next replay
-  // (clawsweeper review on #77287, P2).
-  if (!isStreamErrorSentinelContent(content)) {
-    return false;
-  }
-  const stopReason = (message as { stopReason?: unknown }).stopReason;
-  if (stopReason === "error") {
-    return true;
-  }
-  return isZeroUsageEmptyStopAssistantTurn({
-    stopReason,
-    usage: (message as { usage?: unknown }).usage,
-    content: [],
-  });
-}
-
-function isStreamErrorSentinelContent(content: readonly unknown[]): boolean {
-  if (content.length !== 1) {
-    return false;
-  }
-  const block = content[0];
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const blockRecord = block as { type?: unknown; text?: unknown };
-  return blockRecord.type === "text" && blockRecord.text === STREAM_ERROR_FALLBACK_TEXT;
 }
 
 function normalizeAssistantUsageSnapshot(usage: unknown) {
@@ -582,7 +524,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       continue;
     }
     out[i] = {
-      ...(message as unknown as Record<string, unknown>),
+      ...message,
       usage: normalizedUsage,
     } as AgentMessage;
     touched = true;
@@ -858,32 +800,26 @@ export async function sanitizeSessionHistory(params: {
   // tests plus live OpenAI/Codex and generic replay-repair model tests.
   const openAIRepairedToolCalls =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
-          erroredAssistantResultPolicy: "drop",
-          // Match upstream Codex history normalization for OpenAI Responses:
-          // missing function_call_output entries are model-visible "aborted".
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitizedToolCalls, true)
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
         normalizeOpenAIResponsesToolCallIds(
           // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
           // invalidated by a switch, every later replay must keep dropping them.
-          downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-            dropReplayableReasoningBefore: latestModelSwitchTimestamp ?? undefined,
-          }),
+          dropStaleOpenAIReasoning(
+            openAIRepairedToolCalls,
+            latestModelSwitchTimestamp ?? undefined,
+          ),
         ),
       )
     : sanitizedToolCalls;
   const pairedToolCalls =
     !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(openAISafeToolCalls, {
-          erroredAssistantResultPolicy: "drop",
-        })
+      ? sanitizeToolUseResultPairingForModel(openAISafeToolCalls, false)
       : openAISafeToolCalls;
   const sanitizedToolIds =
-    policy.sanitizeToolCallIds && policy.toolCallIdMode
+    !isOpenAIResponsesApi && policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(pairedToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
           duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
@@ -912,15 +848,10 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+  // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.
   const responsesProviderRepaired =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
-          erroredAssistantResultPolicy: "drop",
-          // Provider replay hooks run after the core repair pipeline and may
-          // rewrite history. Keep the final Responses invariant guarded by the
-          // same Codex-compatible repair instead of failing on hook output.
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitizedWithProvider, true)
       : sanitizedWithProvider;
   const responsesInvariantChecked = isOpenAIResponsesApi
     ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
@@ -991,6 +922,10 @@ export async function validateReplayTurns(params: {
   const validatedGemini = policy.validateGeminiTurns
     ? validateGeminiTurns(params.messages)
     : params.messages;
-  return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
+  return policy.validateAnthropicTurns
+    ? validateAnthropicTurns(validatedGemini, {
+        mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, params.modelApi),
+      })
+    : validatedGemini;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

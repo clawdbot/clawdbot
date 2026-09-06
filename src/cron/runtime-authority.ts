@@ -1,5 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isRecord } from "../utils.js";
+import { snapshotOwnCronRecord } from "./own-record.js";
 
 const CRON_RUNTIME_AUTHORITY_MAX_BYTES = 64 * 1024;
 const CRON_RUNTIME_AUTHORITY_MAX_ID_LENGTH = 128;
@@ -101,19 +102,20 @@ function deepFreezeJson(value: JsonValue): JsonValue {
 
 /** Validates the private persisted transport without learning runtime-owned payload semantics. */
 export function normalizeCronRuntimeAuthority(value: unknown): CronRuntimeAuthority | undefined {
+  const input = isRecord(value) ? snapshotOwnCronRecord(value) : undefined;
   if (
-    !isRecord(value) ||
-    value.version !== 1 ||
-    Object.keys(value).some((key) => !CRON_RUNTIME_AUTHORITY_KEYS.has(key)) ||
-    !Object.hasOwn(value, "runtimeId") ||
-    !Object.hasOwn(value, "namespace") ||
-    !Object.hasOwn(value, "payload")
+    !input ||
+    input.version !== 1 ||
+    Object.keys(input).some((key) => !CRON_RUNTIME_AUTHORITY_KEYS.has(key)) ||
+    !("runtimeId" in input) ||
+    !("namespace" in input) ||
+    !("payload" in input)
   ) {
     return undefined;
   }
-  const runtimeId = normalizeAuthorityId(value.runtimeId);
-  const namespace = normalizeAuthorityId(value.namespace);
-  const payload = cloneJsonObject(value.payload);
+  const runtimeId = normalizeAuthorityId(input.runtimeId);
+  const namespace = normalizeAuthorityId(input.namespace);
+  const payload = cloneJsonObject(input.payload);
   if (!runtimeId || !namespace || !payload) {
     return undefined;
   }

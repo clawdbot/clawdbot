@@ -18,6 +18,10 @@ import type {
   TelegramSendOpts,
 } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
+import {
+  resolveTelegramAllowedReactions,
+  resolveTelegramReactionEmoji,
+} from "./status-reaction-variants.js";
 import { parseTelegramTarget, type TelegramTarget } from "./targets.js";
 
 type TelegramReactionOpts = TelegramApiCallOpts & {
@@ -26,6 +30,21 @@ type TelegramReactionOpts = TelegramApiCallOpts & {
 
 type TelegramTypingOpts = Omit<TelegramApiCallOpts, "gatewayClientScopes"> &
   Pick<TelegramSendOpts, "messageThreadId">;
+
+export async function getTelegramAllowedReactions(
+  chatId: string | number,
+  opts: TelegramApiCallOpts,
+): ReturnType<typeof resolveTelegramAllowedReactions> {
+  const context = resolveTelegramApiContext(opts);
+  return withTelegramApiContextLease(
+    context,
+    resolveTelegramAllowedReactions({
+      chat: undefined,
+      chatId,
+      getChat: (targetChatId) => context.api.getChat(targetChatId),
+    }),
+  );
+}
 
 export async function sendTypingTelegram(
   to: string,
@@ -109,12 +128,16 @@ async function reactMessageTelegramWithContext(
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
-  // Build the reaction array. We cast emoji to the grammY union type since
-  // Telegram validates emoji server-side; invalid emojis fail gracefully.
+  // Unsupported emoji remain server-validated so existing graceful failures stay intact.
+  const reactionEmoji =
+    resolveTelegramReactionEmoji(trimmedEmoji) ?? (trimmedEmoji as ReactionTypeEmoji["emoji"]);
+  // Telegram custom emoji IDs are numeric; preserve the native reaction variant on the wire.
   const reactions: ReactionType[] =
     remove || !trimmedEmoji
       ? []
-      : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
+      : /^\d+$/.test(trimmedEmoji)
+        ? [{ type: "custom_emoji", custom_emoji_id: trimmedEmoji }]
+        : [{ type: "emoji", emoji: reactionEmoji }];
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }

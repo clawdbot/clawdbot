@@ -3,15 +3,16 @@
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
-import { playwrightCore } from "./playwright-core.runtime.js";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
+import { bindPlaywrightCdpSend } from "./pw-cdp-send.js";
 import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-
-const { devices: playwrightDevices } = playwrightCore;
+import {
+  awaitActionWithAbort,
+  createAbortPromiseWithListener,
+} from "./pw-tools-core.interactions.navigation.js";
 
 type DeviceSize = { width: number; height: number };
-type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-
 type PlaywrightDeviceDescriptor = {
   userAgent: string;
   viewport: DeviceSize;
@@ -43,44 +44,78 @@ function resolvePageEmulationSession(page: Page, state: PageState): Promise<CDPS
 async function withPageEmulationCdpClient<T>(params: {
   page: Page;
   state: PageState;
-  run: (send: PageCdpSend) => Promise<T>;
+  run: (send: ReturnType<typeof bindPlaywrightCdpSend>, session: CDPSession) => Promise<T>;
 }): Promise<T> {
   const session = await resolvePageEmulationSession(params.page, params.state);
-  return await params.run((method, values) =>
-    (
-      session.send as unknown as (
-        method: string,
-        values?: Record<string, unknown>,
-      ) => Promise<unknown>
-    )(method, values),
-  );
+  return await params.run(bindPlaywrightCdpSend(session), session);
 }
 
-async function runDeviceTransition(params: {
-  page: Page;
+export async function setViewportSizeOnPage(page: Page, state: PageState, viewport: DeviceSize) {
+  const emulation = state.emulation;
+  if (
+    emulation?.metricsOwner &&
+    (emulation.metricsOwner.viewport.width !== viewport.width ||
+      emulation.metricsOwner.viewport.height !== viewport.height)
+  ) {
+    // Chromium caches metrics per session. Release the device owner before
+    // Playwright writes, or reapplying the same device silently skips its DPR/screen.
+    await emulation.metricsOwner.session.send("Emulation.clearDeviceMetricsOverride");
+    delete emulation.metricsOwner;
+  }
+  await page.setViewportSize(viewport);
+}
+
+export async function runPageEmulationTransition<T>(params: {
   state: PageState;
   signal?: AbortSignal;
-  run: () => Promise<void>;
-}): Promise<void> {
+  run: () => Promise<T>;
+}): Promise<T> {
   params.signal?.throwIfAborted();
   const emulation = resolvePageEmulationState(params.state);
-  const previous = emulation.deviceTransitionTail ?? Promise.resolve();
+  const interrupted = (emulation.transitionAbort ??= new AbortController());
+  interrupted.signal.throwIfAborted();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, interrupted.signal])
+    : interrupted.signal;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
+  const previous = emulation.transitionTail ?? Promise.resolve();
   const transition = previous
     .catch(() => {})
     .then(async () => {
-      params.signal?.throwIfAborted();
-      // Once admitted, finish the whole descriptor. Aborting between overrides would
-      // leave viewport, user agent, metrics, and touch state from different devices.
-      await params.run();
+      signal.throwIfAborted();
+      // Device changes and captures share one queue: neither may observe or
+      // restore only part of another operation's viewport, metrics, or touch state.
+      const interrupt = () =>
+        interrupted.abort(
+          new Error(
+            "A previous screenshot or emulation action was cancelled but is still running. Retry when it finishes; if it remains stuck, close and reopen this tab.",
+          ),
+        );
+      params.signal?.addEventListener("abort", interrupt, { once: true });
+      try {
+        return await params.run();
+      } finally {
+        params.signal?.removeEventListener("abort", interrupt);
+      }
     });
-  const tail = transition.catch(() => {});
-  emulation.deviceTransitionTail = tail;
+  // Cancellation cannot stop Chromium's pending capture/restoration. Reject
+  // waiting callers, but retain the mutation owner until its cleanup settles.
+  const tail = transition
+    .then(
+      () => {},
+      () => {},
+    )
+    .finally(() => {
+      if (emulation.transitionTail === tail) {
+        delete emulation.transitionTail;
+        delete emulation.transitionAbort;
+      }
+    });
+  emulation.transitionTail = tail;
   try {
-    await transition;
+    return await awaitActionWithAbort(transition, abortPromise);
   } finally {
-    if (emulation.deviceTransitionTail === tail) {
-      delete emulation.deviceTransitionTail;
-    }
+    cleanup();
   }
 }
 
@@ -252,15 +287,14 @@ export async function setDeviceViaPlaywright(opts: {
   if (!name) {
     throw new Error("device name is required");
   }
-  const descriptor = (playwrightDevices as Record<string, unknown>)[name] as
+  const descriptor = (getPlaywrightCore().devices as Record<string, unknown>)[name] as
     | PlaywrightDeviceDescriptor
     | undefined;
   if (!descriptor) {
     throw new Error(`Unknown device "${name}".`);
   }
 
-  await runDeviceTransition({
-    page,
+  await runPageEmulationTransition({
     state: pageState,
     signal: opts.signal,
     run: async () => {
@@ -269,15 +303,12 @@ export async function setDeviceViaPlaywright(opts: {
 
       // Keep Playwright's page model aligned before applying the descriptor fields
       // that its public setViewportSize API cannot express on an attached context.
-      await page.setViewportSize({
-        width: descriptor.viewport.width,
-        height: descriptor.viewport.height,
-      });
+      await setViewportSizeOnPage(page, pageState, { ...descriptor.viewport });
 
       await withPageEmulationCdpClient({
         page,
         state: pageState,
-        run: async (send) => {
+        run: async (send, session) => {
           await send("Emulation.setUserAgentOverride", {
             userAgent: descriptor.userAgent,
           });
@@ -293,9 +324,12 @@ export async function setDeviceViaPlaywright(opts: {
                 ? { angle: 0, type: "portraitPrimary" }
                 : { angle: descriptor.isMobile ? 90 : 0, type: "landscapePrimary" },
           });
+          const emulation = resolvePageEmulationState(pageState);
+          emulation.metricsOwner = { session, viewport: { ...descriptor.viewport } };
           await send("Emulation.setTouchEmulationEnabled", {
             enabled: descriptor.hasTouch,
           });
+          emulation.touch = { session, enabled: descriptor.hasTouch };
         },
       });
     },

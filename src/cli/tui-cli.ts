@@ -1,9 +1,10 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
 import type { Command } from "commander";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 import { resolveSessionTarget } from "./session-target.js";
@@ -123,7 +124,7 @@ export function registerTuiCli(program: Command) {
         const invokedSubcommand = cmd.parent?.args[0];
         await runTuiCliAction(target, opts, invokedSubcommand);
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });

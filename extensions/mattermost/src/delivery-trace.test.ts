@@ -196,7 +196,7 @@ function setupMattermostTrace(recorder: WireRecorder) {
       core,
       cfg,
       payload: resolvedPayload,
-      to: `channel:${CHANNEL_ID}`,
+      channelId: CHANNEL_ID,
       accountId: ACCOUNT_ID,
       agentId: "agent",
       replyToId: resolveMattermostReplyRootId({

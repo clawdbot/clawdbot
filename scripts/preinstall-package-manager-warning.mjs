@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../node-version.mjs";
+import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
 const lifecyclePackageManagerLauncherAliases = new Map([
@@ -10,12 +12,9 @@ const lifecyclePackageManagerLauncherAliases = new Map([
   ["yarn-berry", "yarn"],
 ]);
 const NODE_ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/iu;
-const NODE_VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const NODE_RUNTIME_PROBE_SOURCE =
   "process.stdout.write(JSON.stringify({version:process.versions.node??null,bunVersion:process.versions.bun??null,execPath:process.execPath??null}))";
 const PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS = 10_000;
-export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
-
 /**
  * @typedef {{
  *   version: string | null;
@@ -47,25 +46,7 @@ function normalizeEnvValue(value) {
 }
 
 function parseNodeVersion(value) {
-  const match = NODE_VERSION_RE.exec(normalizeEnvValue(value));
-  if (!match) {
-    return null;
-  }
-  return {
-    major: Number.parseInt(match[1] ?? "", 10),
-    minor: Number.parseInt(match[2] ?? "", 10),
-    patch: Number.parseInt(match[3] ?? "", 10),
-  };
-}
-
-function isNodeVersionAtLeast(version, minimum) {
-  if (version.major !== minimum.major) {
-    return version.major > minimum.major;
-  }
-  if (version.minor !== minimum.minor) {
-    return version.minor > minimum.minor;
-  }
-  return version.patch >= minimum.patch;
+  return parseNodeReleaseVersion(normalizeEnvValue(value));
 }
 
 /**
@@ -306,7 +287,7 @@ export function enforceSupportedNodeRuntime(
 }
 
 /**
- * Removes the packed sentinel only after the runtime check succeeds.
+ * Removes the 2026.8.1 dist sentinel after the runtime check succeeds.
  * @param {{
  *   markerUrl?: URL;
  *   remove?: (path: URL, options: { force: boolean }) => void;
@@ -314,9 +295,9 @@ export function enforceSupportedNodeRuntime(
  * @param {(...data: unknown[]) => void} [reportError]
  * @returns {boolean}
  */
-export function completePackageInstallGuard(
+export function removeLegacyPackageInstallGuard(
   {
-    markerUrl = new URL(`../${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`, import.meta.url),
+    markerUrl = new URL(`../${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`, import.meta.url),
     remove = rmSync,
   } = {},
   reportError = console.error,
@@ -326,7 +307,7 @@ export function completePackageInstallGuard(
     return true;
   } catch (error) {
     reportError(
-      `[openclaw] error: could not complete package preinstall: ${
+      `[openclaw] error: could not remove the legacy package install guard: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -416,7 +397,7 @@ export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (enforceSupportedNodeRuntime() && completePackageInstallGuard()) {
+  if (enforceSupportedNodeRuntime() && removeLegacyPackageInstallGuard()) {
     warnIfNonPnpmLifecycle();
   } else {
     process.exitCode = 1;

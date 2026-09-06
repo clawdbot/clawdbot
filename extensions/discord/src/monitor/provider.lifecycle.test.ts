@@ -380,6 +380,36 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("returns promptly when abortSignal fires during the READY retry backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const abortController = new AbortController();
+      const { gateway } = createGatewayHarness();
+      const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness({
+        gateway,
+      });
+      lifecycleParams.abortSignal = abortController.signal;
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(15_250);
+      expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(waitForDiscordGatewayStopMock).not.toHaveBeenCalled();
+
+      abortController.abort(new Error("shutdown"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(1);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expectLifecycleCleanup({ threadStop, waitCalls: 1, gatewaySupervisor });
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits for the stale startup socket to close before reconnecting", async () => {
     vi.useFakeTimers();
     try {
@@ -706,52 +736,6 @@ describe("runDiscordGatewayLifecycle", () => {
         (patch) =>
           patch.connected === true && patch.lifecycle === "ready" && patch.lastDisconnect === null,
       );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-describe("waitForGatewayReady", () => {
-  let waitForGatewayReady: (typeof import("../../test-api.js"))["discordGatewayLifecycleTesting"]["waitForGatewayReady"];
-
-  beforeAll(async () => {
-    waitForGatewayReady = (await import("../../test-api.js")).discordGatewayLifecycleTesting
-      .waitForGatewayReady;
-  });
-
-  it("returns promptly when abortSignal fires during the READY retry backoff", async () => {
-    vi.useFakeTimers();
-    try {
-      const controller = new AbortController();
-      const gateway = {
-        isConnected: false,
-        connect: vi.fn(),
-        disconnect: vi.fn(),
-        ws: null,
-      };
-      const runtime: RuntimeEnv = {
-        log: () => {},
-        error: () => {},
-        exit: () => {},
-      };
-
-      const readyPromise = waitForGatewayReady({
-        gateway,
-        abortSignal: controller.signal,
-        readyTimeoutMs: 200,
-        runtime,
-      });
-
-      await vi.advanceTimersByTimeAsync(250);
-      expect(gateway.connect).toHaveBeenCalledTimes(1);
-      controller.abort();
-
-      await expect(readyPromise).resolves.toBeUndefined();
-      expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(gateway.connect).toHaveBeenCalledTimes(1);
-      expect(gateway.disconnect).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

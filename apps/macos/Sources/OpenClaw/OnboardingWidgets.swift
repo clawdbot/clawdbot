@@ -120,7 +120,7 @@ extension OnboardingView {
                 .working
             }
         case .ai:
-            if snapshot.aiPhase == .connected {
+            if case .connected = snapshot.aiPhase {
                 .celebrating
             } else if snapshot.aiBusy {
                 .thinking

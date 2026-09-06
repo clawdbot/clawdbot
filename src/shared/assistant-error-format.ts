@@ -1,5 +1,7 @@
 // Assistant error formatting helpers normalize assistant-visible error payloads.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const HTTP_STATUS_DELIMITER_RE = /(?:\s*:\s*|\s+)/;
@@ -42,6 +44,21 @@ type ApiErrorInfo = {
   message?: string;
   requestId?: string;
 };
+
+export function formatProviderRefusalText(message: { diagnostics?: unknown }): string | undefined {
+  const refusal = Array.isArray(message.diagnostics)
+    ? message.diagnostics.find(
+        (diagnostic) => asOptionalRecord(diagnostic)?.type === "provider_refusal",
+      )
+    : undefined;
+  if (!refusal) {
+    return undefined;
+  }
+  const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
+  const safeCategory =
+    typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
+  return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
+}
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -160,7 +177,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
     return true;
   }
 
-  const status = extractLeadingHttpStatus(trimmed);
+  const status = extractHttpResponseBody(extractLeadingHttpStatus(trimmed));
   if (!status || status.code < 500) {
     return false;
   }
@@ -170,7 +187,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   }
 
   return (
-    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && HTML_CLOSE_RE.test(status.rest)
+    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.body) && HTML_CLOSE_RE.test(status.body)
   );
 }
 

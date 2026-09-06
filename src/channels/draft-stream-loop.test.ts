@@ -1,7 +1,7 @@
 // Draft stream loop tests cover incremental draft updates while channel replies stream.
 import { setImmediate as nextMacrotask } from "node:timers/promises";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
 const flushMicrotasks = async () => {
@@ -42,6 +42,84 @@ async function captureUnhandledRejections(
 }
 
 describe("createDraftStreamLoop", () => {
+  it.each(["unchanged", "rejected"])(
+    "sends a newer coalesced value after an %s send",
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      let releaseFirst!: () => void;
+      const first = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const error = new Error("send rejected");
+      const onBackgroundFlushError = vi.fn();
+      const send = vi.fn(async () => {
+        if (send.mock.calls.length === 1) {
+          await first;
+          if (outcome === "rejected") {
+            throw error;
+          }
+          return false;
+        }
+        return true;
+      });
+      const loop = createDraftStreamLoop({
+        throttleMs: 1_000,
+        coalesceInFlight: true,
+        isStopped: () => false,
+        sendOrEditStreamMessage: send,
+        onBackgroundFlushError,
+      });
+      loop.update("First snapshot");
+      loop.update("New milestone");
+      releaseFirst();
+      if (outcome === "rejected") {
+        await expect(loop.waitForInFlight()).rejects.toBe(error);
+        await waitForBackgroundFlushError(onBackgroundFlushError);
+        expect(onBackgroundFlushError).toHaveBeenCalledExactlyOnceWith(error);
+      } else {
+        await loop.waitForInFlight();
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send).toHaveBeenLastCalledWith("New milestone");
+      loop.stop();
+    },
+  );
+
+  it("coalesces updates arriving during a send without delaying explicit attention flushes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const send = vi.fn(async () => {
+      if (send.mock.calls.length === 1) {
+        await first;
+      }
+    });
+    const loop = createDraftStreamLoop({
+      throttleMs: 1_000,
+      coalesceInFlight: true,
+      isStopped: () => false,
+      sendOrEditStreamMessage: send,
+    });
+    loop.update("First milestone");
+    loop.update("Second milestone");
+    loop.update("Latest milestone");
+    releaseFirst();
+    await loop.waitForInFlight();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(send).toHaveBeenLastCalledWith("Latest milestone");
+    loop.update("Approval required");
+    await loop.flush();
+    expect(send).toHaveBeenLastCalledWith("Approval required");
+    loop.stop();
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
   });

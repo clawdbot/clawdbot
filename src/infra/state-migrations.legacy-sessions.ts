@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
+import { isErrno } from "./errors.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
+import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import {
   ensureMigrationDir,
   migrationFileExists,
@@ -25,7 +30,89 @@ import {
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
 import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
-import type { LegacyStateDetection } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+
+const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
+
+function legacyAgentInspectionFailure(subject: string, error: unknown) {
+  return { status: "failed", warning: `Failed inspecting ${subject}: ${String(error)}` } as const;
+}
+
+export function inspectLegacyAgentDir(
+  legacyDir: string,
+): { status: "empty" | "payload" } | { status: "failed"; warning: string } {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(legacyDir, { withFileTypes: true });
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") {
+      return { status: "empty" };
+    }
+    return legacyAgentInspectionFailure(`legacy agent directory ${legacyDir}`, error);
+  }
+  if (entries.length === 0) {
+    return { status: "empty" };
+  }
+
+  const databasePath = path.join(legacyDir, LEGACY_AGENT_DATABASE_BASENAME);
+  const databaseFiles = new Set(
+    resolveSqliteDatabaseFilePaths(databasePath).map((pathname) => path.basename(pathname)),
+  );
+  const hasFilePayload = entries.some((entry) => !databaseFiles.has(entry.name));
+  const hasDatabaseFiles = entries.some((entry) => databaseFiles.has(entry.name));
+  if (!hasDatabaseFiles) {
+    return { status: hasFilePayload ? "payload" : "empty" };
+  }
+  if (!migrationFileExists(databasePath)) {
+    return legacyAgentInspectionFailure(
+      `legacy agent database ${databasePath}`,
+      "main database is missing or not a regular file",
+    );
+  }
+
+  let database: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  try {
+    const opened = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    database = opened;
+    const schemaOwner = readExistingAgentSchemaMeta(opened);
+    if (!schemaOwner || schemaOwner.role !== "agent") {
+      return legacyAgentInspectionFailure(
+        `legacy agent database ${databasePath}`,
+        "agent schema ownership metadata is missing",
+      );
+    }
+    if (!schemaOwner.agentId) {
+      return legacyAgentInspectionFailure(
+        `legacy agent database ${databasePath}`,
+        "agent schema owner is missing or blank",
+      );
+    }
+    const tableNames = opened // sqlite-allow-raw -- Read-only legacy migration payload inspection.
+      .prepare(
+        // The excluded singleton rows are seeded schema controls, not user payload.
+        `SELECT name FROM pragma_table_list
+         WHERE schema = 'main' AND type IN ('table', 'virtual')
+           AND substr(name, 1, 7) <> 'sqlite_'
+           AND name NOT IN ('schema_meta', 'session_key_contract', 'memory_index_state')`,
+      )
+      .all()
+      .flatMap((row) =>
+        row && typeof row === "object" && "name" in row && typeof row.name === "string"
+          ? [row.name]
+          : [],
+      );
+    const hasPayload = tableNames.some((name) =>
+      opened // sqlite-allow-raw -- pragma-owned names stay quoted inside this bounded probe.
+        .prepare(`SELECT 1 FROM ${quoteSqliteIdentifier(name)} LIMIT 1`)
+        .get(),
+    );
+    return { status: hasPayload || hasFilePayload ? "payload" : "empty" };
+  } catch (error) {
+    return legacyAgentInspectionFailure(`legacy agent database ${databasePath}`, error);
+  } finally {
+    database?.close();
+  }
+}
 
 function normalizeMergedSessionStore(
   merged: Record<string, SessionEntryLike>,
@@ -56,9 +143,10 @@ export async function migrateLegacySessions(
     recoverCorruptTargetStore?: boolean;
     legacySessionSurfaces: PreparedLegacySessionSurfaces;
   },
-): Promise<{ changes: string[]; warnings: string[] }> {
+): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const recoverableWarnings: string[] = [];
   if (!detected.sessions.hasLegacy) {
     return { changes, warnings };
   }
@@ -231,7 +319,7 @@ export async function migrateLegacySessions(
     }
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (preservedLegacyForeignMainAliasCount > 0) {
-      warnings.push(
+      recoverableWarnings.push(
         `Preserved ${preservedLegacyForeignMainAliasCount} ambiguous session key(s) while importing legacy sessions into ${detected.sessions.targetStorePath}`,
       );
     }
@@ -291,7 +379,13 @@ export async function migrateLegacySessions(
     }
   }
 
-  return { changes, warnings };
+  return {
+    changes,
+    warnings: [...warnings, ...recoverableWarnings],
+    ...(warnings.length === 0 && recoverableWarnings.length > 0 && changes.length > 0
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }
 
 export async function migrateLegacyAgentDir(

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
@@ -10,8 +11,8 @@ import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
@@ -396,6 +397,7 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
+    env: resolveDiagnosticProcessEnv(),
     encoding: "utf8",
     timeout: lsofTimeoutMs,
   });
@@ -473,6 +475,7 @@ function pollPortOnce(port: number): PollResult {
   try {
     const lsof = resolveLsofCommandSync();
     const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: POLL_SPAWN_TIMEOUT_MS,
     });

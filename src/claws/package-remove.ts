@@ -281,6 +281,16 @@ export async function planClawPackageRemovals(
       retain("Package has a current non-Claw owner or pre-existing origin.");
       continue;
     }
+    if (
+      packageRef.kind === "plugin" &&
+      !explicitlySelected &&
+      cleanup.mode === "remove-if-unused"
+    ) {
+      retain(
+        "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its canonical owner.",
+      );
+      continue;
+    }
 
     let pluginId: string | undefined;
     let ownerIsNewer: boolean;

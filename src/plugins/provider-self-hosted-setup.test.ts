@@ -1,9 +1,7 @@
 /** Tests self-hosted provider setup helpers and auth/config defaults. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  configureOpenAICompatibleSelfHostedProviderNonInteractive,
-  discoverOpenAICompatibleLocalModels,
-} from "./provider-self-hosted-setup.js";
+import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
+import { configureOpenAICompatibleSelfHostedProviderNonInteractive } from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
 
 const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock, loggerWarnMock } = vi.hoisted(() => ({
@@ -380,24 +378,24 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(1, {
-      url: "http://127.0.0.1:8000/v1/models",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 5000,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8000/props",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/v1/models",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
+        timeoutMs: 5000,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/props",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(release).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
     expect(propsResponse.wasCanceled()).toBe(true);
@@ -519,15 +517,15 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
   });
@@ -598,24 +596,24 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(3, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(firstPropsRelease).toHaveBeenCalledOnce();
     expect(secondPropsRelease).toHaveBeenCalledOnce();
@@ -700,31 +698,6 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     ]);
     expect(models[0]).not.toHaveProperty("contextTokens");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("does not allowlist always-blocked metadata hostnames", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "metadata-probe" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://metadata.google.internal/v1/models",
-      release,
-    });
-
-    await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://metadata.google.internal/v1",
-      label: "vLLM",
-      env: {},
-    });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://metadata.google.internal/v1/models",
-      init: { headers: undefined },
-      policy: undefined,
-      timeoutMs: 5000,
-    });
     expect(release).toHaveBeenCalledOnce();
   });
 

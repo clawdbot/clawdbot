@@ -8,10 +8,12 @@ const mocks = vi.hoisted(() => ({
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
 }));
 
-vi.mock("./server-plugin-fallback-context.js", () => ({
-  getFallbackGatewayContext: () => ({
-    getRuntimeConfig: mocks.getRuntimeConfig,
-    nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    context: {
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+    },
   }),
 }));
 

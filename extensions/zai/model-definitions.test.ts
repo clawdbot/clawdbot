@@ -1,6 +1,10 @@
 // Zai tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildZaiModelDefinition, ZAI_DEFAULT_COST } from "./model-definitions.js";
+import {
+  buildZaiCatalogModels,
+  buildZaiModelDefinition,
+  ZAI_DEFAULT_COST,
+} from "./model-definitions.js";
 
 type ExpectedZaiModelFields = {
   id: string;
@@ -32,6 +36,34 @@ function expectZaiModelFields(expected: ExpectedZaiModelFields) {
 }
 
 describe("zai model definitions", () => {
+  it("uses GLM-5.3 Coding Plan catalog metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5.3",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(buildZaiCatalogModels().find((model) => model.id === "glm-5.3")?.compat).toEqual({
+      codeMode: "preferred",
+    });
+  });
+
+  it("uses official multimodal GLM-5.3 Flash catalog metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5.3-flash",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
+    });
+    expect(buildZaiCatalogModels().find((model) => model.id === "glm-5.3-flash")?.compat).toEqual({
+      codeMode: "preferred",
+    });
+  });
+
   it("uses official GLM-5.2 Coding Plan metadata", () => {
     expectZaiModelFields({
       id: "glm-5.2",

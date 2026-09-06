@@ -74,31 +74,15 @@ extension MacGatewayChatTransport {
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         guard let serverLease = await self.connection.captureServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
+        let unreadAckContract = await self.connection.supportsServerCapability(
+            .sessionUnreadAckContract,
+            ifCurrentServerLease: serverLease)
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
-                let target = transport.sessionTarget(for: key)
-                let request = OpenClawChatGatewayRequests.patchSession(
-                    sessionKey: target.sessionKey,
-                    agentID: target.agentID,
-                    expectedSessionID: expectedSessionID,
-                    label: label,
-                    category: category,
-                    pinned: pinned,
-                    archived: archived,
-                    unread: unread)
-                _ = try await self.connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: serverLease)
-            },
-            deleteSession: { key in
-                let target = transport.sessionTarget(for: key)
-                let request = OpenClawChatGatewayRequests.deleteSession(
-                    sessionKey: target.sessionKey,
-                    agentID: target.agentID)
-                _ = try await self.connection.request(
+            sessionTarget: { transport.sessionTarget(for: $0) },
+            unreadAckContract: unreadAckContract,
+            request: { request in
+                try await self.connection.request(
                     method: request.method,
                     params: request.params,
                     timeoutMs: request.timeoutMs,
@@ -119,10 +103,15 @@ extension MacGatewayChatTransport {
     }
 
     func forkSession(parentKey: String) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
+    }
+
+    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
         let target = self.sessionTarget(for: parentKey)
         let request = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: target.sessionKey,
-            agentID: target.agentID)
+            agentID: target.agentID,
+            fromLastCompleted: fromLastCompleted)
         let data = try await self.requestSessionAction(request)
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: data).key
     }

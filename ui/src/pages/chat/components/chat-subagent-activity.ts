@@ -3,9 +3,8 @@ import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { isActiveTask, sortTasks, taskTimestampMs } from "../../../lib/tasks/data.ts";
+import { isActiveTask, sortTasks, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { renderDiffStatChips } from "./chat-diff-render.ts";
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
 const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
@@ -70,7 +69,7 @@ export function deriveSubagentActivity(params: {
 
 function subagentActivityLabel(task: TaskSummary): string {
   if (isActiveTask(task)) {
-    return t("chat.backgroundTasks.subagentActivity.working");
+    return t("chat.backgroundTasks.subagentActivity.running");
   }
   if (task.status === "cancelled") {
     return t("chat.backgroundTasks.subagentActivity.cancelled");
@@ -103,27 +102,25 @@ function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
   }
   const failed = task.status !== "completed";
   return html`<span
-    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${failed
-      ? "failed"
-      : "finished"}"
+    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${
+      failed ? "failed" : "finished"
+    }"
     aria-hidden="true"
     >${failed ? icons.x : icons.check}</span
   >`;
 }
 
-function renderSubagentActivityRow(task: TaskSummary): TemplateResult {
+function renderSubagentActivityRow(
+  task: TaskSummary,
+  onOpenTaskDetail?: (task: TaskSummary) => void,
+): TemplateResult {
   const snippet = subagentActivitySnippet(task);
   const label = subagentActivityLabel(task);
-  return html`
-    <div
-      class="chat-subagent-activity__row"
-      data-subagent-task-id=${task.id}
-      role="status"
-      aria-live="off"
-    >
-      ${renderSubagentActivityIndicator(task)}
-      <span class="chat-subagent-activity__label">${label}</span>
-      ${snippet
+  const content = html`
+    ${renderSubagentActivityIndicator(task)}
+    <span class="chat-subagent-activity__label">${label}</span>
+    ${
+      snippet
         ? keyed(
             `${task.status}:${snippet}`,
             html`<span
@@ -132,14 +129,35 @@ function renderSubagentActivityRow(task: TaskSummary): TemplateResult {
               >${snippet}</span
             >`,
           )
-        : nothing}
-      ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
-    </div>
+        : nothing
+    }
   `;
+  if (!onOpenTaskDetail) {
+    return html`<div
+      class="chat-subagent-activity__row"
+      data-subagent-task-id=${task.id}
+      role="status"
+      aria-live="off"
+    >
+      ${content}
+    </div> `;
+  }
+  return html`<button
+    class="chat-subagent-activity__row chat-subagent-activity__row--interactive"
+    data-subagent-task-id=${task.id}
+    type="button"
+    aria-label=${t("chat.backgroundTasks.subagentActivity.openDetails", {
+      title: taskTitle(task),
+    })}
+    @click=${() => onOpenTaskDetail(task)}
+  >
+    ${content}
+  </button>`;
 }
 
 export function renderSubagentActivity(
   presentation: SubagentActivityPresentation,
+  onOpenTaskDetail?: (task: TaskSummary) => void,
 ): TemplateResult | typeof nothing {
   if (presentation.rows.length === 0) {
     return nothing;
@@ -152,15 +170,17 @@ export function renderSubagentActivity(
       ${repeat(
         presentation.rows,
         (task) => task.id,
-        (task) => renderSubagentActivityRow(task),
+        (task) => renderSubagentActivityRow(task, onOpenTaskDetail),
       )}
-      ${presentation.overflowWorking > 0
-        ? html`<div class="chat-subagent-activity__overflow">
-            ${t("chat.backgroundTasks.subagentActivity.moreWorking", {
-              count: String(presentation.overflowWorking),
-            })}
-          </div>`
-        : nothing}
+      ${
+        presentation.overflowWorking > 0
+          ? html`<div class="chat-subagent-activity__overflow">
+              ${t("chat.backgroundTasks.subagentActivity.moreWorking", {
+                count: String(presentation.overflowWorking),
+              })}
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }

@@ -1,12 +1,12 @@
 // Covers gateway-side cleanup when silent pairing supersedes stale sibling records.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   approveNodePairing,
   listNodePairing,
   requestNodePairing,
 } from "../infra/device-pairing-node.js";
 import {
-  approveDevicePairing,
   listDevicePairing,
   removePairedDeviceRole,
   requestDevicePairing,
@@ -25,20 +25,39 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "./node-wake-state.test-support.js";
+import { bindDeviceWorkerReconciliation } from "./worker-environments/device-provider.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-pairing-prune-" });
 
 type BroadcastCall = { event: string; payload: Record<string, unknown> };
 type PruneContext = Parameters<typeof pruneSupersededSilentPairingsAfterApproval>[0]["context"];
 
-function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
+function createPruneContext(params?: {
+  connectedDeviceIds?: string[];
+  workerEnvironmentIds?: Record<string, readonly string[]>;
+}) {
   const broadcasts: BroadcastCall[] = [];
   const invalidated: string[] = [];
   const disconnected: string[] = [];
   const logs: string[] = [];
   const warnings: string[] = [];
   const clearedSurfaces: string[] = [];
+  const revokedWorkers: string[] = [];
+  const reconciledPlacements: string[] = [];
+  const order: string[] = [];
   const connected = new Set(params?.connectedDeviceIds ?? []);
+  const workerEnvironmentService = {} as NonNullable<PruneContext["workerEnvironmentService"]>;
+  bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
+    revokedWorkers.push(deviceId);
+    order.push(`worker:${deviceId}`);
+    return params?.workerEnvironmentIds?.[deviceId] ?? [];
+  });
+  const workerPlacementDispatchService = {
+    reconcileActive: async (environmentId: string) => {
+      reconciledPlacements.push(environmentId);
+      order.push(`placement:${environmentId}`);
+    },
+  } as NonNullable<PruneContext["workerPlacementDispatchService"]>;
   const context: PruneContext = {
     broadcast: (event, payload) => {
       broadcasts.push({ event, payload: payload as Record<string, unknown> });
@@ -50,10 +69,14 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
     hasConnectedClientsForDevice: (deviceId: string) => connected.has(deviceId),
     invalidateClientsForDevice: (deviceId: string) => {
       invalidated.push(deviceId);
+      order.push(`invalidate:${deviceId}`);
     },
     disconnectClientsForDevice: (deviceId: string) => {
       disconnected.push(deviceId);
+      order.push(`disconnect:${deviceId}`);
     },
+    workerEnvironmentService,
+    workerPlacementDispatchService,
     nodeRegistry: {
       updateSurface: (nodeId: string) => {
         clearedSurfaces.push(nodeId);
@@ -61,7 +84,18 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
       },
     },
   };
-  return { broadcasts, invalidated, disconnected, logs, warnings, clearedSurfaces, context };
+  return {
+    broadcasts,
+    invalidated,
+    disconnected,
+    logs,
+    warnings,
+    clearedSurfaces,
+    revokedWorkers,
+    reconciledPlacements,
+    order,
+    context,
+  };
 }
 
 async function pairSilentDevice(params: {
@@ -166,7 +200,9 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     });
     const wakeLifecycle = captureNodeWakeLifecycle("node-stale");
 
-    const harness = createPruneContext();
+    const harness = createPruneContext({
+      workerEnvironmentIds: { "node-stale": ["environment-node-stale"] },
+    });
     const pruned = await pruneSupersededSilentPairingsAfterApproval({
       deviceId: anchor.deviceId,
       context: harness.context,
@@ -185,7 +221,15 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     expect(listPendingNodeActions({ nodeId: "node-stale", ttlMs: 60_000 })).toEqual([]);
     await expect(loadApnsRegistration("node-stale", baseDir)).resolves.toBeNull();
     expect(harness.invalidated).toEqual(["node-stale"]);
+    expect(harness.revokedWorkers).toEqual(["node-stale"]);
+    expect(harness.reconciledPlacements).toEqual(["environment-node-stale"]);
     expect(harness.disconnected).toEqual(["node-stale"]);
+    expect(harness.order).toEqual([
+      "invalidate:node-stale",
+      "worker:node-stale",
+      "placement:environment-node-stale",
+      "disconnect:node-stale",
+    ]);
     expect(harness.clearedSurfaces).toEqual(["node-stale"]);
     expect(harness.warnings).toEqual([]);
     expect(harness.broadcasts).toEqual([

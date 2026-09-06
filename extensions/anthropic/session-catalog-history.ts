@@ -70,10 +70,10 @@ export async function importClaudeHistory(params: {
         continue;
       }
       // The idempotency key rides on the message so recovery re-imports dedupe.
-      const message = {
-        ...(imported as unknown as Record<string, unknown>),
+      const message: AgentMessage & { idempotencyKey: string } = {
+        ...imported,
         idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
-      } as unknown as AgentMessage;
+      };
       await transcript.appendMessage({
         message,
         idempotencyLookup: "scan",

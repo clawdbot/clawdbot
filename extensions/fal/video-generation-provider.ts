@@ -6,10 +6,10 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   type SsrFPolicy,
@@ -96,18 +96,6 @@ type FalQueueResponse = {
     message?: string;
   };
 };
-
-let falFetchGuard = fetchWithSsrFGuard;
-
-function setFalVideoFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  falFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-if (process.env.VITEST === "true") {
-  const key = Symbol.for("openclaw.falTestApi");
-  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
-  Reflect.set(globalThis, key, { ...api, setVideoFetchGuard: setFalVideoFetchGuardForTesting });
-}
 
 function normalizeFalVideoUrl(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
@@ -208,7 +196,7 @@ async function downloadFalVideo(
   policy: SsrFPolicy | undefined,
   maxBytes: number,
 ): Promise<GeneratedVideoAsset> {
-  const { response, release } = await falFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url,
     timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
     policy,
@@ -221,7 +209,9 @@ async function downloadFalVideo(
     let exceededMaxBytes = false;
     let buffer: Buffer;
     try {
-      buffer = await readResponseWithLimit(response, maxBytes, {
+      buffer = await readProviderBinaryResponse(response, "fal generated video download", "video", {
+        maxBytes,
+        chunkTimeoutMs: 0,
         onOverflow: ({ maxBytes: maxBytesLocal }) => {
           exceededMaxBytes = true;
           return new Error(`fal generated video download exceeds ${maxBytesLocal} bytes`);
@@ -468,7 +458,7 @@ async function fetchFalJson(params: {
   auditContext: string;
   errorContext: string;
 }): Promise<unknown> {
-  const { response, release } = await falFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
     timeoutMs: params.timeoutMs,

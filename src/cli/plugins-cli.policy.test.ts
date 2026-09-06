@@ -1,17 +1,23 @@
 // Plugins CLI policy tests cover plugin command policy checks and warnings.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   buildPluginRegistrySnapshotReportMock,
   enablePluginInConfigMock,
+  loadPluginManifestRegistryMock,
   pluginCliConfigMock,
   replaceConfigFileMock,
   refreshPluginRegistryMock,
   resetPluginsCliTestState,
   runtimeErrors,
   pluginsCliRuntimeLogs,
+  promptYesNoMock,
   runPluginsCommand,
+  setInstalledPluginIndexInstallRecords,
   configWriteMock,
+  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
@@ -99,6 +105,104 @@ describe("plugins cli policy mutations", () => {
       installRecords: {},
       policyPluginIds: ["alpha"],
       reason: "policy-changed",
+    });
+  });
+
+  it("rejects enabling an unconsented installed plugin without --accept-capabilities", async () => {
+    await withTempDir("openclaw-cli-capability-consent-", async (rootDir) => {
+      createColdPluginFixture({ rootDir, pluginId: "alpha" });
+      const sourceConfig = {
+        plugins: { entries: { alpha: { enabled: false } } },
+      } as OpenClawConfig;
+      pluginCliConfigMock.mockReturnValue(sourceConfig);
+      setInstalledPluginIndexInstallRecords({
+        alpha: { source: "npm", spec: "@acme/alpha", installPath: rootDir },
+      });
+      mockPluginRegistry(["alpha"]);
+      await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.at(-1)).toContain("--accept-capabilities");
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    {
+      name: "binds explicit approval for a disabled installed plugin",
+      enabled: false,
+      commandArgs: ["plugins", "enable", "alpha", "--accept-capabilities"],
+      expectsConsent: true,
+    },
+    {
+      name: "records explicit capability consent for an already-enabled installed plugin",
+      enabled: true,
+      commandArgs: ["plugins", "enable", "alpha", "--accept-capabilities"],
+      expectsConsent: true,
+    },
+    {
+      name: "preserves no-option re-enable compatibility for an already-enabled installed plugin",
+      enabled: true,
+      commandArgs: ["plugins", "enable", "alpha"],
+      expectsConsent: false,
+    },
+  ])("$name", async ({ commandArgs, enabled, expectsConsent }) => {
+    await withTempDir("openclaw-cli-capability-consent-enabled-", async (rootDir) => {
+      const fixture = createColdPluginFixture({ rootDir, pluginId: "alpha" });
+      const { recordPluginManifestInstallOwner } =
+        await import("../plugins/manifest-install-owner.js");
+      loadPluginManifestRegistryMock.mockReturnValue({
+        plugins: [
+          recordPluginManifestInstallOwner(
+            {
+              id: "alpha",
+              channels: [fixture.channelId],
+              providers: [fixture.providerId],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              origin: "global",
+              rootDir,
+              source: fixture.runtimeSource,
+              manifestPath: `${rootDir}/openclaw.plugin.json`,
+            },
+            "alpha",
+          ),
+        ],
+        diagnostics: [],
+      });
+      const sourceConfig = {
+        plugins: { entries: { alpha: { enabled } } },
+      } as OpenClawConfig;
+      pluginCliConfigMock.mockReturnValue(sourceConfig);
+      setInstalledPluginIndexInstallRecords({
+        alpha: { source: "npm", spec: "@acme/alpha", installPath: rootDir },
+      });
+      buildPluginRegistrySnapshotReportMock.mockReturnValue({
+        plugins: [{ id: "alpha", enabled }],
+        diagnostics: [],
+        registrySource: "derived",
+        registryDiagnostics: [],
+      });
+
+      await runPluginsCommand(commandArgs);
+
+      const { resolvePluginArtifactDeclaredSurface } =
+        await import("../plugins/capability-artifact.js");
+      const { computeDeclaredSurfaceHash } = await import("../plugins/capability-summary.js");
+      if (expectsConsent) {
+        const acceptedRecord =
+          writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mock.calls[0]?.[0]?.alpha;
+        expect(acceptedRecord?.acceptedSurfaceHash).toBe(
+          computeDeclaredSurfaceHash(resolvePluginArtifactDeclaredSurface(rootDir)),
+        );
+      } else {
+        expect(
+          writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+        ).not.toHaveBeenCalled();
+      }
+      expect(replaceConfigFileMock).toHaveBeenCalledOnce();
+      expect(promptYesNoMock).not.toHaveBeenCalled();
     });
   });
 

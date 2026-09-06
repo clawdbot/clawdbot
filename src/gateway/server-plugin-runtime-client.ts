@@ -12,17 +12,29 @@ import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayRequestOptions } from "./server-methods/types.js";
+import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type {
+  GatewayAgentRunTaskOwner,
+  GatewayRequestOptions,
+  TrustedAgentToolCaller,
+} from "./server-methods/types.js";
 
 export function createSyntheticPluginRuntimeClient(params?: {
+  authenticatedUserProfile?: NonNullable<
+    NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
+  >;
   allowModelOverride?: boolean;
-  agentRunTracking?: "plugin_subagent";
+  agentToolCaller?: TrustedAgentToolCaller;
+  agentRunTracking?: GatewayAgentRunTaskOwner;
+  operatorRoleActor?: GatewayOperatorRoleActor;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
+  nodeInvokeApprovalSessionKey?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  pluginSubagentToolsAllow?: string[];
   delegatedToolPolicyHandoffId?: string;
   sessionCreation?: TrustedSessionCreation;
   scopes?: string[];
@@ -32,6 +44,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ? params.pluginRuntimeOwnerId.trim()
       : undefined;
   return {
+    ...(params?.authenticatedUserProfile
+      ? { authenticatedUserProfile: params.authenticatedUserProfile }
+      : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -46,7 +61,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
     },
     internal: {
       syntheticClient: true,
+      ...(params?.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
+      ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
@@ -58,11 +75,17 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.nodeInvokeApprovalSessionKey
+        ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }
+        : {}),
       ...(params?.pluginSubagentRequester
         ? { pluginSubagentRequester: params.pluginSubagentRequester }
         : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
+      ...(params?.pluginSubagentToolsAllow
+        ? { pluginSubagentToolsAllow: [...params.pluginSubagentToolsAllow] }
         : {}),
       ...(params?.delegatedToolPolicyHandoffId
         ? { delegatedToolPolicyHandoffId: params.delegatedToolPolicyHandoffId }

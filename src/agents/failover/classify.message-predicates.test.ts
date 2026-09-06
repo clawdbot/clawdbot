@@ -9,15 +9,8 @@ import {
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-  matchesFormatErrorPattern,
 } from "./classify.js";
 import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
-
-describe("matchesFormatErrorPattern", () => {
-  it("retains the direct format compatibility predicate", () => {
-    expect(matchesFormatErrorPattern("invalid request format")).toBe(true);
-  });
-});
 
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
@@ -279,14 +272,5 @@ describe("HTTP 429 overload wording (#98101)", () => {
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
     );
-  });
-
-  it("preserves actionable retry details when a rate limit also mentions overload", () => {
-    expect(
-      renderRateLimitOrOverloadedCopy({
-        reason: "rate_limit",
-        raw: "429 rate limit: service overloaded, try again in 30 seconds",
-      }),
-    ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });

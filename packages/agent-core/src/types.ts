@@ -75,6 +75,13 @@ export interface ToolLoopIntervention {
   reason: string;
 }
 
+/** Bucketed feedback for an admitted call, not a veto or recovery attempt. */
+export interface ToolLoopWarning {
+  kind: "tool-loop-warning";
+  toolCallId: string;
+  count: number;
+}
+
 /** Context for OpenClaw-owned whole-batch tool admission. */
 export interface InternalBeforeToolBatchContext {
   assistantMessage: AssistantMessage;
@@ -83,9 +90,9 @@ export interface InternalBeforeToolBatchContext {
 }
 
 /** Result of OpenClaw-owned whole-batch tool admission. */
-export interface InternalBeforeToolBatchResult {
-  intervention?: ToolLoopIntervention;
-}
+export type InternalBeforeToolBatchResult =
+  | { intervention: ToolLoopIntervention; warnings?: never }
+  | { intervention?: never; warnings?: ToolLoopWarning[] };
 
 export interface DeferredToolCallContext {
   /** The assistant message that requested the deferred tool call. */
@@ -320,6 +327,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    */
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
 
+  /** Consumes the cancellation fact for a previously drained queue message. */
+  consumeQueuedMessageCancellation?: (message: AgentMessage) => boolean;
+
   /**
    * Tool execution mode.
    * - "sequential": execute tool calls one by one, checking for steering before each starts
@@ -427,6 +437,8 @@ export interface CustomMessage<T = unknown> {
   content: string | (TextContent | ImageContent)[];
   /** Whether UI surfaces should display this message. */
   display: boolean;
+  /** Keep display-only application activity out of future model context. */
+  excludeFromContext?: boolean;
   /** Optional application-specific metadata. */
   details?: T;
   /** Millisecond timestamp for transcript ordering. */

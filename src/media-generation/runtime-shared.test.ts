@@ -9,6 +9,7 @@ import {
   resolveClosestResolution,
   resolveClosestSize,
   resolveMediaProviderRequestTimeoutMs,
+  resolveReferenceImageCapabilityError,
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
@@ -28,6 +29,28 @@ function parseModelRef(raw?: string) {
 }
 
 describe("media-generation runtime shared candidates", () => {
+  it.each([
+    [0, undefined, undefined],
+    [1, { enabled: false }, "provider/model does not support reference-image edit inputs"],
+    [
+      2,
+      { enabled: true, maxInputImages: 1 },
+      "provider/model supports at most 1 reference image, 2 requested",
+    ],
+    [11, { enabled: true }, "provider/model supports at most 10 reference images, 11 requested"],
+  ] as const)(
+    "validates finite reference-image capability for %s inputs",
+    (inputImageCount, edit, error) => {
+      expect(
+        resolveReferenceImageCapabilityError({
+          candidateRef: "provider/model",
+          inputImageCount,
+          edit,
+        }),
+      ).toBe(error);
+    },
+  );
+
   it("appends auth-backed provider defaults after explicit refs by default", () => {
     const cfg = {
       agents: {
@@ -157,7 +180,7 @@ describe("media-generation runtime shared candidates", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "media-alias/gpt-5.5",
             },
           },
         },
@@ -172,7 +195,7 @@ describe("media-generation runtime shared candidates", () => {
         },
         {
           id: "openai",
-          aliases: ["openai"],
+          aliases: ["media-alias"],
           defaultModel: "gpt-image-2",
           isConfigured: () => true,
         },

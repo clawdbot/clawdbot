@@ -3,14 +3,21 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { upsertCronJobRow } from "../cron/store/row-codec.js";
+import type { CronStoredJob } from "../cron/types.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
-import { markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
-import { claimClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
+import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
+import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -27,39 +34,41 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 function cronReadView(agentId: string, ref: ReturnType<typeof readClawCronRefs>[number]) {
-  const job = ref.job;
-  const normalized = normalizeCronJobCreate({
-    name: job.name ?? job.id,
-    declarationKey: ref.declarationKey,
-    ...(job.name ? { displayName: job.name } : {}),
-    owner: { agentId },
-    enabled: true,
-    agentId,
-    schedule: {
-      kind: "cron",
-      expr: job.schedule.cron,
-      ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
-    },
-    sessionTarget: job.session === "main" ? `session:agent:${agentId}:main` : job.session,
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: job.message },
-    delivery: job.delivery
-      ? {
-          mode: job.delivery.mode,
-          ...(job.delivery.channel ? { channel: job.delivery.channel } : {}),
-        }
-      : { mode: "none" },
-  });
+  const normalized = normalizeCronJobCreate(clawCronGatewayInput(agentId, ref));
   if (!normalized || !ref.schedulerJobId) {
     throw new Error("expected complete cron provenance");
   }
-  return {
+  return cronJobReadView({
     ...normalized,
     id: ref.schedulerJobId,
     createdAtMs: 1,
     updatedAtMs: 1,
-    state: {},
-  };
+    state: { nextRunAtMs: 100, lastRunAtMs: 50, lastStatus: "ok" },
+  });
+}
+
+function seedAttachedCronJob(
+  env: NodeJS.ProcessEnv,
+  job: Pick<CronStoredJob, "id" | "name" | "schedule">,
+): void {
+  const database = openOpenClawStateDatabase({ env });
+  upsertCronJobRow(
+    database.db,
+    "default",
+    {
+      ...job,
+      agentId: "worker",
+      owner: { agentId: "worker" },
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Run scheduled job" },
+      state: {},
+    },
+    0,
+  );
 }
 
 async function fixture(
@@ -146,15 +155,18 @@ async function addFixture(
 describe("Claw status and remove", () => {
   it("rejects cleanup when an expected-missing agent id was recreated", async () => {
     await expect(
-      claimClawAgentConfigRemoval({
-        agentId: "worker",
-        expectedDigest: "sha256:missing",
-        expectedRemovalSurfaceDigest: "sha256:unused",
-        expectedState: "missing",
-        fallbackWorkspace: "/tmp/old-worker",
-        config: { agents: { entries: { worker: { workspace: "/tmp/new-worker" } } } },
-        onModified: () => new Error("agent recreated"),
-      }),
+      withClawAgentConfigRemoval(
+        {
+          agentId: "worker",
+          expectedDigest: "sha256:missing",
+          expectedRemovalSurfaceDigest: "sha256:unused",
+          expectedState: "missing",
+          fallbackWorkspace: "/tmp/old-worker",
+          config: { agents: { entries: { worker: { workspace: "/tmp/new-worker" } } } },
+          onModified: () => new Error("agent recreated"),
+        },
+        (commitRemoval) => commitRemoval(),
+      ),
     ).rejects.toThrow("agent recreated");
   });
 
@@ -400,29 +412,11 @@ describe("Claw status and remove", () => {
 
   it("previews and blocks operator-owned cron jobs attached to the agent", async () => {
     const current = await addFixture();
-    const database = openOpenClawStateDatabase({ env: current.env });
-    database.db
-      .prepare(
-        `INSERT INTO cron_jobs (
-           store_key, job_id, name, enabled, created_at_ms, agent_id, owner_agent_id,
-           schedule_kind, session_target, wake_mode, payload_kind, job_json, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "default",
-        "operator-job",
-        "Operator job",
-        1,
-        1,
-        "worker",
-        "worker",
-        "every",
-        "isolated",
-        "now",
-        "agentTurn",
-        "{}",
-        1,
-      );
+    seedAttachedCronJob(current.env, {
+      id: "operator-job",
+      name: "Operator job",
+      schedule: { kind: "every", everyMs: 60_000 },
+    });
 
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
@@ -440,44 +434,62 @@ describe("Claw status and remove", () => {
     );
   });
 
-  it("does not treat Claw-owned cron jobs as external agent blockers", async () => {
-    const current = await addFixture({ withCron: true });
-    const database = openOpenClawStateDatabase({ env: current.env });
-    database.db
-      .prepare(
-        `INSERT INTO cron_jobs (
-           store_key, job_id, name, enabled, created_at_ms, agent_id, owner_agent_id,
-           schedule_kind, session_target, wake_mode, payload_kind, job_json, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "default",
-        "scheduler-daily",
-        "Claw job",
-        1,
-        1,
-        "worker",
-        "worker",
-        "cron",
-        "isolated",
-        "now",
-        "agentTurn",
-        "{}",
-        1,
+  it.each([false, true])(
+    "keeps Claw-owned cron removal actions consistent (independent jobs=%s)",
+    async (withIndependentJobs) => {
+      const current = await addFixture({ withCron: true });
+      seedAttachedCronJob(current.env, {
+        id: "scheduler-daily",
+        name: "Claw job",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+      });
+      if (withIndependentJobs) {
+        for (const id of ["z-operator-job", "a-operator-job"]) {
+          seedAttachedCronJob(current.env, {
+            id,
+            name: "Operator job",
+            schedule: { kind: "every", everyMs: 60_000 },
+          });
+        }
+      }
+
+      const plan = await buildClawRemovePlan("worker", {
+        env: current.env,
+        config: current.getConfig(),
+      });
+      const independentIds = withIndependentJobs ? ["a-operator-job", "z-operator-job"] : [];
+      expect(plan.blockers).toEqual(
+        independentIds.map((id) => ({
+          code: "agent_job_attached",
+          message: expect.stringContaining(JSON.stringify(id)),
+        })),
       );
-
-    const plan = await buildClawRemovePlan("worker", {
-      env: current.env,
-      config: current.getConfig(),
-    });
-
-    expect(plan.blockers).not.toContainEqual(
-      expect.objectContaining({ code: "agent_job_attached" }),
-    );
-  });
+      expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual(
+        independentIds.map((id) =>
+          expect.objectContaining({ id, action: "retain", blocked: true }),
+        ),
+      );
+      expect(plan.actions.filter((action) => action.kind === "cronJob")).toEqual([
+        expect.objectContaining({
+          id: "daily-report",
+          target: "scheduler-daily",
+          action: "remove",
+          blocked: false,
+        }),
+      ]);
+    },
+  );
 
   it("removes the agent and unchanged files but only releases package refs", async () => {
     const current = await addFixture({ withFile: true });
+    const databasePath = join(
+      current.env.OPENCLAW_STATE_DIR,
+      "agents",
+      "worker",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    registerOpenClawAgentDatabase({ agentId: "worker", path: databasePath, env: current.env });
     persistClawPackageRef(
       current.plan,
       {
@@ -509,6 +521,9 @@ describe("Claw status and remove", () => {
       workspaceFiles: [{ path: "SOUL.md", action: "deleted" }],
     });
     expect(config.agents?.entries?.worker).toBeUndefined();
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env: current.env }).map((entry) => entry.agentId),
+    ).not.toContain("worker");
     await expect(readFile(join(current.plan.agent.workspace, "SOUL.md"), "utf8")).rejects.toThrow();
     await expect(readClawStatus("worker", { env: current.env, config })).resolves.toMatchObject({
       summary: { claws: 0 },

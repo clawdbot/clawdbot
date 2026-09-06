@@ -192,6 +192,40 @@ describe("discord live qa runtime", () => {
     });
   });
 
+  it("separates text ingress from target voice authorization", () => {
+    const next = testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      {
+        voiceChannelAccess: {
+          channelId: "523456789012345678",
+          users: ["323456789012345678"],
+        },
+      },
+    );
+
+    const account = next.channels?.discord?.accounts?.sut;
+    expect(next.channels?.discord?.voice).toEqual({
+      enabled: true,
+      mode: "stt-tts",
+      autoJoin: [],
+    });
+    expect(
+      account?.guilds?.["123456789012345678"]?.channels?.["223456789012345678"]?.users,
+    ).toEqual(["423456789012345678"]);
+    expect(
+      account?.guilds?.["123456789012345678"]?.channels?.["523456789012345678"]?.users,
+    ).toEqual(["323456789012345678"]);
+    expect(next.tools?.alsoAllow).toContain("transcripts");
+    expect(next.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
+  });
+
   it("injects tool-only Discord status reaction config for the Mantis scenario", () => {
     const next = testing.buildDiscordQaConfig(
       {},

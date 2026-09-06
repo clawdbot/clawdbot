@@ -12,6 +12,7 @@ const sharedClientMocks = vi.hoisted(() => ({
 
 vi.mock("./src/app-server/shared-client.js", () => ({
   createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
+  retireSharedCodexAppServerClientIfCurrent: () => undefined,
 }));
 
 function codexModel(inputModalities: string[] = ["text", "image"]) {
@@ -47,7 +48,8 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.147.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -92,7 +94,8 @@ function createFakeClient(options?: {
   onTurnStart?: () => void;
 }) {
   const notifications = new Set<(notification: CodexServerNotification) => void>();
-  const requestHandlers = new Set<(request: { method: string }) => JsonValue | undefined>();
+  type RequestHandler = Parameters<CodexAppServerClient["addRequestHandler"]>[0];
+  const requestHandlers = new Set<RequestHandler>();
   const requests: Array<{ method: string; params?: JsonValue }> = [];
   const approvalResponses: JsonValue[] = [];
   const request = vi.fn(async (method: string, params?: JsonValue) => {
@@ -122,50 +125,68 @@ function createFakeClient(options?: {
     }
     if (method === "turn/start") {
       options?.onTurnStart?.();
+      const approvals: Promise<void>[] = [];
       if (options?.approvalRequestMethod) {
         for (const handler of requestHandlers) {
-          const response = handler({ method: options.approvalRequestMethod });
-          if (response !== undefined) {
-            approvalResponses.push(response);
-          }
+          approvals.push(
+            Promise.resolve(
+              handler({
+                id: "approval-1",
+                method: options.approvalRequestMethod,
+                params: { threadId: "thread-1", turnId: "turn-1" },
+              }),
+            ).then((response) => {
+              if (response !== undefined) {
+                approvalResponses.push(response);
+              }
+            }),
+          );
         }
       }
-      if (options?.notifyError) {
-        for (const notify of notifications) {
-          notify({
-            method: "error",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              error: {
-                message: options.notifyError,
-                codexErrorInfo: null,
-                additionalDetails: null,
+      const completeTurn = () => {
+        if (options?.notifyError) {
+          for (const notify of notifications) {
+            notify({
+              method: "error",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                error: {
+                  message: options.notifyError,
+                  codexErrorInfo: null,
+                  additionalDetails: null,
+                },
+                willRetry: false,
               },
-              willRetry: false,
-            },
-          });
+            });
+          }
+        } else if (!options?.completeWithItems && !options?.deferTurnCompletion) {
+          for (const notify of notifications) {
+            notify({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: options?.responseText ?? "A red square.",
+              },
+            });
+            notify({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                turn: turnStartResult("completed").turn,
+              },
+            });
+          }
         }
-      } else if (!options?.completeWithItems && !options?.deferTurnCompletion) {
-        for (const notify of notifications) {
-          notify({
-            method: "item/agentMessage/delta",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              itemId: "msg-1",
-              delta: options?.responseText ?? "A red square.",
-            },
-          });
-          notify({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              turn: turnStartResult("completed").turn,
-            },
-          });
-        }
+      };
+      // Return turn/start before waiting for keyed approvals; complete only after their replies.
+      if (approvals.length > 0) {
+        void Promise.all(approvals).then(completeTurn);
+      } else {
+        completeTurn();
       }
       return turnStartResult(
         options?.completeWithItems ? "completed" : "inProgress",
@@ -185,21 +206,22 @@ function createFakeClient(options?: {
     return {};
   });
 
+  const closeAndWait = vi.fn(async () => true);
   const client = {
     request,
     addNotificationHandler(handler: (notification: CodexServerNotification) => void) {
       notifications.add(handler);
       return () => notifications.delete(handler);
     },
-    addRequestHandler(handler: (request: { method: string }) => JsonValue | undefined) {
+    addRequestHandler(handler: RequestHandler) {
       requestHandlers.add(handler);
       return () => requestHandlers.delete(handler);
     },
     addCloseHandler: () => () => undefined,
-    close: vi.fn(),
+    closeAndWait,
   } as unknown as CodexAppServerClient;
 
-  return { client, requests, approvalResponses };
+  return { client, requests, approvalResponses, closeAndWait };
 }
 
 describe("codex media understanding provider", () => {
@@ -268,7 +290,7 @@ describe("codex media understanding provider", () => {
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(async () => client);
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
     const provider = buildCodexMediaUnderstandingProvider({
       clientFactory,
     });
@@ -298,13 +320,17 @@ describe("codex media understanding provider", () => {
       "thread/start",
       "turn/start",
     ]);
-    expect(clientFactory).toHaveBeenCalledWith({
-      startOptions: expect.any(Object),
-      authProfileId: undefined,
-      agentDir: "/tmp/openclaw-agent",
-      config: cfg,
-      timeoutMs: 30_000,
-    });
+    const factoryOptions = clientFactory.mock.calls[0]?.[0];
+    expect(factoryOptions).toEqual(
+      expect.objectContaining({
+        startOptions: expect.any(Object),
+        authProfileId: undefined,
+        agentDir: "/tmp/openclaw-agent",
+        config: cfg,
+      }),
+    );
+    expect(factoryOptions?.timeoutMs).toBeGreaterThan(0);
+    expect(factoryOptions?.timeoutMs).toBeLessThanOrEqual(30_000);
     expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -325,6 +351,8 @@ describe("codex media understanding provider", () => {
         "features.multi_agent_v2": false,
         "features.plugins": false,
         "features.standalone_web_search": false,
+        project_doc_max_bytes: 131_072,
+        "tools.update_plan.enabled": false,
         web_search: "disabled",
       },
       environments: [],
@@ -339,14 +367,13 @@ describe("codex media understanding provider", () => {
         { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
       ],
       approvalPolicy: "on-request",
-      model: "gpt-5.4",
       effort: "low",
     });
   });
 
   it("treats a blank agent directory as absent when starting the app-server", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(async () => client);
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
     const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
     const cfg = {};
 
@@ -361,20 +388,24 @@ describe("codex media understanding provider", () => {
       agentDir: " ",
     });
 
-    expect(clientFactory).toHaveBeenCalledWith({
-      startOptions: expect.any(Object),
-      authProfileId: undefined,
-      agentDir: undefined,
-      config: cfg,
-      timeoutMs: 30_000,
-    });
+    const factoryOptions = clientFactory.mock.calls[0]?.[0];
+    expect(factoryOptions).toEqual(
+      expect.objectContaining({
+        startOptions: expect.any(Object),
+        authProfileId: undefined,
+        agentDir: undefined,
+        config: cfg,
+      }),
+    );
+    expect(factoryOptions?.timeoutMs).toBeGreaterThan(0);
+    expect(factoryOptions?.timeoutMs).toBeLessThanOrEqual(30_000);
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
     expect(requests[2]?.params).not.toHaveProperty("cwd");
   });
 
   it("preserves configured WebSocket transport for media turns", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(async () => client);
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
     const provider = buildCodexMediaUnderstandingProvider({
       pluginConfig: {
         appServer: {
@@ -396,16 +427,20 @@ describe("codex media understanding provider", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
-    expect(clientFactory).toHaveBeenCalledWith({
-      startOptions: expect.objectContaining({
-        transport: "websocket",
-        url: "ws://127.0.0.1:4501",
+    const factoryOptions = clientFactory.mock.calls[0]?.[0];
+    expect(factoryOptions).toEqual(
+      expect.objectContaining({
+        startOptions: expect.objectContaining({
+          transport: "websocket",
+          url: "ws://127.0.0.1:4501",
+        }),
+        authProfileId: undefined,
+        agentDir: "/tmp/openclaw-agent",
+        config: {},
       }),
-      authProfileId: undefined,
-      agentDir: "/tmp/openclaw-agent",
-      config: {},
-      timeoutMs: 30_000,
-    });
+    );
+    expect(factoryOptions?.timeoutMs).toBeGreaterThan(0);
+    expect(factoryOptions?.timeoutMs).toBeLessThanOrEqual(30_000);
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
     expect(requests[2]?.params).not.toHaveProperty("cwd");
   });
@@ -447,7 +482,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("passes the scoped auth store into isolated app-server startup", async () => {
-    const { client } = createFakeClient();
+    const { client, closeAndWait } = createFakeClient();
     sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
     const provider = buildCodexMediaUnderstandingProvider();
     const authStore = {
@@ -478,6 +513,7 @@ describe("codex media understanding provider", () => {
     expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileStore: authStore }),
     );
+    expect(closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {
@@ -662,6 +698,8 @@ describe("codex media understanding provider", () => {
         "features.multi_agent_v2": false,
         "features.plugins": false,
         "features.standalone_web_search": false,
+        project_doc_max_bytes: 131_072,
+        "tools.update_plan.enabled": false,
         web_search: "disabled",
       },
       environments: [],
@@ -673,14 +711,13 @@ describe("codex media understanding provider", () => {
       | {
           threadId?: unknown;
           approvalPolicy?: unknown;
-          model?: unknown;
           input?: Array<{ type?: unknown; text?: unknown; text_elements?: unknown; url?: unknown }>;
           effort?: unknown;
         }
       | undefined;
     expect(turnParams?.threadId).toBe("thread-1");
     expect(turnParams?.approvalPolicy).toBe("on-request");
-    expect(turnParams?.model).toBe("gpt-5.4");
+    expect(turnParams).not.toHaveProperty("model");
     expect(turnParams).not.toHaveProperty("cwd");
     expect(turnParams?.effort).toBe("low");
     expect(turnParams?.input).toHaveLength(3);

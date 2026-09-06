@@ -3,6 +3,7 @@ import type { MediaUnderstandingCapability } from "./types.js";
 
 type MediaCapabilityProvider = {
   transcribeAudio?: unknown;
+  transcribeAudioWithContext?: unknown;
   describeImage?: unknown;
   describeVideo?: unknown;
 };
@@ -18,7 +19,7 @@ export function providerSupportsCapability(
     return false;
   }
   if (capability === "audio") {
-    return Boolean(provider.transcribeAudio);
+    return Boolean(provider.transcribeAudioWithContext || provider.transcribeAudio);
   }
   if (capability === "image") {
     return Boolean(provider.describeImage);

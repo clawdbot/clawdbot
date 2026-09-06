@@ -10,6 +10,7 @@ const PLUGIN_INSTALL_OWNER_MIGRATIONS = Symbol.for("openclaw.pluginInstallOwnerM
 type PluginInstallTransactionRequest = {
   deferCommit: true;
   transactionSink?: PluginInstallTransaction[];
+  assertOwned?: () => void;
 };
 
 export function attachPluginInstallTransaction<T extends object>(
@@ -35,6 +36,7 @@ export function resolvePluginInstallTransaction(
 export function requestDeferredPluginInstall<T extends object>(
   params: T,
   transactionSink?: PluginInstallTransaction[],
+  assertOwned?: () => void,
 ): T {
   Object.defineProperty(params, PLUGIN_INSTALL_TRANSACTION_REQUEST, {
     configurable: false,
@@ -42,6 +44,7 @@ export function requestDeferredPluginInstall<T extends object>(
     value: {
       deferCommit: true,
       ...(transactionSink ? { transactionSink } : {}),
+      ...(assertOwned ? { assertOwned } : {}),
     } satisfies PluginInstallTransactionRequest,
   });
   return params;
@@ -52,25 +55,17 @@ export function copyPluginInstallTransactionRequest<T extends object>(
   target: T,
 ): T {
   const request = resolvePluginInstallTransactionRequest(source);
-  return request ? requestDeferredPluginInstall(target, request.transactionSink) : target;
+  return request
+    ? requestDeferredPluginInstall(target, request.transactionSink, request.assertOwned)
+    : target;
 }
 
-function resolvePluginInstallTransactionRequest(
+export function resolvePluginInstallTransactionRequest(
   params: object,
 ): PluginInstallTransactionRequest | undefined {
   return (params as { [PLUGIN_INSTALL_TRANSACTION_REQUEST]?: PluginInstallTransactionRequest })[
     PLUGIN_INSTALL_TRANSACTION_REQUEST
   ];
-}
-
-export function isPluginInstallCommitDeferred(params: object): boolean {
-  return resolvePluginInstallTransactionRequest(params)?.deferCommit === true;
-}
-
-export function resolvePluginInstallTransactionSink(
-  params: object,
-): PluginInstallTransaction[] | undefined {
-  return resolvePluginInstallTransactionRequest(params)?.transactionSink;
 }
 
 export function attachPluginInstallOwnerMigrations<T extends object>(

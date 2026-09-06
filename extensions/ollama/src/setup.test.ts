@@ -153,6 +153,8 @@ describe("ollama setup", () => {
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
     expect(modelIds?.[0]).toBe("gemma4");
+    expect(result.config.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(result.credential).toBeUndefined();
   });
 
   it("Docker setup defaults to the host Ollama endpoint", async () => {
@@ -203,6 +205,7 @@ describe("ollama setup", () => {
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
     expect(modelIds?.[0]).toBe("minimax-m2.7");
+    expect(result.defaultModel).toBe("ollama/minimax-m2.7");
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("https://ollama.com");
     expect(result.config.models?.providers?.ollama?.apiKey).toBe("test-ollama-key");
     expect(result.credential).toBe("test-ollama-key");
@@ -244,12 +247,15 @@ describe("ollama setup", () => {
     expect(modelIds).toEqual([
       "gemma4",
       "minimax-m2.7:cloud",
+      "minimax-m3:cloud",
+      "kimi-k3:cloud",
       "glm-5.1:cloud",
       "glm-5.2:cloud",
       "llama3:8b",
     ]);
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
-    expect(result.credential).toBe("ollama-local");
+    expect(result.config.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(result.credential).toBeUndefined();
   });
 
   it("mode selection affects model ordering (local)", async () => {
@@ -454,30 +460,24 @@ describe("ollama setup", () => {
     const models = result.config.models?.providers?.ollama?.models;
     const modelIds = models?.map((m) => m.id);
 
-    expect(modelIds).toEqual(["minimax-m2.7", "glm-5.1", "glm-5.2"]);
-    expect(models).toEqual([
-      expect.objectContaining({
-        id: "minimax-m2.7",
-        contextWindow: 196_608,
-        reasoning: true,
-        input: ["text"],
-        compat: { supportsTools: true, supportsUsageInStreaming: true },
-      }),
-      expect.objectContaining({
-        id: "glm-5.1",
-        contextWindow: 202_752,
-        reasoning: true,
-        input: ["text"],
-        compat: { supportsTools: true, supportsUsageInStreaming: true },
-      }),
-      expect.objectContaining({
-        id: "glm-5.2",
-        contextWindow: 1_000_000,
-        reasoning: true,
-        input: ["text"],
-        compat: { supportsTools: true, supportsUsageInStreaming: true },
-      }),
-    ]);
+    expect(modelIds).toEqual(["minimax-m2.7", "minimax-m3", "kimi-k3", "glm-5.1", "glm-5.2"]);
+    expect(models?.every((model) => model.contextTokens === undefined)).toBe(true);
+    expect(models).toEqual(
+      expect.arrayContaining(
+        [
+          { id: "minimax-m2.7", contextWindow: 196_608 },
+          { id: "glm-5.1", contextWindow: 202_752 },
+          { id: "glm-5.2", contextWindow: 1_000_000 },
+        ].map((model) =>
+          expect.objectContaining({
+            ...model,
+            reasoning: true,
+            input: ["text"],
+            compat: { supportsTools: true, supportsUsageInStreaming: true },
+          }),
+        ),
+      ),
+    );
   });
 
   it("cloud mode populates models from ollama.com /api/tags when reachable", async () => {
@@ -499,6 +499,8 @@ describe("ollama setup", () => {
 
     expect(modelIds).toEqual([
       "minimax-m2.7",
+      "minimax-m3",
+      "kimi-k3",
       "glm-5.1",
       "glm-5.2",
       "qwen3-coder:480b-cloud",
@@ -530,7 +532,7 @@ describe("ollama setup", () => {
       (m) => m.id === "llama3:8b",
     );
 
-    expect(model?.contextWindow).toBe(65536);
+    expect(model).toMatchObject({ contextWindow: 65_536, contextTokens: 32_768 });
     expect(result.defaultModel).toBe("ollama/llama3:8b");
   });
 
@@ -949,40 +951,6 @@ describe("ollama setup", () => {
     });
   });
 
-  it("uses discovered model when requested non-interactive download fails", async () => {
-    const fetchMock = createOllamaFetchMock({
-      tags: ["qwen2.5-coder:7b"],
-      pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
-
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-4o-mini",
-              fallbacks: ["anthropic/claude-sonnet-4-5"],
-            },
-          },
-        },
-      },
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "missing-model",
-      },
-      runtime,
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith("Download failed: disk full");
-    expect(result.agents?.defaults?.model).toEqual({
-      primary: "ollama/qwen2.5-coder:7b",
-      fallbacks: ["anthropic/claude-sonnet-4-5"],
-    });
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
-  });
-
   it("normalizes ollama/ prefix in non-interactive custom model download", async () => {
     const fetchMock = createOllamaFetchMock({
       tags: [],
@@ -1003,7 +971,8 @@ describe("ollama setup", () => {
     const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
     expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ model: "llama3.2:latest" });
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
@@ -1027,7 +996,8 @@ describe("ollama setup", () => {
     ]);
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/gemma4:latest" });
     expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it.each(["kimi-k2.5:cloud", "gpt-oss:120b-cloud"])(

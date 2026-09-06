@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
@@ -23,8 +24,7 @@ type ReadCronTaskRunHistoryPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
-  /** Narrows the page to these job ids (caller-scope filtering). */
-  jobIds?: readonly string[];
+  agentId?: string;
   runId?: string;
   status?: CronRunHistoryStatusFilter;
   statuses?: CronRunStatus[];
@@ -33,6 +33,8 @@ type ReadCronTaskRunHistoryPageOptions = {
   query?: string;
   sortDir?: CronRunHistorySortDir;
   jobNameById?: Record<string, string>;
+  /** Filter before paging so hidden runs cannot consume page slots or inflate totals. */
+  entryFilter?: (entry: CronRunLogEntry) => boolean;
 };
 
 type CronTaskRunHistoryPage = {
@@ -112,7 +114,7 @@ function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string,
   for (const entry of entries) {
     const jobName = jobNameById?.[entry.jobId];
     if (jobName) {
-      (entry as CronRunLogEntry & { jobName?: string }).jobName = jobName;
+      entry.jobName = jobName;
     }
   }
 }
@@ -127,7 +129,7 @@ export function readCronTaskRunHistoryPage(
   const statuses = normalizeStatuses(options);
   const deliveryStatuses = normalizeDeliveryStatuses(options);
   const runId = normalizeOptionalString(options.runId);
-  const jobIds = options.jobIds ? new Set(options.jobIds) : undefined;
+  const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
   const sortDir: CronRunHistorySortDir = options.sortDir === "asc" ? "asc" : "desc";
   const rows = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
@@ -135,12 +137,10 @@ export function readCronTaskRunHistoryPage(
     sourceId: jobId,
   })
     .filter((task) => cronTaskRecordStoreKey(task) === options.storeKey)
+    .filter((task) => !agentId || task.agentId === agentId)
     .map((task) => ({ task, entry: cronTaskRecordToRunLogEntry(task) }))
     .filter((row): row is { task: TaskRecord; entry: CronRunLogEntry } => row.entry !== null)
     .filter(({ entry }) => {
-      if (jobIds && !jobIds.has(entry.jobId)) {
-        return false;
-      }
       if (runId && entry.runId !== runId) {
         return false;
       }
@@ -151,8 +151,9 @@ export function readCronTaskRunHistoryPage(
         return false;
       }
       return (
-        !query ||
-        normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)
+        (!query ||
+          normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)) &&
+        (!options.entryFilter || options.entryFilter(entry))
       );
     })
     .toSorted((left, right) => compareHistoryRows(left, right, sortDir));

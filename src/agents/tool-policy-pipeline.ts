@@ -3,10 +3,11 @@
  * stay tied to the layer that introduced them, while plugin groups are
  * expanded only after unknown core/plugin entries are classified.
  */
-import { filterToolsByPolicy } from "./agent-tools.policy.js";
+import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
-import { auditToolPolicyFilter, type ToolPolicyAuditLogLevel } from "./tool-policy-audit.js";
+import { auditToolPolicyFilter } from "./tool-policy-audit.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -137,7 +138,6 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   toolMeta: (tool: TTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
-  auditLogLevel?: ToolPolicyAuditLogLevel;
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
   onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
 }): TTool[] {
@@ -159,9 +159,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       continue;
     }
 
-    let policy: ToolPolicyLike | undefined = step.policy;
+    const policy = step.policy;
+    const frozenAllow = isFrozenClawToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
+      // Read declarations per layer because callbacks can update the next layer.
       const resolved = analyzeAllowlistByToolType(
         policy,
         pluginGroups,
@@ -203,10 +205,14 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           }
         }
       }
-      policy = resolved.policy;
     }
 
-    const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
+    const expanded = frozenAllow
+      ? {
+          allow: policy.allow,
+          deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+        }
+      : expandPolicyWithPluginGroups(policy, pluginGroups);
     if (!expanded) {
       continue;
     }
@@ -218,7 +224,6 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       policy: expanded,
       before,
       after: filtered,
-      logLevel: params.auditLogLevel,
     });
   }
   return filtered;
@@ -254,16 +259,4 @@ function describeUnknownAllowlistSuffix(params: {
         ? unavailableCoreDetail
         : "These entries won't match any tool unless the plugin is enabled.";
   return preface ? `${preface} ${detail}` : detail;
-}
-
-/** Clears process-local warning dedupe state between tests. */
-function resetToolPolicyWarningCacheForTest(): void {
-  seenToolPolicyWarnings.clear();
-  toolPolicyWarningOrder.length = 0;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.toolPolicyWarningCacheTestApi")
-  ] = { resetToolPolicyWarningCacheForTest };
 }

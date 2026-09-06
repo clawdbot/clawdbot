@@ -192,7 +192,16 @@ async function expectTalkSecretsConfig(
   await withTalkConfigConnection(
     ["operator.read", "operator.write", "operator.talk.secrets"],
     async (ws) => {
-      const res = await fetchOkTalkConfig(ws, { includeSecrets: true });
+      const secrets = await import("../secrets/runtime.js");
+      const snapshot = await secrets.prepareSecretsRuntimeSnapshot({
+        config: (await (await import("../config/config.js")).readConfigFileSnapshot()).config,
+        env: process.env,
+        includeAuthStoreRefs: false,
+        loadablePluginOrigins: new Map(),
+      });
+      const response = fetchOkTalkConfig(ws, { includeSecrets: true });
+      secrets.activateSecretsRuntimeSnapshot(snapshot);
+      const res = await response;
       expect(validateTalkConfigResult(res.payload)).toBe(true);
       expectTalkConfig(res.payload?.config?.talk, {
         provider: GENERIC_TALK_PROVIDER_ID,

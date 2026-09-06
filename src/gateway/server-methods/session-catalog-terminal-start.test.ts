@@ -4,7 +4,13 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
+
+vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
+  getUserProfileRole: vi.fn(() => null),
+}));
 
 function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatalogProvider {
   return {
@@ -17,18 +23,18 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
 }
 
 let activeProvider: SessionCatalogProvider;
-const resolveCreateTarget = vi.fn((): { ok: true } | { ok: false; message: string } => ({
-  ok: true,
-}));
-const handler = catalogStartHandler(
-  (catalogId) => (activeProvider.id === catalogId ? activeProvider : undefined),
-  resolveCreateTarget,
+const handler = catalogStartHandler((catalogId) =>
+  activeProvider.id === catalogId ? activeProvider : undefined,
 );
 
 function startCall(
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] }; connId?: string },
+  client?: {
+    authenticatedUserProfile?: { profileId: string };
+    connect?: { scopes?: string[] };
+    connId?: string;
+  },
   contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
@@ -46,7 +52,11 @@ function startCall(
 async function call(
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] }; connId?: string },
+  client?: {
+    authenticatedUserProfile?: { profileId: string };
+    connect?: { scopes?: string[] };
+    connId?: string;
+  },
   contextOverrides: Record<string, unknown> = {},
 ) {
   const pending = startCall(params, config, client, contextOverrides);
@@ -61,19 +71,20 @@ describe("sessions.catalog.startTerminal", () => {
 
   beforeEach(() => {
     activeProvider = provider();
-    resolveCreateTarget.mockReset();
-    resolveCreateTarget.mockReturnValue({ ok: true });
   });
 
-  it("requires the cliAgents opt-in before terminal start", async () => {
+  it("honors the cliAgents opt-out before terminal start", async () => {
     const startTerminalSession = vi.fn();
     activeProvider = provider({ startTerminalSession });
 
-    const respond = await call({
-      catalogId: "codex",
-      agentId: "main",
-      cwd: process.cwd(),
-    });
+    const respond = await call(
+      {
+        catalogId: "codex",
+        agentId: "main",
+        cwd: process.cwd(),
+      },
+      { gateway: { cliAgents: { enabled: false } } },
+    );
 
     expect(startTerminalSession).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -127,6 +138,42 @@ describe("sessions.catalog.startTerminal", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message:
           "cwd must be an existing absolute directory; create or choose a worktree and retry",
+      }),
+    );
+  });
+
+  it("rejects terminal start before resolving a disallowed agent's provider target", async () => {
+    const startTerminalSession = vi.fn();
+    activeProvider = provider({ startTerminalSession });
+
+    const respond = await call(
+      { catalogId: "codex", agentId: "main", cwd: process.cwd() },
+      {
+        gateway: {
+          cliAgents: { enabled: true },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: ["research"],
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
+          },
+        },
+      },
+      { authenticatedUserProfile: { profileId: "profile-terminal-guest" }, connId: "conn-1" },
+      { isTerminalEnabled: () => true, terminalSessions: {} },
+    );
+
+    expect(startTerminalSession).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.FORBIDDEN,
+        message: expect.stringContaining('cannot create sessions for agent "main"'),
       }),
     );
   });
@@ -215,8 +262,57 @@ describe("sessions.catalog.startTerminal", () => {
     );
   });
 
-  it("reuses terminal.open admission and manager ownership for terminal start", async () => {
+  it("rejects local terminal start for a named profile before provider fallback", async () => {
     const cwd = process.cwd();
+    const startTerminalSession = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
+      throw new Error(
+        request.allowProcessHomeFallback === false
+          ? "local Test sessions are unavailable in isolated state"
+          : "unguarded local terminal start",
+      );
+    });
+    activeProvider = provider({ startTerminalSession: startTerminalSession as never });
+    const home = os.userInfo().homedir;
+    const stateDir = path.join(home, ".openclaw-dev");
+
+    const respond = await withEnvAsync(
+      {
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: "dev",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () =>
+        await call(
+          { catalogId: "codex", agentId: "main", cwd },
+          { gateway: { cliAgents: { enabled: true } } },
+          { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+          {
+            isTerminalEnabled: () => true,
+            terminalSessions: { open: vi.fn() },
+            resolveTerminalLaunchPolicy: () => ({
+              ok: true,
+              plan: { agentId: "main", cwd, shell: "/bin/zsh", args: [] },
+            }),
+            isConnectionActive: () => true,
+          },
+        ),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("local Test sessions are unavailable in isolated state"),
+      }),
+    );
+  });
+
+  it("reuses terminal.open admission and ownership without an OpenClaw model target", async () => {
+    const cwd = process.cwd();
+    const resolveCreateSession = vi.fn(() => undefined);
     const startTerminalSession = vi.fn(async () => ({
       kind: "local" as const,
       argv: ["codex", "--", "Inspect the failing test"],
@@ -232,9 +328,20 @@ describe("sessions.catalog.startTerminal", () => {
       cwd,
       shell: "/bin/zsh",
     }));
-    activeProvider = provider({ startTerminalSession });
+    activeProvider = provider({ startTerminalSession, resolveCreateSession });
 
-    const config = { gateway: { cliAgents: { enabled: true } } };
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5" },
+          models: {
+            "openai/gpt-5": {
+              params: { responsesServerCompaction: true, responsesCompactThreshold: 42_000 },
+            },
+          },
+        },
+      },
+    };
     const respond = await call(
       {
         catalogId: "codex",
@@ -257,9 +364,13 @@ describe("sessions.catalog.startTerminal", () => {
       },
     );
 
-    expect(resolveCreateTarget).toHaveBeenCalledWith("codex", "research", config);
+    expect(resolveCreateSession).not.toHaveBeenCalled();
+    expect(startTerminalSession).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledOnce();
     expect(startTerminalSession).toHaveBeenCalledWith({
       agentId: "research",
+      hostId: "gateway:local",
+      allowProcessHomeFallback: false,
       cwd,
       initialMessage: "Inspect the failing test",
     });
@@ -313,8 +424,10 @@ describe("sessions.catalog.startTerminal", () => {
 
     expect(startTerminalSession).toHaveBeenCalledWith({
       agentId: "main",
+      allowProcessHomeFallback: false,
       cwd: "/remote/worktree",
       nodeId: "remote",
+      hostId: "node:remote",
     });
     expect(open).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(

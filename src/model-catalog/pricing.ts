@@ -1,8 +1,12 @@
 import { isIP } from "node:net";
 import type { RemoteModelCatalogPricing } from "@openclaw/model-catalog-core";
+import { MODEL_PRICING_SOURCES } from "@openclaw/model-catalog-core/model-catalog-pricing";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
-import { modelKey, normalizeModelRef } from "../agents/model-selection.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import {
+  createStaticProviderModelIdNormalizer,
+  normalizeProviderId,
+} from "../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -14,12 +18,13 @@ import { planEffectiveModelCatalogRows } from "./index.js";
 import { getRemoteModelCatalogPricing } from "./remote-overlay.js";
 
 type PricingValue = RemoteModelCatalogPricing | ModelCatalogCost;
-type ManifestPlugins = readonly PluginManifestRegistry["plugins"][number][];
 type ExternalPricingPolicy = {
   external: boolean;
+  authoritative: boolean;
 };
 type PricingContext = {
-  snapshot?: PluginMetadataSnapshot;
+  config: OpenClawConfig;
+  normalizeKey: (provider: string, model: string) => string;
   catalog: ReadonlyMap<string, PricingValue>;
   hosted: Readonly<Record<string, RemoteModelCatalogPricing>>;
   normalizedHosted: ReadonlyMap<string, RemoteModelCatalogPricing>;
@@ -29,15 +34,6 @@ type PricingContext = {
 
 const EMPTY_CONFIG: OpenClawConfig = {};
 const pricingContextByConfig = new WeakMap<OpenClawConfig, PricingContext>();
-
-function normalizePolicy(
-  policy: { external?: boolean } | undefined,
-): ExternalPricingPolicy | undefined {
-  if (!policy) {
-    return undefined;
-  }
-  return { external: policy.external !== false };
-}
 
 function activeManifestRegistry(
   snapshot: PluginMetadataSnapshot,
@@ -54,15 +50,15 @@ function activeManifestRegistry(
   };
 }
 
-function normalizedHostedKey(key: string, manifestPlugins?: ManifestPlugins): string | undefined {
+function normalizedHostedKey(
+  key: string,
+  normalizeKey: PricingContext["normalizeKey"],
+): string | undefined {
   const slash = key.indexOf("/");
   if (slash <= 0 || slash === key.length - 1) {
     return undefined;
   }
-  const normalized = normalizeModelRef(key.slice(0, slash), key.slice(slash + 1), {
-    manifestPlugins,
-  });
-  return modelKey(normalized.provider, normalized.model);
+  return normalizeKey(key.slice(0, slash), key.slice(slash + 1));
 }
 
 function buildPricingContext(config: OpenClawConfig): PricingContext {
@@ -79,19 +75,29 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
   const registry = snapshot
     ? activeManifestRegistry(snapshot, config)
     : ({ plugins: [], diagnostics: [] } satisfies PluginManifestRegistry);
+  // Pricing reuses prepared static policies without activating provider runtime.
+  const normalizeModel = createStaticProviderModelIdNormalizer({
+    manifestPlugins: snapshot ?? [],
+  });
+  const normalizeKey = (provider: string, model: string) => {
+    const providerId = normalizeProviderId(provider);
+    return buildModelCatalogRef(providerId, normalizeModel(providerId, model.trim()));
+  };
   const catalog = new Map<string, PricingValue>();
   for (const row of planEffectiveModelCatalogRows({ registry, config }).rows) {
     if (row.cost) {
-      catalog.set(modelKey(row.provider, row.id), row.cost);
+      catalog.set(buildModelCatalogRef(row.provider, row.id), row.cost);
     }
   }
   const policies = new Map<string, ExternalPricingPolicy>();
   for (const plugin of registry.plugins) {
-    for (const [provider, rawPolicy] of Object.entries(plugin.modelPricing?.providers ?? {})) {
-      const policy = normalizePolicy(rawPolicy);
-      if (policy) {
-        policies.set(provider, policy);
-      }
+    for (const [provider, policy] of Object.entries(plugin.modelPricing?.providers ?? {})) {
+      policies.set(provider, {
+        external: policy.external !== false,
+        authoritative: MODEL_PRICING_SOURCES.some(
+          ({ id, authoritative }) => authoritative && Boolean(policy[id]),
+        ),
+      });
     }
   }
   // Hosted aliases are policy-resolved against installed manifests. If that metadata is
@@ -99,7 +105,7 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
   const hosted = snapshot ? (getRemoteModelCatalogPricing(config) ?? {}) : {};
   const normalizedHosted = new Map<string, RemoteModelCatalogPricing>();
   for (const [key, pricing] of Object.entries(hosted).toSorted(([a], [b]) => a.localeCompare(b))) {
-    const normalized = normalizedHostedKey(key, snapshot?.plugins);
+    const normalized = normalizedHostedKey(key, normalizeKey);
     if (normalized && !normalizedHosted.has(normalized)) {
       normalizedHosted.set(normalized, pricing);
     }
@@ -109,11 +115,15 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
     hosted: Object.entries(hosted).toSorted(([a], [b]) => a.localeCompare(b)),
     normalizedHosted: [...normalizedHosted.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
     policies: [...policies.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
+    normalization: [...(snapshot?.owners.modelIdNormalizationPolicies ?? [])].toSorted(([a], [b]) =>
+      a.localeCompare(b),
+    ),
   });
-  return { snapshot, catalog, hosted, normalizedHosted, policies, fingerprint };
+  return { config, normalizeKey, catalog, hosted, normalizedHosted, policies, fingerprint };
 }
 
-function getPricingContext(config: OpenClawConfig): PricingContext {
+/** Reuses the static pricing policy captured for this config. */
+export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG): PricingContext {
   const existing = pricingContextByConfig.get(config);
   if (existing) {
     return existing;
@@ -183,77 +193,38 @@ function isPrivateOrLoopbackUrl(value: string | undefined): boolean {
   }
 }
 
-function findConfiguredModel(
-  config: OpenClawConfig,
-  provider: string,
-  model: string,
-  manifestPlugins?: ManifestPlugins,
-): ModelDefinitionConfig | undefined {
-  return config.models?.providers?.[provider]?.models?.find((entry) => {
-    const normalized = normalizeModelRef(provider, entry.id, { manifestPlugins });
-    return modelKey(normalized.provider, normalized.model) === modelKey(provider, model);
-  });
-}
-
-function allowsHostedPricing(
-  config: OpenClawConfig,
-  provider: string,
-  model: string,
-  manifestPlugins?: ManifestPlugins,
-): boolean {
-  const providerConfig = config.models?.providers?.[provider];
-  const configuredModel = findConfiguredModel(config, provider, model, manifestPlugins);
-  return !(
+/** Resolves catalog-first pricing for a key prepared by this metadata context. */
+export function resolveModelPricing(
+  context: PricingContext,
+  key: string,
+): PricingValue | undefined {
+  const provider = key.slice(0, key.indexOf("/"));
+  const providerConfig = context.config.models?.providers?.[provider];
+  const configuredModel = providerConfig?.models?.find(
+    (entry) => context.normalizeKey(provider, entry.id) === key,
+  );
+  if (
     isPrivateOrLoopbackUrl(configuredModel?.baseUrl) ||
     isPrivateOrLoopbackUrl(providerConfig?.baseUrl)
-  );
-}
-
-export function resolveCatalogModelPricing(params: {
-  config?: OpenClawConfig;
-  provider: string;
-  model: string;
-}): PricingValue | undefined {
-  const config = params.config ?? EMPTY_CONFIG;
-  const context = getPricingContext(config);
-  const normalized = normalizeModelRef(params.provider, params.model, {
-    manifestPlugins: context.snapshot?.plugins,
-  });
-  if (
-    !allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot?.plugins)
   ) {
     return undefined;
   }
-  const pricing = context.catalog.get(modelKey(normalized.provider, normalized.model));
-  return pricing && hasKnownPricing(pricing) ? pricing : undefined;
-}
-
-export function resolveHostedModelPricing(params: {
-  config?: OpenClawConfig;
-  provider: string;
-  model: string;
-}): PricingValue | undefined {
-  const config = params.config ?? EMPTY_CONFIG;
-  const context = getPricingContext(config);
-  const normalized = normalizeModelRef(params.provider, params.model, {
-    manifestPlugins: context.snapshot?.plugins,
-  });
-  if (
-    context.policies.get(normalized.provider)?.external === false ||
-    !allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot?.plugins)
-  ) {
+  const catalog = context.catalog.get(key);
+  if (catalog && hasKnownPricing(catalog)) {
+    return catalog;
+  }
+  const policy = context.policies.get(provider);
+  if (policy?.external === false) {
     return undefined;
   }
-  const key = modelKey(normalized.provider, normalized.model);
-  const pricing =
-    context.hosted[key] ??
-    (context.policies.has(normalized.provider) ? undefined : context.normalizedHosted.get(key));
-  return pricing && hasKnownPricing(pricing) ? pricing : undefined;
+  const hosted = context.hosted[key] ?? (policy ? undefined : context.normalizedHosted.get(key));
+  // The publisher retains validated native zeros under exact owner keys. Catalog
+  // placeholders and normalized aliases cannot establish an authoritative free rate.
+  return hosted && (hasKnownPricing(hosted) || policy?.authoritative) ? hosted : undefined;
 }
 
-export function modelCatalogPricingFingerprint(config?: OpenClawConfig): string {
-  const resolvedConfig = config ?? EMPTY_CONFIG;
-  const context = getPricingContext(resolvedConfig);
+export function modelCatalogPricingFingerprint(context: PricingContext): string {
+  const resolvedConfig = context.config;
   const configuredEndpoints = Object.entries(resolvedConfig.models?.providers ?? {})
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([provider, providerConfig]) => ({

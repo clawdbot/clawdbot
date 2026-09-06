@@ -3,19 +3,18 @@
  *
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
-import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
-import { emitModelTransportDebug } from "@openclaw/ai/transports";
-import { formatModelTransportDebugUrl } from "@openclaw/ai/transports";
+import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
+import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw/ai/transports";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
 import {
   asFiniteNumberInRange,
   clampTimerTimeoutMs,
   parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
@@ -27,6 +26,7 @@ import {
   mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  SsrFBlockedError,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import type { Model } from "../llm/types.js";
@@ -39,13 +39,11 @@ import {
   swapSecretSentinelsInText,
 } from "../secrets/sentinel.js";
 import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
-import {
-  ensureModelProviderLocalService,
-  type ProviderLocalServiceLease,
-} from "./provider-local-service.js";
+import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
+import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
   buildProviderRequestDispatcherPolicy,
-  getModelProviderMetadataOwners,
+  getModelProviderRequestRouteFacts,
   getModelProviderRequestTransport,
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
@@ -463,37 +461,6 @@ function requestBodyHasStreamTrue(
   }
 }
 
-function parseRetryAfterSeconds(headers: Headers): number | undefined {
-  const retryAfterMs = headers.get("retry-after-ms");
-  if (retryAfterMs) {
-    const trimmedRetryAfterMs = retryAfterMs.trim();
-    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs)) {
-      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmedRetryAfterMs), {
-        min: 0,
-        max: Number.MAX_SAFE_INTEGER,
-      });
-      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
-    }
-  }
-
-  const retryAfter = headers.get("retry-after");
-  if (!retryAfter) {
-    return undefined;
-  }
-
-  const trimmedRetryAfterSeconds = retryAfter.trim();
-  if (/^\d+$/.test(trimmedRetryAfterSeconds)) {
-    return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
-  }
-
-  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfterSeconds);
-  if (retryAt === undefined) {
-    return undefined;
-  }
-
-  return Math.max(0, (retryAt - Date.now()) / 1000);
-}
-
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
   const raw = process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS?.trim();
   if (!raw) {
@@ -592,12 +559,12 @@ function resolveModelRequestPolicy(model: Model) {
         }
       : undefined,
   });
-  const providerMetadataOwners = getModelProviderMetadataOwners(model);
+  const routeFacts = getModelProviderRequestRouteFacts(model);
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
-    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+    ...(routeFacts ? { routeFacts } : {}),
     capability: "llm",
     transport: "stream",
     request,
@@ -677,7 +644,8 @@ function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is str
         label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
     ) &&
     !isLinkLocalIpAddress(hostname) &&
-    !isCloudMetadataIpAddress(hostname)
+    !isCloudMetadataIpAddress(hostname) &&
+    !isRfc8215LocalUseNat64Ipv6Address(hostname)
   );
 }
 
@@ -722,6 +690,35 @@ export function resolveProviderTransportSsrFPolicy(params: {
     baseUrlOriginPolicy,
     fakeIpPolicy,
     params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+  );
+}
+
+function withModelProviderNetworkRemediation(
+  error: unknown,
+  params: {
+    baseUrl?: string;
+    providerId: string;
+    url: string;
+  },
+): unknown {
+  const baseOrigin = resolveHttpOrigin(params.baseUrl);
+  const requestOrigin = resolveHttpOrigin(params.url);
+  const hostname = normalizeProviderOriginHostname(params.baseUrl);
+  if (
+    !(error instanceof SsrFBlockedError) ||
+    !baseOrigin ||
+    requestOrigin !== baseOrigin ||
+    !hostname ||
+    !isRfc8215LocalUseNat64Ipv6Address(hostname)
+  ) {
+    return error;
+  }
+  return new SsrFBlockedError(
+    `Configured model provider ${params.providerId} uses local-use NAT64 origin ` +
+      `${baseOrigin}, which OpenClaw blocks by default. Move the provider to a ` +
+      `loopback, LAN, or tailnet address, or set ` +
+      `models.providers.${params.providerId}.request.allowPrivateNetwork=true only for an ` +
+      `operator-controlled endpoint. Original block: ${error.message}`,
   );
 }
 
@@ -832,10 +829,7 @@ export function buildGuardedModelFetch(
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
       // Only operator-configured custom/local endpoints get exact-origin trust;
       // known public/native providers keep the default rebinding checks.
-      trustConfiguredBaseUrlOrigin:
-        !requestConfig.privateNetworkExplicitlyDenied &&
-        (requestConfig.policy?.endpointClass === "custom" ||
-          requestConfig.policy?.endpointClass === "local"),
+      trustConfiguredBaseUrlOrigin: requestConfig.trustConfiguredBaseUrlOrigin,
     });
     const requestInit =
       request &&
@@ -894,12 +888,17 @@ export function buildGuardedModelFetch(
           : guardedFetchOptions,
       );
     } catch (error) {
+      const remediatedError = withModelProviderNetworkRemediation(error, {
+        baseUrl: model.baseUrl,
+        providerId: model.provider,
+        url,
+      });
       log.warn(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(remediatedError)}`,
       );
       localServiceLease?.release();
-      throw error;
+      throw remediatedError;
     }
     let response = result.response;
     emitModelTransportDebug(

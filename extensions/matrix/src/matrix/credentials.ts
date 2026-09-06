@@ -17,15 +17,6 @@ export {
 } from "./credentials-read.js";
 export type { MatrixStoredCredentials } from "./credentials-state.js";
 
-function requireCredentialStoreUpdate(
-  store: ReturnType<typeof openMatrixCredentialsStore>,
-): NonNullable<ReturnType<typeof openMatrixCredentialsStore>["update"]> {
-  if (!store.update) {
-    throw new Error("Matrix credentials require atomic plugin-state updates");
-  }
-  return store.update;
-}
-
 export async function saveMatrixCredentials(
   credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
   env: NodeJS.ProcessEnv = process.env,
@@ -34,7 +25,7 @@ export async function saveMatrixCredentials(
   const normalizedAccountId = normalizeAccountId(accountId);
   const store = openMatrixCredentialsStore(env);
   const now = new Date().toISOString();
-  requireCredentialStoreUpdate(store)(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
+  store.update(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
     const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
     return {
       accountId: normalizedAccountId,
@@ -57,7 +48,7 @@ export async function saveBackfilledMatrixDeviceId(
   const store = openMatrixCredentialsStore(env);
   const now = new Date().toISOString();
   let result: "saved" | "skipped" = "saved";
-  requireCredentialStoreUpdate(store)(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
+  store.update(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
     // A delayed login backfill must not resurrect credentials after logout.
     if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
       result = "skipped";
@@ -92,7 +83,7 @@ export async function touchMatrixCredentials(
 ): Promise<void> {
   const normalizedAccountId = normalizeAccountId(accountId);
   const store = openMatrixCredentialsStore(env);
-  requireCredentialStoreUpdate(store)(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
+  store.update(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
     // A delayed activity touch must preserve an explicit logout tombstone.
     if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
       return current;

@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Tests typing mode persistence across session updates and reply turns.
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { createTypingController } from "./typing.js";
 
 describe("typing persistence bug fix", () => {
@@ -82,6 +82,31 @@ describe("typing persistence bug fix", () => {
     vi.advanceTimersByTime(6000);
     expect(onReplyStartSpy).toHaveBeenCalledTimes(1); // Still only the initial call
   });
+
+  it.each(["cleanup", "run-first", "idle-first"] as const)(
+    "disposes typing when %s closes the controller before start settles",
+    async (completion) => {
+      const starting = controller.startTypingLoop();
+      if (completion === "cleanup") {
+        controller.cleanup();
+      } else if (completion === "run-first") {
+        controller.markRunComplete();
+        controller.markDispatchIdle();
+      } else {
+        controller.markDispatchIdle();
+        controller.markRunComplete();
+      }
+      await starting;
+      await controller.startTypingOnText("late text");
+      controller.cleanup();
+
+      expect(controller.isActive()).toBe(false);
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("should prevent typing restart even if cleanup is delayed", async () => {
     // Start typing

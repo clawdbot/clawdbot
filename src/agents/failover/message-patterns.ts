@@ -1,5 +1,42 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
+
+// Both figures must be denominated in tokens and come from one clause. A message can state an RPM
+// limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
+// against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
+const STATED_TOKEN_SIZES_RE =
+  /(?:\btpm\b|tokens per minute)[^.\n]*?\blimit\s+([\d,]+)[^.\n]*?\brequested\s+([\d,]+)/i;
+
+function readStatedTokenCount(digits: string | undefined): number | undefined {
+  const parsed = Number(digits?.replaceAll(",", ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * Groq denominates a per-request size ceiling per minute: an oversized single request is refused
+ * with a 413 naming TPM that states both `Limit <n>` and `Requested <m>`. A request larger than
+ * the whole limit does not fit even an empty bucket, so waiting can never admit it. Ordinary
+ * throttling states a requested size within the limit and remains a rate limit.
+ *
+ * The ceiling belongs to the request and to the refusing provider's quota, not to the model's
+ * context window, so compaction budgeted against that window cannot satisfy it either.
+ * Embedded recovery surfaces reset guidance without retrying. If a transport-owning harness
+ * bypasses that recovery, model failover may advance to a differently provisioned candidate.
+ */
+export function isProviderRequestSizeCeilingError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  const stated = STATED_TOKEN_SIZES_RE.exec(errorMessage);
+  const limit = readStatedTokenCount(stated?.[1]);
+  const requested = readStatedTokenCount(stated?.[2]);
+  return limit !== undefined && requested !== undefined && requested > limit;
+}
+
+// First-party model transports use these terminal-contract forms when EOF arrives
+// before a response is complete; keep non-model stream lifecycle errors out.
+export const INCOMPLETE_ASSISTANT_STREAM_RE =
+  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without a terminal finish reason)[.!]?$/i;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -66,9 +103,6 @@ const BILLING_ERROR_HARD_402_RE =
 // standalone status token, HTTP/status context, or a structured status/code shape.
 const RATE_LIMIT_429_RE =
   /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
-// Catches provider "model X not found" wording; the legacy provider table
-// only covers Groq's deactivated-model forms.
-export const GENERIC_MODEL_NOT_FOUND_RE = /\bmodel\b.{0,60}?\bnot (?:found|available)\b/i;
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
   ZAI_AUTH_CODE_1113_RE,
@@ -146,6 +180,7 @@ const ERROR_PATTERNS = {
     // Keep them anchored so unrelated local stream failures do not trigger model failover.
     /^stream disconnected before completion(?::[\s\S]*)?$/i,
     /^premature close of server response while trying to fetch\b/i,
+    INCOMPLETE_ASSISTANT_STREAM_RE,
     // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
     "网络错误",
     "网络异常",

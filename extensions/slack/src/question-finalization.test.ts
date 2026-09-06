@@ -59,7 +59,7 @@ describe("Slack question finalization", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     const headers = Array.from({ length: 21 }, (_value, index) => `Column ${String(index)}`);
     const payload = {
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -104,11 +104,15 @@ describe("Slack question finalization", () => {
       },
       payload: renderedAfterTransport!,
       results: [
-        { channel: "slack", messageId: "44", channelId: "C123" },
+        {
+          channel: "slack",
+          messageId: "44",
+          target: { kind: "channel", id: "C123" },
+        },
         {
           channel: "slack",
           messageId: "55",
-          channelId: "C123",
+          target: { kind: "channel", id: "C123" },
           meta: {
             slackQuestionActionIds: ["openclaw:question_button:1:1"],
             [SLACK_QUESTION_FINALIZATION_BLOCKS]: [],
@@ -142,7 +146,7 @@ describe("Slack question finalization", () => {
     const payload = {
       text: "Pick one",
       mediaUrl: "https://example.invalid/question-context.png",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -169,19 +173,31 @@ describe("Slack question finalization", () => {
       target: { channel: "slack", to: "C123", accountId: "default" },
       payload: jsonRoundTrip(rendered)!,
       results: [
-        { channel: "slack", messageId: "upload", channelId: "C123" },
-        { channel: "slack", messageId: "preface-1", channelId: "C123" },
-        { channel: "slack", messageId: "preface-2", channelId: "C123" },
+        {
+          channel: "slack",
+          messageId: "upload",
+          target: { kind: "channel", id: "C123" },
+        },
+        {
+          channel: "slack",
+          messageId: "preface-1",
+          target: { kind: "channel", id: "C123" },
+        },
+        {
+          channel: "slack",
+          messageId: "preface-2",
+          target: { kind: "channel", id: "C123" },
+        },
         {
           channel: "slack",
           messageId: "another-question",
-          channelId: "C123",
+          target: { kind: "channel", id: "C123" },
           meta: { slackQuestionActionIds: ["openclaw:question_button:9:1"] },
         },
         {
           channel: "slack",
           messageId: "actual-question",
-          channelId: "C123",
+          target: { kind: "channel", id: "C123" },
           meta: {
             slackQuestionActionIds: [questionActionId],
             [SLACK_QUESTION_FINALIZATION_BLOCKS]: [],
@@ -204,7 +220,7 @@ describe("Slack question finalization", () => {
     const payload = {
       text: "Pick one",
       mediaUrl: "https://example.invalid/question-context.png",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -302,7 +318,7 @@ describe("Slack question finalization", () => {
     const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
     const payload = {
       text: "Pick one",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {

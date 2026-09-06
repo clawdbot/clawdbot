@@ -57,15 +57,21 @@ describe("Telegram live QA scenario gate", () => {
   let summaryPath: string;
 
   function writeSummary(status: string) {
+    const skipped = status === "skip" || status === "skipped";
+    const counts =
+      status === "pass" || status === "fail" || skipped
+        ? {
+            total: 1,
+            passed: status === "pass" ? 1 : 0,
+            failed: status === "fail" ? 1 : 0,
+            skipped: skipped ? 1 : 0,
+          }
+        : { total: 1 };
     writeFileSync(
       summaryPath,
       JSON.stringify({
-        counts: {
-          total: 1,
-          passed: status === "pass" ? 1 : 0,
-          failed: status === "fail" ? 1 : 0,
-          skipped: status === "skip" || status === "skipped" ? 1 : 0,
-        },
+        run: { status: "completed" },
+        counts,
         scenarios: [{ name: "channel-canary", status }],
       }),
       "utf8",
@@ -74,7 +80,8 @@ describe("Telegram live QA scenario gate", () => {
 
   beforeEach(() => {
     previousExitCode = process.exitCode;
-    process.exitCode = undefined;
+    // Bun does not clear a previous failure when assigned undefined.
+    process.exitCode = 0;
     vi.clearAllMocks();
     delete process.env[SUT_COMMAND_ENV];
     tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-qa-telegram-gate-"));
@@ -88,7 +95,7 @@ describe("Telegram live QA scenario gate", () => {
   });
 
   afterEach(() => {
-    process.exitCode = previousExitCode;
+    process.exitCode = previousExitCode ?? 0;
     rmSync(tempRoot, { force: true, recursive: true });
   });
 
@@ -122,7 +129,7 @@ describe("Telegram live QA scenario gate", () => {
       providerMode: "mock-openai",
     });
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("permits genuinely executed failed scenarios when failures are explicitly allowed", async () => {
@@ -133,7 +140,7 @@ describe("Telegram live QA scenario gate", () => {
       allowFailures: true,
     });
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it.each([
@@ -153,6 +160,7 @@ describe("Telegram live QA scenario gate", () => {
         writeFileSync(
           summaryPath,
           JSON.stringify({
+            run: { status: "completed" },
             counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
             scenarios: [],
           }),
@@ -169,7 +177,7 @@ describe("Telegram live QA scenario gate", () => {
           allowFailures: true,
         }),
       ).rejects.toThrow(expected);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     },
   );
 

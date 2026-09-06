@@ -26,6 +26,7 @@ export type DiscordInboundJob = {
   ingressSettlement?: {
     settle: () => Promise<void>;
     abandon: (error?: unknown) => Promise<void>;
+    cancel: () => Promise<void>;
   };
 };
 

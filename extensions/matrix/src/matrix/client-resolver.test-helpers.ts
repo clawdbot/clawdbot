@@ -46,7 +46,7 @@ export function createMockMatrixClient(): MatrixClient {
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
-    stopWithoutPersist: vi.fn(() => undefined),
+    stopWithoutPersist: vi.fn(async () => undefined),
   } as unknown as MatrixClient;
 }
 

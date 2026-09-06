@@ -10,11 +10,11 @@ import {
   resolveToolCallTargetPaths,
   type ToolCallKind,
 } from "./tool-call-view.ts";
+import { resolveToolDisplay } from "./tool-display.ts";
 
 type ToolGroupSummaryInput = {
   name: string;
   args?: unknown;
-  isError?: boolean;
 };
 
 type FileActivity = "read" | "edit" | "write" | "delete";
@@ -31,7 +31,6 @@ type GroupCounts = {
   fetches: number;
   otherNames: Set<string>;
   others: number;
-  failed: number;
 };
 
 function countFiles(counts: GroupCounts, activity: FileActivity, paths: readonly string[]): void {
@@ -75,11 +74,10 @@ function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
         break;
       default:
         counts.others += 1;
-        counts.otherNames.add(card.name);
+        // Same display label as the standalone row, so a collapsed rollup of
+        // e.g. heartbeat_respond reads "Heartbeat Respond" in both shapes.
+        counts.otherNames.add(resolveToolDisplay({ name: card.name, args: card.args }).label);
     }
-  }
-  if (card.isError) {
-    counts.failed += 1;
   }
 }
 
@@ -108,7 +106,6 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     fetches: 0,
     otherNames: new Set(),
     others: 0,
-    failed: 0,
   };
   for (const card of cards) {
     countCard(counts, card);
@@ -186,14 +183,5 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     );
   }
   const label = segments.join(", ");
-  const capitalized = label.charAt(0).toUpperCase() + label.slice(1);
-  if (counts.failed === 0) {
-    return capitalized;
-  }
-  const failureLabel = countLabel(
-    counts.failed,
-    "chat.toolCards.group.failedOne",
-    "chat.toolCards.group.failedMany",
-  );
-  return `${capitalized} · ${failureLabel}`;
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }

@@ -14,13 +14,13 @@ import {
 import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
-import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmGenerationProjectDirPrefix,
   resolvePluginNpmProjectDir,
 } from "./install-paths.js";
-import { loadPluginInstallRuntime } from "./install-shared.js";
+import { loadPluginInstallRuntime, resolveEffectiveInstallMode } from "./install-shared.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
@@ -35,32 +35,11 @@ const MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS = [
   "npm-shrinkwrap.json",
 ] as const;
 
-type NpmManagedOverrideCompatibility = {
-  npmAliases: boolean;
-  pnpmParentChildSelectors: boolean;
-};
-
-export function classifyNpmManagedOverrideCompatibilityError(result: {
+export function isNpmAliasOverrideCompatibilityError(result: {
   stdout: string;
   stderr: string;
-}): NpmManagedOverrideCompatibility | undefined {
-  const output = `${result.stderr}\n${result.stdout}`;
-  const selectorError =
-    output.includes("EINVALIDTAGNAME") ||
-    output.includes("EINVALIDPACKAGENAME") ||
-    output.includes("Override without name:");
-  const selectorFragments = [
-    ...output.matchAll(/"([^"]+)"/gu),
-    ...output.matchAll(/Override without name: ([^\r\n]+)/gu),
-  ].flatMap((match) => match.slice(1));
-  const compatibility = {
-    npmAliases: output.includes("Invalid comparator: npm:"),
-    pnpmParentChildSelectors:
-      selectorError && selectorFragments.some((fragment) => /[^ |@]>/u.test(fragment)),
-  };
-  return compatibility.npmAliases || compatibility.pnpmParentChildSelectors
-    ? compatibility
-    : undefined;
+}): boolean {
+  return `${result.stderr}\n${result.stdout}`.includes("Invalid comparator: npm:");
 }
 
 export async function rollbackManagedNpmPluginInstall(params: {
@@ -456,20 +435,6 @@ export async function cleanupManagedNpmPluginInstallRollbackSnapshot(params: {
   }
 }
 
-export function formatNpmCommandFailureOutput(result: SpawnResult): string {
-  const detail = result.stderr.trim() || result.stdout.trim();
-  if (detail) {
-    return detail;
-  }
-  if (result.code !== null) {
-    return `exit code ${result.code} (no output from npm)`;
-  }
-  if (result.signal) {
-    return `signal ${result.signal} (no output from npm)`;
-  }
-  return `termination ${result.termination} (no output from npm)`;
-}
-
 export function isManagedNpmProjectCorruptionInstallFailure(result: {
   stdout: string;
   stderr: string;
@@ -552,7 +517,7 @@ export async function listManagedNpmRootPackageNames(npmRoot: string): Promise<S
   return packageNames;
 }
 
-export function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
+function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
   return path.join(npmRoot, "node_modules", ...packageName.split("/"));
 }
 
@@ -569,7 +534,7 @@ function resolveManagedNpmRootGenerationKey(params: {
   ].join("\n");
 }
 
-export function resolveManagedNpmRootForInstall(params: {
+function resolveManagedNpmRootForInstall(params: {
   npmBaseDir: string;
   packageName: string;
   npmResolution: NpmSpecResolution;
@@ -591,7 +556,7 @@ export function resolveManagedNpmRootForInstall(params: {
   });
 }
 
-export function resolveManagedNpmInstallRoot(params: {
+function resolveManagedNpmInstallRoot(params: {
   npmBaseDir: string;
   packageName: string;
   npmResolution: NpmSpecResolution;
@@ -655,7 +620,7 @@ async function listManagedNpmPackageDirsForPackage(params: {
   return packageDirs;
 }
 
-export async function resolveManagedNpmGenerationUseForInstall(params: {
+async function resolveManagedNpmGenerationUseForInstall(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   npmBaseDir: string;
   packageName: string;
@@ -687,10 +652,44 @@ export async function resolveManagedNpmGenerationUseForInstall(params: {
       return "retained-install";
     }
   }
-  if (params.requestedMode === "update") {
-    return hasNonRetainedPackageDir ? "update" : "none";
-  }
-  return "none";
+  return generationUse;
+}
+
+export async function resolveManagedNpmInstallPlan(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  npmBaseDir: string;
+  packageName: string;
+  requestedMode: "install" | "update";
+  npmResolution: NpmSpecResolution;
+}): Promise<{
+  npmRoot: string;
+  installRoot: string;
+  targetMode: "install" | "update";
+  policyMode: "install" | "update";
+}> {
+  const generationUse = await resolveManagedNpmGenerationUseForInstall(params);
+  const npmRoot = resolveManagedNpmInstallRoot({
+    ...params,
+    useGeneration: generationUse !== "none",
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
+  const targetMode =
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+      ? "update"
+      : await resolveEffectiveInstallMode({
+          runtime: params.runtime,
+          requestedMode: params.requestedMode,
+          targetPath: installRoot,
+        });
+  // A new artifact directory can still update an installed plugin. Conversely,
+  // reactivating a retained tree requires fresh-install policy, even for --update.
+  const policyMode =
+    generationUse === "update"
+      ? "update"
+      : generationUse === "retained-install"
+        ? "install"
+        : targetMode;
+  return { npmRoot, installRoot, targetMode, policyMode };
 }
 
 export function resolveRequiredPlatformPackageNames(

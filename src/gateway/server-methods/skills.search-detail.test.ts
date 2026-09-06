@@ -25,6 +25,7 @@ vi.mock("../../skills/lifecycle/clawhub.js", () => ({
 }));
 
 vi.mock("../../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
   fetchClawHubSkillDetail: (...args: unknown[]) => fetchClawHubSkillDetailMock(...args),
   searchClawHubSkills: vi.fn(),
 }));

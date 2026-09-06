@@ -7,17 +7,20 @@ import {
   ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
   migrateOpenClawAgentDatabaseForMaintenance,
+  resolveOpenClawAgentSqlitePath,
+  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 
 /** Reclaim free pages from one agent session SQLite database. */
-export function compactDoctorSessionSqliteTarget(
+export async function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
-  options: { env?: NodeJS.ProcessEnv; migrateOlderSchema?: boolean } = {},
-): DoctorSessionSqliteCompactReport {
-  const sqlitePath = resolveTargetSqlitePath(target);
+  options: { env?: NodeJS.ProcessEnv; operation?: "import-finalize" } = {},
+): Promise<DoctorSessionSqliteCompactReport> {
+  const databaseOptions = resolveTargetSqliteOptions(target, options.env);
+  const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
   const stat = readSessionDatabaseStat(sqlitePath);
   if (!stat) {
@@ -48,40 +51,44 @@ export function compactDoctorSessionSqliteTarget(
       );
     }
   };
-  if (options.migrateOlderSchema) {
-    migrateOpenClawAgentDatabaseForMaintenance({
-      agentId: target.agentId,
-      pathname: sqlitePath,
-    });
-    requireQuarantineCleared();
-  }
-
-  const compact = compactDoctorSqliteFile({
-    afterSuccess: () => {
-      requireQuarantineCleared();
-      ensureOpenClawAgentDatabasePermissions(sqlitePath, {
-        agentId: target.agentId,
-        path: sqlitePath,
-      });
-    },
-    sqlitePath,
-    validateBeforeMutation: (database) =>
-      assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId: target.agentId,
+  const compactTarget = () => {
+    if (options.operation === "import-finalize") {
+      migrateOpenClawAgentDatabaseForMaintenance({
+        agentId: databaseOptions.agentId,
         pathname: sqlitePath,
-      }),
-  });
-  return {
-    dbSizeAfterBytes: compact.after.dbSizeBytes,
-    dbSizeBeforeBytes: compact.before.dbSizeBytes,
-    freelistAfterPages: compact.after.freelistPages,
-    freelistBeforePages: compact.before.freelistPages,
-    pageSizeBytes: compact.before.pageSizeBytes || compact.after.pageSizeBytes,
-    reclaimedBytes: compact.reclaimedBytes,
-    skipped: false,
-    walSizeAfterBytes: compact.after.walSizeBytes,
-    walSizeBeforeBytes: compact.before.walSizeBytes,
+      });
+      requireQuarantineCleared();
+    }
+
+    const compact = compactDoctorSqliteFile({
+      operation: options.operation,
+      afterSuccess: () => {
+        requireQuarantineCleared();
+        ensureOpenClawAgentDatabasePermissions(sqlitePath, databaseOptions);
+      },
+      sqlitePath,
+      validateBeforeMutation: (database) =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: databaseOptions.agentId,
+          pathname: sqlitePath,
+        }),
+    });
+    return {
+      dbSizeAfterBytes: compact.after.dbSizeBytes,
+      dbSizeBeforeBytes: compact.before.dbSizeBytes,
+      freelistAfterPages: compact.after.freelistPages,
+      freelistBeforePages: compact.before.freelistPages,
+      pageSizeBytes: compact.before.pageSizeBytes || compact.after.pageSizeBytes,
+      reclaimedBytes: compact.reclaimedBytes,
+      skipped: false,
+      walSizeAfterBytes: compact.after.walSizeBytes,
+      walSizeBeforeBytes: compact.before.walSizeBytes,
+    };
   };
+  // The maintenance lease lives in shared state; never forward the agent database path.
+  return options.operation === "import-finalize"
+    ? withAgentDatabaseMaintenanceLease({ env: databaseOptions.env }, async () => compactTarget())
+    : compactTarget();
 }
 
 function readSessionDatabaseStat(sqlitePath: string): fs.Stats | undefined {

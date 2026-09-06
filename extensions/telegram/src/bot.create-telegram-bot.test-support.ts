@@ -83,6 +83,8 @@ export function createTelegramNativeCommandTestDeps(
                   delivery.deliverWithProviderMessageSending(payload, {
                     ...info,
                     onPlatformSendDispatch: info.onPlatformSendDispatch ?? (async () => undefined),
+                    assertPlatformSendAuthorized:
+                      info.assertPlatformSendAuthorized ?? (() => undefined),
                   })
               : delivery.deliver,
           onError: delivery.onError,

@@ -16,9 +16,14 @@ export type ProviderCatalogContext = {
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  /** Normalized provider identities selected for this catalog owner; absent means the full catalog. */
+  providerIds?: readonly string[];
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+    profileId?: string;
+    /** Credential kind from this lookup when known; never infer it from another selection. */
+    mode?: "api_key" | "oauth" | "token";
   };
   resolveProviderAuth: (
     providerId?: string,

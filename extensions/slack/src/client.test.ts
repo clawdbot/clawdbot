@@ -13,7 +13,8 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   isDebugProxyGlobalFetchPatchInstalled: isDebugProxyGlobalFetchPatchInstalledMock,
 }));
 
-vi.mock("@slack/web-api", () => {
+vi.mock("@slack/web-api", async (importOriginal) => {
+  const { WebAPIRateLimitedError } = await importOriginal<typeof import("@slack/web-api")>();
   const WebClient = vi.fn(function WebClientMock(
     this: Record<string, unknown>,
     token: string,
@@ -22,7 +23,7 @@ vi.mock("@slack/web-api", () => {
     this.token = token;
     this.options = options;
   });
-  return { WebClient };
+  return { WebClient, WebAPIRateLimitedError };
 });
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
@@ -32,7 +33,6 @@ let createSlackLookupClient: typeof import("./client.js").createSlackLookupClien
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
-let clearSlackWriteClientCacheForTest: typeof import("./client.js").clearSlackWriteClientCacheForTest;
 let resolveSlackProxyDispatcher: typeof import("./client-options.js").resolveSlackProxyDispatcher;
 let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
 let resolveSlackWriteClientOptions: typeof import("./client.js").resolveSlackWriteClientOptions;
@@ -114,7 +114,6 @@ beforeAll(async () => {
     createSlackWriteClient,
     createSlackTokenCacheKey,
     getSlackWriteClient,
-    clearSlackWriteClientCacheForTest,
     resolveSlackWebClientOptions,
     resolveSlackWriteClientOptions,
     SLACK_DEFAULT_RETRY_OPTIONS,
@@ -125,7 +124,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   WebClient.mockClear();
-  clearSlackWriteClientCacheForTest();
   clearSlackApiUrlEnvForTest();
   isDebugProxyGlobalFetchPatchInstalledMock.mockReturnValue(false);
 });
@@ -311,7 +309,8 @@ describe("slack web client config", () => {
     createSlackWriteClient("xoxb-test", { timeout: 4321, fetch: customFetch });
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
-      fetch: customFetch,
+      fetch: expect.any(Function),
+      rejectRateLimitedCalls: true,
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       timeout: 4321,
     });
@@ -326,6 +325,8 @@ describe("slack web client config", () => {
       expect(second).toBe(first);
       expect(WebClient).toHaveBeenCalledTimes(1);
       expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
+        fetch: expect.any(Function),
+        rejectRateLimitedCalls: true,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       });
     } finally {
@@ -358,10 +359,14 @@ describe("slack web client config", () => {
       expect(second).not.toBe(first);
       expect(WebClient).toHaveBeenCalledTimes(2);
       expect(WebClient).toHaveBeenNthCalledWith(1, "xoxb-org", {
+        fetch: expect.any(Function),
+        rejectRateLimitedCalls: true,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
         teamId: "T1",
       });
       expect(WebClient).toHaveBeenNthCalledWith(2, "xoxb-org", {
+        fetch: expect.any(Function),
+        rejectRateLimitedCalls: true,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
         teamId: "T2",
       });
@@ -393,9 +398,9 @@ describe("slack web client config", () => {
     clearProxyEnvForTest();
     try {
       process.env.SLACK_API_URL = "http://127.0.0.1:49152/api/";
-      const first = getSlackWriteClient("xoxb-test");
+      const first = getSlackWriteClient("xoxb-env");
       process.env.SLACK_API_URL = "http://127.0.0.1:49153/api/";
-      const second = getSlackWriteClient("xoxb-test");
+      const second = getSlackWriteClient("xoxb-env");
 
       expect(second).not.toBe(first);
       expect(WebClient).toHaveBeenCalledTimes(2);
@@ -477,6 +482,50 @@ describe("slack proxy dispatcher", () => {
   it("attaches the shared fetch when no proxy env var is configured", () => {
     expect(resolveSlackProxyDispatcher()).toBeUndefined();
     expect(requireFetch(resolveSlackWebClientOptions())).toBeTypeOf("function");
+  });
+
+  it("omits explicit empty bodies from Slack SDK requests", async () => {
+    const globalFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    try {
+      const fetch = requireFetch(resolveSlackWebClientOptions());
+      await fetch("https://slack.com/api/auth.test", {
+        body: "",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      });
+
+      expect(globalFetch).toHaveBeenCalledWith("https://slack.com/api/auth.test", {
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      });
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
+  it("preserves nonempty Slack SDK request bodies", async () => {
+    const globalFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    try {
+      const fetch = requireFetch(resolveSlackWebClientOptions());
+      await fetch("https://slack.com/api/chat.postMessage", {
+        body: "channel=C123&text=hello",
+        method: "POST",
+      });
+
+      expect(globalFetch).toHaveBeenCalledWith(
+        "https://slack.com/api/chat.postMessage",
+        expect.objectContaining({
+          body: "channel=C123&text=hello",
+          method: "POST",
+        }),
+      );
+    } finally {
+      globalFetch.mockRestore();
+    }
   });
 
   it("preserves an explicitly provided fetch", async () => {

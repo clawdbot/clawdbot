@@ -22,8 +22,13 @@ export type GatewayRunOpts = {
   rawStream?: boolean;
   rawStreamPath?: unknown;
   dev?: boolean;
+  ambientChannels?: boolean;
   devAmbientChannels?: boolean;
   reset?: boolean;
+  /** Internal Windows Task Scheduler bridge; hidden from normal CLI help. */
+  taskSupervisor?: boolean;
+  /** Internal isolated update rehearsal, hidden from operator help. */
+  updateCanary?: boolean;
 };
 
 const GATEWAY_RUN_VALUE_KEYS = [
@@ -42,8 +47,11 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "tailscaleResetOnExit",
   "allowUnconfigured",
   "dev",
+  "ambientChannels",
   "devAmbientChannels",
   "reset",
+  "taskSupervisor",
+  "updateCanary",
   "force",
   "verbose",
   "cliBackendLogs",
