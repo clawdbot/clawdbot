@@ -279,4 +279,29 @@ describe("structured input compiler", () => {
       }),
     ).toMatchObject({ kind: "unsupported", message: expect.stringContaining("credentials") });
   });
+
+  it("compiles an empty form only when allowEmptyForm is set", () => {
+    const emptyProps: Record<string, unknown> = {};
+
+    const withoutFlag = compile(emptyProps, [], {
+      ...baseOptions,
+      allowEmptyForm: false,
+    });
+    expect(withoutFlag).toMatchObject({
+      kind: "unsupported",
+      message: expect.stringContaining("empty"),
+    });
+
+    const withFlag = compile(emptyProps, [], {
+      ...baseOptions,
+      allowEmptyForm: true,
+    });
+    expect(withFlag).toMatchObject({ kind: "ready" });
+    const plan = requirePlan(withFlag);
+    if (plan.kind !== "form") {
+      throw new Error("expected form plan");
+    }
+    expect(plan.fields).toEqual([]);
+    expect(decodeForm(withFlag, {})).toEqual({});
+  });
 });
