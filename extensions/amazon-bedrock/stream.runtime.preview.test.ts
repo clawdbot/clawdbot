@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { crc32 } from "node:zlib";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AssistantMessageEvent, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
@@ -150,7 +151,7 @@ it("bounds full-buffer preview work without losing raw deltas, progress, or term
   for (let offset = 0; offset < raw.length; offset += 256) {
     chunks.push(raw.slice(offset, offset + 256));
   }
-  const acknowledgments = chunks.map(() => Promise.withResolvers<void>());
+  const acknowledgments = chunks.map(() => createDeferred<void>());
   async function* frames(): AsyncGenerator<Frame> {
     yield startMessage;
     yield startTool(0);
@@ -234,7 +235,7 @@ it.for([false, true])(
       { index: 3, input: firstRaw.slice(1050) },
       { index: 8, input: secondRaw.slice(530) },
     ];
-    const gates = deltas.map(() => Promise.withResolvers<void>());
+    const gates = deltas.map(() => createDeferred<void>());
     async function* frames(): AsyncGenerator<Frame> {
       yield startMessage;
       yield startTool(3);
