@@ -4,15 +4,15 @@
 // starts. Without this, a yielded nested requester's settle wake runs as an
 // untracked sibling and the original requester never receives its completion.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 
-const mockGetLatestLiveSubagentRunByChildSessionKey = vi.fn();
+const mockGetLatestLiveSubagentRunByChildSessionKey = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../agents/subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: mockGetLatestLiveSubagentRunByChildSessionKey,
 }));
 
-import { resolveGatewayAgentTaskTrackingMode } from "./agent-task-tracking.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+const { resolveGatewayAgentTaskTrackingMode } = await import("./agent-task-tracking.js");
 
 const SESSION_KEY = "agent:main:subagent:middle";
 
@@ -76,14 +76,16 @@ describe("resolveGatewayAgentTaskTrackingMode — inter_session paused-run adopt
     });
 
     expect(mockGetLatestLiveSubagentRunByChildSessionKey).toHaveBeenCalledTimes(1);
-    const filterFn = mockGetLatestLiveSubagentRunByChildSessionKey.mock.calls[0][1];
+    const filterFn = mockGetLatestLiveSubagentRunByChildSessionKey.mock.calls[0]![1] as (entry: {
+      pauseReason?: string;
+    }) => boolean;
     expect(filterFn).toBeTypeOf("function");
     expect(filterFn({ pauseReason: "sessions_yield" })).toBe(true);
     expect(filterFn({ pauseReason: undefined })).toBe(false);
     expect(filterFn({ pauseReason: "manual_pause" })).toBe(false);
   });
 
-  it("returns none for inter_session when paused run exists but client has plugin_subagent tracking (delegates to existing branch)", () => {
+  it("returns plugin_subagent for inter_session with paused run regardless of client tracking mode", () => {
     // When agentRunTracking is already plugin_subagent, the inter_session check
     // still takes precedence: a paused run must be adopted, not registered as
     // a new sibling under the plugin's own tracking.
@@ -99,9 +101,6 @@ describe("resolveGatewayAgentTaskTrackingMode — inter_session paused-run adopt
       inputProvenance: interSessionProvenance,
     });
 
-    // The inter_session paused-run branch returns plugin_subagent directly so
-    // admission runs adoptPausedSubagentRunForFollowUp regardless of the
-    // client's own tracking mode.
     expect(mode).toBe("plugin_subagent");
   });
 
