@@ -322,6 +322,7 @@ describe("chat header session menu", () => {
     menu.querySelector<HTMLButtonElement>(".session-menu__icon-remove")?.click();
     for (const value of [
       "copy-session-link",
+      "copy-session-preview-link",
       "copy-markdown",
       "copy-session-id",
       "open-new-tab",
@@ -340,6 +341,7 @@ describe("chat header session menu", () => {
       [{ kind: "set-color", color: "purple" }],
       [{ kind: "reset-appearance" }],
       [{ kind: "copy-session-link" }],
+      [{ kind: "copy-session-preview-link" }],
       [{ kind: "copy-markdown" }],
       [{ kind: "copy-session-id" }],
       [{ kind: "open-new-tab" }],
@@ -549,7 +551,7 @@ describe("chat header session menu", () => {
     await menu.updateComplete;
     expect(
       Array.from(menu.querySelectorAll(":scope > wa-dropdown > wa-dropdown-item")).map(itemLabel),
-    ).toEqual(["Back", "Session link", "Conversation as Markdown", "Session ID"]);
+    ).toEqual(["Back", "Session link", "Preview link", "Conversation as Markdown", "Session ID"]);
     select(menu, "compact:back");
     await menu.updateComplete;
     select(menu, "compact:open-open-in");
@@ -689,6 +691,7 @@ describe("chat header session menu", () => {
     expect(item(menu, "Conversation as Markdown").disabled).toBe(true);
     for (const kind of [
       "copy-session-link",
+      "copy-session-preview-link",
       "copy-markdown",
       "open-new-tab",
       "open-new-window",

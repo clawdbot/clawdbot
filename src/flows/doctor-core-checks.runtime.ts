@@ -268,7 +268,7 @@ export async function collectGatewayDaemonFindings(
       fixHint: state.runtime.detail ?? "Log into a GUI session, then rerun doctor.",
     });
   }
-  if (state.runtime?.missingSupervision || state.runtime?.missingUnit) {
+  if (state.runtime?.missingUnit) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",

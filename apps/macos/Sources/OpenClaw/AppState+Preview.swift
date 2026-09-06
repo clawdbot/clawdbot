@@ -7,7 +7,6 @@ extension AppState {
         state.launchAtLogin = true
         state.onboardingSeen = true
         state.debugPaneEnabled = true
-        state.nativeSettingsPanesEnabled = true
         state.swabbleEnabled = true
         state.swabbleTriggerWords = ["Claude", "Computer", "Jarvis"]
         state.voiceWakeTriggerChime = .system(name: "Glass")

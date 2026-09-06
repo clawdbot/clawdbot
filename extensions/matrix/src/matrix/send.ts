@@ -16,6 +16,7 @@ import {
 import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
+import { buildMatrixMessageRelation, resolveMatrixReplyToEventId } from "./relations.js";
 import type { MatrixClient } from "./sdk.js";
 import { chunkMatrixText, prepareMatrixSingleText } from "./send/chunking.js";
 import {
@@ -24,9 +25,7 @@ import {
   withResolvedMatrixSendClient,
 } from "./send/client.js";
 import {
-  buildReplyRelation,
   buildTextContent,
-  buildThreadRelation,
   diffMatrixMentions,
   enrichMatrixFormattedContent,
   extractMatrixMentions,
@@ -234,9 +233,7 @@ export async function sendMessageMatrix(
         });
         const { chunks, convertedText, preparedBody, fitsInSingleEvent, tableMode } = preparedText;
         const singleEventBody = fitsInSingleEvent ? preparedBody : undefined;
-        const relation = threadId
-          ? buildThreadRelation(threadId, opts.replyToId)
-          : buildReplyRelation(opts.replyToId);
+        const relation = buildMatrixMessageRelation({ ...opts, threadId });
         let pendingExtraContent = opts.extraContent;
         const events: Omit<MatrixPreparedEvent, "transactionId">[] = [];
         const prepareContent = (
@@ -387,7 +384,7 @@ export async function sendMessageMatrix(
           continue;
         }
         // Media captions and text follow-ups can intentionally have different reply relations.
-        const eventReplyToId = planned.content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+        const eventReplyToId = resolveMatrixReplyToEventId(planned.content);
         const acceptedEvent: MatrixReceiptEvent = {
           messageId: eventId,
           kind: planned.receiptKind,
@@ -453,7 +450,7 @@ export async function sendPollMatrix(
       });
       const threadId = normalizeThreadId(opts.threadId);
       const pollPayload: Record<string, unknown> = threadId
-        ? { ...pollContent, "m.relates_to": buildThreadRelation(threadId) }
+        ? { ...pollContent, "m.relates_to": buildMatrixMessageRelation({ threadId }) }
         : { ...pollContent };
       pollPayload["m.mentions"] = mentions;
       const eventId = await client.sendEvent(roomId, M_POLL_START, pollPayload);
@@ -554,9 +551,7 @@ export async function sendSingleTextMessageMatrix(
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
       const normalizedThreadId = normalizeThreadId(opts.threadId);
-      const relation = normalizedThreadId
-        ? buildThreadRelation(normalizedThreadId, opts.replyToId)
-        : buildReplyRelation(opts.replyToId);
+      const relation = buildMatrixMessageRelation({ ...opts, threadId: normalizedThreadId });
       const content = withMatrixExtraContentFields(
         buildTextContent(convertedText, relation, {
           msgtype: opts.msgtype,
@@ -577,7 +572,7 @@ export async function sendSingleTextMessageMatrix(
         (content as Record<string, unknown>)[MSC4357_LIVE_KEY] = {};
       }
       const eventId = await client.sendMessage(resolvedRoom, content);
-      const replyToId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+      const replyToId = resolveMatrixReplyToEventId(content);
       return {
         messageId: eventId ?? "unknown",
         roomId: resolvedRoom,

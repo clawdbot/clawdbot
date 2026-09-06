@@ -116,6 +116,10 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+When the index identity reports an OpenClaw chunking-implementation change,
+a normal or CLI search rebuilds it before returning results. The rebuild uses
+the agent's current embedding settings; status inspection remains read-only.
+
 Search-triggered maintenance applies pending memory and session changes
 incrementally while searches remain available. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.

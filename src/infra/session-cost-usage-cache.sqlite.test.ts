@@ -80,7 +80,7 @@ describe("session cost usage SQLite cache", () => {
       vi.spyOn(process, "kill").mockImplementation(() => true);
       vi.spyOn(fs, "readFileSync").mockImplementation((filePath) => {
         expect(String(filePath)).toBe(`/proc/${zombiePid}/status`);
-        return `Name:\tworker\nState:\tZ (zombie)\nPid:\t${zombiePid}\n`;
+        return `Name:\tworker\nState:\tZ (zombie)\nPid:\t${zombiePid}\nThreads:\t1\n`;
       });
 
       expect(isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);

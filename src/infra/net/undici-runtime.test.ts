@@ -1,5 +1,3 @@
-// Undici runtime tests cover managed proxy TLS, IP-SNI stripping, and proxy
-// client factory installation.
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -41,30 +39,21 @@ class MockClient extends EventEmitter {
 }
 
 class MockAgent extends EventEmitter {
-  readonly __testStub = true;
-
   constructor(public readonly options?: Record<string, unknown>) {
     super();
   }
 
-  createOriginDispatcher(options: Record<string, unknown>, emitConnect = true): EventEmitter {
+  createOriginDispatcher(options: Record<string, unknown>): EventEmitter {
     const factory = this.options?.factory;
-    const dispatcher =
-      typeof factory === "function"
-        ? (factory(new URL("https://service.test"), options) as EventEmitter)
-        : options.connections === 1
-          ? new MockClient(new URL("https://service.test"), options)
-          : new MockPool(new URL("https://service.test"), options);
-    if (emitConnect) {
-      this.emit("connect", new URL("https://service.test"), [this, dispatcher]);
-    }
-    return dispatcher;
+    return typeof factory === "function"
+      ? (factory(new URL("https://service.test"), options) as EventEmitter)
+      : options.connections === 1
+        ? new MockClient(new URL("https://service.test"), options)
+        : new MockPool(new URL("https://service.test"), options);
   }
 }
 
 class MockPool extends EventEmitter {
-  readonly __testStub = true;
-
   constructor(
     public readonly origin: unknown,
     public readonly options: unknown,
@@ -72,18 +61,9 @@ class MockPool extends EventEmitter {
     super();
     poolCtor(origin, options);
   }
-
-  createClient(): EventEmitter {
-    const options = expectOptionsRecord(this.options, "expected Pool options object");
-    const factory = options.factory;
-    return typeof factory === "function"
-      ? (factory(this.origin, options) as EventEmitter)
-      : new MockClient(this.origin, options);
-  }
 }
 
 class MockEnvHttpProxyAgent extends EventEmitter {
-  readonly __testStub = true;
   readonly [DESTINATION_AGENT]: MockAgent;
 
   constructor(public readonly options: unknown) {
@@ -96,7 +76,6 @@ class MockEnvHttpProxyAgent extends EventEmitter {
 
 class MockProxyAgent extends EventEmitter {
   static latest: MockProxyAgent | undefined;
-  readonly __testStub = true;
   readonly [DESTINATION_AGENT]: MockAgent;
 
   constructor(public readonly options: unknown) {
@@ -158,7 +137,7 @@ describe("undici dispatcher errors", () => {
       name: "direct agent client",
       createClient: () => {
         const agent = createHttp1Agent() as unknown as MockAgent;
-        return agent.createOriginDispatcher({ connections: 1 }, false);
+        return agent.createOriginDispatcher({ connections: 1 });
       },
     },
     {
@@ -167,7 +146,7 @@ describe("undici dispatcher errors", () => {
         const agent = createHttp1ProxyAgent({
           uri: "http://proxy.test:8080",
         }) as unknown as MockProxyAgent;
-        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 }, false);
+        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 });
       },
     },
     {
@@ -180,7 +159,7 @@ describe("undici dispatcher errors", () => {
         if (!agent) {
           throw new Error("expected environment proxy transport");
         }
-        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 }, false);
+        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 });
       },
     },
   ])("handles an internal error from $name before connect", ({ createClient }) => {
@@ -243,57 +222,30 @@ describe("createHttp1ProxyAgent", () => {
       stopActiveManagedProxyRegistration(registration);
     }
   });
-
-  it("strips invalid IP SNI when undici connects to an HTTPS proxy by IP", () => {
-    installUndiciRuntimeDeps();
-
-    createHttp1ProxyAgent({ uri: "https://127.0.0.1:8443" });
-    invokeProxyClientFactory(requireProxyAgentOptions());
-    invokeClientConnect(requireClientOptions(), "127.0.0.1");
-
-    expect(proxyConnect).toHaveBeenCalledWith(
-      expect.not.objectContaining({ servername: "127.0.0.1" }),
-      expect.any(Function),
-    );
-  });
-
-  it("strips invalid bracketed IPv6 SNI when undici connects to an HTTPS proxy by IP", () => {
-    installUndiciRuntimeDeps();
-
-    createHttp1ProxyAgent({ uri: "https://[::1]:8443" });
-    invokeProxyClientFactory(requireProxyAgentOptions());
-    invokeClientConnect(requireClientOptions(), "[::1]");
-
-    expect(proxyConnect).toHaveBeenCalledWith(
-      expect.not.objectContaining({ servername: "[::1]" }),
-      expect.any(Function),
-    );
-  });
-
-  it("preserves DNS SNI when undici connects to an HTTPS proxy by hostname", () => {
-    installUndiciRuntimeDeps();
-
-    createHttp1ProxyAgent({ uri: "https://proxy.example:8443" });
-    invokeProxyClientFactory(requireProxyAgentOptions());
-    invokeClientConnect(requireClientOptions(), "proxy.example");
-
-    expect(proxyConnect).toHaveBeenCalledWith(
-      expect.objectContaining({ servername: "proxy.example" }),
-      expect.any(Function),
-    );
-  });
 });
 
-describe("createHttp1EnvHttpProxyAgent", () => {
-  it("installs the IP-safe proxy client factory for env proxy dispatchers", () => {
+describe("proxy SNI policy", () => {
+  it.each([
+    { mode: "fixed", servername: "127.0.0.1", preserve: false },
+    { mode: "fixed", servername: "[::1]", preserve: false },
+    { mode: "fixed", servername: "proxy.example", preserve: true },
+    { mode: "environment", servername: "127.0.0.1", preserve: false },
+  ])("handles $servername through the $mode proxy", ({ mode, servername, preserve }) => {
     installUndiciRuntimeDeps();
 
-    createHttp1EnvHttpProxyAgent({ httpsProxy: "https://127.0.0.1:8443" });
+    const uri = `https://${servername}:8443`;
+    if (mode === "environment") {
+      createHttp1EnvHttpProxyAgent({ httpsProxy: uri });
+    } else {
+      createHttp1ProxyAgent({ uri });
+    }
     invokeProxyClientFactory(requireProxyAgentOptions());
-    invokeClientConnect(requireClientOptions(), "127.0.0.1");
+    invokeClientConnect(requireClientOptions(), servername);
 
     expect(proxyConnect).toHaveBeenCalledWith(
-      expect.not.objectContaining({ servername: "127.0.0.1" }),
+      preserve
+        ? expect.objectContaining({ servername })
+        : expect.not.objectContaining({ servername }),
       expect.any(Function),
     );
   });

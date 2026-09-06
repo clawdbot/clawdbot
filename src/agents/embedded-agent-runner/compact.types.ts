@@ -20,7 +20,10 @@ import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/typ
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
-export type CompactEmbeddedAgentSessionParams = {
+export type CompactEmbeddedAgentSessionParams = Pick<
+  import("./run/params.js").RunEmbeddedAgentParams,
+  "requireWorkspaceOnly" | "requireWritableSandbox"
+> & {
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   sessionId: string;

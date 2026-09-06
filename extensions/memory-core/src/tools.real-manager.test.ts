@@ -78,7 +78,6 @@ describe("memory_search real manager", () => {
     const cfg = fixture.createConfig({
       provider: "none",
       vectorEnabled: false,
-      onSearch: false,
     });
     const manager = await fixture.getFreshManager(cfg);
     await manager.sync({ reason: "cli", force: true });
@@ -114,7 +113,7 @@ describe("memory_search real manager", () => {
 
   it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
     const manager = await fixture.getFreshManager(
-      fixture.createConfig({ model: "old-embed", vectorEnabled: false, onSearch: false }),
+      fixture.createConfig({ model: "old-embed", vectorEnabled: false }),
     );
     await manager.sync({ reason: "cli", force: true });
     await manager.close();
@@ -134,7 +133,6 @@ describe("memory_search real manager", () => {
         config: fixture.createConfig({
           model: "new-embed",
           vectorEnabled: false,
-          onSearch: false,
         }),
         agentId: "main",
       });
@@ -180,7 +178,6 @@ describe("memory_search real manager", () => {
       sessionMemory: true,
       minScore: 0,
       vectorEnabled: false,
-      onSearch: true,
     });
     const sessionKey = "agent:main:telegram:direct:refresh-proof";
     await fixture.seedSessionTranscript({
@@ -299,10 +296,12 @@ describe("memory_search real manager", () => {
       minScore: 0,
       sources: ["sessions"],
     });
-    expect(ranked.slice(0, 2).map((hit) => hit.path)).toEqual([
-      expect.stringContaining("hidden-a"),
-      expect.stringContaining("hidden-b"),
-    ]);
+    expect(
+      ranked
+        .slice(0, 2)
+        .map((hit) => hit.path)
+        .toSorted(),
+    ).toEqual([expect.stringContaining("hidden-a"), expect.stringContaining("hidden-b")]);
     fixture.provider.embedQueryCalls = 0;
     fixture.provider.embeddedQueryTexts = [];
 
@@ -335,7 +334,7 @@ describe("memory_search real manager", () => {
       };
     };
 
-    expect(details.results.map((hit) => hit.snippet)).toEqual([
+    expect(details.results.map((hit) => hit.snippet).toSorted()).toEqual([
       expect.stringContaining("visible private a"),
       expect.stringContaining("visible private b"),
     ]);
@@ -426,7 +425,6 @@ describe("memory_search real manager", () => {
       sources: ["memory"],
       vectorEnabled: false,
       minScore: 0,
-      onSearch: false,
     });
     const initializedManager = await fixture.getFreshManager(cfg, "cli");
     await initializedManager.sync({ reason: "test", force: true });

@@ -17,7 +17,12 @@ const suite = createControlUiE2eSuite({
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("retries an initial catalog failure and restores recovered models", async () => {
+  it.each([
+    "initial catalog failure",
+    "config.changed",
+    "chat.metadata.changed",
+    "reconnect",
+  ] as const)("refreshes the catalog after %s", async (trigger) => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -35,6 +40,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         await page.clock.install();
+        const initiallyUnavailable = trigger === "initial catalog failure";
         const config = {
           agents: { defaults: { model: "openai/gpt-5.5" } },
           ui: { prefs: { themeMode: "dark" } },
@@ -51,12 +57,18 @@ suite.define(() => {
               valid: true,
             },
             "config.patch": { ok: true },
-            "models.list": {
-              __mockError: {
-                code: "UNAVAILABLE",
-                message: "Model catalog temporarily unavailable",
-              },
-            },
+            "models.list": initiallyUnavailable
+              ? {
+                  __mockError: {
+                    code: "UNAVAILABLE",
+                    message: "Model catalog temporarily unavailable",
+                  },
+                }
+              : {
+                  models: [
+                    { available: true, id: "old-model", name: "Old model", provider: "openai" },
+                  ],
+                },
           },
         });
 
@@ -70,6 +82,14 @@ suite.define(() => {
         const picker = section.locator("wa-select.model-picker__select");
         await picker.waitFor();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+        if (initiallyUnavailable) {
+          await section.getByText("Explicit model catalog unavailable", { exact: true }).waitFor();
+        } else {
+          await picker
+            .locator("wa-option")
+            .filter({ hasText: "Old model" })
+            .waitFor({ state: "attached" });
+        }
         await pauseVirtualClock(page);
         const initialSystemInfoRequestCount = (await gateway.getRequests("system.info")).length;
         expect(initialSystemInfoRequestCount).toBeGreaterThan(0);
@@ -91,7 +111,7 @@ suite.define(() => {
           // The settings section exceeds the viewport; keep its current field scroll.
           await picker.scrollIntoViewIfNeeded();
           await writeFile(
-            path.join(suite.artifactDir, "01-initial-failure.png"),
+            path.join(suite.artifactDir, "01-before-refresh.png"),
             await takeControlUiViewportScreenshot(page, section, [picker]),
           );
           await page.evaluate(() => {
@@ -128,6 +148,11 @@ suite.define(() => {
           },
         ];
         await gateway.setMethodResponse("models.list", { models: recoveredModels });
+        if (trigger === "reconnect") {
+          await gateway.closeLatest(1006, "synthetic transient disconnect");
+        } else if (!initiallyUnavailable) {
+          await gateway.emitGatewayEvent(trigger, { agentId: "main" });
+        }
         await page.clock.runFor(10_000);
         await expect
           .poll(async () => (await gateway.getRequests("system.info")).length)
@@ -135,6 +160,9 @@ suite.define(() => {
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
         const finalSystemInfoRequestCount = (await gateway.getRequests("system.info")).length;
         const finalRequestCount = (await gateway.getRequests("models.list")).length;
+        expect((await gateway.getRequests("models.list"))[1]?.params).toEqual(
+          initialRequest?.params,
+        );
         const finalWarningVisible = await section
           .getByText("Explicit model catalog unavailable", { exact: true })
           .isVisible()
@@ -157,8 +185,12 @@ suite.define(() => {
           });
         }
 
-        expect(initialWarningVisible).toBe(true);
-        expect(initialOptions).toEqual(["Auto (provider default)", "Disabled"]);
+        expect(initialWarningVisible).toBe(initiallyUnavailable);
+        expect(initialOptions).toEqual([
+          "Auto (provider default)",
+          "Disabled",
+          ...(initiallyUnavailable ? [] : ["Old model"]),
+        ]);
         expect(finalSystemInfoRequestCount).toBe(initialSystemInfoRequestCount + 1);
         expect(finalRequestCount).toBe(2);
         expect(finalWarningVisible).toBe(false);

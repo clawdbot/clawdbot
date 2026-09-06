@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 describe("queued completion handoff", () => {
-  it.each(["delivered", "source retired", "execution timeout", "delivery deadline"] as const)(
+  it.each(["delivered", "source retired", "long execution", "delivery deadline"] as const)(
     "keeps an accepted busy-parent completion pending until execution: %s",
     async (outcome) => {
       vi.useFakeTimers();
@@ -182,14 +182,11 @@ describe("queued completion handoff", () => {
         }
         sourceAllowed = outcome !== "source retired";
         parentSettled.resolve();
-        if (outcome === "execution timeout") {
+        if (outcome === "long execution") {
           await executionStarted.promise;
           await vi.advanceTimersByTimeAsync(120_001);
-          expect(await delivery).toMatchObject({
-            delivered: false,
-            error: "gateway request timeout for agent",
-          });
-          return;
+          expect(finished).toBe(false);
+          expect((await accepted.promise).signal?.aborted).toBe(false);
         }
         executionSettled.resolve();
         expect(await delivery).toMatchObject(

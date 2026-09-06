@@ -274,8 +274,9 @@ function renderLibraryEditor(library: SkillLibraryController) {
           ><input
             class="settings-input"
             name="library-slug"
+            title=${t("skillLibrary.slugHelp")}
             required
-            pattern="[a-z0-9][a-z0-9-]{0,62}"
+            pattern="[a-z0-9][a-z0-9\\-]{0,62}"
             maxlength="63"
             ?disabled=${disabled}
             .value=${live(draft.slug)}
@@ -580,7 +581,8 @@ function renderLibraryImport(library: SkillLibraryController) {
             class="settings-input"
             required
             name="library-import-slug"
-            pattern="[a-z0-9][a-z0-9-]{0,62}"
+            title=${t("skillLibrary.slugHelp")}
+            pattern="[a-z0-9][a-z0-9\\-]{0,62}"
             .value=${library.importSlug}
             ?disabled=${library.busy}
             @input=${(event: Event) => {

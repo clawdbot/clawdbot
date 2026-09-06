@@ -320,6 +320,30 @@ describe("matchesNoProxy", () => {
       expected: true,
     },
     {
+      name: "matches zero-valued IPv4 addresses",
+      url: "http://0.0.0.0/",
+      env: { NO_PROXY: "0.*" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches high-bit IPv4 wildcard octets",
+      url: "http://255.128.64.32/",
+      env: { NO_PROXY: "255.*.64.32" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches IPv4 CIDR with a zero-length prefix",
+      url: "http://255.128.64.32/",
+      env: { NO_PROXY: "0.0.0.0/0" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches IPv4 CIDR with a full-length prefix",
+      url: "http://255.128.64.32/",
+      env: { NO_PROXY: "255.128.64.32/32" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
       name: "matches IPv4 wildcard octet entries",
       url: "http://100.64.0.3:8990/v1/messages",
       env: { NO_PROXY: "100.64.*" } as NodeJS.ProcessEnv,
@@ -355,6 +379,23 @@ describe("matchesNoProxy", () => {
 });
 
 describe("shouldUseEnvHttpProxyForUrl", () => {
+  it.each([
+    ["https://api.example./v1", "example", false],
+    ["https://api.example/v1", "example.", false],
+    ["https://api.example.:8443/v1", "*.example.:8443", false],
+    ["https://api.example.:8443/v1", "*.example.:443", true],
+    ["https://notexample./v1", "example.", true],
+    ["https://api.example../v1", "example", true],
+    ["https://api.example./v1", ".", true],
+  ])("keeps NO_PROXY DNS-dot routing aligned for %s and %s", (url, noProxy, expected) => {
+    expect(
+      shouldUseEnvHttpProxyForUrl(url, {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: noProxy,
+      }),
+    ).toBe(expected);
+  });
+
   it.each([
     {
       name: "uses HTTPS_PROXY for https URLs",

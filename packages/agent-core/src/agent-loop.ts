@@ -1184,7 +1184,7 @@ async function prepareToolCallExecution(
     return {
       kind: "immediate",
       outcome: {
-        result: createErrorToolResult(coerceErrorMessage(error)),
+        result: createToolExecutionErrorResult(error),
         isError: true,
         executionStarted: false,
       },
@@ -1237,7 +1237,7 @@ async function prepareToolCallExecution(
               throw implementationStartError.error;
             }
             return {
-              result: createErrorToolResult(coerceErrorMessage(error)),
+              result: createToolExecutionErrorResult(error),
               isError: true,
               executionStarted,
               ...(executionStarted && signal?.aborted && error === signal.reason
@@ -1298,7 +1298,7 @@ async function prepareToolCallExecution(
               executionStarted: false,
             }
           : {
-              result: createErrorToolResult(coerceErrorMessage(internalPreparation.outcome.error)),
+              result: createToolExecutionErrorResult(internalPreparation.outcome.error),
               isError: true,
               executionStarted: false,
             },
@@ -1548,6 +1548,13 @@ async function completeUnstartedToolCall(
   );
   await emitToolExecutionEnd(finalized, batch.emit);
   return finalized;
+}
+
+function createToolExecutionErrorResult(error: unknown): AgentToolResult<unknown> {
+  const result = createErrorToolResult(coerceErrorMessage(error));
+  return typeof error === "object" && error !== null
+    ? copyInternalToolResultState(error, result)
+    : result;
 }
 
 function createErrorToolResult(message: string, details: unknown = {}): AgentToolResult<unknown> {

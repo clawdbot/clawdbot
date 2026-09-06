@@ -473,7 +473,7 @@ describe("remote testbox gate delegation", () => {
         "--idle-timeout 90m --ttl 240m --timing-json " +
         "--label pr-424242-gates " +
         "-- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 " +
-        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test",
+        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test",
     );
   });
 
