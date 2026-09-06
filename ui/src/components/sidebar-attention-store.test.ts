@@ -142,6 +142,58 @@ describe("sidebar attention source publication", () => {
     },
   );
 
+  it.each(["settled", "pending"] as const)(
+    "defers hidden cron inventory and catches up once after a %s visible read",
+    async (initial) => {
+      let visibility: DocumentVisibilityState = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+      vi.spyOn(Date, "now").mockReturnValue(120_000);
+      const pendingList = deferred<CronJobsListResult>();
+      let listCalls = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          listCalls += 1;
+          return initial === "pending" && listCalls === 1
+            ? pendingList.promise
+            : cronPage(listCalls === 1 ? "previous" : "current");
+        }
+        return method === "cron.status"
+          ? { enabled: true, triggersEnabled: true, jobs: 1 }
+          : { ts: 120_000, providers: [] };
+      });
+      const harness = createGatewayHarness(mockClient(request));
+      store = createStore(harness.gateway);
+      store.activate(SidebarAttentionStoreController);
+      if (initial === "settled") {
+        await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "previous" }]));
+      } else {
+        // A visible invalidation queued behind the pending pair also retires on hide.
+        harness.emitEvent("cron", {});
+      }
+      visibility = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      for (let index = 0; index < 20; index++) {
+        harness.emitEvent("cron", {});
+      }
+      pendingList.resolve(cronPage("previous"));
+      await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "previous" }]));
+      for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
+        expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(1);
+      }
+
+      visibility = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "current" }]));
+      for (const method of ["cron.list", "cron.status"]) {
+        expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
+      }
+      expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
+        1,
+      );
+    },
+  );
+
   it("publishes progress but retires dismissals only after a fresh complete inventory", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const pages = Array.from({ length: 5 }, () => deferred<CronJobsListResult>());
