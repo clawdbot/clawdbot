@@ -19,8 +19,16 @@ import { isScheduledTerminalOneShotRetry } from "./timer-trigger.js";
  */
 export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): boolean {
   const lastRunAtMs = job.state.lastRunAtMs;
-  // Only replay a "missed slot" when there is concrete run history.
-  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
+  const nextRunAtMs = job.state.nextRunAtMs;
+  // Pacing supersedes intervening natural slots. Both startup admission and
+  // backoff repair must retain that occurrence instead of inventing a miss.
+  if (
+    typeof lastRunAtMs !== "number" ||
+    !Number.isFinite(lastRunAtMs) ||
+    (hasScheduledNextRunAtMs(nextRunAtMs) &&
+      job.state.pacedNextRunAtMs === nextRunAtMs &&
+      nowMs < nextRunAtMs)
+  ) {
     return false;
   }
   let previousRunAtMs: number | undefined;
