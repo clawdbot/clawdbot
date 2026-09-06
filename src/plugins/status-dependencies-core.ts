@@ -195,6 +195,31 @@ export function buildPluginDependencyStatus(params: {
   };
 }
 
+/** Checks managed required dependencies, using the host audit for the OpenClaw SDK link. */
+export async function findMissingRequiredPluginDependencies(params: {
+  rootDir: string;
+  dependencyRootDir: string;
+  dependencies?: PluginDependencySpecMap;
+}): Promise<string[]> {
+  const status = buildPluginDependencyStatus(params);
+  if (!status.dependencies.some((entry) => entry.name === "openclaw")) {
+    return status.missing;
+  }
+
+  const rootDir = safeRealpathSync(params.rootDir);
+  const boundaryRoot = safeRealpathSync(params.dependencyRootDir);
+  let hostInstalled = false;
+  if (rootDir && boundaryRoot && isPathInside(boundaryRoot, rootDir)) {
+    // The canonical host may live outside this project. Audit its identity even
+    // when an in-project copy would satisfy the ordinary dependency lookup.
+    const { auditOpenClawPeerDependencyLink } = await import("./plugin-peer-link.js");
+    hostInstalled = (await auditOpenClawPeerDependencyLink({ packageDir: rootDir })) === null;
+  }
+  return status.dependencies
+    .filter((entry) => (entry.name === "openclaw" ? !hostInstalled : !entry.installed))
+    .map((entry) => entry.name);
+}
+
 /** Projects missing required dependencies consistently across cold plugin status surfaces. */
 export function projectPluginDependencyHealth<T extends PluginDependencyHealthRegistry>(
   registry: T,
