@@ -29,6 +29,43 @@ function expectSchemaIssue(
   }
 }
 
+describe("Feishu custom domains", () => {
+  it.each([
+    ["feishu", true],
+    ["lark", true],
+    ["https://tenant.example", true],
+    ["HTTPS://tenant.example", true],
+    ["HtTpS://Tenant.Example:8443/Api/Base%2FKeep/", true],
+    ["HTTPS://fixture-user@tenant.example/base", true],
+    ["HTTPS://tenant.example/base?tenant=Keep#Fragment", true],
+    ["HTTPS://tenant.example/base?", true],
+    ["HTTPS://tenant.example/base#", true],
+    ["http://tenant.example", false],
+    ["HTTP://tenant.example", false],
+    ["https://[", false],
+    ["HTTPS://[", false],
+    ["tenant.example/base", false],
+  ])("validates root and account domain %s consistently", (domain, accepted) => {
+    for (const value of [{ domain }, { accounts: { work: { domain } } }]) {
+      const parsed = FeishuConfigSchema.safeParse(value);
+      expect(parsed.success, "Zod validation").toBe(accepted);
+      if (parsed.success) {
+        expect(parsed.data).toMatchObject(value);
+      }
+      const exported = validateJsonSchemaValue({
+        schema: FeishuChannelConfigSchema.schema,
+        cacheKey: "feishu-domain-test",
+        value,
+        applyDefaults: true,
+      });
+      expect(exported.ok, "exported JSON Schema validation").toBe(accepted);
+      if (exported.ok) {
+        expect(exported.value).toMatchObject(value);
+      }
+    }
+  });
+});
+
 describe("FeishuConfigSchema webhook validation", () => {
   it("applies top-level defaults", () => {
     const result = FeishuConfigSchema.parse({});

@@ -221,13 +221,18 @@ suite.define(() => {
             }
           }
           await page.setViewportSize({ width: 390, height: 844 });
-          expect(
-            await alert.evaluate((element) => {
-              const text = element.querySelector(".chat-error__content")!.getBoundingClientRect();
-              const action = element.querySelector(".chat-error__discard")!.getBoundingClientRect();
-              return action.top >= text.bottom && action.right <= innerWidth && action.left >= 0;
-            }),
-          ).toBe(true);
+          // The resize event schedules the shell's mobile layout after the viewport RPC.
+          await expect
+            .poll(() =>
+              alert.evaluate((element) => {
+                const text = element.querySelector(".chat-error__content")!.getBoundingClientRect();
+                const action = element
+                  .querySelector(".chat-error__discard")!
+                  .getBoundingClientRect();
+                return action.top >= text.bottom && action.right <= innerWidth && action.left >= 0;
+              }),
+            )
+            .toBe(true);
           if (captureUiProofEnabled) {
             await page.screenshot({
               animations: "disabled",

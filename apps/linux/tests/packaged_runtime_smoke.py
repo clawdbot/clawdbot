@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -63,6 +64,190 @@ FORBIDDEN_APPIMAGE_LIBRARY_PATTERNS = (
     "libwayland-egl.so*",
     "libwayland-server.so*",
 )
+
+ABI_LIMITS = {
+    "GLIBC": "2.35",
+    "GLIBCXX": "3.4.30",
+    # Keep the C++ and libgcc symbol ceilings paired to the GCC 12.1 runtime.
+    "CXXABI": "1.3.13",
+    "GCC": "12.0.0",
+}
+
+AMD64_ABI_ALLOWED_VARIANTS = {
+    "CXXABI": frozenset(("FLOAT128", "TM_1")),
+}
+
+
+def version_key(version):
+    return tuple(int(part) for part in version.split("."))
+
+
+def is_numeric_version(version):
+    return re.fullmatch(r"\d+(?:\.\d+)*", version) is not None
+
+
+def requirement_sort_key(version):
+    if is_numeric_version(version):
+        return (0, version_key(version), "")
+    return (1, (), version)
+
+
+def compare_versions(left, right):
+    left_parts = version_key(left)
+    right_parts = version_key(right)
+    length = max(len(left_parts), len(right_parts))
+    return (
+        left_parts + (0,) * (length - len(left_parts))
+        > right_parts + (0,) * (length - len(right_parts))
+    )
+
+
+def parse_version_needs(text, source):
+    requirements = {family: set() for family in ABI_LIMITS}
+    in_version_needs = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Version needs section "):
+            in_version_needs = True
+            continue
+        if line.startswith("Version ") and " section " in line:
+            in_version_needs = False
+            continue
+        if not in_version_needs:
+            continue
+        match = re.search(r"\bName:\s*(\S+)", line)
+        if match is None:
+            continue
+        name = match.group(1)
+        family = None
+        for candidate in ABI_LIMITS:
+            prefix = f"{candidate}_"
+            if name.startswith(prefix):
+                family = candidate
+                version = name.removeprefix(prefix)
+                break
+        if family is None:
+            continue
+        if (
+            not is_numeric_version(version)
+            and version not in AMD64_ABI_ALLOWED_VARIANTS.get(family, ())
+        ):
+            raise RuntimeError(f"{source} requires unknown {family} version {name}")
+        requirements[family].add(version)
+    return {
+        family: sorted(versions, key=requirement_sort_key)
+        for family, versions in requirements.items()
+    }
+
+
+def is_regular_elf(path):
+    if path.is_symlink() or not path.is_file():
+        return False
+    with path.open("rb") as source:
+        return source.read(4) == b"\x7fELF"
+
+
+def read_abi_requirements(path, source, readelf):
+    result = subprocess.run(
+        [readelf, "--version-info", "--wide", str(path)],
+        env={**os.environ, "LC_ALL": "C"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        detail = result.stdout.strip().replace(str(path), source)
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(
+            f"readelf failed for {source} with exit {result.returncode}{suffix}"
+        )
+    return parse_version_needs(result.stdout, source)
+
+
+def collect_abi_report(appimage, appdir, readelf=None):
+    readelf = readelf or shutil.which("readelf")
+    if readelf is None:
+        raise RuntimeError("readelf is required for AppImage ABI inspection")
+    if not is_regular_elf(appimage):
+        raise RuntimeError(f"{appimage.name} is not a regular ELF AppImage runtime")
+
+    candidates = [
+        {
+            "path": appimage,
+            "reportPath": appimage.name,
+            "source": "appimage-runtime",
+        }
+    ]
+    candidates.extend(
+        {
+            "path": path,
+            "reportPath": path.relative_to(appdir).as_posix(),
+            "source": "appdir",
+        }
+        for path in appdir.rglob("*")
+        if is_regular_elf(path)
+    )
+    files = []
+    for candidate in sorted(
+        candidates,
+        key=lambda item: (item["reportPath"], item["source"]),
+    ):
+        files.append(
+            {
+                "path": candidate["reportPath"],
+                "source": candidate["source"],
+                "requires": read_abi_requirements(
+                    candidate["path"],
+                    candidate["reportPath"],
+                    readelf,
+                ),
+            }
+        )
+
+    maximum_required = {}
+    for family in ABI_LIMITS:
+        versions = [
+            version
+            for entry in files
+            for version in entry["requires"][family]
+            if is_numeric_version(version)
+        ]
+        maximum_required[family] = (
+            max(versions, key=version_key) if versions else None
+        )
+    return {
+        "files": files,
+        "limits": ABI_LIMITS,
+        "maximumRequired": maximum_required,
+    }
+
+
+def write_abi_report(output, report):
+    (output / "abi.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    )
+
+
+def enforce_abi_limits(report):
+    violations = []
+    for entry in report["files"]:
+        for family, limit in ABI_LIMITS.items():
+            for version in entry["requires"][family]:
+                if not is_numeric_version(version):
+                    if version not in AMD64_ABI_ALLOWED_VARIANTS.get(family, ()):
+                        raise RuntimeError(
+                            f"{entry['path']} requires unknown {family} version "
+                            f"{family}_{version}"
+                        )
+                    continue
+                if compare_versions(version, limit):
+                    violations.append(
+                        f"{entry['path']} requires {family}_{version} (limit {family}_{limit})"
+                    )
+    if violations:
+        raise RuntimeError("AppImage ABI floor exceeded: " + "; ".join(violations))
 
 
 def write_command(output, name, command, *, cwd=None, env=None):
@@ -432,6 +617,10 @@ def main():
         for required in (apprun, binary):
             if not required.is_file():
                 raise RuntimeError(f"Missing packaged runtime file: {required.relative_to(appdir)}")
+
+        abi_report = collect_abi_report(appimage, appdir)
+        write_abi_report(output, abi_report)
+        enforce_abi_limits(abi_report)
 
         usr_lib = appdir / "usr/lib"
         forbidden_libraries = sorted(

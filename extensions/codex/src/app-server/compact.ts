@@ -17,7 +17,7 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
-  isCodexAlreadyTerminalInterruptError,
+  isCodexNoActiveTurnInterruptError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
@@ -157,8 +157,9 @@ function watchCodexNativeCompactionCompletion(params: {
         { timeoutMs: Math.max(1, params.interruptGraceMs) },
       )
       .catch((error: unknown) => {
-        // This exact InvalidRequest proves the target turn was already terminal.
-        if (isCodexAlreadyTerminalInterruptError(error)) {
+        // Compaction derives its target from a native start/item receipt, never
+        // a start ACK, so an absent active target follows its terminal state.
+        if (isCodexNoActiveTurnInterruptError(error)) {
           if (compactionItemCompleted) {
             complete();
             return;
@@ -462,17 +463,35 @@ async function compactCodexNativeThread(
     agentId: params.agentId,
     config: params.config,
   });
-  // Already-readable bindings keep compaction's own cancellation-result handling.
-  const readableBinding = options.bindingStore.read(bindingIdentity);
-  const { binding: initialBinding, assertCurrent } = readableBinding
-    ? { binding: readableBinding, assertCurrent: () => {} }
-    : await resolveCodexSessionBinding({
-        bindingStore: options.bindingStore,
-        identity: bindingIdentity,
-        config: params.config,
-        storePath: params.sessionTarget?.storePath,
-        signal: params.abortSignal,
-      });
+  const abortedResult = (expectedThreadId?: string, currentThreadId = expectedThreadId) =>
+    options.allowNonManualNativeRequest
+      ? skippedCodexNativeCompactionResult(params, {
+          reason: "codex app-server compaction aborted before native compaction",
+          code: "aborted_before_native_compaction",
+          request: options.nativeCompactionRequest ?? "after_context_engine",
+          ...(expectedThreadId ? { expectedThreadId, currentThreadId } : {}),
+        })
+      : {
+          ok: false as const,
+          compacted: false,
+          reason: "codex app-server compaction aborted while waiting to start",
+        };
+  let resolvedBinding: Awaited<ReturnType<typeof resolveCodexSessionBinding>>;
+  try {
+    resolvedBinding = await resolveCodexSessionBinding({
+      bindingStore: options.bindingStore,
+      identity: bindingIdentity,
+      config: params.config,
+      storePath: params.sessionTarget?.storePath,
+      signal: params.abortSignal,
+    });
+  } catch (error) {
+    if (!params.abortSignal?.aborted) {
+      throw error;
+    }
+    return abortedResult(options.bindingStore.read(bindingIdentity)?.threadId);
+  }
+  const { binding: initialBinding, assertCurrent } = resolvedBinding;
   if (!initialBinding?.threadId) {
     return failedCodexThreadBindingCompactionResult(params, {
       reason: "no codex app-server thread binding",
@@ -896,20 +915,7 @@ async function compactCodexNativeThread(
     );
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      if (options.allowNonManualNativeRequest) {
-        return skippedCodexNativeCompactionResult(params, {
-          reason: "codex app-server compaction aborted before native compaction",
-          code: "aborted_before_native_compaction",
-          request: options.nativeCompactionRequest ?? "after_context_engine",
-          expectedThreadId: initialBinding.threadId,
-          currentThreadId: binding.threadId,
-        });
-      }
-      return {
-        ok: false,
-        compacted: false,
-        reason: "codex app-server compaction aborted while waiting to start",
-      };
+      return abortedResult(initialBinding.threadId, binding.threadId);
     }
     throw error;
   }

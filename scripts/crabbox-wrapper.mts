@@ -5,7 +5,8 @@ import {
   accessSync,
   chmodSync,
   constants,
-  cpSync,
+  copyFileSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -724,8 +725,34 @@ function parseCommandInvocation(helpText: string, commandArgs: string[]) {
     }
   }
 
+  const fileScript = optionEntries.findLast(({ name }) => name === "script");
+  const stdinScript = optionEntries.findLast(({ name }) => name === "script-stdin");
+  // Go stops at any invalid boolean; loadRunScript rejects two active sources.
+  // Preserve those errors without reading or normalizing either input locally.
+  const invalidStdin = optionEntries.some(
+    ({ name, index, value }) =>
+      name === "script-stdin" &&
+      commandArgs[index]?.includes("=") &&
+      !/^(?:1|t|T|true|TRUE|True|0|f|F|false|FALSE|False)$/u.test(value),
+  );
+  const stdinEnabled = Boolean(
+    stdinScript &&
+    (!commandArgs[stdinScript.index]?.includes("=") ||
+      /^(?:1|t|T|true|TRUE|True)$/u.test(stdinScript.value)),
+  );
+  const scriptRequested = !invalidStdin && Boolean(fileScript?.value || stdinEnabled);
+  const script =
+    invalidStdin || (fileScript?.value && stdinEnabled)
+      ? undefined
+      : fileScript?.value
+        ? fileScript
+        : stdinEnabled
+          ? stdinScript
+          : undefined;
   return {
     args: commandArgs,
+    scriptRequested,
+    script,
     commandArgs: start >= 0 ? commandArgs.slice(start) : [],
     optionEntries,
     options,
@@ -1413,9 +1440,12 @@ function preserveTemporaryCrabboxArtifacts() {
     return;
   }
   const sourceRoot = resolve(childCwd, ".crabbox");
+  if (!crabboxArtifactDirectoryExists(sourceRoot)) {
+    return;
+  }
   const directories = ["runs", "captures"].filter((name) => {
     const source = resolve(sourceRoot, name);
-    return statSync(source, { throwIfNoEntry: false }) && readdirSync(source).length > 0;
+    return crabboxArtifactDirectoryExists(source) && readdirSync(source).length > 0;
   });
   if (directories.length === 0) {
     return;
@@ -1424,14 +1454,48 @@ function preserveTemporaryCrabboxArtifacts() {
   // Native artifacts reuse lease names. Keep each invocation together without
   // overwriting earlier evidence, and copy only outputs, never other Crabbox state.
   const retainedRoot = resolve(repoRoot, ".crabbox", "wrapper-artifacts");
-  mkdirSync(retainedRoot, { recursive: true });
+  for (const directory of [dirname(retainedRoot), retainedRoot]) {
+    if (!crabboxArtifactDirectoryExists(directory)) {
+      mkdirSync(directory, { mode: 0o700 });
+    }
+  }
   const destination = mkdtempSync(resolve(retainedRoot, "run-"));
-  for (const name of directories) {
-    cpSync(resolve(sourceRoot, name), resolve(destination, name), { recursive: true });
+  try {
+    for (const name of directories) {
+      copyCrabboxArtifact(resolve(sourceRoot, name), resolve(destination, name));
+    }
+  } catch (error) {
+    rmSync(destination, { recursive: true, force: true });
+    throw error;
   }
   console.error(
     `[crabbox] preserved temporary artifacts: ${sourceRoot} -> ${relative(repoRoot, destination)}`,
   );
+}
+
+function crabboxArtifactDirectoryExists(directory: string) {
+  const info = lstatSync(directory, { throwIfNoEntry: false });
+  if (info && !info.isDirectory()) {
+    throw new Error(`artifact path must be a real directory: ${directory}`);
+  }
+  return Boolean(info);
+}
+
+function copyCrabboxArtifact(source: string, destination: string) {
+  // Links can escape the output allowlist or point back into the deleted capsule.
+  // Copy only regular files and real directories; diagnostics remain private bytes.
+  const info = lstatSync(source);
+  if (info.isDirectory()) {
+    mkdirSync(destination, { mode: 0o700 });
+    for (const entry of readdirSync(source)) {
+      copyCrabboxArtifact(resolve(source, entry), resolve(destination, entry));
+    }
+  } else if (info.isFile()) {
+    copyFileSync(source, destination, constants.COPYFILE_EXCL);
+    chmodSync(destination, 0o600);
+  } else {
+    throw new Error(`artifact must be a regular file or directory: ${source}`);
+  }
 }
 
 function shellQuote(value: string) {
@@ -2689,8 +2753,7 @@ function injectRemotePosixHydratedNodeModulesBootstrap(invocation: CommandInvoca
   if (
     invocation.args[0] !== "run" ||
     isWindowsRemoteTarget(invocation.args) ||
-    invocation.options.has("script") ||
-    invocation.options.has("script-stdin") ||
+    invocation.script ||
     invocation.start < 0
   ) {
     return invocation.args;
@@ -2702,8 +2765,17 @@ function injectRemotePosixHydratedNodeModulesBootstrap(invocation: CommandInvoca
   );
 }
 
-function remotePosixJsEnvBootstrap() {
+function remotePosixJsEnvBootstrap(packageManager = false) {
   return [
+    ...(packageManager
+      ? [
+          'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
+          'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
+          'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
+          'export PATH="$PNPM_HOME:$PATH";',
+          'corepack enable --install-directory "$PNPM_HOME" || return 1;',
+        ]
+      : []),
     "openclaw_crabbox_env() {",
     "openclaw_env_args=();",
     "openclaw_env_ignore=0;",
@@ -2782,18 +2854,11 @@ function remoteAwsMacosJsBootstrap({
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
     ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
-    bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
-      "pnpm --version >&2;",
-    );
+    bootstrap.push("pnpm --version >&2;");
   }
   // Raw AWS macOS boxes skip setup-node-env, so Bun needs its own user-local pin.
   if (bun) {
@@ -2883,18 +2948,17 @@ function remoteWsl2JsBootstrap({ packageManager = false, sourceBootstrap = "" } 
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
     ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
     bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
       "pnpm --version >&2;",
-      "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+      ...(sourceBootstrap
+        ? []
+        : [
+            "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+          ]),
     );
   }
   bootstrap.push('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
@@ -3302,24 +3366,30 @@ function injectRemoteAwsMacosSwiftBootstrap(
   );
 }
 
-function replaceRunFlagWithScript(commandArgs: string[], flagName: string, scriptPath: string) {
-  const invocation = parseCommandInvocation(help.text, commandArgs);
-  const normalizedName = commandOptionName(flagName);
-  const normalizedArgs = [...commandArgs];
-  for (const { index, name } of invocation.optionEntries) {
-    if (name === normalizedName) {
-      normalizedArgs.splice(index, 1, "--script", scriptPath);
-      return normalizedArgs;
+function replaceRunScript(invocation: CommandInvocation, scriptPath: string) {
+  const normalizedArgs = invocation.args.slice(0, invocation.optionEnd);
+  // One generated file replaces all valid source flags: a later empty file or
+  // an earlier true stdin flag must not override/conflict with the verifier.
+  for (const { name, index } of invocation.optionEntries.toReversed()) {
+    if (name === "script" || name === "script-stdin") {
+      normalizedArgs.splice(
+        index,
+        name === "script" && !invocation.args[index]?.includes("=") ? 2 : 1,
+      );
     }
   }
-  return normalizedArgs;
+  return [
+    ...normalizedArgs,
+    "--script",
+    scriptPath,
+    ...invocation.args.slice(invocation.optionEnd),
+  ];
 }
 
 function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName: string) {
-  if (
-    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    !parseCommandInvocation(help.text, commandArgs).options.has("script-stdin")
-  ) {
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const scriptOption = invocation.script;
+  if (!isAwsMacosRemoteTarget(commandArgs, providerName) || scriptOption?.name !== "script-stdin") {
     return { args: commandArgs, cleanup: () => {}, prepared: false };
   }
 
@@ -3329,7 +3399,7 @@ function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName
   writeFileSync(scriptPath, createAwsMacosScriptStdinWrapper(script), "utf8");
   chmodSync(scriptPath, 0o700);
   return {
-    args: replaceRunFlagWithScript(commandArgs, "--script-stdin", scriptPath),
+    args: replaceRunScript(invocation, scriptPath),
     cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
     prepared: true,
   };
@@ -3690,6 +3760,8 @@ function applyRunTransforms(
     options.childCwd === repoRoot ? markedArgs : absolutizeLocalRunPaths(markedArgs);
   let invocation = parseCommandInvocation(help.text, localArgs);
   const facts = analyzeRemoteCommand(invocation);
+  // Materializing a capsule runs its installer before the caller's command.
+  facts.packageManager ||= Boolean(options.capsule);
 
   const wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
     invocation,
@@ -3702,10 +3774,10 @@ function applyRunTransforms(
   try {
     if (sourceBootstrap && !wsl2ScriptBootstrap.prepared) {
       invocation = parseCommandInvocation(help.text, transformedArgs);
-      if (invocation.options.has("script") || invocation.options.has("script-stdin")) {
-        const scriptOption = invocation.options.get("script");
+      const scriptOption = invocation.script;
+      if (scriptOption) {
         const script = readFileSync(
-          scriptOption ? resolve(repoRoot, scriptOption.value) : 0,
+          scriptOption.name === "script" ? resolve(repoRoot, scriptOption.value) : 0,
           "utf8",
         );
         const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-source-script-"));
@@ -3716,16 +3788,7 @@ function applyRunTransforms(
           wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
         );
         chmodSync(scriptPath, 0o700);
-        const entry = invocation.optionEntries.find(
-          ({ name }) => name === "script" || name === "script-stdin",
-        )!;
-        transformedArgs = [...transformedArgs];
-        transformedArgs.splice(
-          entry.index,
-          entry.name === "script" && !transformedArgs[entry.index]?.includes("=") ? 2 : 1,
-          "--script",
-          scriptPath,
-        );
+        transformedArgs = replaceRunScript(invocation, scriptPath);
       } else if (
         invocation.start >= 0 &&
         !isAwsMacosRemoteTarget(transformedArgs, options.provider)
@@ -3882,6 +3945,16 @@ if (
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  // The delegated provider rejects uploaded scripts before acquiring a lease.
+  if (
+    normalizedArgs[0] === "run" &&
+    parseCommandInvocation(help.text, normalizedArgs).scriptRequested
+  ) {
+    console.error(
+      "[crabbox] provider=blacksmith-testbox does not support --script or --script-stdin. Run a synced script as trailing argv, use --shell, or choose an SSH provider for uploaded scripts.",
+    );
+    process.exit(2);
+  }
   // Testbox owns sync; reject before lease or checkout side effects.
   if (normalizedArgs[0] === "run" && hasOption(normalizedArgs, "--no-sync")) {
     console.error(
@@ -3969,7 +4042,7 @@ let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let fullCheckout = null;
 let stopFullCheckoutKeepalive = () => {};
-let cleanupDone = false;
+let cleanupSucceeded: boolean | undefined;
 let sourceCapsule: CrabboxSourceCapsule | null = null;
 let remoteChangedGateAlias = "";
 let capturedBlacksmithLeaseId = "";
@@ -3990,7 +4063,12 @@ try {
       sourceCapsule = prepareCrabboxSourceCapsule({
         repoRoot,
         syncRoot,
-        binary,
+        syncPlan: spawnInvocation(
+          binary,
+          ["sync-plan", "--json", "--limit", "2147483647"],
+          process.env,
+          process.platform,
+        ),
         base: changedGateBase || changedGateBaseForCommand([]).resolvedBase,
       });
     }
@@ -4031,10 +4109,10 @@ try {
 }
 
 function cleanupOnce() {
-  if (cleanupDone) {
-    return;
+  if (cleanupSucceeded !== undefined) {
+    return cleanupSucceeded;
   }
-  cleanupDone = true;
+  cleanupSucceeded = false;
   stopFullCheckoutKeepalive();
   wsl2ScriptBootstrap.cleanup();
   scriptBootstrap.cleanup();
@@ -4047,11 +4125,14 @@ function cleanupOnce() {
     preserveTemporaryCrabboxArtifacts();
   } catch (error) {
     console.error(
-      `[crabbox] artifact preservation failed; temporary checkout retained at ${childCwd}`,
+      `[crabbox] artifact preservation failed: ${error instanceof Error ? error.message : String(error)}; temporary checkout retained at ${childCwd}. Recover .crabbox/runs and .crabbox/captures from this checkout before removing it.`,
     );
-    throw error;
+    process.exitCode ||= 1;
+    return false;
   }
   cleanupChildCwd();
+  cleanupSucceeded = true;
+  return true;
 }
 
 const invocation = parseCommandInvocation(help.text, normalizedArgs);
@@ -4247,12 +4328,12 @@ child.on("exit", (code, signal) => {
       exitCode = 2;
     }
   }
-  cleanupOnce();
+  const artifactsPreserved = cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  const finalExitCode = (exitCode ?? 1) || (fullCheckoutAvailable && artifactsPreserved ? 0 : 1);
   if (
     finalExitCode !== 0 &&
     reusedRunLeaseId &&

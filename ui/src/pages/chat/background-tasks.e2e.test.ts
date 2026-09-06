@@ -422,7 +422,7 @@ suite.define(() => {
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
         await focusChatSidePanel(page);
         await expect
-          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .poll(() => page.locator(".chat-panel-focus").getAttribute("aria-pressed"))
           .toBe("true");
         const expandedWidths = await detailPanel.evaluate((taskPanel) => {
           const panel = taskPanel.closest<HTMLElement>(".side-panel__panel");
@@ -441,7 +441,7 @@ suite.define(() => {
         );
         await page.getByRole("button", { name: "Restore split", exact: true }).click();
         await expect
-          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .poll(() => page.locator(".chat-panel-focus").getAttribute("aria-pressed"))
           .toBe("false");
         await restoreChatAsMain(page);
 
@@ -507,7 +507,7 @@ suite.define(() => {
     );
   });
 
-  it("streams two subagent activity rows and retains final diff chips", async () => {
+  it("streams chip-free subagent rows and retains final diff counts in Review", async () => {
     const activityDir = path.join(
       createControlUiE2eArtifactDir("chat-background-tasks", artifactDir),
       "subagent-activity",
@@ -585,8 +585,7 @@ suite.define(() => {
         const secondRow = activity.locator('[data-subagent-task-id="task-parallel-two"]');
         expect(await firstRow.textContent()).toContain("Reviewing session ownership");
         expect(await secondRow.textContent()).toContain("Checking tool card rendering");
-        expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
-        expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
+        expect(await activity.locator(".chat-diffstat").count()).toBe(0);
         await writeFile(
           path.join(activityDir, "01-two-subagents-streaming.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
@@ -601,6 +600,8 @@ suite.define(() => {
         await detailPanel.getByText("Inspecting session ownership boundaries.").waitFor();
         expect(await detailPanel.textContent()).toContain("Review session ownership");
         expect(await detailPanel.textContent()).toContain("Running");
+        expect(await detailPanel.locator(".chat-diffstat__add").textContent()).toBe("+14");
+        expect(await detailPanel.locator(".chat-diffstat__del").textContent()).toBe("-3");
         await expect
           .poll(async () =>
             (await gateway.getRequests("chat.history")).some(
@@ -650,9 +651,12 @@ suite.define(() => {
         await firstRow.getByText("Subagent finished").waitFor();
         await detailPanel.getByText("Completed").waitFor();
         expect(await firstRow.textContent()).toContain("Ownership review complete");
-        expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
-        expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
-        expect(await secondRow.textContent()).toContain("Subagent working");
+        expect(await activity.locator(".chat-diffstat").count()).toBe(0);
+        expect(await detailPanel.locator(".chat-diffstat__add").textContent()).toBe("+14");
+        expect(await detailPanel.locator(".chat-diffstat__del").textContent()).toBe("-3");
+        expect(await secondRow.locator(".chat-subagent-activity__label").textContent()).toBe(
+          "Subagent",
+        );
         expect(await secondRow.textContent()).toContain("Checking tool card rendering");
         await writeFile(
           path.join(activityDir, "02-one-subagent-finished.png"),

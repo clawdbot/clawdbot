@@ -23,8 +23,7 @@ import {
 } from "../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
+  resolveSessionStoreIdentity,
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import type {
@@ -107,7 +106,6 @@ function buildGatewaySessionStoreScanTargets(params: {
 type GatewaySessionStoreDiscovery = {
   existing: SessionStoreTarget[];
   fallback: SessionStoreTarget;
-  prepared?: true;
 };
 
 function resolveGatewaySessionStoreCandidates(
@@ -137,41 +135,6 @@ function resolveGatewaySessionStoreCandidates(
  * Keep discovery agent-scoped here or each row repeats registry probes and agent-root scans.
  */
 export type GatewaySessionStoreDiscoveryCache = Map<string, GatewaySessionStoreDiscovery>;
-
-export function createGatewaySessionStoreDiscoveryCache(params: {
-  cfg: OpenClawConfig;
-  targets: readonly SessionStoreTarget[];
-  agentIds: Iterable<string>;
-}): GatewaySessionStoreDiscoveryCache {
-  const cache: GatewaySessionStoreDiscoveryCache = new Map();
-  const prepare = (rawAgentId: string, target?: SessionStoreTarget) => {
-    const agentId = normalizeAgentId(rawAgentId);
-    const current = cache.get(agentId);
-    if (current) {
-      if (target) {
-        current.existing.push(target);
-      }
-      return;
-    }
-    const fallback = {
-      agentId,
-      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
-    };
-    const existing = target
-      ? [target]
-      : params.targets.length > 0
-        ? [...params.targets]
-        : [fallback];
-    cache.set(agentId, { existing, fallback, prepared: true });
-  };
-  for (const target of params.targets) {
-    prepare(target.agentId, target);
-  }
-  for (const agentId of params.agentIds) {
-    prepare(agentId);
-  }
-  return cache;
-}
 
 type GatewaySessionStoreLookupParams = {
   cfg: OpenClawConfig;
@@ -211,11 +174,9 @@ function prepareGatewaySessionStoreLookup(
   );
   const { existing, fallback } = discovery;
   const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
-  const candidates = discovery.prepared
-    ? existing
-    : configured
-      ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
-      : existing;
+  const candidates = configured
+    ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
+    : existing;
   if (candidates.length === 0) {
     // Retired/manual agents require an existing discovered store; lookup never creates one.
     return {
@@ -387,17 +348,11 @@ function prepareGatewaySessionStoreTarget(
   params: GatewaySessionStoreLookupParams,
 ): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore> {
   const key = params.key;
-  const requestedAgentId = normalizeOptionalString(params.agentId);
-  const canonicalKey = resolveSessionStoreKey({
+  const { canonicalKey, agentId } = resolveSessionStoreIdentity({
     cfg: params.cfg,
     sessionKey: key,
-    ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
+    agentId: params.agentId,
   });
-  const agentId =
-    requestedAgentId &&
-    (isAgentScopedSentinelSessionKey(canonicalKey) || !parseAgentSessionKey(key))
-      ? normalizeAgentId(requestedAgentId)
-      : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   if (isIncognitoSessionKey(canonicalKey)) {
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
     const read: GatewaySessionStoreRead = {

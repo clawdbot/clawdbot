@@ -35,6 +35,7 @@ import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import type { deliverAgentCommandResult } from "./delivery.js";
+import { createCommandMaintenanceBudget } from "./maintenance-budget.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { runEmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
@@ -151,6 +152,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
   let result = params.attempt.result;
   let deliveryResult: Awaited<ReturnType<typeof deliverAgentCommandResult>>;
   let hasResultError: boolean;
+  let terminalError: string | undefined;
   let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
   const publishSessionOwnership = (committedCompactionSessionId?: string) => {
     // Outer restart-recovery cleanup runs even after later delivery failures.
@@ -159,6 +161,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
       committedCompactionSessionId,
     );
   };
+  // Housekeeping shares the foreground allowance, but its expiry must not cancel the answer.
+  const maintenance = createCommandMaintenanceBudget(
+    params.attempt.startedAt,
+    timeoutMs,
+    params.opts.abortSignal,
+  );
 
   try {
     await fallbackTrajectoryRecorder?.flush();
@@ -298,7 +306,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionEntry &&
       sessionStore &&
       sessionKey &&
-      !params.suppressVisibleSessionEffects
+      !params.suppressVisibleSessionEffects &&
+      maintenance.remainingMs() > 0
     ) {
       const flushProvider = result.meta.agentMeta?.provider ?? fallbackProvider;
       const flushModel = result.meta.agentMeta?.model ?? fallbackModel;
@@ -326,7 +335,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           skillsSnapshot,
           thinkLevel: effectiveTurnThinkLevel,
           verboseLevel: resolvedVerboseLevel ?? "off",
-          timeoutMs,
+          timeoutMs: maintenance.remainingMs(),
           // Maintenance is system-owned and must not inherit completed-turn authority.
           senderIsOwner: false,
         },
@@ -349,7 +358,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         runtimePolicySessionKey: sessionKey,
         storePath,
         isHeartbeat: isHeartbeatLifecycleRun,
-        abortSignal: params.opts.abortSignal,
+        abortSignal: maintenance.signal,
         onSessionIdChanged: params.opts.onSessionIdChanged,
       });
       sessionEntry = memoryFlushResult.sessionEntry ?? sessionEntry;
@@ -359,6 +368,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         publishSessionOwnership();
       }
       throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      params.opts.abortSignal?.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     }
 
@@ -429,18 +439,25 @@ export async function finalizeEmbeddedAgentCommand(params: {
     if (
       (persistedCliTurnTranscript || embeddedCompactionRun) &&
       !params.suppressVisibleSessionEffects &&
-      canSafelyRunPostTurnCompaction
+      canSafelyRunPostTurnCompaction &&
+      maintenance.remainingMs() > 0
     ) {
-      const lifecycleRevisionBefore = sessionEntry?.lifecycleRevision;
+      let maintenanceLifecycleRevision = sessionEntry?.lifecycleRevision;
+      const compactionCountBefore = sessionEntry?.compactionCount ?? 0;
       try {
-        const compactionCountBefore = sessionEntry?.compactionCount ?? 0;
+        if (followupRun) {
+          followupRun.run.timeoutMs = maintenance.remainingMs();
+        }
         const authorize = () => {
           throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
           assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          return params.opts.abortSignal?.aborted !== true && !sessionReboundDuringRun;
+          return (
+            maintenance.remainingMs() > 0 && !maintenance.signal.aborted && !sessionReboundDuringRun
+          );
         };
         const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
           sessionEntry = accepted.entry;
+          maintenanceLifecycleRevision = accepted.entry.lifecycleRevision;
           runOwnedSessionId = accepted.sessionId;
           publishSessionOwnership(
             accepted.previousSessionId === undefined ? undefined : accepted.sessionId,
@@ -461,7 +478,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               defaultModel: embeddedCompactionRun.run.model,
               isHeartbeat: false,
               agentHarnessId: agentMeta?.agentHarnessId,
-              abortSignal: params.opts.abortSignal,
+              abortSignal: maintenance.signal,
               onSessionIdChanged: params.opts.onSessionIdChanged,
               authorize,
               onCompactionCommitted: onCommitted,
@@ -489,7 +506,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
                 thinkLevel: effectiveTurnThinkLevel,
                 extraSystemPrompt: params.opts.extraSystemPrompt,
                 pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
-                abortSignal: params.opts.abortSignal,
+                abortSignal: maintenance.signal,
               },
               {
                 assertActive: () => {
@@ -505,48 +522,21 @@ export async function finalizeEmbeddedAgentCommand(params: {
         sessionEntry = compactedSessionEntry;
         runOwnedSessionId = compactedSessionEntry?.sessionId ?? runOwnedSessionId;
         publishSessionOwnership();
-        const completedCompactions =
-          (compactedSessionEntry?.compactionCount ?? 0) - compactionCountBefore;
-        if (
-          embeddedCompactionRun &&
-          compactedSessionEntry &&
-          agentMeta &&
-          completedCompactions > 0
-        ) {
-          // These facts describe maintenance after the reply; preserve its original provider usage.
-          result = {
-            ...result,
-            meta: {
-              ...result.meta,
-              agentMeta: {
-                ...agentMeta,
-                sessionId: runOwnedSessionId,
-                sessionFile: formatSqliteSessionFileMarker({
-                  agentId: sessionAgentId,
-                  sessionId: runOwnedSessionId,
-                  storePath,
-                }),
-                compactionCount: (agentMeta.compactionCount ?? 0) + completedCompactions,
-                compactionTokensAfter: resolveFreshSessionTotalTokens(compactedSessionEntry),
-                contextBudgetStatus: undefined,
-              },
-            },
-          };
-        }
       } catch (error) {
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
         throwAgentRunRestartAbortReason(error);
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        if (embeddedCompactionRun) {
+        if (embeddedCompactionRun || maintenance.signal.aborted) {
           // Housekeeping must not erase a completed local reply, but stale ownership
           // is not an ordinary compactor failure and must still stop final delivery.
           params.opts.abortSignal?.throwIfAborted();
           const currentEntry = await resolveFreshSessionEntryForDelivery?.();
           params.opts.abortSignal?.throwIfAborted();
           assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          if (!currentEntry || currentEntry.lifecycleRevision !== lifecycleRevisionBefore) {
+          if (!currentEntry || currentEntry.lifecycleRevision !== maintenanceLifecycleRevision) {
             throw error;
           }
+          sessionEntry = currentEntry;
         } else if (
           params.opts.deliver !== true ||
           !pendingFinalDeliveryMarker.pendingFinalDeliveryMarkerPersisted ||
@@ -557,6 +547,28 @@ export async function finalizeEmbeddedAgentCommand(params: {
         log.warn(
           `Post-turn transcript compaction failed for ${sessionKey ?? sessionId}; continuing final delivery: ${formatErrorMessage(error)}`,
         );
+      }
+      const completedCompactions = (sessionEntry?.compactionCount ?? 0) - compactionCountBefore;
+      if (embeddedCompactionRun && sessionEntry && agentMeta && completedCompactions > 0) {
+        // Account accepted commits even if later housekeeping was cancelled; keep reply usage intact.
+        result = {
+          ...result,
+          meta: {
+            ...result.meta,
+            agentMeta: {
+              ...agentMeta,
+              sessionId: runOwnedSessionId,
+              sessionFile: formatSqliteSessionFileMarker({
+                agentId: sessionAgentId,
+                sessionId: runOwnedSessionId,
+                storePath,
+              }),
+              compactionCount: (agentMeta.compactionCount ?? 0) + completedCompactions,
+              compactionTokensAfter: resolveFreshSessionTotalTokens(sessionEntry),
+              contextBudgetStatus: undefined,
+            },
+          },
+        };
       }
     }
 
@@ -570,7 +582,10 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionEntry,
       result,
       payloads,
-      assertDeliveryCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
+      assertDeliveryCurrent: () => {
+        params.opts.abortSignal?.throwIfAborted();
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      },
       onDeliveryResult: (
         delivered: Parameters<
           NonNullable<Parameters<typeof deliverAgentCommandResult>[0]["onDeliveryResult"]>
@@ -674,6 +689,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     }
 
     hasResultError = Boolean(fallbackExhausted || lifecycle.resolveResultError(result, false));
+    terminalError = hasResultError
+      ? lifecycle.resolveTerminalError(result, fallbackExhausted, terminal)
+      : terminal.outcome.error;
     if (hasResultError) {
       lifecycle.emitResultError(result, fallbackExhausted, terminal);
     } else {
@@ -683,6 +701,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     lifecycle.emitPostTurnError(error, terminal);
     throw error;
   } finally {
+    maintenance.dispose();
     await deferredLifecycle.complete();
   }
 
@@ -703,6 +722,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       hasResultError || classifyAgentRunTerminalOutcome(outcome) !== "success"
         ? "failed"
         : "completed",
+      terminalError ? formatErrorMessage(terminalError) : undefined,
     ),
     sessionEntry,
     runOwnedSessionId,

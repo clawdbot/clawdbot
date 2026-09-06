@@ -280,8 +280,9 @@ describe("outbound message progress companion", () => {
     const repositoryRoot = process.cwd();
     ensurePinnedReaderCommit(repositoryRoot);
     const projectedDatabase = openOpenClawStateDatabase(database).db;
-    // Only audit rows belong to this proof. Restore the empty binding table from
-    // the immutable reader's schema without inventing a production downgrade.
+    // Only audit rows belong to this proof. Restore the empty binding and Workshop
+    // proposal tables from the immutable reader's schema without inventing a
+    // production downgrade.
     expect(
       projectedDatabase
         .prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings")
@@ -296,26 +297,23 @@ describe("outbound message progress companion", () => {
           { cwd: repositoryRoot, encoding: "utf8" },
         ),
       );
-      const bindingStatements = pinnedSchemaDatabase
-        .prepare(
-          `SELECT sql FROM sqlite_schema
-           WHERE tbl_name = 'current_conversation_bindings'
-             AND type IN ('table', 'index') AND sql IS NOT NULL
-           ORDER BY type = 'table' DESC, name`,
-        )
-        .all() as Array<{ sql: string }>;
-      projectedDatabase.exec("DROP TABLE current_conversation_bindings;");
-      for (const { sql } of bindingStatements) {
-        projectedDatabase.exec(sql);
+      const pinnedStatements = pinnedSchemaDatabase.prepare(
+        `SELECT sql FROM sqlite_schema
+         WHERE tbl_name = ?
+           AND type IN ('table', 'index') AND sql IS NOT NULL
+         ORDER BY type = 'table' DESC, name`,
+      );
+      for (const table of ["current_conversation_bindings", "skill_workshop_proposals"]) {
+        projectedDatabase.exec(`DROP TABLE ${table};`);
+        for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
+          projectedDatabase.exec(sql);
+        }
       }
     } finally {
       pinnedSchemaDatabase.close();
     }
-    // This pinned reader predates the Workshop's first-use column and requires present lazy tables
-    // to retain its exact shape; project that unrelated table to the reader's historical contract.
     // The v9-era reader needs the v13 projection removal, v12 singleton fold-in,
     // v11 curator retirement, and v10 dead-table retirement reversed in order.
-    projectedDatabase.exec("ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;");
     projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
     projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
     projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);

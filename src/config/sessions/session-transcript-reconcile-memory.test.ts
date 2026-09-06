@@ -32,6 +32,7 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
+  waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 
 const agentId = "secondary";
@@ -255,6 +256,9 @@ describe("incognito transcript reconciliation", () => {
       );
       try {
         closeOpenClawAgentDatabaseByPath(database.path);
+        if (mode === "scheduled") {
+          await waitForSessionTranscriptProjection(scope);
+        }
       } finally {
         release.resolve();
         await blocker;

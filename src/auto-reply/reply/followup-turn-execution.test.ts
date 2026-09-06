@@ -171,6 +171,43 @@ describe("executeFollowupTurn", () => {
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
+  it.each(["off", "on", "full"] as const)(
+    "keeps explicit turn verbosity %s despite live-session changes",
+    async (selected) => {
+      let liveLevel: "on" | "off" = selected === "off" ? "on" : "off";
+      const turn = createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: liveLevel }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      });
+      turn.queued.run.verboseLevelOverride = selected;
+      const toolResult = vi.fn(async () => {});
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        expect(params.resolvedVerboseLevel).toBe(selected);
+        expect(params.shouldEmitToolResult()).toBe(selected !== "off");
+        expect(params.shouldEmitToolOutput()).toBe(selected === "full");
+        liveLevel = liveLevel === "off" ? "on" : "off";
+        expect(params.shouldEmitToolResult()).toBe(selected !== "off");
+        if (params.shouldEmitToolResult()) {
+          await params.opts?.onToolResult?.({ text: "TOOL_STATUS" });
+        }
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+      const result = await executeFollowupTurn({
+        turn,
+        defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+        onToolResult: toolResult,
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      await result.progress.drain();
+      expect(toolResult).toHaveBeenCalledTimes(selected === "off" ? 0 : 1);
+    },
+  );
+
   it("ignores verbosity loaded from a replacement session generation", async () => {
     const currentEntry = {
       sessionId: "session",

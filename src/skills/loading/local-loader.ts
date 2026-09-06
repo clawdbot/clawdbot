@@ -17,6 +17,7 @@ import {
 export type LoadedLocalSkill = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
+  content: string;
 };
 
 export type LocalSkillLoadDiagnostic = {
@@ -125,62 +126,34 @@ export function loadSingleSkillDirectory(params: {
       disableModelInvocation: invocation.disableModelInvocation,
     },
     frontmatter,
+    content: raw,
   };
 }
 
-function listCandidateSkillDirs(dir: string): string[] {
-  try {
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
-      )
-      .map((entry) => path.join(dir, entry.name))
-      .toSorted((left, right) => left.localeCompare(right));
-  } catch {
-    return [];
-  }
-}
-
-/** Loads skills from a local directory while turning read/parse failures into diagnostics. */
-export function loadSkillsFromDirSafe(params: {
-  dir: string;
-  source: string;
+export function readSkillFrontmatterSafe(params: {
+  rootDir: string;
+  filePath: string;
   maxBytes?: number;
   rejectHardlinks?: boolean;
-  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
-}): LoadedLocalSkill[] {
-  const rootDir = path.resolve(params.dir);
+}): Record<string, string> | null {
   let rootRealPath: string;
   try {
-    rootRealPath = fs.realpathSync(rootDir);
+    rootRealPath = fs.realpathSync(path.resolve(params.rootDir));
   } catch {
-    return [];
+    return null;
   }
-
-  const rootSkill = loadSingleSkillDirectory({
-    skillDir: rootDir,
-    source: params.source,
+  const raw = readSkillFileSync({
     rootRealPath,
+    filePath: path.resolve(params.filePath),
     maxBytes: params.maxBytes,
     rejectHardlinks: params.rejectHardlinks,
-    onDiagnostic: params.onDiagnostic,
   });
-  if (rootSkill) {
-    return [rootSkill];
+  if (raw === null) {
+    return null;
   }
-
-  return listCandidateSkillDirs(rootDir)
-    .map((skillDir) =>
-      loadSingleSkillDirectory({
-        skillDir,
-        source: params.source,
-        rootRealPath,
-        maxBytes: params.maxBytes,
-        rejectHardlinks: params.rejectHardlinks,
-        onDiagnostic: params.onDiagnostic,
-      }),
-    )
-    .filter((skill): skill is LoadedLocalSkill => skill !== null);
+  try {
+    return parseSkillFrontmatter(raw);
+  } catch {
+    return null;
+  }
 }

@@ -19,7 +19,7 @@ function widget(viewGeneration = "a".repeat(32)): BoardWidget {
   };
 }
 
-function createHost() {
+function createHost(waitForRender = false) {
   const frame = document.createElement("iframe");
   document.body.append(frame);
   const onLoadFailed = vi.fn();
@@ -37,6 +37,7 @@ function createHost() {
     onUnauthorized: vi.fn(),
     onReadyTimeout: vi.fn(),
     onLoaded,
+    onRendered: waitForRender ? vi.fn() : undefined,
     onError: vi.fn(),
   };
   const host = new BoardWidgetSandboxHost(options);
@@ -60,40 +61,53 @@ afterEach(() => {
 });
 
 describe("BoardWidgetSandboxHost document timeout", () => {
-  it.each(["headers", "body"] as const)("times out stalled %s delivery", async (phase) => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-        const signal = init?.signal;
-        if (phase === "headers") {
-          return new Promise<Response>((_resolve, reject) => {
-            signal?.addEventListener("abort", () => reject(new Error("request aborted")));
-          });
-        }
-        return Promise.resolve(
-          new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(new TextEncoder().encode("<!doctype html>"));
-                signal?.addEventListener("abort", () =>
-                  controller.error(new Error("body aborted")),
-                );
-              },
-            }),
-          ),
+  it.each(["headers", "body", "render"] as const)(
+    "times out stalled %s delivery",
+    async (phase) => {
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+          if (phase === "render") {
+            return Promise.resolve(new Response("<!doctype html><p>Waiting for a resource</p>"));
+          }
+          const signal = init?.signal;
+          if (phase === "headers") {
+            return new Promise<Response>((_resolve, reject) => {
+              signal?.addEventListener("abort", () => reject(new Error("request aborted")));
+            });
+          }
+          return Promise.resolve(
+            new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode("<!doctype html>"));
+                  signal?.addEventListener("abort", () =>
+                    controller.error(new Error("body aborted")),
+                  );
+                },
+              }),
+            ),
+          );
+        }),
+      );
+      const { host, onLoadFailed, onLoaded, options } = createHost(phase === "render");
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      if (phase === "render") {
+        expect(onLoadFailed).not.toHaveBeenCalled();
+        expect(options.onError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: expect.stringContaining("did not finish loading") }),
         );
-      }),
-    );
-    const { host, onLoadFailed, onLoaded } = createHost();
-
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(onLoadFailed).toHaveBeenCalledWith(widget());
-    expect(onLoadFailed).toHaveBeenCalledOnce();
-    expect(onLoaded).not.toHaveBeenCalled();
-    host.dispose();
-  });
+      } else {
+        expect(onLoadFailed).toHaveBeenCalledWith(widget());
+        expect(onLoadFailed).toHaveBeenCalledOnce();
+      }
+      expect(onLoaded).toHaveBeenCalledTimes(phase === "render" ? 1 : 0);
+      host.dispose();
+    },
+  );
 
   it.each(["generation", "client"] as const)(
     "keeps a replacement document after a %s change cancels a stalled load",

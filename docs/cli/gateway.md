@@ -140,6 +140,8 @@ openclaw gateway restart --wait 30s
 
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
+On macOS, when `openclaw gateway restart`, `stop`, `install`, or `uninstall` runs inside the managed LaunchAgent's process tree, including an agent's shell command, OpenClaw detects that from launchd's service environment or, when a hand-written plist omits those variables, from process ancestry against the PID launchd reports for the job. Restart hands off to a detached helper so `kickstart -k` cannot kill the caller. Stop, install, and uninstall refuse and ask you to run the command from an external shell.
+
 External terminals without Gateway-service markers, externally supervised Gateways, node services, and non-Windows callers keep their existing routing. Explicit `--force`, `--wait`, `--preserve-definition`, or `--skip-deferral` also retain their existing behavior and validation; they do not implicitly enable `--safe`.
 
 <Warning>
@@ -612,6 +614,31 @@ openclaw gateway stop
 openclaw gateway restart
 openclaw gateway uninstall
 ```
+
+### Recover an unreadable native service definition
+
+If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first
+restore access to the service files and native service manager. `--force` does not
+bypass unknown service facts. Inspect the selected service with
+`openclaw gateway status --deep` from the account and profile that own it.
+
+For a malformed definition or unsupported environment syntax, privately back up
+the service files and any values stored only in its environment. Correct unresolved
+or unsupported values before reinstalling; OpenClaw cannot infer their intended
+values. Then, from an external shell using the same account and profile:
+
+```bash
+openclaw gateway uninstall
+openclaw gateway install
+openclaw gateway health
+```
+
+Uninstall removes the native registration and launcher, preserving configuration,
+plugin installations, session state, and workspaces. Reinstallation rebuilds the
+service environment from the current configuration and installation inputs;
+service-only values must be supplied again. If native service status is itself
+unavailable, uninstall also refuses: restore native manager access first instead
+of deleting state or bypassing inspection.
 
 ### Lifecycle requests from Gateway chat
 

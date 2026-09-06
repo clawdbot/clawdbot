@@ -122,18 +122,10 @@ export function createAssistantCommentaryMessage(
   itemId: string,
   timestamp: number,
 ): AssistantMessage {
-  const attribution = resolveCodexLocalRuntimeAttribution(params);
   const message: AssistantMessage & {
     openclawStreamFallback: { replacementText: string; source: "segment"; itemId: string };
   } = {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: params.modelId,
-    usage: ZERO_USAGE,
-    stopReason: "stop",
-    timestamp,
+    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
     // Keep this unphased: gateway history hides commentary-phase assistant rows.
     // The keyed fallback persists Control UI narration without channel delivery.
     openclawStreamFallback: {
@@ -151,16 +143,8 @@ export function createAssistantAsyncMessage(
   itemId: string,
   timestamp: number,
 ): CodexAsyncAssistantMessage {
-  const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: attribution.api ?? "openai-chatgpt-responses",
-    provider: attribution.provider,
-    model: params.modelId,
-    usage: ZERO_USAGE,
-    stopReason: "stop",
-    timestamp,
+    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
     openclawAsyncDelivery: { itemId },
   };
 }
@@ -169,16 +153,24 @@ export function createAssistantReasoningMessage(
   params: CodexAssistantMessageParams,
   text: string,
 ): AssistantMessage {
+  // Shared history and visibility controls need reasoning, not final-answer text.
+  return createNonterminalAssistantMessage(params, [{ type: "thinking", thinking: text }]);
+}
+
+function createNonterminalAssistantMessage(
+  params: CodexAssistantMessageParams,
+  content: AssistantMessage["content"],
+  timestamp?: number,
+): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
     role: "assistant",
-    // Shared history and visibility controls need reasoning, not final-answer text.
-    content: [{ type: "thinking", thinking: text }],
+    content,
     api: attribution.api ?? "openai-chatgpt-responses",
     provider: attribution.provider,
     model: params.modelId,
     usage: ZERO_USAGE,
     stopReason: "stop",
-    timestamp: Date.now(),
+    timestamp: timestamp ?? Date.now(),
   };
 }

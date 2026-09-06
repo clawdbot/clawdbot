@@ -25,8 +25,7 @@ import {
   acquireStartupMigrationLease,
   acquireStartupMigrationLeaseWithWait,
   hasActiveStartupMigrationLease,
-  needsStateMigrationCheckpoint,
-  needsStartupMigrationCheckpoint,
+  readMigrationCheckpointStatus,
   readStartupMigrationVersion,
   recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
@@ -221,23 +220,23 @@ describe("startup migration checkpoint", () => {
 
     expect(readStartupMigrationVersion(env)).toBeNull();
     expect(
-      needsStartupMigrationCheckpoint({
+      readMigrationCheckpointStatus({
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
         identity: migrationIdentity,
       }),
-    ).toBe(true);
+    ).toBe("stale");
     const { DatabaseSync } = requireNodeSqlite();
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     expect(
-      needsStateMigrationCheckpoint({
+      readMigrationCheckpointStatus({
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
         identity: migrationIdentity,
       }),
-    ).toBe(true);
+    ).toBe("stale");
     expect(prepare.mock.calls.filter(([sql]) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
     prepare.mockRestore();
 
@@ -251,50 +250,42 @@ describe("startup migration checkpoint", () => {
 
     expect(readStartupMigrationVersion(env)).toBe("2026.7.1");
     expect(
-      needsStartupMigrationCheckpoint({
+      readMigrationCheckpointStatus({
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
         identity: migrationIdentity,
       }),
-    ).toBe(false);
+    ).toBe("startup-current");
     expect(
-      needsStateMigrationCheckpoint({
-        env,
-        version: "2026.7.1",
-        buildIdentity: "2026-07-11T00:00:00.000Z",
-        identity: migrationIdentity,
-      }),
-    ).toBe(false);
-    expect(
-      needsStartupMigrationCheckpoint({
+      readMigrationCheckpointStatus({
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:01:00.000Z",
         identity: migrationIdentity,
       }),
-    ).toBe(true);
+    ).toBe("stale");
     expect(
-      needsStartupMigrationCheckpoint({
+      readMigrationCheckpointStatus({
         env,
         version: "2026.7.2",
         buildIdentity: "2026-07-11T00:00:00.000Z",
         identity: migrationIdentity,
       }),
-    ).toBe(true);
+    ).toBe("stale");
     for (const [field, value] of [
       ["effectiveConfigFingerprint", "effective-config-changed"],
       ["pluginDoctorConfigFingerprint", "plugin-doctor-config-changed"],
       ["pluginMigrationFingerprint", "plugin-migrations-changed"],
     ] as const) {
       expect(
-        needsStartupMigrationCheckpoint({
+        readMigrationCheckpointStatus({
           env,
           version: "2026.7.1",
           buildIdentity: "2026-07-11T00:00:00.000Z",
           identity: { ...migrationIdentity, [field]: value },
         }),
-      ).toBe(true);
+      ).toBe("stale");
     }
   });
 
@@ -311,8 +302,7 @@ describe("startup migration checkpoint", () => {
 
     recordSuccessfulStateMigrations({ ...checkpoint, nowMs: 1234 });
 
-    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
-    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
     expect(readStartupMigrationVersion(env)).toBeNull();
 
     // Older gateways recorded only startup completion, which also certifies state migrations.
@@ -329,9 +319,14 @@ describe("startup migration checkpoint", () => {
       },
       { env },
     );
-    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
-    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("startup-current");
     expect(readStartupMigrationVersion(env)).toBe(checkpoint.version);
+
+    recordSuccessfulStateMigrations({ ...checkpoint, buildIdentity: "older-build" });
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("startup-current");
+    recordSuccessfulStartupMigrations({ ...checkpoint, buildIdentity: "older-build" });
+    recordSuccessfulStateMigrations(checkpoint);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
   });
 
   it("keeps the fast path disabled without immutable build provenance", () => {
@@ -347,30 +342,30 @@ describe("startup migration checkpoint", () => {
       nowMs: 1234,
     });
 
+    for (const identity of [
+      undefined,
+      null,
+      { ...migrationIdentity, effectiveConfigFingerprint: " " },
+      { ...migrationIdentity, pluginDoctorConfigFingerprint: " " },
+      { ...migrationIdentity, pluginMigrationFingerprint: " " },
+    ]) {
+      expect(readMigrationCheckpointStatus({ env, buildIdentity: "known-build", identity })).toBe(
+        "stale",
+      );
+      expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+    }
     expect(
-      needsStartupMigrationCheckpoint({
-        env,
-        version: "2026.7.1",
-        buildIdentity: null,
-        identity: migrationIdentity,
-      }),
-    ).toBe(true);
+      readMigrationCheckpointStatus({ env, buildIdentity: null, identity: migrationIdentity }),
+    ).toBe("stale");
+    expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
     expect(
-      needsStartupMigrationCheckpoint({
+      readMigrationCheckpointStatus({
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
         identity: migrationIdentity,
       }),
-    ).toBe(true);
-    expect(
-      needsStartupMigrationCheckpoint({
-        env,
-        version: "2026.7.1",
-        buildIdentity: "2026-07-11T00:00:00.000Z",
-        identity: null,
-      }),
-    ).toBe(true);
+    ).toBe("stale");
   });
 
   it("treats legacy build-only checkpoints as stale once", () => {
@@ -398,8 +393,7 @@ describe("startup migration checkpoint", () => {
       { env },
     );
 
-    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
-    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(true);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("stale");
     expect(readStartupMigrationVersion(env)).toBe("2026.7.1");
   });
 
@@ -517,7 +511,7 @@ describe("startup migration checkpoint", () => {
       identity: migrationIdentity,
     };
 
-    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("stale");
 
     const acquired = await acquireStartupMigrationLeaseWithWait({
       env,
@@ -537,7 +531,7 @@ describe("startup migration checkpoint", () => {
 
     expect(sleepCount).toBe(1);
     expect(acquired.owner).toBe("second");
-    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("startup-current");
     acquired.release();
   });
 
@@ -708,7 +702,7 @@ describe("startup migration checkpoint", () => {
     `);
     db.close();
 
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1" })).toBe(true);
+    expect(readMigrationCheckpointStatus({ env, version: "2026.7.1" })).toBe("stale");
     const lease = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" });
     const leased = new sqlite.DatabaseSync(dbPath, { readOnly: true });
     expect(leased.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
@@ -727,6 +721,13 @@ describe("startup migration checkpoint", () => {
     db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     db.close();
 
+    expect(() =>
+      readMigrationCheckpointStatus({
+        env,
+        buildIdentity: "known-build",
+        identity: migrationIdentity,
+      }),
+    ).toThrow(`newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" })).toThrow(
       `newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
     );
@@ -737,5 +738,38 @@ describe("startup migration checkpoint", () => {
       .get() as { ok?: unknown } | undefined;
     verify.close();
     expect(row).toBeUndefined();
+  });
+
+  it("rejects foreign-key corruption before reading checkpoint status", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-corrupt-"),
+    };
+    const dbPath = resolveOpenClawStateSqlitePath(env);
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE legacy_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE legacy_child (parent_id INTEGER REFERENCES legacy_parent(id));
+      INSERT INTO legacy_child VALUES (1);
+    `);
+    db.close();
+
+    expect(() =>
+      readMigrationCheckpointStatus({
+        env,
+        buildIdentity: "known-build",
+        identity: migrationIdentity,
+      }),
+    ).toThrow("foreign_key_check failed");
+    const verify = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        verify.prepare("SELECT name FROM sqlite_schema WHERE name = 'schema_meta'").get(),
+      ).toBeUndefined();
+    } finally {
+      verify.close();
+    }
   });
 });

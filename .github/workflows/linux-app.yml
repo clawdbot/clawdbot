@@ -88,6 +88,11 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Test packaged runtime ABI scanner
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s apps/linux/tests -p 'test_packaged_runtime_smoke.py'
+
       - name: Check Rust formatting
         working-directory: apps/linux/src-tauri
         run: cargo +stable fmt --check
@@ -128,7 +133,7 @@ jobs:
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: apps/linux/scripts/finalize-appimage.sh apps/linux/src-tauri/target/release/bundle/appimage
 
-      - name: Test native first-run setup without a CLI
+      - name: Test native first-run setup and failed Gateway startup
         id: first-run
         shell: bash
         run: |
@@ -136,6 +141,10 @@ jobs:
             /usr/bin/python3 apps/linux/tests/first_run.py \
             apps/linux/src-tauri/target/release/openclaw-desktop \
             2>&1 | tee "${RUNNER_TEMP}/linux-first-run.log"
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/release/openclaw-desktop --local-start-failure \
+            2>&1 | tee -a "${RUNNER_TEMP}/linux-first-run.log"
 
       - name: Upload first-run failure log
         if: failure() && steps.first-run.outcome == 'failure'

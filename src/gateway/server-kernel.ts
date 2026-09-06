@@ -179,7 +179,6 @@ export async function createGatewayKernel(
         port,
         log,
         logCron,
-        diagnosticsEnabled: bootstrap.diagnosticsEnabled,
         shutdownRuntime,
       }),
     );

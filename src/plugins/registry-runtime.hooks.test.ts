@@ -56,7 +56,7 @@ describe("plugin runtime hook dispatch ownership", () => {
     builder.registry.plugins.push(record);
 
     await expect(api.runtime.hooks.dispatchHookAgentTurn(hookTurn)).rejects.toThrow(
-      'dispatchHookAgentTurn is only available for trusted plugins in this release. Plugin "untrusted-mail" loaded with origin "workspace"',
+      'reason=record-missing; registryPath=null; origin="workspace"',
     );
     expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
   });

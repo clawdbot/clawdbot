@@ -21,6 +21,7 @@ export default defineSingleProviderPluginEntry({
       noteMessage: "Manage API keys at https://novita.ai/settings/key-management",
     },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },

@@ -187,8 +187,20 @@ Example schema:
 | `auto`      | Use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route. |
 | `full`      | Run host exec without approval prompts.                                                                                                                                   |
 
-Doctor migrates the retired persisted `tools.exec.security` / `tools.exec.ask`
-pair to `tools.exec.mode`.
+Doctor migrates supported legacy `tools.exec.security` / `tools.exec.ask` pairs
+to `tools.exec.mode`. If a deploy script, template, or config generator still
+sends the old fields, `config patch` and Gateway `config.patch` reject the mixed
+policy without changing the file. Update that source in the same exec object
+named by the error, including `agents.entries.<agentId>.tools.exec` for an agent
+override. Replace `security` / `ask` with the suggested `mode` value when an exact
+equivalent exists. For example, `security: "full", ask: "off"` becomes `mode: "full"`.
+
+An incomplete pair needs an explicit choice of the intended policy before
+conversion. Pairs with `ask: "always"`, or `security: "full", ask: "on-miss"`,
+have no exact mode equivalent: retain both legacy fields and remove `mode` from
+that same object to keep their policy. Preserve other exec settings when replacing
+an object. Run `openclaw doctor --fix` for a saved file that still needs migration;
+running it again does not update a stale deployment source.
 
 ### `exec.security`
 
@@ -284,9 +296,9 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 </Warning>
 
-For OpenClaw-managed Claude sessions, the Claude Agent SDK always uses its
+For OpenClaw-managed Claude sessions, OpenClaw launches Claude Code in its
 `default` permission mode. OpenClaw's effective exec policy remains
-authoritative through its native tool approval callback, including YOLO and
+authoritative through native tool hooks and permission requests, including YOLO and
 restrictive policies, even if raw Claude backend args request
 `bypassPermissions`.
 
@@ -663,6 +675,14 @@ facts; channels never infer them from commands or message text. Without a
 declared scope, approval cards render exactly as before.
 
 ## System events and denials
+
+When an approval can be delivered, ordinary agent runs wait for the decision
+and receive the exec result in the same turn. The final reply uses the original
+delivery path, including an inbound A2A task. An operator denial returns a denied
+tool result without running the command.
+
+Diagnostic and export commands that explicitly use asynchronous execution retain
+their separate follow-up delivery. For those workflows:
 
 Exec lifecycle posts an `Exec finished` system message to the agent's
 session after the node reports completion. OpenClaw can also emit an

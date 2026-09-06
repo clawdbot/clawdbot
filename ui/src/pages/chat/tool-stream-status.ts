@@ -7,6 +7,7 @@ import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type {
   AgentEventPayload,
   CompactionStatus,
@@ -405,6 +406,23 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream === "run_status" && payload.data.phase === "retrying") {
+    const message = toTrimmedString(payload.data.message);
+    if (message) {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "retrying",
+        message: formatUiExternalText(message.slice(0, 256)),
+        seq: payload.seq,
+      });
+    }
+    return true;
+  }
+  if (payload.stream === "assistant") {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    return true;
+  }
   if (payload.stream === "compaction") {
     handleCompactionEvent(host, payload);
     return true;

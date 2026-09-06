@@ -5,6 +5,7 @@ import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";
 import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
@@ -97,6 +98,7 @@ export const GATEWAY_EVENTS = [
   "terminal.data",
   "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
   "portal.changed",
   "progressCard.changed",
   "mentions.changed",

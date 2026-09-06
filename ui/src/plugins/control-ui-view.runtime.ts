@@ -137,11 +137,9 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
               throw new Error("This plugin UI view has ended.");
             }
             this.defaultContainers.add(target);
-            this.toggleAttribute("data-plugin-default-mounted", true);
             render(this.defaultView, target, { host: this.defaultHost ?? this });
             return () => {
               this.defaultContainers.delete(target);
-              this.toggleAttribute("data-plugin-default-mounted", this.defaultContainers.size > 0);
               render(nothing, target);
             };
           },
@@ -230,7 +228,6 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
       render(nothing, container);
     }
     this.defaultContainers.clear();
-    this.removeAttribute("data-plugin-default-mounted");
     this.viewContext = undefined;
   }
 

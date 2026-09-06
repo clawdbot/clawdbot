@@ -37,7 +37,7 @@ vi.mock("../state/user-profiles.js", async (importOriginal) => ({
   getUserProfileDisplay,
 }));
 
-import { listSessionsFromStoreAsync } from "./session-utils.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -64,7 +64,7 @@ it("lets configured agents win id-only owner facet collisions", async () => {
         } satisfies SessionEntry,
       ]),
     );
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg: {
         agents: { list: [{ id: "shared-id", identity: { name: "Shared agent" } }] },
       } as OpenClawConfig,
@@ -102,7 +102,7 @@ it("returns the complete deterministic owner facet independently of pagination",
     },
   };
 
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -141,7 +141,7 @@ it("returns the complete deterministic owner facet independently of pagination",
   });
   expect(getUserProfileDisplay).toHaveBeenCalledTimes(2);
 
-  const filtered = await listSessionsFromStoreAsync({
+  const filtered = await listSessionFixture({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -167,7 +167,7 @@ it("prepends an owner window without advancing shared-page pagination", async ()
     },
   };
 
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owner-first",
     store,
@@ -225,7 +225,7 @@ it("projects only durable profiles and configured agents as effective owners", a
       } satisfies SessionEntry,
     ]),
   );
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {
       agents: {
         list: [
@@ -308,7 +308,7 @@ it("filters immutable creator and effective owner separately while preserving pr
       updatedAt: 0,
     },
   } satisfies Record<string, SessionEntry>;
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -342,7 +342,7 @@ it("filters immutable creator and effective owner separately while preserving pr
       label: "Bob",
     },
   ]);
-  const creatorFiltered = await listSessionsFromStoreAsync({
+  const creatorFiltered = await listSessionFixture({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -358,7 +358,7 @@ it("filters immutable creator and effective owner separately while preserving pr
       owner: { actor: { id: "profile-bob", label: "Bob" } },
     },
   );
-  const ownerFiltered = await listSessionsFromStoreAsync({
+  const ownerFiltered = await listSessionFixture({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -406,9 +406,9 @@ it("filters immutable creator and effective owner separately while preserving pr
       opts: { creatorId: "profile-ada" },
     };
     expect
-      .soft((await listSessionsFromStoreAsync(query)).sessions.map((row) => row.key))
+      .soft((await listSessionFixture(query)).sessions.map((row) => row.key))
       .toEqual(["agent:main:shared", "agent:main:draft"]);
-    const authorized = await listSessionsFromStoreAsync({ ...query, entryFilter });
+    const authorized = await listSessionFixture({ ...query, entryFilter });
     expect
       .soft(authorized.sessions.map((row) => row.key))
       .toEqual(
@@ -483,7 +483,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
   const cfg: OpenClawConfig = {
     agents: { list: [{ id: "research", identity: { name: "Research" } }] },
   };
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg,
     storePath: "/tmp/openclaw-session-participants",
     store,
@@ -512,7 +512,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     participantCount: 5,
   });
 
-  const unfiltered = await listSessionsFromStoreAsync({
+  const unfiltered = await listSessionFixture({
     cfg,
     storePath: "/tmp/openclaw-session-participants",
     store,
@@ -530,7 +530,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     expect(participant).not.toHaveProperty("label");
     expect(participant).not.toHaveProperty("avatarUrl");
   }
-  const selected = await listSessionsFromStoreAsync({
+  const selected = await listSessionFixture({
     cfg,
     storePath: "/tmp/openclaw-session-participants",
     store,
@@ -603,7 +603,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       store,
       opts: { archived: "all" as const, includePeople: true },
     };
-    const all = await listSessionsFromStoreAsync(query);
+    const all = await listSessionFixture(query);
     const creator = {
       type: "human",
       id: "former",
@@ -625,7 +625,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       });
       expect(row.owner).toBeUndefined();
     }
-    const involving = await listSessionsFromStoreAsync({ ...query, involvingActorId: "current" });
+    const involving = await listSessionFixture({ ...query, involvingActorId: "current" });
     expect(involving.sessions.map((row) => row.key)).toEqual(["agent:main:historical", childKey]);
     expect(involving.sessions[0]?.participants).toEqual([
       { identity: { type: "profile", id: "current" }, label: "Current" },
@@ -633,7 +633,7 @@ it.each(["spawn", "talk", "cron"] as const)(
     expect(involving.people).toEqual([
       { identity: { type: "profile", id: "current" }, label: "Current", sessionCount: 2 },
     ]);
-    const ownerFirst = await listSessionsFromStoreAsync({
+    const ownerFirst = await listSessionFixture({
       ...query,
       opts: { archived: "all", limit: 1 },
       ownerFirstActorId: "current",
@@ -642,7 +642,7 @@ it.each(["spawn", "talk", "cron"] as const)(
 
     // Reassignment must not erase the creator's Activity association or fabricate their input.
     child.owner = { actor: { type: "agent", id: "main" } };
-    const associated = await listSessionsFromStoreAsync({
+    const associated = await listSessionFixture({
       ...query,
       opts: { ...query.opts, involvingProfileId: "former" },
     });
@@ -684,20 +684,20 @@ it("returns a canonical selected person and orders merged owners without borrowi
     store,
     opts: { archived: "all" as const, includePeople: true, involvingProfileId: "former", limit: 1 },
   };
-  const result = await listSessionsFromStoreAsync(query);
+  const result = await listSessionFixture(query);
   expect(result).toMatchObject({
     involvingProfileId: "current",
     totalCount: 1,
     peopleIncomplete: true,
   });
   expect(result.people?.some((person) => person.identity.id === "current")).toBe(true);
-  const ordered = await listSessionsFromStoreAsync({
+  const ordered = await listSessionFixture({
     ...query,
     opts: { archived: "all", limit: 1 },
     ownerFirstActorId: "current",
   });
   expect(ordered.sessions[0]?.key).toBe("agent:main:owned");
-  const involved = await listSessionsFromStoreAsync({
+  const involved = await listSessionFixture({
     ...query,
     opts: { archived: "all" },
     involvingActorId: "current",
@@ -706,7 +706,7 @@ it("returns a canonical selected person and orders merged owners without borrowi
 });
 
 it("reports the authoritative admission bound even when the visible participant list is smaller", async () => {
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {},
     storePath: "/tmp/openclaw-session-bound",
     store: {
@@ -821,9 +821,10 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   } as GatewayClient;
   const entryFilter = createSessionListEntryFilter({ client: viewer });
 
-  const project = async (opts: Parameters<typeof listSessionsFromStoreAsync>[0]["opts"]) => {
-    const result = await listSessionsFromStoreAsync({
+  const project = async (opts: Parameters<typeof listSessionFixture>[0]["opts"]) => {
+    const result = await listSessionFixture({
       cfg,
+      fixtureAgentId: "main",
       ...(entryFilter ? { entryFilter } : {}),
       opts,
       store,
@@ -910,7 +911,8 @@ it("preserves list output across visibility, scope, owner, and search filters", 
 
 it("keeps the serialized list response deterministic for the current filter path", async () => {
   vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
+    fixtureAgentId: "main",
     cfg: {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },

@@ -488,7 +488,9 @@ async function command() {
     if (count === (fault.occurrence ?? 1)) commandResult = fault;
   }
   const operation = args.shift();
-  if (operation === "init" && !localGit) {
+  if (operation === "rev-parse" && args.join(" ") === "--git-path info/exclude" && !localGit) {
+    fs.writeSync(1, `${path.join(cwd, ".git/info/exclude")}\n`);
+  } else if (operation === "init" && !localGit) {
     await boundary("init");
     const config = path.join(root, "fixture-config.json");
     if (fs.existsSync(config)) {

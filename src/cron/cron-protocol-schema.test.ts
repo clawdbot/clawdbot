@@ -1,8 +1,6 @@
-import { Value } from "typebox/value";
 // Cron protocol schema tests cover runtime validation for cron protocol payloads.
 import { describe, expect, it } from "vitest";
 import {
-  CronAddParamsSchema,
   CronJobStateSchema,
   CronPacingSchema,
   CronUpdateParamsSchema,
@@ -56,24 +54,5 @@ describe("cron protocol schema", () => {
     expect((CronPacingSchema as SchemaLike).description).toContain(
       "at least one of min or max is required",
     );
-  });
-
-  it("keeps system-owned payloads out of client create and patch schemas", () => {
-    const payload = { kind: "skillCollectionReview" };
-    expect(
-      Value.Check(CronAddParamsSchema, {
-        name: "skill review",
-        schedule: { kind: "every", everyMs: 604_800_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload,
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(CronUpdateParamsSchema, {
-        id: "job-1",
-        patch: { payload },
-      }),
-    ).toBe(false);
   });
 });

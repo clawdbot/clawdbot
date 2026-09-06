@@ -14,6 +14,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -82,6 +83,58 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     }
     expect(workersStarted).toBe(0);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(entry);
+  });
+
+  it("rejects cleanup planning when a native scan fails after an orphan marker", async () => {
+    const sessionKey = "agent:main:marker-scan-history";
+    const sessionId = "marker-scan-history";
+    const events = [
+      { type: "metadata", runId: "cleanup-race-marker" },
+      { type: "metadata", runId: "failing-tail" },
+    ];
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "marker-scan-current", updatedAt: Date.now() },
+    );
+    const database = openDatabase(storePath);
+    const failure = new Error("late native transcript read failure");
+    const observed: unknown[] = [];
+    database.db.function("cleanup_marker_event", (eventJson) => {
+      observed.push(eventJson);
+      if (eventJson === JSON.stringify(events[1])) {
+        throw failure;
+      }
+      return eventJson;
+    });
+    // A connection-local view fails during native stepping without changing the saved schema.
+    database.db.exec(`CREATE TEMP VIEW transcript_events AS
+      SELECT session_id, seq, cleanup_marker_event(event_json) AS event_json, created_at
+      FROM main.transcript_events`);
+    let caught: unknown;
+    try {
+      planSessionLifecycleArtifactCleanup(database, {
+        archiveRemovedEntryTranscripts: false,
+        archiveDirectory: path.dirname(storePath),
+        sessionKeySegmentPrefix: "unrelated-prefix-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 0,
+        nowMs: Date.now(),
+      });
+    } catch (error) {
+      caught = error;
+    } finally {
+      database.db.exec("DROP VIEW temp.transcript_events");
+    }
+    expect(caught).toBe(failure);
+    expect(observed).toContain(JSON.stringify(events[0]));
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "marker-scan-current",
+    });
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
+      events,
+    );
   });
 
   it("reclaims orphan-only history and republishes pending archives on an empty pass", async () => {

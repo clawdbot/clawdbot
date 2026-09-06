@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
@@ -38,6 +40,7 @@ import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -62,6 +65,7 @@ async function finishFailedUpdate(
     failure?: { cause: unknown; detail: string };
     json?: boolean;
     stopped?: boolean;
+    run?: FinishUpdateParams["opts"]["run"];
     windowsTaskAutoStartRecovery?: NonNullable<
       FinishUpdateParams["preManagedServiceStop"]
     >["windowsTaskAutoStartRecovery"];
@@ -93,8 +97,7 @@ async function finishFailedUpdate(
     shouldRestart: true,
     preUpdatePluginInstallRecords: {},
     updateStepTimeoutMs: 1000,
-    opts: { json: options.json },
-    showProgress: false,
+    opts: { json: options.json, run: options.run },
     startedAt: Date.now(),
     preManagedServiceStop: {
       stopped: options.stopped ?? true,
@@ -148,11 +151,6 @@ describe("skipped update exit status", () => {
     ["already-current", 0],
   ] as const)("handles %s with exit %i", async (reason, exitCode) => {
     const failure = await finishSkippedUpdate(reason);
-    if (reason === "dirty") {
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Update blocked: local files are edited"),
-      );
-    }
     expect(failure.exitCode).toBe(exitCode);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
@@ -169,17 +167,25 @@ describe("failed Git update recovery restart", () => {
     async (status) => {
       let now = 1_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: tempDirs.make("update-report-before-boot-"),
+      };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       mocks.restart.mockImplementationOnce(async () => {
         expect(mocks.writeSentinel.mock.lastCall?.[0].result).toMatchObject({ status });
         expect(mocks.writeSentinel.mock.lastCall?.[0].result.durationMs).toBe(0);
         expect(mocks.printResult).not.toHaveBeenCalled();
+        if (status === "error") {
+          expect(getUpdateRun(run.runId, { env })?.origin.nextAction).toContain("triage");
+        }
         now += 200;
       });
 
-      await finishFailedUpdate({
-        ...failedResult({ serviceRestartSafe: true, version: "1.0.0" }),
-        status,
-      });
+      await finishFailedUpdate(
+        { ...failedResult({ serviceRestartSafe: true, version: "1.0.0" }), status },
+        { run },
+      );
 
       expect(mocks.restart).toHaveBeenCalledOnce();
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
@@ -271,7 +277,6 @@ describe("failed Git update recovery restart", () => {
         },
         {
           windowsTaskAutoStartRecovery: {
-            suspended: Promise.resolve(true),
             beginMutation: () => {},
             restore,
             complete,
@@ -285,15 +290,11 @@ describe("failed Git update recovery restart", () => {
   );
 
   it("leaves a managed Gateway stopped after unverified rollback recovery", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-
     await finishFailedUpdate(
       failedResult({ serviceRestartSafe: false, reason: "runtime-verification-failed" }),
     );
 
     expect(mocks.restart).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Run `openclaw triage`"));
   });
 
   it("does not restart when the mutation owner returned no recovery verdict", async () => {
@@ -406,47 +407,27 @@ describe("failed Git update recovery restart", () => {
     },
   );
 
-  it("routes a dirty rollback checkout into triage", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  it.each([true, false])(
+    "persists the owned profile and observed service stop in recovery guidance (stopped=%s)",
+    async (stopped) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: tempDirs.make("update-report-recovery-"),
+        OPENCLAW_PROFILE: "work",
+      };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      await finishFailedUpdate(
+        failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
+        { stopped, run },
+      );
 
-    await finishFailedUpdate(
-      failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
-    );
-
-    const output = log.mock.calls.flat().map(String).join("\n");
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(output).toContain("Run `openclaw triage`");
-    expect(output).toContain("diagnose and repair the installation");
-    expect(output).toContain("Keep the gateway stopped until the update succeeds");
-  });
-
-  it("preserves the active profile in unsafe recovery guidance", async () => {
-    vi.stubEnv("OPENCLAW_PROFILE", "work");
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-
-    await finishFailedUpdate(
-      failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
-    );
-
-    const output = log.mock.calls.flat().map(String).join("\n");
-    expect(output).toContain("Run `openclaw --profile work triage`");
-    expect(output).not.toContain("Run `openclaw triage`");
-  });
-
-  it("does not claim an unsafe recovery stopped a service that was already down", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-
-    await finishFailedUpdate(
-      failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
-      { stopped: false },
-    );
-
-    const output = log.mock.calls.flat().map(String).join("\n");
-    expect(output).toContain("Update recovery could not prove a runnable installation");
-    expect(output).toContain("Run `openclaw triage`");
-    expect(output).not.toContain("remains stopped");
-    expect(output).not.toContain("Keep the gateway stopped");
-  });
+      const nextAction = getUpdateRun(run.runId, { env })?.origin.nextAction;
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(nextAction).toContain("Run `openclaw --profile work triage`");
+      expect(nextAction?.includes("Keep the gateway stopped")).toBe(stopped);
+      expect(mocks.printResult.mock.lastCall?.[2]).toEqual({ nextAction });
+    },
+  );
 
   it("keeps structured JSON recovery free of prose guidance", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
@@ -460,6 +441,7 @@ describe("failed Git update recovery restart", () => {
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ ...result, durationMs: expect.any(Number) }),
       expect.objectContaining({ json: true }),
+      expect.objectContaining({ nextAction: expect.any(String) }),
     );
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
@@ -479,8 +461,6 @@ describe("failed package update recovery safety", () => {
     "pnpm package postinstall",
     "pnpm package lifecycle finalize",
   ])("keeps the replaced package stopped after %s fails", async (name) => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-
     const failure = await finishFailedUpdate({
       status: "error",
       mode: name.startsWith("pnpm ") ? "pnpm" : "npm",
@@ -501,12 +481,9 @@ describe("failed package update recovery safety", () => {
     expect(failure.exitCode).toBe(1);
 
     expect(mocks.restart).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
   });
 
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-
     const failure = await finishFailedUpdate({
       status: "error",
       mode: "npm",
@@ -530,6 +507,5 @@ describe("failed package update recovery safety", () => {
       reason: "runtime-verification-failed",
       packageRollbackVerified: true,
     });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
   });
 });

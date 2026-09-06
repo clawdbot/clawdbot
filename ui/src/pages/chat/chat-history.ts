@@ -100,7 +100,11 @@ export async function loadChatHistory(
       if (result) {
         setChatHistoryLoad(state, {
           phase: "committed",
-          key: `${sessionKey}\u0000${requestAgentId ?? ""}`,
+          client,
+          connectionEpoch,
+          sessionKey,
+          requestAgentId,
+          sessionInfo: result.sessionInfo,
         });
       } else if (
         state.sessionKey === sessionKey &&

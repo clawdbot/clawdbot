@@ -28,6 +28,7 @@ async function createOwner(
     deferExit?: boolean;
     cleanup?: () => Promise<void>;
     systemPrompt?: string;
+    argv0?: string;
     capture?: { token: string; key: string };
     requiredGeneration?: string;
   } = {},
@@ -67,6 +68,7 @@ async function createOwner(
   const capability: CliBackendLiveSessionCapability = createCliLiveSessionCapability({
     context,
     argv: ["claude", "-p"],
+    argv0: options.argv0,
     env: { PATH: "/usr/bin:/bin" },
     beginCapture,
     abortSignal: new AbortController().signal,
@@ -240,26 +242,40 @@ describe("generic plugin-owned live session registry", () => {
     expect(original.capability.current()).toBe(original.session);
   });
 
-  it("rejects required generation reuse after prompt changes without closing its only process", async () => {
-    const original = await createOwner({
-      sessionId: "required-prompt-owner",
-      generation: "required-generation",
-      systemPrompt: "Original system policy.",
-    });
-    original.register();
-    const changed = await createOwner({
-      sessionId: "required-prompt-owner",
-      requiredGeneration: "required-generation",
-      systemPrompt: "Changed system policy.",
-    });
+  it.each([
+    {
+      change: "system prompt",
+      originalOptions: { systemPrompt: "Original system policy." },
+      changedOptions: { systemPrompt: "Changed system policy." },
+    },
+    {
+      change: "invocation name",
+      originalOptions: { argv0: "/usr/bin/cli-alias-a" },
+      changedOptions: { argv0: "/usr/bin/cli-alias-b" },
+    },
+  ])(
+    "rejects required generation reuse after $change changes without closing its only process",
+    async ({ originalOptions, changedOptions }) => {
+      const original = await createOwner({
+        sessionId: "required-changed-owner",
+        generation: "required-generation",
+        ...originalOptions,
+      });
+      original.register();
+      const changed = await createOwner({
+        sessionId: "required-changed-owner",
+        requiredGeneration: "required-generation",
+        ...changedOptions,
+      });
 
-    expect(changed.capability.fingerprint).not.toBe(original.capability.fingerprint);
-    expect(() => changed.capability.current()).toThrow(
-      expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
-    );
-    expect(original.close).not.toHaveBeenCalled();
-    expect(original.capability.current()).toBe(original.session);
-  });
+      expect(changed.capability.fingerprint).not.toBe(original.capability.fingerprint);
+      expect(() => changed.capability.current()).toThrow(
+        expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
+      );
+      expect(original.close).not.toHaveBeenCalled();
+      expect(original.capability.current()).toBe(original.session);
+    },
+  );
 
   it("transfers admitted MCP authority to the original private process before capture", async () => {
     const original = await createOwner({

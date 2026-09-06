@@ -1,9 +1,16 @@
 // Telegram plugin module implements account throttler behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose, sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
+import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
+import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 type ApiThrottlerTransformer = ReturnType<typeof apiThrottler>;
+type TelegramAccountThrottler = {
+  transformer: ApiThrottlerTransformer;
+  chatActions: ReturnType<typeof createTelegramSendChatActionHandler>;
+};
 type TelegramApiPayload = {
   chat_id?: unknown;
   direct_messages_topic_id?: unknown;
@@ -16,11 +23,53 @@ type QueuedApiRequest<T> = {
   reject: (err: unknown) => void;
 };
 
-class GroupFairQueue {
+class GroupRequestScheduler {
   private readonly lanes = new Map<string, Array<QueuedApiRequest<unknown>>>();
   private laneOrder: string[] = [];
   private nextLaneIndex = 0;
   private running = false;
+  private actionTail = Promise.resolve();
+  private nextActionAtMs = 0;
+
+  enqueueAction<T>(
+    run: () => Promise<T>,
+    signal: Parameters<ApiThrottlerTransformer>[3],
+  ): Promise<T> {
+    // grammY may supply the legacy node-fetch signal; bridge only its abort event.
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) {
+      abort();
+    } else {
+      signal?.addEventListener("abort", abort, { once: true });
+    }
+    const result = this.actionTail.then(async () => {
+      controller.signal.throwIfAborted();
+      const waitMs = this.nextActionAtMs - Date.now();
+      if (waitMs > 0) {
+        await sleepWithAbort(waitMs, controller.signal);
+      }
+      try {
+        return await run();
+      } finally {
+        // The final API guard can back off after this queue's wait.
+        this.nextActionAtMs = Date.now() + 1_000;
+      }
+    });
+    this.actionTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return Promise.race([
+      result,
+      waitForAbortSignal(controller.signal).then(() => {
+        throw new DOMException("Chat action canceled", "AbortError");
+      }),
+    ]).finally(() => {
+      signal?.removeEventListener("abort", abort);
+      controller.abort();
+    });
+  }
 
   enqueue<T>(laneKey: string, run: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -97,15 +146,15 @@ class GroupFairQueue {
 
 const TELEGRAM_ACCOUNT_THROTTLERS_KEY = Symbol.for("openclaw.telegram.accountThrottlers");
 
-function getAccountThrottlers(): Map<string, ApiThrottlerTransformer> {
+function getAccountThrottlers(): Map<string, TelegramAccountThrottler> {
   const globalRecord = globalThis as Record<PropertyKey, unknown>;
   const existing = globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] as
-    | Map<string, ApiThrottlerTransformer>
+    | Map<string, TelegramAccountThrottler>
     | undefined;
   if (existing) {
     return existing;
   }
-  const created = new Map<string, ApiThrottlerTransformer>();
+  const created = new Map<string, TelegramAccountThrottler>();
   globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] = created;
   return created;
 }
@@ -141,32 +190,50 @@ function resolveForumLaneKey(payload: TelegramApiPayload): string {
 
 function createTelegramAccountThrottler(
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
-): ApiThrottlerTransformer {
+): TelegramAccountThrottler {
   const baseThrottler = createThrottler();
-  const fairQueuesByChat = new Map<string, GroupFairQueue>();
+  const chatActions = createTelegramSendChatActionHandler({
+    logger: (message) => logVerbose(`telegram: ${message}`),
+    minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
+  });
+  const schedulersByChat = new Map<string, GroupRequestScheduler>();
 
-  return (prev, method, payload, signal) => {
+  const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
     const apiPayload = readPayload(payload);
     const groupChatKey = apiPayload ? resolveGroupChatKey(apiPayload) : undefined;
     if (!apiPayload || !groupChatKey) {
-      return baseThrottler(prev, method, payload, signal);
+      return baseThrottler(
+        (queuedMethod, queuedPayload, queuedSignal) =>
+          chatActions.apiTransformer(prev, queuedMethod, queuedPayload, queuedSignal),
+        method,
+        payload,
+        signal,
+      );
     }
 
-    let fairQueue = fairQueuesByChat.get(groupChatKey);
-    if (!fairQueue) {
-      fairQueue = new GroupFairQueue();
-      fairQueuesByChat.set(groupChatKey, fairQueue);
+    let scheduler = schedulersByChat.get(groupChatKey);
+    if (!scheduler) {
+      scheduler = new GroupRequestScheduler();
+      schedulersByChat.set(groupChatKey, scheduler);
+    }
+    if (method === "sendChatAction") {
+      // Ephemeral actions must not spend message reservoirs; the shared guard honors flood waits.
+      return scheduler.enqueueAction(
+        () => chatActions.apiTransformer(prev, method, payload, signal),
+        signal,
+      );
     }
 
     const laneKey = resolveForumLaneKey(apiPayload);
-    return fairQueue.enqueue(laneKey, () => baseThrottler(prev, method, payload, signal));
+    return scheduler.enqueue(laneKey, () => baseThrottler(prev, method, payload, signal));
   };
+  return { transformer, chatActions };
 }
 
 export function getOrCreateAccountThrottler(
   token: string,
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
-): ApiThrottlerTransformer {
+): TelegramAccountThrottler {
   const throttlerByToken = getAccountThrottlers();
   let throttler = throttlerByToken.get(token);
   if (!throttler) {

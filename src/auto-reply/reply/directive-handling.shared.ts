@@ -133,20 +133,25 @@ const SESSION_QUEUE_DIRECTIVE_FIELDS = [
 export function resolveDirectiveTouchedSessionFields(params: {
   directives: InlineDirectives;
   allowPrivilegedPersistence: boolean;
+  directiveOnly: boolean;
 }): Array<keyof SessionEntry> {
   const { directives } = params;
   const fields = new Set<keyof SessionEntry>();
+  if (directives.hasModelDirective) {
+    for (const field of SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS) {
+      fields.add(field);
+    }
+  }
+  // Mixed-message hints are turn-local; only model selection has a persistent contract.
+  if (!params.directiveOnly) {
+    return [...fields];
+  }
   for (const [directiveField, sessionField] of SESSION_LEVEL_DIRECTIVE_FIELDS) {
     if (
       directives[directiveField] &&
       (sessionField !== "verboseLevel" || params.allowPrivilegedPersistence)
     ) {
       fields.add(sessionField);
-    }
-  }
-  if (directives.hasModelDirective) {
-    for (const field of SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS) {
-      fields.add(field);
     }
   }
   if (directives.hasExecDirective && params.allowPrivilegedPersistence) {
@@ -179,13 +184,12 @@ export function rejectSessionDirectiveTransaction(
   return { text: errorText, isError: true };
 }
 
-/** Keeps the first informational/denied acknowledgement while committing valid siblings once. */
+/** Keeps the first informational/denied acknowledgement while validating the remaining hints. */
 export async function acknowledgeIgnoredSessionDirective(params: {
   reply: ReplyPayload;
   directives: InlineDirectives;
   ignoredDirective: IgnoredSessionDirectiveFlag;
   persistenceState: HandleDirectiveOnlyParams["persistenceState"];
-  allowPrivilegedPersistence: boolean;
   applyRemainingDirectives: (directives: InlineDirectives) => Promise<ReplyPayload | undefined>;
 }): Promise<ReplyPayload> {
   if (!params.persistenceState) {
@@ -208,15 +212,10 @@ export async function acknowledgeIgnoredSessionDirective(params: {
           ...(ignoredDirective === "hasFastDirective" ? { clearFastMode: false } : {}),
           ...(ignoredDirective === "hasModelDirective" ? { rawModelProfile: undefined } : {}),
         };
-  const touchedFields = resolveDirectiveTouchedSessionFields({
-    directives: remainingDirectives,
-    allowPrivilegedPersistence: params.allowPrivilegedPersistence,
-  });
-  if (touchedFields.length > 0) {
-    const siblingReply = await params.applyRemainingDirectives(remainingDirectives);
-    if (params.persistenceState.outcome.kind === "rejected") {
-      return siblingReply ?? params.reply;
-    }
+  // Turn-local hints still need validation even when they cannot write session fields.
+  const siblingReply = await params.applyRemainingDirectives(remainingDirectives);
+  if (params.persistenceState.outcome.kind === "rejected") {
+    return siblingReply ?? params.reply;
   }
   return params.reply;
 }
@@ -226,9 +225,7 @@ export function applySessionDirectiveFields(params: {
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
   allowPrivilegedPersistence: boolean;
-  allowTracePersistence: boolean;
   allowElevatedPersistence: boolean;
-  persistDirectiveOnlyFields: boolean;
 }): boolean {
   const { directives, sessionEntry } = params;
   let updated = false;
@@ -253,11 +250,7 @@ export function applySessionDirectiveFields(params: {
       delete sessionEntry.fastMode;
       updated = true;
     }
-  } else if (
-    params.persistDirectiveOnlyFields &&
-    directives.hasFastDirective &&
-    directives.fastMode !== undefined
-  ) {
+  } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
     updateField("fastMode", directives.fastMode);
   }
   if (
@@ -268,7 +261,7 @@ export function applySessionDirectiveFields(params: {
     applyVerboseOverride(sessionEntry, directives.verboseLevel);
     updated = true;
   }
-  if (directives.hasTraceDirective && directives.traceLevel && params.allowTracePersistence) {
+  if (directives.hasTraceDirective && directives.traceLevel) {
     applyTraceOverride(sessionEntry, directives.traceLevel);
     updated = true;
   }
@@ -301,7 +294,7 @@ export function applySessionDirectiveFields(params: {
       delete sessionEntry[field];
     }
     updated = true;
-  } else if (directives.hasQueueDirective && params.persistDirectiveOnlyFields) {
+  } else if (directives.hasQueueDirective) {
     for (const [directiveField, sessionField] of SESSION_QUEUE_DIRECTIVE_FIELDS) {
       const value = directives[directiveField];
       if (typeof value === "number" || value) {

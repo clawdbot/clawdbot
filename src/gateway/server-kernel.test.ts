@@ -155,6 +155,7 @@ describe("createGatewayKernel", () => {
       const preparationStarted = createDeferred();
       const acceptRequest = vi.fn();
       const hostLifecycle: GatewayHostLifecycle = {
+        externalRestart: { isCurrent: () => true },
         async request(_action, assertCaller) {
           assertCaller();
           preparationStarted.resolve();
@@ -244,6 +245,8 @@ describe("createGatewayKernel", () => {
           value: { gatewayInstanceId: bootId, items: [] },
         });
         const boundHost = kernel.gatewayRequestContext.hostLifecycle!;
+        // Handoff consumption compares the private owner, not a copied predicate.
+        expect(boundHost.externalRestart).toBe(hostLifecycle.externalRestart);
         pendingStop = expect(boundHost.request("stop", () => {})).rejects.toThrow(
           "closed instance",
         );

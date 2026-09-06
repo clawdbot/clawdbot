@@ -7,6 +7,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
@@ -215,20 +216,35 @@ function insertPluginStateEntryIfAbsent(
   return Number(result.numAffectedRows ?? 0) > 0;
 }
 
+type PluginStateEntryLookup = { pluginId: string; namespace: string; key: string; now: number };
+const pluginStateEntryQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof prepareSqliteQuerySync<PluginStateEntryLookup, PluginStateRow>>
+>();
+
 function selectPluginStateEntry(
   db: DatabaseSync,
-  params: { pluginId: string; namespace: string; key: string; now: number },
+  params: PluginStateEntryLookup,
 ): PluginStateRow | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "=", params.key)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
-  );
+  let query = pluginStateEntryQueries.get(db);
+  if (!query) {
+    // Retain compilation with the physical connection; keys and expiry stay invocation-local.
+    query = prepareSqliteQuerySync<PluginStateEntryLookup, PluginStateRow>(db, (parameter) => {
+      const pluginId = parameter((value) => value.pluginId);
+      const namespace = parameter((value) => value.namespace);
+      const key = parameter((value) => value.key);
+      const now = parameter((value) => value.now);
+      return getPluginStateKysely(db)
+        .selectFrom("plugin_state_entries")
+        .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
+        .where("plugin_id", "=", pluginId)
+        .where("namespace", "=", namespace)
+        .where("entry_key", "=", key)
+        .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]));
+    });
+    pluginStateEntryQueries.set(db, query);
+  }
+  return query(params).rows[0];
 }
 
 function selectPluginStateEntries(
@@ -380,27 +396,26 @@ function deleteOldestPluginStateNamespaceEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; protectedKey: string; now: number; limit: number },
 ): number {
-  const keys = executeSqliteQuerySync(
+  const kysely = getPluginStateKysely(db);
+  const keys = kysely
+    .selectFrom("plugin_state_entries")
+    .select("entry_key")
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace)
+    .where("entry_key", "!=", params.protectedKey)
+    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
+    .orderBy("created_at", "asc")
+    .orderBy("entry_key", "asc")
+    .limit(params.limit);
+  const result = executeSqliteQuerySync(
     db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select(["entry_key"])
+    kysely
+      .deleteFrom("plugin_state_entries")
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
-      .where("entry_key", "!=", params.protectedKey)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
-      .orderBy("created_at", "asc")
-      .orderBy("entry_key", "asc")
-      .limit(params.limit),
-  ).rows;
-  for (const row of keys) {
-    deletePluginStateEntry(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: row.entry_key,
-    });
-  }
-  return keys.length;
+      .where("entry_key", "in", keys),
+  );
+  return Number(result.numAffectedRows ?? 0);
 }
 
 function openPluginStateDatabase(

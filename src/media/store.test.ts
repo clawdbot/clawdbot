@@ -443,6 +443,22 @@ describe("media store", () => {
       },
     },
     {
+      name: "preserves original extension for generic file streams",
+      run: async () => {
+        const buffer = Buffer.from("custom binary");
+        const saved = await store.saveMediaStream(
+          Readable.from([buffer]),
+          "application/octet-stream",
+          "stream-inbound",
+          1024,
+          "report.CuStOm",
+        );
+
+        expect(store.extractOriginalFilename(saved.path)).toBe("report.CuStOm");
+        await expect(fs.readFile(saved.path)).resolves.toEqual(buffer);
+      },
+    },
+    {
       name: "prefers detected stream mime over mixed-case generic zip header extension",
       run: async () => {
         const saved = await store.saveMediaStream(
@@ -642,9 +658,9 @@ describe("media store", () => {
       name: "preserves original extension for generic file buffers",
       buffer: Buffer.from("custom binary"),
       contentType: "application/octet-stream",
-      originalFilename: "report.custom",
+      originalFilename: "report.CuStOm",
       expectedContentType: "application/octet-stream",
-      expectedExtension: ".custom",
+      expectedExtension: ".CuStOm",
     },
     {
       name: "does not preserve mixed-case image header extensions for generic container buffers",

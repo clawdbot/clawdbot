@@ -6,21 +6,6 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
-/**
- * Machine-readable delivery result emitted by outbound send commands.
- */
-export type OutboundDeliveryJson = {
-  channel: string;
-  via: "direct" | "gateway";
-  to: string;
-  messageId: string;
-  mediaUrl: string | null;
-  target?: OutboundDeliveryResult["target"];
-  timestamp?: number;
-  toJid?: string;
-  meta?: Record<string, unknown>;
-};
-
 const resolveChannelLabel = (channel: string) => {
   const pluginLabel = getChannelPlugin(channel as ChannelId)?.meta.label;
   if (pluginLabel) {

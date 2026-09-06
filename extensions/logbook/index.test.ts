@@ -11,6 +11,7 @@ function registerLogbookPolicies(): OpenClawPluginNodeInvokePolicy[] {
   const policies: OpenClawPluginNodeInvokePolicy[] = [];
   plugin.register({
     pluginConfig: {},
+    lifecycle: { registerRuntimeLifecycle() {} },
     session: { controls: { registerControlUiDescriptor: () => {} } },
     registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => policies.push(policy),
     registerService: () => {},
@@ -24,6 +25,7 @@ describe("logbook gateway methods", () => {
     const registrations: Array<{ method: string; options: unknown }> = [];
     plugin.register({
       pluginConfig: {},
+      lifecycle: { registerRuntimeLifecycle() {} },
       session: { controls: { registerControlUiDescriptor: () => {} } },
       registerNodeInvokePolicy: () => {},
       registerService: () => {},

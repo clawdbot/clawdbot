@@ -16,7 +16,7 @@ import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
-  attestCodexPluginThreadApps,
+  checkCodexThreadAppAvailability,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import {
@@ -296,7 +296,7 @@ export async function materializePendingSupervisionBranch(
     if (params.provisionalAppIds?.length) {
       try {
         await params.lifecycleTiming.measure("plugin-app-attestation", () =>
-          attestCodexPluginThreadApps({
+          checkCodexThreadAppAvailability({
             client: params.client,
             threadId: finalThreadId,
             appIds: params.provisionalAppIds ?? [],

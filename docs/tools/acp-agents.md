@@ -156,6 +156,7 @@ Quick `/acp` flow from chat:
     - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, reset, or expired.
     - Gateway commands stay local. `/acp ...`, `/status`, and `/session` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
+    - Turn completion waits for queued output delivery. If delivery fails, OpenClaw cancels the active turn and waits for backend cleanup before starting the next queued turn, within the configured turn timeout.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
     - Idle runtime workers are eligible for cleanup after the built-in idle period; stored session metadata remains available for `/acp sessions`.
@@ -592,7 +593,8 @@ config-the-default error).
 <ParamField path="thinking" type="string">
   Explicit thinking/reasoning effort. For Codex ACP, `minimal` maps to low
   effort, `low`/`medium`/`high`/`xhigh` map directly, and `off` omits the
-  reasoning-effort startup override. When omitted, ACP spawns use existing
+  reasoning-effort startup override. An explicit value takes precedence over
+  a reasoning suffix in `model`, including `off`. When omitted, ACP spawns use existing
   subagent thinking defaults, the configured target agent's `thinkingDefault`, and per-model
   `agents.defaults.models["provider/model"].params.thinking` for the selected
   model.

@@ -1,4 +1,4 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
+import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
@@ -8,14 +8,14 @@ import {
 
 type SessionProgressCardControllerOptions = {
   gateway: () => ApplicationGateway | null | undefined;
-  sessionKey: () => string | null | undefined;
+  target: () => ProgressCardGetParams | null | undefined;
 };
 
-/** Keeps one chat pane on the gateway-scoped durable progress-card snapshot. */
+/** Keeps one view on the gateway-scoped durable progress-card snapshot. */
 export class SessionProgressCardController implements ReactiveController {
   private store: SessionProgressCardStore | null = null;
   private stopUpdates: (() => void) | null = null;
-  private sessionKey = "";
+  private target: ProgressCardGetParams | undefined;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -25,11 +25,27 @@ export class SessionProgressCardController implements ReactiveController {
   }
 
   get card(): ProgressCard | null {
-    return this.store?.get(this.sessionKey) ?? null;
+    return this.target ? (this.store?.get(this.target) ?? null) : null;
+  }
+
+  get loading(): boolean {
+    return !this.target || this.store?.get(this.target) === undefined;
+  }
+
+  retry = (): void => {
+    if (this.target?.sessionKey) {
+      void this.store?.load(this.target).catch(() => undefined);
+    }
+  };
+
+  get error() {
+    return this.target ? this.store?.getError(this.target) : undefined;
   }
 
   dismiss = (card: ProgressCard): Promise<boolean> =>
-    this.store?.dismiss(card) ?? Promise.resolve(false);
+    this.target
+      ? (this.store?.dismiss(this.target, card) ?? Promise.resolve(false))
+      : Promise.resolve(false);
 
   hostUpdate(): void {
     this.synchronize();
@@ -41,18 +57,21 @@ export class SessionProgressCardController implements ReactiveController {
 
   private synchronize(): void {
     const gateway = this.options.gateway() ?? null;
-    const sessionKey = this.options.sessionKey()?.trim() ?? "";
+    const target = this.options.target() ?? undefined;
     const nextStore = gateway ? sessionProgressCardsForGateway(gateway) : null;
     if (nextStore !== this.store) {
       this.release();
       this.store = nextStore;
       this.stopUpdates = nextStore?.subscribe(() => this.host.requestUpdate()) ?? null;
     }
-    if (sessionKey === this.sessionKey) {
+    if (
+      target?.sessionKey === this.target?.sessionKey &&
+      target?.agentId === this.target?.agentId
+    ) {
       return;
     }
-    this.sessionKey = sessionKey;
-    this.store?.watch(this, sessionKey ? [sessionKey] : []);
+    this.target = target;
+    this.store?.watch(this, target ? [target] : []);
   }
 
   private release(): void {
@@ -60,6 +79,6 @@ export class SessionProgressCardController implements ReactiveController {
     this.stopUpdates?.();
     this.stopUpdates = null;
     this.store = null;
-    this.sessionKey = "";
+    this.target = undefined;
   }
 }

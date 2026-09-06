@@ -206,7 +206,6 @@ async function finishSuccessfulPackageSwitch(
     downgradeRisk: true,
     shouldRestart: Boolean(params.restartEnvironment),
     opts: { json: params.json },
-    showProgress: false,
     controlPlaneUpdateSentinelMeta: {},
     preUpdatePluginInstallRecords: {},
     startedAt: Date.now(),
@@ -370,6 +369,7 @@ describe("successful update finalization ordering", () => {
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
       expect.any(Object),
+      expect.any(Object),
     );
     expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "restart-unhealthy" }),
@@ -417,7 +417,6 @@ describe("successful update finalization ordering", () => {
         restartEnvironment: process.env,
         json: true,
         windowsTaskAutoStartRecovery: {
-          suspended: Promise.resolve(true),
           beginMutation: () => {},
           restore,
           complete: () => {},
@@ -439,6 +438,7 @@ describe("successful update finalization ordering", () => {
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "windows-task-autostart-restore-failed" }),
       expect.objectContaining({ json: true }),
+      expect.any(Object),
     );
     expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
       mocks.printResult.mock.lastCall?.[0],
@@ -534,7 +534,6 @@ describe("successful update finalization ordering", () => {
       downgradeRisk: false,
       shouldRestart: false,
       opts: {},
-      showProgress: false,
       ownedManagedUpdateEnv,
       controlPlaneUpdateSentinelMeta: {},
       preUpdatePluginInstallRecords: {},
@@ -578,6 +577,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expect(mocks.printResult).toHaveBeenCalledWith(
         expect.objectContaining({ status: "error", reason: "wrapper-retirement-failed" }),
+        expect.any(Object),
         expect.any(Object),
       );
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
@@ -830,6 +830,7 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).toHaveBeenCalledWith(
           expect.objectContaining({ status: "error", reason: "service-revalidation-failed" }),
           expect.objectContaining({ json: true }),
+          expect.any(Object),
         );
         expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
           mocks.printResult.mock.lastCall?.[0],
@@ -909,6 +910,7 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).toHaveBeenCalledOnce();
         expect(mocks.printResult).toHaveBeenCalledWith(
           expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
+          expect.any(Object),
           expect.any(Object),
         );
         expect(mocks.markSentinelFailure).toHaveBeenCalledWith(

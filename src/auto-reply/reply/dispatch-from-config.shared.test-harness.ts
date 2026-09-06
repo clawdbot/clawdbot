@@ -25,6 +25,7 @@ import type {
   ReplyDispatchSettledCounts,
   ReplyDispatcher,
 } from "./reply-dispatcher.types.js";
+import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = {
@@ -304,9 +305,9 @@ const replyMediaPathMocks = vi.hoisted(() => ({
   ),
 }));
 const stageSandboxMediaMocks = vi.hoisted(() => ({
-  stageSandboxMedia: vi.fn<(params: unknown) => Promise<{ staged: Map<string, string> }>>(
-    async () => ({ staged: new Map() }),
-  ),
+  stageSandboxMedia: vi.fn<(params: unknown) => Promise<StageSandboxMediaResult>>(async () => ({
+    staged: new Map(),
+  })),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
   pluginRegistry: { plugins: [], tools: [], diagnostics: [] },
