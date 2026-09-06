@@ -37,7 +37,6 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.util.ReflectionHelpers.ClassParameter
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Hold only the factory return; the real OkHttp socket and callbacks keep running. */
@@ -60,7 +59,14 @@ class HeldWebSocketFactory {
         ClassParameter.from(WebSocketListener::class.java, listener),
       )
     entered.countDown()
-    check(release.await(5, TimeUnit.SECONDS)) { "Factory return was not released" }
+    // The test owns release; a competing timeout can strand the unpublished socket.
+    try {
+      release.await()
+    } catch (error: InterruptedException) {
+      socket.cancel()
+      Thread.currentThread().interrupt()
+      throw error
+    }
     return socket
   }
 

@@ -18,14 +18,16 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import {
-  UpdateRunRecordSchema,
-  type UpdateRunRecord,
-  type UpdateRunPhase,
-  type UpdateRunStep,
-} from "./update-run-record.js";
+import type { UpdateRunRecord, UpdateRunPhase, UpdateRunStep } from "./update-run-record.js";
+import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
+const RETAINED_STEP_NAMES = [
+  ...UPDATE_RUN_PHASES,
+  "notice:ack",
+  "notice:activating",
+  "notice:verifying",
+];
 const JSON_FIELDS = [
   "origin",
   "target",
@@ -58,20 +60,22 @@ function mapJsonText(value: unknown, transform: (text: string) => string): unkno
   return value;
 }
 
-/** Keep recent steps without evicting the phase timeline; every column has its own byte budget. */
+function isRetainedStep(item: unknown): boolean {
+  return isRecord(item) && RETAINED_STEP_NAMES.some((name) => name === item.step);
+}
+
+/** Phase history and notice custody survive diagnostic eviction, so final delivery stays eligible. */
 function boundedJson(input: unknown): string {
   let value = input;
   let json = JSON.stringify(value);
   while (Buffer.byteLength(json) > JSON_BYTES) {
     if (Array.isArray(value)) {
-      const disposable = value.findIndex(
-        (item) => !isRecord(item) || !UPDATE_RUN_PHASES.some((phase) => phase === item.step),
-      );
+      const disposable = value.findIndex((item) => !isRetainedStep(item));
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
-        // Phase identities and timestamps fit the budget. Discard optional
-        // diagnostics before losing the history needed by every report.
+        // Phase history and notice custody fit; discard optional diagnostics
+        // before losing the identities that keep final delivery eligible.
         value = value.map((item) => (isRecord(item) ? { ...item, detail: undefined } : item));
       }
     } else if (isRecord(value)) {
@@ -291,10 +295,8 @@ function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {
     record.steps.push(step);
   }
   while (record.steps.length > 128) {
-    const disposable = record.steps.findIndex(
-      (entry) => !UPDATE_RUN_PHASES.some((phase) => phase === entry.step),
-    );
-    record.steps.splice(Math.max(0, disposable), 1);
+    const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
+    record.steps.splice(disposable, 1);
   }
 }
 
@@ -376,16 +378,19 @@ export function finishUpdateRun(
         return;
       }
       const now = Date.now();
-      upsertStep(record, {
-        step: record.phase,
-        status:
-          result.status === "failed"
-            ? "failed"
-            : result.status === "skipped"
-              ? "skipped"
-              : "completed",
-        endedAtMs: now,
-      });
+      // A thrown command or interrupted updater can miss its completion callback.
+      // Terminal runs cannot retain live steps after their lifecycle closes.
+      for (const step of record.steps) {
+        if (step.step === record.phase || step.status === "in_progress") {
+          step.status =
+            result.status === "failed"
+              ? "failed"
+              : result.status === "skipped"
+                ? "skipped"
+                : "completed";
+          step.endedAtMs = now;
+        }
+      }
       record.status = result.status;
       record.phase = "finished";
       record.reason = result.reason ?? null;

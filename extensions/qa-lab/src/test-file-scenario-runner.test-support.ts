@@ -94,6 +94,7 @@ export async function writeNativeVitestReport(
     passed: number;
     testFilePath?: string;
     testName?: string;
+    ancestorTitles?: string[];
   },
 ) {
   const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
@@ -122,7 +123,16 @@ export async function writeNativeVitestReport(
           name: path.resolve(command.cwd, counts.testFilePath ?? requestedTestPath ?? "unknown"),
           status: counts.passed > 0 ? "passed" : "skipped",
           assertionResults:
-            counts.passed > 0 ? [{ fullName: testName, title: testName, status: "passed" }] : [],
+            counts.passed > 0
+              ? [
+                  {
+                    ancestorTitles: counts.ancestorTitles ?? [],
+                    fullName: [...(counts.ancestorTitles ?? []), testName].join(" "),
+                    title: testName,
+                    status: "passed",
+                  },
+                ]
+              : [],
         },
       ],
     }),

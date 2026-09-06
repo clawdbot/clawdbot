@@ -1871,6 +1871,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const runtimeTargets = [
       "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
       ...doctorRuntimeTargets,
+      "src/commands/doctor-plugin-install-config.process.test.ts",
       "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
       "src/gateway/gateway-cron-process-identity.windows.test.ts",
@@ -2482,7 +2483,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         checkName: `checks-node-${shard.shardName}`,
         configs: ["test/vitest/vitest.commands.config.ts"],
         includePatterns: shard.includePatterns,
-        ...(shard.shardName === "agentic-commands-doctor-config-state"
+        ...(shard.shardName === "agentic-commands-doctor-config-state" ||
+        shard.shardName === "agentic-commands-doctor-plugins-tools"
           ? { pretestBuildMode: "runtime" }
           : {}),
         requiresDist: false,
@@ -2592,9 +2594,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shardName: "agentic-agents-core-runtime",
       },
       {
+        checkName: "checks-node-agentic-agents-core-spawn-production-boundary",
+        configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+        includePatterns: agentShards[11]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-spawn-production-boundary",
+      },
+      {
         checkName: "checks-node-agentic-agents-core-isolated",
         configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
-        includePatterns: agentShards[11]?.includePatterns,
+        includePatterns: agentShards[12]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-isolated",
@@ -2660,6 +2670,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         configs: gatewayCoreConfigs,
         includePatterns: [
           "src/gateway/gateway-active-memory.test.ts",
+          "src/gateway/gateway-auth-rewarm.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
         ],
@@ -2714,6 +2725,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ...agentVitestProjectOwners.coreIsolated.include.filter((file) =>
         relative("src/agents", file).replaceAll("\\", "/").includes("/"),
       ),
+      ...agentVitestProjectOwners.spawnProductionBoundary.include,
     ].toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);

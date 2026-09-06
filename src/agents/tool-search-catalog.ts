@@ -45,6 +45,7 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.name,
         entry.label ?? "",
         entry.description,
+        entry.directVisible === true,
         entry.source === "openclaw"
           ? stableStringify(entry.parameters)
           : untrustedSchemaFingerprint(entry.parameters),
@@ -473,8 +474,9 @@ export function applyToolCatalogCompaction(
       continue;
     }
     if (shouldCatalog(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
-      if (!params.isVisibleCatalogTool?.(tool)) {
+      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+      catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
+      if (!directVisible) {
         continue;
       }
     }

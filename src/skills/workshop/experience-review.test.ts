@@ -12,9 +12,10 @@ import {
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
-  prepareSkillExperienceReviewCandidate,
+  type ExperienceReviewCandidate,
   type SkillExperienceReviewParams,
-} from "./experience-review.js";
+} from "./experience-review-scheduler.js";
+import { prepareSkillExperienceReviewCandidate } from "./experience-review.js";
 
 function completedRun(
   options: {
@@ -65,6 +66,33 @@ function completedRun(
       },
     },
     config: { skills: { workshop: { autonomous: { mode: options.mode ?? "propose" } } } },
+    source: {
+      agentId: options.agentId ?? "main",
+      sessionId: "session-1",
+      sessionKey: options.sessionKey ?? "agent:main:main",
+      storePath: "/session-store",
+      entryId: "completed-message",
+      generation: "generation-1",
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 0,
+    },
+  };
+}
+
+function captureCandidate(params: SkillExperienceReviewParams): ExperienceReviewCandidate {
+  const source = params.source!;
+  return {
+    ctx: {
+      runId: params.ctx.runId,
+      workspaceDir: params.ctx.workspaceDir!,
+      modelProviderId: params.ctx.modelProviderId!,
+      modelId: params.ctx.modelId!,
+      authProfileId: params.ctx.authProfileId,
+      foregroundPromptContext: params.ctx.foregroundPromptContext,
+    },
+    config: params.config,
+    source,
   };
 }
 
@@ -94,11 +122,9 @@ describe("skill experience review scheduler", () => {
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         return false;
       },
-      prepareReview: async (candidate) => {
+      runReview: async (candidate) => {
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        return candidate;
-      },
-      runReview: async () => {
+        await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         finishReview?.();
       },
@@ -127,9 +153,11 @@ describe("skill experience review scheduler", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(runReview).toHaveBeenCalledWith(
       expect.objectContaining({
-        ctx: expect.objectContaining({
+        source: expect.objectContaining({
           sessionId: "session-1",
           sessionKey: "agent:main:main",
+        }),
+        ctx: expect.objectContaining({
           foregroundPromptContext: expect.objectContaining({ reasoningLevel: "on" }),
         }),
       }),
@@ -222,22 +250,24 @@ describe("skill experience review scheduler", () => {
   it("rechecks current autonomy and tool policy before a delayed review", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
-    const prepareReview = vi.fn(async (candidate) =>
-      prepareSkillExperienceReviewCandidate(candidate, {
+    const review = vi.fn(async (candidate: ExperienceReviewCandidate) => {
+      const prepared = await prepareSkillExperienceReviewCandidate(candidate, {
         skills: { workshop: { autonomous: { mode: "propose" } } },
         tools: { deny: ["skill_workshop"] },
-      }),
-    );
+      });
+      if (prepared) {
+        await runReview(prepared);
+      }
+    });
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => false,
-      prepareReview,
-      runReview,
+      runReview: review,
     });
 
     scheduler.schedule(completedRun());
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(prepareReview).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
     expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
@@ -247,26 +277,20 @@ describe("skill experience review scheduler", () => {
     groupParams.ctx.foregroundPromptContext.messageProvider = "whatsapp";
     groupParams.ctx.foregroundPromptContext.groupId = "safe-room";
     await expect(
-      prepareSkillExperienceReviewCandidate(
-        { ctx: groupParams.ctx, config: groupParams.config },
-        {
-          skills: { workshop: { autonomous: { mode: "propose" } } },
-          channels: {
-            whatsapp: { groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } } },
-          },
+      prepareSkillExperienceReviewCandidate(captureCandidate(groupParams), {
+        skills: { workshop: { autonomous: { mode: "propose" } } },
+        channels: {
+          whatsapp: { groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } } },
         },
-      ),
+      }),
     ).resolves.toBeUndefined();
 
     const mainParams = completedRun();
     await expect(
-      prepareSkillExperienceReviewCandidate(
-        { ctx: mainParams.ctx, config: mainParams.config },
-        {
-          skills: { workshop: { autonomous: { mode: "propose" } } },
-          agents: { defaults: { sandbox: { mode: "non-main" } } },
-        },
-      ),
+      prepareSkillExperienceReviewCandidate(captureCandidate(mainParams), {
+        skills: { workshop: { autonomous: { mode: "propose" } } },
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+      }),
     ).resolves.toBeDefined();
   });
 
@@ -339,23 +363,21 @@ describe("skill experience review scheduler", () => {
     const memberRoleIds = Array.from({ length: 150 }, (_, index) => `role-${index}`);
     const params = completedRun();
     params.ctx.foregroundPromptContext.memberRoleIds = memberRoleIds;
-    const prepareReview = vi.fn(async (candidate) => candidate);
-    const runReview = vi.fn().mockResolvedValue(undefined);
+    const reviewed: ExperienceReviewCandidate[] = [];
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => false,
-      prepareReview,
-      runReview,
+      runReview: async (candidate) => {
+        const prepared = await prepareSkillExperienceReviewCandidate(candidate, params.config);
+        if (prepared) {
+          reviewed.push(prepared);
+        }
+      },
     });
 
     scheduler.schedule(params);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(prepareReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
-      memberRoleIds,
-    );
-    expect(runReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
-      memberRoleIds,
-    );
+    expect(reviewed[0]?.ctx.foregroundPromptContext.memberRoleIds).toEqual(memberRoleIds);
     scheduler.clear();
   });
 
@@ -389,22 +411,24 @@ describe("skill experience review scheduler", () => {
   it("does not re-arm evidence during asynchronous review preparation", async () => {
     vi.useFakeTimers();
     let finishPreparation: (() => void) | undefined;
-    const prepareReview = vi.fn(async (candidate) => {
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const review = vi.fn(async (candidate: ExperienceReviewCandidate) => {
+      const prepared = await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
       await new Promise<void>((resolve) => {
         finishPreparation = resolve;
       });
-      return candidate;
+      if (prepared) {
+        await runReview(prepared);
+      }
     });
-    const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => false,
-      prepareReview,
-      runReview,
+      runReview: review,
     });
 
     scheduler.schedule(completedRun({ runId: "deep-turn" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(prepareReview).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
     expect(runReview).not.toHaveBeenCalled();
 
     scheduler.schedule(completedRun({ runId: "shallow-turn", modelIterations: 1 }));
@@ -449,13 +473,13 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun(second));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledOnce();
-    expect(runReview.mock.calls[0]?.[0].ctx).toMatchObject(first);
+    expect(runReview.mock.calls[0]?.[0].source).toMatchObject(first);
 
     finishFirst?.();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledTimes(2);
-    expect(runReview.mock.calls[1]?.[0].ctx).toMatchObject(second);
+    expect(runReview.mock.calls[1]?.[0].source).toMatchObject(second);
     scheduler.clear();
   });
 
@@ -517,44 +541,15 @@ describe("skill experience review scheduler", () => {
 });
 
 describe("skill experience review prompt", () => {
-  it("matches the settled review contract and tags user-authored skills", () => {
-    const prompt = buildSkillExperienceReviewPrompt({
-      ctx: { runId: "run-1" },
-      usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
-      existingSkills: [
-        { name: "release-runbook", description: "Ship releases", userAuthored: false },
-        { name: "local-notes", description: "Local workflow", userAuthored: true },
-      ],
-    });
-    expect(prompt).toContain("this message starts a review pass");
-    expect(prompt).toContain("NO_REPLY is the correct answer for most turns");
-    expect(prompt).toContain("One mutation at most, smallest mutation first");
-    expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
-    expect(prompt).toContain("Reading and preparing do not spend the mutation");
-    expect(prompt).toContain("Only writable workspace skills can be read or updated");
-    expect(prompt).toContain("only when no writable skill covers this class of work");
-    expect(prompt).toContain("Writable skills:");
-    expect(prompt).toContain("- release-runbook — Ship releases");
-    expect(prompt).toContain("- local-notes — Local workflow (user-authored)");
-    expect(prompt).not.toContain("Trajectory:");
-
-    const emptyWorkspacePrompt = buildSkillExperienceReviewPrompt({
-      ctx: { runId: "run-1" },
-      existingSkills: [],
-    });
-    expect(emptyWorkspacePrompt).toContain("Writable skills: none.");
-  });
-
-  it("caps used and writable skill lists", () => {
+  it("caps used and existing skill lists", () => {
     const skills = Array.from({ length: 120 }, (_, index) => ({
       name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
       source: "workspace" as const,
       activation: "read" as const,
     }));
     const prompt = buildSkillExperienceReviewPrompt({
-      ctx: {},
       usedSkills: skills,
-      existingSkills: skills.map((skill) => ({ name: skill.name, userAuthored: false })),
+      existingSkills: skills,
     });
     expect(prompt).toContain("more used skills omitted");
     expect(prompt).toContain("(+70 more not shown)");
@@ -568,13 +563,13 @@ describe("skill experience review prompt", () => {
       activation: index % 3 === 0 ? ("command" as const) : ("read" as const),
     }));
     const build = (skills: typeof usedSkills) =>
-      buildSkillExperienceReviewPrompt({ ctx: { runId: "run-1" }, usedSkills: skills });
+      buildSkillExperienceReviewPrompt({ usedSkills: skills });
     const prompt = build(usedSkills.toReversed());
 
     expect(prompt).toBe(build(usedSkills));
     const receipt = prompt.slice(
       prompt.indexOf("Skills actually used in this trajectory"),
-      prompt.indexOf("\n\nWritable skills:"),
+      prompt.indexOf("\n\nExisting Workshop-generated skills:"),
     );
     expect(receipt).toContain(
       "Skills actually used in this trajectory (authoritative runtime receipt):",
@@ -586,11 +581,9 @@ describe("skill experience review prompt", () => {
 
   it("caps existing skills by entry count and line length", () => {
     const prompt = buildSkillExperienceReviewPrompt({
-      ctx: { runId: "run-1" },
       existingSkills: Array.from({ length: 120 }, (_, index) => ({
         name: `skill-${String(index)}`,
         description: "d".repeat(500),
-        userAuthored: false,
       })),
     });
 
@@ -605,8 +598,7 @@ describe("skill experience review prompt", () => {
   });
 
   it("adds the interrupted-run instruction", () => {
-    const prompt = buildSkillExperienceReviewPrompt({ ctx: { runId: "run-1" }, turnAborted: true });
-    expect(prompt).toContain("Interrupted run (stopped before completion): run-1");
+    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true });
     expect(prompt).toContain("Only capture procedures that visibly worked");
   });
 });
@@ -619,19 +611,16 @@ describe("skill experience review preparation", () => {
     const params = completedRun({ sessionKey: "global" });
     params.ctx.agentId = agentId;
     params.ctx.foregroundPromptContext.agentId = agentId;
-    const result = await prepareSkillExperienceReviewCandidate(
-      { ctx: params.ctx },
-      {
-        session: { scope: "global" },
-        agents: {
-          entries: {
-            direct: { sandbox: { mode: "off" } },
-            isolated: { sandbox: { mode: "all" } },
-          },
+    const result = await prepareSkillExperienceReviewCandidate(captureCandidate(params), {
+      session: { scope: "global" },
+      agents: {
+        entries: {
+          direct: { sandbox: { mode: "off" } },
+          isolated: { sandbox: { mode: "all" } },
         },
-        skills: { workshop: { autonomous: { mode: "propose" } } },
       },
-    );
+      skills: { workshop: { autonomous: { mode: "propose" } } },
+    });
 
     expect(result !== undefined).toBe(eligible);
   });
@@ -639,10 +628,7 @@ describe("skill experience review preparation", () => {
   it("keeps an eligible foreground candidate", async () => {
     const params = completedRun();
     await expect(
-      prepareSkillExperienceReviewCandidate(
-        { ctx: params.ctx, config: params.config },
-        params.config ?? {},
-      ),
+      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
     ).resolves.toBeDefined();
   });
 });

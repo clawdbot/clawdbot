@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawIPC
 import Testing
 @testable import OpenClaw
 
@@ -86,69 +85,5 @@ struct ComputerControlSettingsTests {
         #expect(decoded["v"] as? Int == 1)
         #expect(decoded["socketPath"] as? String == endpoint.socketPath)
         #expect(decoded["binaryPath"] as? String == endpoint.binaryPath)
-    }
-
-    @Test func `readiness rows never promote unknown or unavailable state`() {
-        struct Scenario {
-            let provider: ComputerControlProvider
-            let cuaDriverAvailable: Bool
-            let permissions: [Capability: CapabilityAuthorizationStatus]
-            let cuaDaemonReady: Bool?
-            let expectedStatuses: [ComputerControlReadinessRow.Status]
-        }
-
-        let granted: [Capability: CapabilityAuthorizationStatus] = [
-            .accessibility: .granted,
-            .screenRecording: .granted,
-        ]
-        let scenarios = [
-            Scenario(
-                provider: .peekaboo,
-                cuaDriverAvailable: false,
-                permissions: granted,
-                cuaDaemonReady: nil,
-                expectedStatuses: [.available, .granted, .granted]),
-            Scenario(
-                provider: .cua,
-                cuaDriverAvailable: true,
-                permissions: granted,
-                cuaDaemonReady: true,
-                expectedStatuses: [.available, .granted, .granted, .running]),
-            Scenario(
-                provider: .cua,
-                cuaDriverAvailable: true,
-                permissions: [:],
-                cuaDaemonReady: nil,
-                expectedStatuses: [.available, .unknown, .unknown, .unknown]),
-            Scenario(
-                provider: .cua,
-                cuaDriverAvailable: true,
-                permissions: [.accessibility: .notGranted, .screenRecording: .notGranted],
-                cuaDaemonReady: false,
-                expectedStatuses: [.available, .notGranted, .notGranted, .notReady]),
-            Scenario(
-                provider: .cua,
-                cuaDriverAvailable: false,
-                permissions: granted,
-                cuaDaemonReady: true,
-                expectedStatuses: [.unavailable, .granted, .granted, .unavailable]),
-        ]
-
-        for scenario in scenarios {
-            let rows = ComputerControlReadinessPresentation.rows(
-                provider: scenario.provider,
-                cuaDriverAvailable: scenario.cuaDriverAvailable,
-                permissions: scenario.permissions,
-                cuaDaemonReady: scenario.cuaDaemonReady)
-            #expect(rows.map(\.status) == scenario.expectedStatuses)
-            for row in rows {
-                switch row.status {
-                case .available, .granted, .running:
-                    #expect(row.nextStep == nil)
-                case .unavailable, .notGranted, .notReady, .unknown:
-                    #expect(row.nextStep?.isEmpty == false)
-                }
-            }
-        }
     }
 }

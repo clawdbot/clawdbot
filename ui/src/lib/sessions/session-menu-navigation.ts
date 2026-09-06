@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { normalizeBasePath } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -22,6 +23,7 @@ import { parseAgentSessionKey } from "./session-key.ts";
 type SessionNavigationActionKind =
   | "copy-session-id"
   | "copy-session-link"
+  | "copy-session-preview-link"
   | "copy-markdown"
   | "open-new-tab"
   | "open-new-window"
@@ -182,26 +184,28 @@ export async function runSessionNavigationAction<TRouteId extends string>(
       params.agentId,
     );
     const gateway = params.context.gateway;
+    const copyLink = kind === "copy-session-link" || kind === "copy-session-preview-link";
     // Shared links belong to the Gateway; the UI document may be a local SSH
     // tunnel or a dev server with a different mount path. New windows stay local.
-    const linkBase =
-      kind === "copy-session-link"
-        ? (gateway.snapshot.hello?.controlUiUrl ??
-          gateway.snapshot.client?.gatewayUrl ??
-          gateway.connection.gatewayUrl)
-        : undefined;
+    const linkBase = copyLink
+      ? (gateway.snapshot.hello?.controlUiUrl ??
+        gateway.snapshot.client?.gatewayUrl ??
+        gateway.connection.gatewayUrl)
+      : undefined;
     const url = new URL(linkBase || window.location.href);
     url.protocol = url.protocol.replace(/^ws/u, "http");
+    const basePath = linkBase ? url.pathname : params.context.basePath;
     const navigation = sessionNavigationTarget({
       context: params.context,
-      basePath: linkBase ? url.pathname : undefined,
+      basePath:
+        kind === "copy-session-preview-link" ? `${normalizeBasePath(basePath)}/share` : basePath,
       face,
       sessionKey: params.session.key,
       agentId: params.agentId,
       exactKey: true,
     });
     const href = new URL(navigation.href, url.origin).href;
-    if (kind === "copy-session-link") {
+    if (copyLink) {
       const copied = await copyToClipboard(href);
       showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
       return;

@@ -1,8 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-} from "../../gateway/session-store-key.js";
+import { resolveSessionStoreIdentity } from "../../gateway/session-store-key.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -261,16 +258,11 @@ function resolveSessionEntryStoreTarget(
   scope: LogicalSessionAccessScope,
 ): ResolvedSessionEntryStoreTarget {
   const requestedKey = scope.sessionKey.trim();
-  // Scoped aliases can become global, so validate both the requested and fixed-store owners.
-  const requestedAgentId = scope.agentId
-    ? resolveSessionStoreAgentId(scope.cfg, requestedKey, scope.agentId)
-    : undefined;
-  const canonicalKey = resolveSessionStoreKey({
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
     cfg: scope.cfg,
     sessionKey: requestedKey,
-    storeAgentId: requestedAgentId,
+    agentId: scope.agentId,
   });
-  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey, requestedAgentId);
   const scanTargets = buildLogicalSessionEntryCandidateKeys({
     agentId,
     canonicalKey,

@@ -12,10 +12,12 @@ import {
 } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { minimatch } from "minimatch";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
@@ -24,10 +26,12 @@ const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
 describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
   () => {
-    it.each(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
+    const test = createMacScriptTest();
+    test.for(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
       "joins architecture workers and preserves assembly safety: %s",
-      async (mode) => {
-        const root = tempDirs.make("openclaw-swift-parallel-");
+      { timeout: 15_000 },
+      async (mode, { mac, onTestFinished }) => {
+        const root = mac.createTempDir("openclaw-swift-parallel-");
         const stage = path.join(root, "stage");
         const scripts = path.join(root, "scripts/lib");
         mkdirSync(scripts, { recursive: true });
@@ -78,6 +82,7 @@ fs.writeFileSync(path.join(root, 'pid-' + arch), String(child.pid));
 const exited = new Promise(resolve => child.on('exit', resolve));
 process.on('SIGTERM', async () => { child.kill(); await exited; event('stopped:' + arch); process.exit(143); });
 fs.writeFileSync(path.join(root, 'ready-' + arch), 'ready');
+console.log('ready:' + arch);
 const deadline = Date.now() + 5000;
 while (!['arm64', 'x86_64'].every(a => fs.existsSync(path.join(root, 'ready-' + a)))) {
   if (Date.now() > deadline) throw new Error('architecture barrier did not open');
@@ -127,20 +132,32 @@ touch "$ROOT_DIR/assembled"
         child.stderr.on("data", (chunk: Buffer) => {
           stderr += chunk.toString();
         });
-        child.stdout.resume();
-        const closed = new Promise<number | null>((resolve) => {
-          child.on("close", resolve);
+        const closed = mac.lifetime.track(
+          new Promise<number | null>((resolve, reject) => {
+            child.once("error", reject);
+            child.once("close", resolve);
+          }),
+        );
+        const output = createInterface({ input: child.stdout });
+        const ready = new Set<string>();
+        output.on("line", (line) => {
+          if (line === "ready:arm64" || line === "ready:x86_64") {
+            ready.add(line);
+            if (mode === "cancel" && ready.size === 2) {
+              child.kill("SIGTERM");
+            }
+          }
         });
-        if (mode === "cancel") {
-          await expect
-            .poll(
-              () =>
-                existsSync(path.join(root, "ready-arm64")) &&
-                existsSync(path.join(root, "ready-x86_64")),
-            )
-            .toBe(true);
-          child.kill("SIGTERM");
-        }
+        onTestFinished(async () => {
+          try {
+            if (child.exitCode === null && child.signalCode === null) {
+              child.kill("SIGTERM");
+            }
+            await closed;
+          } finally {
+            output.close();
+          }
+        });
         const code = await closed;
         expect(code, stderr).toBe(
           mode === "success" ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
@@ -166,7 +183,6 @@ touch "$ROOT_DIR/assembled"
           ).toBe(mode === "cleanup-failure");
         }
       },
-      15_000,
     );
   },
 );
@@ -332,7 +348,8 @@ function makePlist(): string {
 }
 
 function runHelper(script: string, shell = "bash") {
-  return spawnSync(shell, ["-lc", script], {
+  // Login/logout hooks can replace the helper's exit status on headless hosts.
+  return spawnSync(shell, ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -851,6 +868,8 @@ function runSwiftPMResourceBundleHarness(
 
 function runSwiftPMResourcePatchHarness(failRestore = false) {
   const root = tempDirs.make("openclaw-package-resource-patch-");
+  const workRoot = tempDirs.make("openclaw-resource-backups-");
+  const backupRoot = path.join(workRoot, "resource-backups");
   const buildPath = path.join(root, "build");
   const checkoutRoot = path.join(buildPath, "checkouts");
   const keyboardShortcuts = path.join(
@@ -908,20 +927,20 @@ function runSwiftPMResourcePatchHarness(failRestore = false) {
 
   const result = runHelper(`
     set -euo pipefail
-    SWIFT_WORK_ROOT=${JSON.stringify(tempDirs.make("openclaw-resource-backups-"))}
+    SWIFT_WORK_ROOT=${JSON.stringify(workRoot)}
     BUILD_PATH=${JSON.stringify(buildPath)}
     ${getSwiftPMResourcePatchBlock()}
     patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
     grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
     test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
     grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
-    ${failRestore ? "mv() { return 13; }" : ""}
+    ${failRestore ? "mv() { printf 'restore failed\\n' >&2; return 13; }" : ""}
     cleanup_status=0
     restore_swiftpm_resource_sources || cleanup_status=$?
     exit "$cleanup_status"
   `);
 
-  return { fixtures, result };
+  return { backupRoot, fixtures, result };
 }
 
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
@@ -1926,19 +1945,25 @@ try {
   });
 
   it("routes dependency resource lookups into signed app resources and restores sources", () => {
-    const { fixtures, result } = runSwiftPMResourcePatchHarness();
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness();
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     for (const [file, contents] of fixtures) {
       expect(readFileSync(file, "utf8")).toBe(contents);
-      expect(existsSync(`${file}.openclaw-original`)).toBe(false);
     }
+    expect(readdirSync(backupRoot)).toEqual([]);
   });
 
   it("fails cleanup instead of deleting backups when resource restoration fails", () => {
-    const { result } = runSwiftPMResourcePatchHarness(true);
-    expect(result.status).not.toBe(0);
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(true);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("restore failed\n");
+    const backups = readdirSync(backupRoot).map((file) =>
+      readFileSync(path.join(backupRoot, file), "utf8"),
+    );
+    expect(backups).toHaveLength(fixtures.size);
+    expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
   });
 
   it("fails closed when any required SwiftPM resource bundle is missing", () => {

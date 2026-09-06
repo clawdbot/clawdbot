@@ -11,7 +11,7 @@ import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   acquireStartupMigrationLease,
-  needsStateMigrationCheckpoint,
+  readMigrationCheckpointStatus,
   recordSuccessfulStateMigrations,
   type MigrationCheckpointIdentity,
 } from "../infra/startup-migration-checkpoint.js";
@@ -224,7 +224,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     const reused = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     expect(reused.registrySource).toBe("persisted");
     expect(checkpointIdentity(reused)).toEqual(checkpoint.identity);
-    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
 
     fs.writeFileSync(
       contractPath,
@@ -251,7 +251,7 @@ module.exports = {
     );
     // Package changes are visible to an explicit owner refresh, not to retained generations.
     expect(loadPluginMetadataSnapshot({ config: {}, env, stateDir })).toBe(persisted);
-    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
     clearPluginMetadataLifecycleCaches();
     await withPluginCache(createPluginCache(), async () => {
       const refreshed = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
@@ -268,8 +268,8 @@ module.exports = {
       expect(refreshedIdentity.pluginMigrationFingerprint).not.toBe(
         checkpoint.identity.pluginMigrationFingerprint,
       );
-      expect(needsStateMigrationCheckpoint({ ...checkpoint, identity: refreshedIdentity })).toBe(
-        true,
+      expect(readMigrationCheckpointStatus({ ...checkpoint, identity: refreshedIdentity })).toBe(
+        "stale",
       );
 
       const migration = await autoMigrateLegacyPluginDoctorState({ config: {}, env });

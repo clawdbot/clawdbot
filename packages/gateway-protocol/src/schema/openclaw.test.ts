@@ -13,6 +13,7 @@ import {
   SystemAgentChatQuestionSchema,
   SystemAgentChatHistoryResultSchema,
   SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupActivateResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
 
@@ -119,6 +120,20 @@ describe("OpenClaw chat history protocol", () => {
 });
 
 describe("OpenClaw interactive activation protocol", () => {
+  it("preserves optional owner-recorded rejection on the direct activation result", () => {
+    const failure = { ok: false, status: "auth", error: "The candidate login failed." };
+    expect(Value.Check(SystemAgentSetupActivateResultSchema, failure)).toBe(true);
+    expect(
+      Value.Check(SystemAgentSetupActivateResultSchema, {
+        ...failure,
+        disposition: "rejected-before-promotion",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SystemAgentSetupActivateResultSchema, { ...failure, disposition: "no-mutation" }),
+    ).toBe(false);
+  });
+
   it("requires a session id and does not accept client capability acknowledgments", () => {
     const activation = { kind: "codex-cli", modelRef: "openai/gpt-5.6-luna" };
     expect(validateSystemAgentSetupActivateParams(activation)).toBe(true);

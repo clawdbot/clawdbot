@@ -141,7 +141,7 @@ async function deliverWithProducerLease(
           queueId,
           auditStartedAt,
           producerClaimId,
-          lease.signal,
+          lease,
         );
       } finally {
         lease.stop();

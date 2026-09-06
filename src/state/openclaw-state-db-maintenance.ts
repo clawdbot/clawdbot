@@ -7,12 +7,12 @@ import {
 } from "../infra/sqlite-schema-contract.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
-  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
@@ -55,24 +55,9 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   12: STATE_V6_ADDITIVE_TABLES,
   13: LAZY_ADDITIVE_STATE_TABLES,
   14: LAZY_ADDITIVE_STATE_TABLES,
+  15: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
-
-/** Open shared SQLite database handle plus WAL maintenance lifecycle. */
-
-export function createOpenClawDatabaseVerificationError(
-  kind: "agent" | "state",
-  pathname: string,
-  storedError: string | null,
-): Error {
-  // Doctor's clearing hooks run after a full integrity assertion, so a still-
-  // corrupt file cannot be cleared directly: the file must be healthy first.
-  const error = new Error(
-    `OpenClaw ${kind} database ${pathname} is quarantined after integrity verification failed: ${storedError ?? "unknown integrity error"}. Restore the database from a backup or repair it, then run openclaw doctor --fix to clear the quarantine. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
-  );
-  error.name = "SqliteIntegrityError";
-  return error;
-}
 
 /** Require canonical shared-state ownership without requiring the latest schema. */
 export function assertOpenClawStateDatabaseOwner(
@@ -238,6 +223,11 @@ export const openClawStateMigrationAssertions = new Map([
     (database: DatabaseSync, options: { pathname: string }) =>
       assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 14 }),
   ],
+  [
+    15,
+    (database: DatabaseSync, options: { pathname: string }) =>
+      assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 15 }),
+  ],
 ]);
 
 export function markCurrentStateSchemaVersion(
@@ -282,7 +272,7 @@ export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}):
 }
 
 /** Historical jobs lost the creator's origin; preserve attribution without guessing authority. */
-export function migrateCronCreatorNamespaces(db: DatabaseSync, previousVersion: number): boolean {
+function migrateCronCreatorNamespaces(db: DatabaseSync, previousVersion: number): boolean {
   if (previousVersion >= 14 || !tableExists(db, "cron_jobs")) {
     return false;
   }
@@ -296,10 +286,7 @@ export function migrateCronCreatorNamespaces(db: DatabaseSync, previousVersion: 
 }
 
 /** Keep opaque plugin targets independent of agent identity without rewriting binding records. */
-export function migrateConversationBindingTargets(
-  db: DatabaseSync,
-  previousVersion: number,
-): boolean {
+function migrateConversationBindingTargets(db: DatabaseSync, previousVersion: number): boolean {
   if (previousVersion >= 15) {
     return false;
   }
@@ -317,3 +304,158 @@ export function migrateConversationBindingTargets(
   }
   return true;
 }
+
+// v15 collection cleanup released a dropped skill's claim so a path recreated by hand
+// stayed user-owned. Doctor relocates every applied create into the Workshop directory,
+// so released rows turn stale before the marker leaves with its column.
+const RELEASED_WORKSHOP_CLAIM_REASON =
+  "Skill Workshop released this skill in a collection review; the path stays user-owned.";
+
+function migrateSkillWorkshopCollectionReviewOwnership(db: DatabaseSync): void {
+  if (!tableExists(db, "skill_workshop_proposals")) {
+    db.exec(`
+      CREATE TABLE skill_workshop_collection_reviews_v16 (
+        review_id TEXT NOT NULL PRIMARY KEY,
+        owner_agent_id TEXT NOT NULL,
+        backup_id TEXT NOT NULL,
+        create_time INTEGER NOT NULL,
+        kept_names_json TEXT NOT NULL,
+        written_names_json TEXT NOT NULL,
+        dropped_json TEXT NOT NULL
+      ) STRICT;
+      DROP TABLE skill_workshop_collection_reviews;
+      ALTER TABLE skill_workshop_collection_reviews_v16
+        RENAME TO skill_workshop_collection_reviews;
+      CREATE INDEX idx_skill_workshop_collection_reviews_owner_time
+        ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
+    `);
+    return;
+  }
+  db.exec(`
+    CREATE TABLE skill_workshop_collection_reviews_v16 (
+      review_id TEXT NOT NULL PRIMARY KEY,
+      owner_agent_id TEXT NOT NULL,
+      backup_id TEXT NOT NULL,
+      create_time INTEGER NOT NULL,
+      kept_names_json TEXT NOT NULL,
+      written_names_json TEXT NOT NULL,
+      dropped_json TEXT NOT NULL
+    ) STRICT;
+    INSERT INTO skill_workshop_collection_reviews_v16 (
+      review_id, owner_agent_id, backup_id, create_time,
+      kept_names_json, written_names_json, dropped_json
+    )
+    SELECT review.review_id,
+           (
+             SELECT MIN(proposal.owner_agent_id)
+             FROM skill_workshop_proposals AS proposal
+             WHERE proposal.workspace_dir = review.workspace_dir
+               AND proposal.owner_agent_id IS NOT NULL
+               AND (
+                 SELECT COUNT(DISTINCT owner_agent_id)
+                 FROM skill_workshop_proposals AS matching
+                 WHERE matching.workspace_dir = review.workspace_dir
+                   AND matching.owner_agent_id IS NOT NULL
+               ) = 1
+           ),
+           review.backup_id,
+           review.create_time,
+           review.kept_names_json,
+           review.written_names_json,
+           review.dropped_json
+    FROM skill_workshop_collection_reviews AS review
+    WHERE (
+      SELECT COUNT(DISTINCT proposal.owner_agent_id)
+      FROM skill_workshop_proposals AS proposal
+      WHERE proposal.workspace_dir = review.workspace_dir
+        AND proposal.owner_agent_id IS NOT NULL
+    ) = 1;
+    DROP TABLE skill_workshop_collection_reviews;
+    ALTER TABLE skill_workshop_collection_reviews_v16
+      RENAME TO skill_workshop_collection_reviews;
+    CREATE INDEX idx_skill_workshop_collection_reviews_owner_time
+      ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
+  `);
+}
+
+/** Remove row provenance after the Workshop directory becomes the ownership boundary. */
+function migrateSkillWorkshopDirectoryOwnership(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
+  if (previousVersion >= 16) {
+    return false;
+  }
+  const proposalColumns = ["workspace_dir", "claim_released_time"].filter((column) =>
+    tableHasColumn(db, "skill_workshop_proposals", column),
+  );
+  const reviewHasWorkspace = tableHasColumn(
+    db,
+    "skill_workshop_collection_reviews",
+    "workspace_dir",
+  );
+  if (proposalColumns.length === 0 && !reviewHasWorkspace) {
+    return false;
+  }
+  if (proposalColumns.includes("claim_released_time")) {
+    const released = db
+      .prepare(
+        "SELECT proposal_id, record_json FROM skill_workshop_proposals WHERE claim_released_time IS NOT NULL",
+      )
+      // SAFETY: v15 declares both selected proposal columns as TEXT NOT NULL.
+      .all() as Array<{ proposal_id: string; record_json: string }>;
+    if (released.length > 0) {
+      const staleAt = new Date().toISOString();
+      const update = db.prepare(
+        `UPDATE skill_workshop_proposals
+           SET record_json = ?, status = 'stale', updated_at = ?, stale_at = ?, status_reason = ?
+         WHERE proposal_id = ?`,
+      );
+      for (const row of released) {
+        // SAFETY: the v15 Workshop writer stores a proposal object in record_json.
+        const record = JSON.parse(row.record_json) as Record<string, unknown>;
+        const staleRecord = {
+          ...record,
+          status: "stale",
+          updatedAt: staleAt,
+          staleAt,
+          statusReason: RELEASED_WORKSHOP_CLAIM_REASON,
+        };
+        update.run(
+          JSON.stringify(staleRecord),
+          staleAt,
+          staleAt,
+          RELEASED_WORKSHOP_CLAIM_REASON,
+          row.proposal_id,
+        );
+      }
+    }
+  }
+  if (reviewHasWorkspace) {
+    migrateSkillWorkshopCollectionReviewOwnership(db);
+  }
+  for (const column of proposalColumns) {
+    db.exec(`ALTER TABLE skill_workshop_proposals DROP COLUMN ${column};`);
+  }
+  return true;
+}
+
+/** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
+export const versionedStateMigrations: ReadonlyArray<{
+  migrate: (db: DatabaseSync, previousVersion: number) => boolean;
+  applied: string;
+}> = [
+  { migrate: migrateJsonCanonicalWideRowsV13, applied: "Consolidated shared state tables (v13)" },
+  {
+    migrate: migrateCronCreatorNamespaces,
+    applied: "Qualified historical cron creator attribution as unknown (v14)",
+  },
+  {
+    migrate: migrateConversationBindingTargets,
+    applied: "Removed redundant conversation binding target projections (v15)",
+  },
+  {
+    migrate: migrateSkillWorkshopDirectoryOwnership,
+    applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
+  },
+];

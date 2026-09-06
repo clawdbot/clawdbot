@@ -16,6 +16,21 @@ import {
 } from "./compaction.js";
 import { createFileOps } from "./utils.js";
 
+function createSummaryModel(reasoning = false): Model {
+  return {
+    id: "summary-model",
+    name: "Summary Model",
+    api: "test-api",
+    provider: "test-provider",
+    baseUrl: "https://example.test",
+    reasoning,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 8_000,
+  };
+}
+
 function createUsage(totalTokens: number): Usage {
   return {
     input: totalTokens,
@@ -793,18 +808,7 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
 
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
-    const model: Model = {
-      id: "summary-model",
-      name: "Summary Model",
-      api: "test-api",
-      provider: "test-provider",
-      baseUrl: "https://example.test",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 100_000,
-      maxTokens: 8_000,
-    };
+    const model = createSummaryModel();
     let consumed = false;
     const streamFn = vi.fn<StreamFn>(() => ({
       [Symbol.asyncIterator]() {
@@ -895,18 +899,7 @@ describe("generateSummary thinking options", () => {
     ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
     ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
   ])("rejects %s compaction output", async (_name, content) => {
-    const model: Model = {
-      id: "summary-model",
-      name: "Summary Model",
-      api: "test-api",
-      provider: "test-provider",
-      baseUrl: "https://example.test",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 100_000,
-      maxTokens: 8_000,
-    };
+    const model = createSummaryModel(true);
     const streamFn = vi.fn<StreamFn>(() => {
       const stream = createAssistantMessageEventStream();
       stream.push({
@@ -983,18 +976,7 @@ describe("split-turn compaction", () => {
   ])(
     "forwards focus and serializes $name summaries",
     async ({ history, prefix, budgets, focus = operatorFocus, activeRequest }) => {
-      const model: Model = {
-        id: "summary-model",
-        name: "Summary Model",
-        api: "test-api",
-        provider: "test-provider",
-        baseUrl: "https://example.test",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 100_000,
-        maxTokens: 8_000,
-      };
+      const model = createSummaryModel();
       const prompts: string[] = [];
       const outputBudgets: Array<number | undefined> = [];
       const usageSink = vi.fn();
@@ -1060,6 +1042,14 @@ describe("split-turn compaction", () => {
         expect(prompt).toContain(focus);
         expect(prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
+      }
+      if (prefix) {
+        expect(prompts.at(-1)).toContain("## Original Request");
+        expect(prompts.at(-1)).not.toContain("## Goal");
+      }
+      if (history) {
+        expect(prompts[0]).toContain("## Goal");
+        expect(prompts[0]).not.toContain("## Original Request");
       }
       if (result.ok && activeRequest) {
         expect(result.value.summary).toContain(

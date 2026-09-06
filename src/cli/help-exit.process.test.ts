@@ -248,7 +248,7 @@ describe("CLI help process exit", () => {
       const argv = ["node", "openclaw", group, "--help"];
       const registered =
         registry === "core"
-          ? await registerCoreCliByName(program, createProgramContext(), group, argv)
+          ? await registerCoreCliByName(program, createProgramContext(), group)
           : await registerSubCliByName(program, group, argv);
       const parseResult = await program
         .parseAsync(argv.slice(2), { from: "user" })

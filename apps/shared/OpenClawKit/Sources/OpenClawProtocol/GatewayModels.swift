@@ -1270,15 +1270,19 @@ public struct ProgressCard: Codable, Sendable {
 
 public struct ProgressCardGetParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -1294,17 +1298,20 @@ public struct ProgressCardGetResult: Codable, Sendable {
 
 public struct ProgressCardPutParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let markdown: String?
     public let plan: [ProgressCardStep]?
     public let expectedrevision: Int?
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         markdown: String? = nil,
         plan: [ProgressCardStep]? = nil,
         expectedrevision: Int? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.markdown = markdown
         self.plan = plan
         self.expectedrevision = expectedrevision
@@ -1312,6 +1319,7 @@ public struct ProgressCardPutParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case markdown
         case plan
         case expectedrevision = "expectedRevision"
@@ -2198,6 +2206,46 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
         self.ok = ok
         self.status = status
         self.resumed = resumed
+    }
+}
+
+public struct GatewaySuspendHandoffParams: Codable, Sendable {
+    public let suspensionid: String
+    public let target: [String: AnyCodable]
+
+    public init(
+        suspensionid: String,
+        target: [String: AnyCodable])
+    {
+        self.suspensionid = suspensionid
+        self.target = target
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suspensionid = "suspensionId"
+        case target
+    }
+}
+
+public struct GatewaySuspendHandoffResult: Codable, Sendable {
+    public let status: String
+    public let suspensionid: String
+    public let expiresatms: Int
+
+    public init(
+        status: String,
+        suspensionid: String,
+        expiresatms: Int)
+    {
+        self.status = status
+        self.suspensionid = suspensionid
+        self.expiresatms = expiresatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case suspensionid = "suspensionId"
+        case expiresatms = "expiresAtMs"
     }
 }
 
@@ -6057,21 +6105,25 @@ public struct SessionsPreviewParams: Codable, Sendable {
 
 public struct SessionsDescribeParams: Codable, Sendable {
     public let key: String
+    public let agentid: String?
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
 
     public init(
         key: String,
+        agentid: String? = nil,
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil)
     {
         self.key = key
+        self.agentid = agentid
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
     }
 
     private enum CodingKeys: String, CodingKey {
         case key
+        case agentid = "agentId"
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
     }
@@ -6107,6 +6159,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     public let key: String?
     public let sessionid: String?
     public let label: String?
+    public let reference: [String: AnyCodable]?
     public let shortid: String?
     public let slughint: String?
     public let agentid: String?
@@ -6119,6 +6172,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         key: String? = nil,
         sessionid: String? = nil,
         label: String? = nil,
+        reference: [String: AnyCodable]? = nil,
         shortid: String? = nil,
         slughint: String? = nil,
         agentid: String? = nil,
@@ -6130,6 +6184,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         self.key = key
         self.sessionid = sessionid
         self.label = label
+        self.reference = reference
         self.shortid = shortid
         self.slughint = slughint
         self.agentid = agentid
@@ -6143,6 +6198,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         case key
         case sessionid = "sessionId"
         case label
+        case reference
         case shortid = "shortId"
         case slughint = "slugHint"
         case agentid = "agentId"
@@ -6555,6 +6611,7 @@ public struct SessionRow: Codable, Sendable {
     public let subagentrole: AnyCodable?
     public let subagentcontrolscope: AnyCodable?
     public let swarmgroupid: String?
+    public let swarm: [String: AnyCodable]?
     public let worktree: [String: AnyCodable]?
     public let execnode: String?
     public let execcwd: String?
@@ -6634,6 +6691,7 @@ public struct SessionRow: Codable, Sendable {
         subagentrole: AnyCodable? = nil,
         subagentcontrolscope: AnyCodable? = nil,
         swarmgroupid: String? = nil,
+        swarm: [String: AnyCodable]? = nil,
         worktree: [String: AnyCodable]? = nil,
         execnode: String? = nil,
         execcwd: String? = nil,
@@ -6712,6 +6770,7 @@ public struct SessionRow: Codable, Sendable {
         self.subagentrole = subagentrole
         self.subagentcontrolscope = subagentcontrolscope
         self.swarmgroupid = swarmgroupid
+        self.swarm = swarm
         self.worktree = worktree
         self.execnode = execnode
         self.execcwd = execcwd
@@ -6792,6 +6851,7 @@ public struct SessionRow: Codable, Sendable {
         case subagentrole = "subagentRole"
         case subagentcontrolscope = "subagentControlScope"
         case swarmgroupid = "swarmGroupId"
+        case swarm
         case worktree
         case execnode = "execNode"
         case execcwd = "execCwd"
@@ -6939,15 +6999,19 @@ public struct SessionsObserverVisibilityResult: Codable, Sendable {
 
 public struct SessionGitHubOptionsParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -6975,18 +7039,22 @@ public struct SessionGitHubOptionsResult: Codable, Sendable {
 
 public struct SessionGitHubStatusParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let requestid: String
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         requestid: String)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.requestid = requestid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case requestid = "requestId"
     }
 }
@@ -7006,6 +7074,7 @@ public struct SessionGitHubStatusResult: Codable, Sendable {
 
 public struct SessionGitHubConfirmParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let requestid: String
     public let generation: String
     public let account: [String: AnyCodable]
@@ -7013,12 +7082,14 @@ public struct SessionGitHubConfirmParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         requestid: String,
         generation: String,
         account: [String: AnyCodable],
         requestdigest: String)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.requestid = requestid
         self.generation = generation
         self.account = account
@@ -7027,6 +7098,7 @@ public struct SessionGitHubConfirmParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case requestid = "requestId"
         case generation
         case account
@@ -7036,6 +7108,7 @@ public struct SessionGitHubConfirmParams: Codable, Sendable {
 
 public struct SessionGitHubPublishParams: Codable, Sendable {
     public let sessionkey: String?
+    public let agentid: String?
     public let idempotencykey: String
     public let title: String?
     public let body: String?
@@ -7043,12 +7116,14 @@ public struct SessionGitHubPublishParams: Codable, Sendable {
 
     public init(
         sessionkey: String? = nil,
+        agentid: String? = nil,
         idempotencykey: String,
         title: String? = nil,
         body: String? = nil,
         selection: AnyCodable? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.idempotencykey = idempotencykey
         self.title = title
         self.body = body
@@ -7057,6 +7132,7 @@ public struct SessionGitHubPublishParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case idempotencykey = "idempotencyKey"
         case title
         case body
@@ -13551,6 +13627,7 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
     public let gatewayrestartrequired: Bool?
     public let status: AnyCodable?
     public let error: String?
+    public let disposition: String?
 
     public init(
         ok: Bool,
@@ -13559,7 +13636,8 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
         lines: [String]? = nil,
         gatewayrestartrequired: Bool? = nil,
         status: AnyCodable? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        disposition: String? = nil)
     {
         self.ok = ok
         self.modelref = modelref
@@ -13568,6 +13646,7 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
         self.gatewayrestartrequired = gatewayrestartrequired
         self.status = status
         self.error = error
+        self.disposition = disposition
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13578,6 +13657,7 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
         case gatewayrestartrequired = "gatewayRestartRequired"
         case status
         case error
+        case disposition
     }
 }
 
@@ -13629,6 +13709,7 @@ public struct SystemAgentSetupActivateStartResult: Codable, Sendable {
     public let accounts: [[String: AnyCodable]]?
     public let preparedmodelref: String?
     public let modelactivation: [String: AnyCodable]?
+    public let activationrejection: [String: AnyCodable]?
 
     public init(
         sessionid: String,
@@ -13639,7 +13720,8 @@ public struct SystemAgentSetupActivateStartResult: Codable, Sendable {
         channels: [String]? = nil,
         accounts: [[String: AnyCodable]]? = nil,
         preparedmodelref: String? = nil,
-        modelactivation: [String: AnyCodable]? = nil)
+        modelactivation: [String: AnyCodable]? = nil,
+        activationrejection: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.done = done
@@ -13650,6 +13732,7 @@ public struct SystemAgentSetupActivateStartResult: Codable, Sendable {
         self.accounts = accounts
         self.preparedmodelref = preparedmodelref
         self.modelactivation = modelactivation
+        self.activationrejection = activationrejection
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13662,6 +13745,7 @@ public struct SystemAgentSetupActivateStartResult: Codable, Sendable {
         case accounts
         case preparedmodelref = "preparedModelRef"
         case modelactivation = "modelActivation"
+        case activationrejection = "activationRejection"
     }
 }
 
@@ -13701,6 +13785,7 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
     public let accounts: [[String: AnyCodable]]?
     public let preparedmodelref: String?
     public let modelactivation: [String: AnyCodable]?
+    public let activationrejection: [String: AnyCodable]?
 
     public init(
         sessionid: String,
@@ -13711,7 +13796,8 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
         channels: [String]? = nil,
         accounts: [[String: AnyCodable]]? = nil,
         preparedmodelref: String? = nil,
-        modelactivation: [String: AnyCodable]? = nil)
+        modelactivation: [String: AnyCodable]? = nil,
+        activationrejection: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.done = done
@@ -13722,6 +13808,7 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
         self.accounts = accounts
         self.preparedmodelref = preparedmodelref
         self.modelactivation = modelactivation
+        self.activationrejection = activationrejection
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13734,6 +13821,7 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
         case accounts
         case preparedmodelref = "preparedModelRef"
         case modelactivation = "modelActivation"
+        case activationrejection = "activationRejection"
     }
 }
 
@@ -13872,6 +13960,7 @@ public struct WizardNextResult: Codable, Sendable {
     public let accounts: [[String: AnyCodable]]?
     public let preparedmodelref: String?
     public let modelactivation: [String: AnyCodable]?
+    public let activationrejection: [String: AnyCodable]?
 
     public init(
         done: Bool,
@@ -13881,7 +13970,8 @@ public struct WizardNextResult: Codable, Sendable {
         channels: [String]? = nil,
         accounts: [[String: AnyCodable]]? = nil,
         preparedmodelref: String? = nil,
-        modelactivation: [String: AnyCodable]? = nil)
+        modelactivation: [String: AnyCodable]? = nil,
+        activationrejection: [String: AnyCodable]? = nil)
     {
         self.done = done
         self.step = step
@@ -13891,6 +13981,7 @@ public struct WizardNextResult: Codable, Sendable {
         self.accounts = accounts
         self.preparedmodelref = preparedmodelref
         self.modelactivation = modelactivation
+        self.activationrejection = activationrejection
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13902,6 +13993,7 @@ public struct WizardNextResult: Codable, Sendable {
         case accounts
         case preparedmodelref = "preparedModelRef"
         case modelactivation = "modelActivation"
+        case activationrejection = "activationRejection"
     }
 }
 
@@ -13915,6 +14007,7 @@ public struct WizardStartResult: Codable, Sendable {
     public let accounts: [[String: AnyCodable]]?
     public let preparedmodelref: String?
     public let modelactivation: [String: AnyCodable]?
+    public let activationrejection: [String: AnyCodable]?
 
     public init(
         sessionid: String,
@@ -13925,7 +14018,8 @@ public struct WizardStartResult: Codable, Sendable {
         channels: [String]? = nil,
         accounts: [[String: AnyCodable]]? = nil,
         preparedmodelref: String? = nil,
-        modelactivation: [String: AnyCodable]? = nil)
+        modelactivation: [String: AnyCodable]? = nil,
+        activationrejection: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.done = done
@@ -13936,6 +14030,7 @@ public struct WizardStartResult: Codable, Sendable {
         self.accounts = accounts
         self.preparedmodelref = preparedmodelref
         self.modelactivation = modelactivation
+        self.activationrejection = activationrejection
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13948,6 +14043,7 @@ public struct WizardStartResult: Codable, Sendable {
         case accounts
         case preparedmodelref = "preparedModelRef"
         case modelactivation = "modelActivation"
+        case activationrejection = "activationRejection"
     }
 }
 

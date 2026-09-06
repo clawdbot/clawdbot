@@ -250,7 +250,7 @@ export function resolveGatewaySessionRuntimeProjection(
         : readAcpSessionMeta({ sessionKey, agentId }));
   const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
-    agentId: params.agentId,
+    agentScope: { kind: "prepared", agentId: params.agentId },
     provider: params.provider,
     model: params.model,
     sessionKey: params.sessionKey,
@@ -279,7 +279,7 @@ export function resolveGatewaySessionThinkingProjectionInternal(
         modelId: params.model,
         modelApi: catalogEntry?.api,
         modelBaseUrl: catalogEntry?.baseUrl,
-        agentId: params.agentId,
+        agentScope: { kind: "prepared", agentId: params.agentId },
         sessionKey: params.sessionKey,
         sessionEntry: params.entry,
       });

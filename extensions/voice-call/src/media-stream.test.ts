@@ -11,7 +11,6 @@ import type {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { MediaStreamHandler } from "./media-stream.js";
 import {
   connectWs,
@@ -19,6 +18,7 @@ import {
   waitForClose,
   withTimeout,
 } from "./websocket-test-support.js";
+import { WebSocket } from "./websocket.js";
 
 const createStubSession = (): RealtimeTranscriptionSession => ({
   connect: async () => {},

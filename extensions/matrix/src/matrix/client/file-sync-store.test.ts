@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
-import { openMatrixStorageMetaStoreOptions } from "./storage.js";
+import { openMatrixStorageMetaStoreOptions } from "./storage-metadata.js";
 import { openMatrixSyncCacheStoreOptions, type MatrixSyncCacheRecord } from "./sync-cache-state.js";
 
 function createSyncResponse(nextBatch: string): ISyncResponse {

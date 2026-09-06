@@ -1,4 +1,3 @@
-// Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
 import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
@@ -78,6 +77,7 @@ const allowedAttrs = [
   "data-file-path",
   "data-link-favicon-host",
   "data-session-key",
+  "data-session-href",
   "data-table-interactions",
   "type",
   "aria-expanded",

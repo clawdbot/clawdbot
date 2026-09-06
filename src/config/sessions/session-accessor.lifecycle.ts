@@ -294,9 +294,12 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
+  // Select metadata without yielding; saved prompts are reserved from plugin slots.
+  // Check only selected writes; the patch rereads full entries and rechecks authority at commit.
   for (const { entry, sessionKey } of listSessionEntriesCore({
     agentId: params.agentId,
     storePath: params.storePath,
+    projection: "list",
   })) {
     if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
       continue;
@@ -307,7 +310,10 @@ export async function cleanupPluginHostSessionStore(
     ) {
       continue;
     }
-    const updated = await patchSessionEntryCore(
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
+    await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       (currentEntry) => {
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {
@@ -321,13 +327,14 @@ export async function cleanupPluginHostSessionStore(
         return currentEntry;
       },
       {
+        shouldCommit: params.shouldCleanup,
+        onCommitted: () => {
+          cleared += 1;
+        },
         replaceEntry: true,
         skipMaintenance: true,
       },
     );
-    if (updated) {
-      cleared += 1;
-    }
   }
   return cleared;
 }

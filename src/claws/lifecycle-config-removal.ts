@@ -213,7 +213,6 @@ export async function withClawAgentConfigRemoval<T>(
         async () => commitClawAgentConfigRemoval({ ...params, config }),
         params.stateDatabase,
       );
-      deletion.commit();
       committed = true;
       return {
         ...result,

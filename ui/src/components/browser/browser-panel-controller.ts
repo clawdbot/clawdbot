@@ -546,7 +546,7 @@ export class BrowserPanelController implements ReactiveController {
     const previous = { targetId: this.activeTargetId, view: this.view };
     this.invalidateViewOperations();
     const epoch = this.operations.epoch;
-    this.setState("activeTargetId", targetId);
+    this.setState("activeTargetId", route ? null : targetId);
     this.setState("view", null);
     this.exitCaptureModes();
     if (!route && this.clearUnavailableView()) {
@@ -554,14 +554,14 @@ export class BrowserPanelController implements ReactiveController {
     }
     const focused = await this.runAction(async (actionClient) => {
       if (route) {
-        // Listing is safe for blocked tabs; focus is not. Resolve the alias and
-        // current access observation before attempting to activate the target.
+        // Listing can observe stopped or blocked tabs; focus needs a running,
+        // accessible tab. A historical target cannot survive a browser restart.
         await this.refreshTabsOnly(actionClient, () => this.operations.isLive(epoch, actionClient));
         if (!this.operations.isLive(epoch, actionClient)) {
           return;
         }
         const selected = this.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId);
-        this.setState("activeTargetId", selected?.id ?? targetId);
+        this.setState("activeTargetId", this.running === false ? null : (selected?.id ?? targetId));
         if (this.clearUnavailableView()) {
           return;
         }

@@ -61,8 +61,10 @@ for channel, availability, and the latest durable update report. Gateway console
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
-Interactive updates show the current step and elapsed time. When output is
-piped or captured in a log, each step prints its progress without animation.
+Interactive updates show phase transitions, the current step, and elapsed time.
+The phases match the Control UI: requested, staging, validating, optional
+repairing, activating, restarting, verifying, and finished. When output is
+piped or captured in a log, progress prints without animation.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
@@ -170,10 +172,10 @@ reason. CLI invocations rejected before admission leave state untouched. The sam
 the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome.
 
-`openclaw update --json` includes `runId`. `openclaw update status --json`
+`openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
-Human output, chat completion notices, and the `openclaw status` update line use
-the same report. The report shows recorded facts; an absent verification fact
+Human output, chat completion notices, the Control UI update view, and the
+`openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
 
 Gateway clients with `operator.admin` can inspect history:
@@ -222,6 +224,9 @@ openclaw update repair --accept-capabilities
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
+Configured runtime plugins whose versions follow OpenClaw are checked against
+the newly installed core during post-update repair, even when the updater process
+started on the previous version.
 It does not install a new core package and does not restart the Gateway.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
@@ -533,7 +538,7 @@ the sentinel.
 
     The updater attempts to remove staging before changing the live checkout; cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
 
-    If a candidate fails, walks back up to 10 commits to find the newest buildable commit. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Content-addressed declaration outputs from the successful candidate are reused by the final checkout build; rebased source changes automatically invalidate the affected cache groups. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
+    If a candidate fails, walks back up to 10 commits to find the newest buildable commit. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. If you explicitly request declarations with `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0`, content-addressed declaration outputs from the successful candidate can be reused by the final checkout build; changed inputs invalidate the affected cache groups. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
     The updater already running owns staging. Updating to a commit with this repair cannot change an older published updater's first hop; that default path requires a published baseline containing the repair.
 

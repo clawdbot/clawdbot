@@ -39,7 +39,6 @@ const mocks = vi.hoisted(() => ({
   withAgentExecApprovalsRemoved: vi.fn(
     async (_agentId: string, commit: () => Promise<unknown>) => await commit(),
   ),
-  beginAgentDeletionCommit: vi.fn(),
   beginAgentDeletionRollback: vi.fn(),
   beginAgentDeletionFinish: vi.fn(),
   runAgentDatabaseCleanup: vi.fn(
@@ -239,7 +238,6 @@ vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
       databasePaths: entry.databasePaths ?? [],
       cleanupPaths: entry.cleanupPaths ?? [],
     }),
-    commit: mocks.beginAgentDeletionCommit,
     fenceDatabasePaths: (paths: string[]) => {
       entry.databasePaths = [...new Set(paths)];
     },
@@ -393,7 +391,6 @@ beforeEach(() => {
   mocks.withAgentExecApprovalsRemoved
     .mockReset()
     .mockImplementation(async (_agentId: string, commit: () => Promise<unknown>) => await commit());
-  mocks.beginAgentDeletionCommit.mockReset();
   mocks.beginAgentDeletionRollback.mockReset();
   mocks.beginAgentDeletionFinish.mockReset();
   mocks.readAgentDeletionJournal.mockReset().mockReturnValue(undefined);
@@ -1404,9 +1401,6 @@ describe("agents.delete", () => {
     mocks.writeConfigFile.mockImplementationOnce(async () => {
       events.push("config");
     });
-    mocks.beginAgentDeletionCommit.mockImplementationOnce(() => {
-      events.push("lifecycle");
-    });
     mocks.unregisterResolvedAgentDir.mockImplementationOnce(() => {
       events.push("directory");
       return true;
@@ -1442,7 +1436,7 @@ describe("agents.delete", () => {
       agentId: "test-agent",
       agentDir: "/agents/test-agent",
     });
-    expect(events).toEqual(["database", "cron", "approvals", "config", "lifecycle", "directory"]);
+    expect(events).toEqual(["database", "cron", "approvals", "config", "directory"]);
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
@@ -2745,7 +2739,6 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { ok: true });
-    expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
     expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
     expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
       agentId: "test-agent",
@@ -3081,7 +3074,6 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondErrorContaining(respond, 'agent "агент✨" not found');
-    expect(mocks.beginAgentDeletionCommit).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
@@ -3102,7 +3094,6 @@ describe("agents.delete", () => {
       await promise;
 
       expectRespondOk(respond, { ok: true, agentId: "main" });
-      expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
       expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
       expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
     },
@@ -3121,7 +3112,6 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondErrorContaining(respond, "owns inherited credentials");
-    expect(mocks.beginAgentDeletionCommit).not.toHaveBeenCalled();
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 

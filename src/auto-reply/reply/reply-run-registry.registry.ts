@@ -17,14 +17,11 @@ import {
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
 import { resolveReplyMessageInjectionRejection } from "./reply-run-registry.message-injection.js";
-import {
-  createReplyOperation,
-  expireStaleReplyOperation,
-  forceClearReplyOperation,
-} from "./reply-run-registry.operation.js";
+import { createReplyOperation, forceClearReplyOperation } from "./reply-run-registry.operation.js";
 import {
   clearReplyRunState,
   evictReplyOperationByOperation,
+  expireStaleReplyOperation,
   getAttachedBackend,
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,

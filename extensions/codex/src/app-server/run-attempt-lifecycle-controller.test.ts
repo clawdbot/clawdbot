@@ -211,30 +211,37 @@ describe("Codex terminal dynamic-tool release", () => {
 
   it("completes a successful yield before native interrupt completion", async () => {
     const harness = createTerminalReleaseHarness();
+    // The RPC receives a remaining budget; keep this exact-value assertion on one clock tick.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
-    harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+      expect(harness.cancel).toHaveBeenCalled();
+      expect(harness.request).toHaveBeenCalledWith(
+        "turn/interrupt",
+        { threadId: "thread-1", turnId: "turn-1" },
+        expect.objectContaining({ timeoutMs: 5_000 }),
+      );
+      expect(harness.order.indexOf("cancel")).toBeLessThan(harness.order.indexOf("turn/interrupt"));
+      expect(harness.state.completed).toBe(true);
+      expect(harness.resolveCompletion).toHaveBeenCalledOnce();
 
-    expect(harness.cancel).toHaveBeenCalled();
-    expect(harness.request).toHaveBeenCalledWith(
-      "turn/interrupt",
-      { threadId: "thread-1", turnId: "turn-1" },
-      expect.objectContaining({ timeoutMs: 5_000 }),
-    );
-    expect(harness.order.indexOf("cancel")).toBeLessThan(harness.order.indexOf("turn/interrupt"));
-    expect(harness.state.completed).toBe(true);
-    expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+      harness.completeTurn();
+      harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
-    harness.completeTurn();
-    harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    expect(harness.request).toHaveBeenCalledOnce();
-    expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+      expect(harness.request).toHaveBeenCalledOnce();
+      expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+    } finally {
+      harness.completeTurn();
+      await yieldImmediate();
+      clock.mockRestore();
+    }
   });
 
   it("keeps steering open when the yield result fails", async () => {

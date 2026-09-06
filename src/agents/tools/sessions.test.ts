@@ -1013,6 +1013,36 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "canonical message", args: { message: "    indented body" } },
+    { name: "formatted text alias", args: { text: "Thinking\n_summary_\n    indented body" } },
+    { name: "snake-case alias", args: { send_message: "    indented body" } },
+    { name: "blank earlier alias", args: { SendMessage: " \n\t ", text: "    indented body" } },
+  ])("forwards substantive indentation through $name", async ({ args }) => {
+    callGatewayMock.mockResolvedValue({ runId: "body-whitespace" });
+    const result = await createMainSessionsSendTool().execute("body-whitespace", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      timeoutSeconds: 0,
+      ...args,
+    });
+    expect(requireDetails(result).status).toBe("accepted");
+    const call = callGatewayMock.mock.calls.find(([request]) => request.method === "agent");
+    const request = requireRecord(call?.[0], "agent request");
+    const forwarded = requireRecord(request.params, "agent params");
+    expect(forwarded.message).toMatch(/\n {4}indented body$/u);
+  });
+
+  it.each(["", " \n\t "])("rejects blank message %j before forwarding", async (message) => {
+    await expect(
+      createMainSessionsSendTool().execute("blank-body", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message,
+        timeoutSeconds: 0,
+      }),
+    ).rejects.toThrow("message required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
     const tool = createMainSessionsSendTool();
 

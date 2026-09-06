@@ -218,6 +218,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy"),
     }),
     createDoctorHealthContribution({
+      id: "doctor:skill-workshop-relocation",
+      label: "Skill Workshop relocation",
+      healthCheckIds: ["core/doctor/skill-workshop-relocation"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-relocation"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
       healthChecks: {

@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import {
   ensurePrivateSqliteCoordinatorDirectory,
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
+  tryAcquireExclusiveSqliteCoordinator,
 } from "./sqlite-coordinator.js";
 
 const heldCoordinators = new Map<

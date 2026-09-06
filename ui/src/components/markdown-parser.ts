@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
@@ -341,7 +340,7 @@ export function createMarkdownParser(): MarkdownItParser {
     }
   });
 
-  markdownParser.core.ruler.after("linkify", "file-links", (state) => {
+  markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
     const env = state.env as Partial<MarkdownRenderEnv> | undefined;
     if (env?.fileLinks !== true) {
       return;
@@ -360,7 +359,7 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (token.type === "link_open") {
           const href = String(token.attrGet("href") ?? "");
-          if (href) {
+          if (href && !token.attrGet("data-session-href")) {
             let decodedHref = href;
             try {
               decodedHref = decodeURIComponent(href);
@@ -369,7 +368,7 @@ export function createMarkdownParser(): MarkdownItParser {
             }
             if (!decodedHref.includes("://")) {
               const target =
-                parseMarkdownFileLinkTarget(decodedHref) ??
+                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
                 (isHostLocalMarkdownFileHref(decodedHref)
                   ? splitMarkdownFileLineSuffix(decodedHref.trim())
                   : null);
@@ -610,10 +609,7 @@ export function createMarkdownParser(): MarkdownItParser {
         target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
       return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
     }
-    const sessionKey: unknown = asOptionalRecord(tokens[index]?.meta?.sessionLink)?.sessionKey;
-    return typeof sessionKey === "string"
-      ? `<a class="markdown-session-link" role="link" tabindex="0" data-session-key="${escapeMarkdownHtml(sessionKey)}">${rendered}</a>`
-      : rendered;
+    return rendered;
   };
 
   // Message rendering allows inline data images and explicit open-only placeholders

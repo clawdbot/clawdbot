@@ -3334,6 +3334,33 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("plans requested and fallback routes without provider runtime hooks when normalization is disabled", () => {
+    const normalize = providerModelNormalizationMock.normalizeProviderModelIdWithRuntime;
+    normalize.mockImplementation(() => {
+      throw new Error("runtime hook entered pure planning");
+    });
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: { primary: "custom/primary", fallbacks: ["custom/fallback"] },
+              models: { "custom/fallback": { alias: "other" } },
+            },
+          },
+        }),
+        provider: "custom",
+        model: "primary",
+        requestedRouteResolution: "resolved",
+        allowPluginNormalization: false,
+      }),
+    ).toEqual([
+      { provider: "custom", model: "primary" },
+      { provider: "custom", model: "fallback" },
+    ]);
+    expect(normalize).not.toHaveBeenCalled();
+  });
+
   it("treats normalized default refs as primary and keeps configured fallback chain", () => {
     const cfg = makeCfg({
       agents: {

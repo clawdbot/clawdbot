@@ -36,6 +36,14 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
         },
       );
       const summary = summarizeUpdateRunResponse(response);
+      // The Gateway sends the acknowledgement before handing off its process;
+      // its durable notice owner also delivers completion and failure reports.
+      if (summary.ackDelivered || summary.ackQueued) {
+        return { shouldContinue: false };
+      }
+      if (summary.ok && summary.acknowledgement) {
+        return commandReply(summary.acknowledgement);
+      }
       const run = summary.runId ? getUpdateRun(summary.runId) : undefined;
       if (!run) {
         throw new Error(
