@@ -1749,6 +1749,134 @@ describe("openai image generation provider", () => {
     ).rejects.toThrow(/image call did not complete/i);
   });
 
+  it("surfaces completed assistant refusal text instead of a generic empty-image error", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                type: "message",
+                content: [
+                  {
+                    type: "refusal",
+                    refusal: "Your request was rejected by the safety system.",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(generateOpenAIImage("Draw a prompt the provider refuses")).rejects.toThrow(
+      'Image generation refused by provider safety system: "Your request was rejected by the safety system."',
+    );
+  });
+
+  it("surfaces completed message output text when the snapshot has no image", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                type: "message",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Your request was rejected by the safety system. safety_violations=[hidden]",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(
+      generateOpenAIImage("Draw a prompt the provider refuses in a message"),
+    ).rejects.toThrow(
+      /refused by provider safety system: "Your request was rejected by the safety system\./,
+    );
+  });
+
+  it("prefers completed refusal text over a failed image-call status", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                type: "message",
+                content: [
+                  {
+                    type: "refusal",
+                    refusal: "Your request was rejected by the safety system.",
+                  },
+                ],
+              },
+              { type: "image_generation_call", status: "failed", result: null },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(
+      generateOpenAIImage("Draw a refused prompt that also has a failed image call"),
+    ).rejects.toThrow(
+      'Image generation refused by provider safety system: "Your request was rejected by the safety system."',
+    );
+  });
+
+  it("bounds completed refusal text instead of forwarding the raw provider payload", async () => {
+    mockCodexAuthOnly();
+    const longRefusal = `${"x".repeat(400)} secret-payload`;
+    mockCodexRawStream(
+      [
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                type: "refusal",
+                refusal: longRefusal,
+              },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    const error = await generateOpenAIImage("Draw a prompt with an oversized refusal").then(
+      () => {
+        throw new Error("expected image generation to reject");
+      },
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/refused by provider safety system: "x{16,}/);
+    expect((error as Error).message).not.toContain("secret-payload");
+    expect((error as Error).message.length).toBeLessThan(400);
+  });
+
   it("ignores malformed interim image data when the completed snapshot provides the final image", async () => {
     mockCodexAuthOnly();
     mockCodexRawStream(

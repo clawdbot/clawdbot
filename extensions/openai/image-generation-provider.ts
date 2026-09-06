@@ -461,11 +461,20 @@ function isCodexSubscriptionAuthMode(mode: unknown): boolean {
   return mode === "oauth" || mode === "token";
 }
 
+type OpenAICodexImageGenerationContent = {
+  type?: string;
+  text?: string;
+  refusal?: string;
+};
+
 type OpenAICodexImageGenerationItem = {
   type?: string;
   result?: string | null;
   revised_prompt?: string;
   status?: "in_progress" | "completed" | "generating" | "failed";
+  text?: string;
+  refusal?: string;
+  content?: OpenAICodexImageGenerationContent[];
 };
 
 type OpenAICodexImageGenerationEvent = {
@@ -590,6 +599,65 @@ function decodeCodexImagePayload(payload: string): Buffer {
   return Buffer.from(canonicalPayload, "base64");
 }
 
+function sanitizeCodexRefusalText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value
+    .replace(/safety_violations=\[[^\]]*\]/gi, " ")
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return truncateUtf16Safe(normalized, LOG_VALUE_MAX_CHARS);
+}
+
+function extractCodexCompletedRefusalText(
+  output: OpenAICodexImageGenerationItem[] | undefined,
+): string | undefined {
+  if (!output?.length) {
+    return undefined;
+  }
+  for (const entry of output) {
+    if (entry.type === "refusal") {
+      const text = sanitizeCodexRefusalText(entry.refusal ?? entry.text);
+      if (text) {
+        return text;
+      }
+    }
+    if (entry.type === "message" || entry.type === "refusal") {
+      for (const part of entry.content ?? []) {
+        if (part.type === "refusal") {
+          const text = sanitizeCodexRefusalText(part.refusal ?? part.text);
+          if (text) {
+            return text;
+          }
+        }
+      }
+    }
+  }
+  for (const entry of output) {
+    if (entry.type !== "message") {
+      continue;
+    }
+    const topLevel = sanitizeCodexRefusalText(entry.text ?? entry.refusal);
+    if (topLevel) {
+      return topLevel;
+    }
+    for (const part of entry.content ?? []) {
+      if (part.type === "output_text" || part.type === "text") {
+        const text = sanitizeCodexRefusalText(part.text);
+        if (text) {
+          return text;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 function toCodexImage(
   entry: OpenAICodexImageGenerationItem,
   index: number,
@@ -654,10 +722,23 @@ function extractCodexImageGenerationResult(params: {
   // The completed snapshot owns final provider state; done events only recover
   // compatible streams that omit their image from the terminal output.
   const selectedOutputItems = completedOutputItems.length > 0 ? completedOutputItems : outputItems;
+  const refusalText = extractCodexCompletedRefusalText(completedResponse.output);
   const images = selectedOutputItems
+    .filter((item) => !item.status || item.status === "completed")
     .map((item, index) => toCodexImage(item, index, params.outputFormat))
     .filter((image): image is NonNullable<typeof image> => image !== null);
   if (images.length === 0) {
+    if (refusalText) {
+      throw new Error(`Image generation refused by provider safety system: "${refusalText}"`);
+    }
+    const unfinished = selectedOutputItems.find(
+      (item) => item.status && item.status !== "completed",
+    );
+    if (unfinished?.status) {
+      throw new Error(
+        `OpenAI Codex image generation image call did not complete (${unfinished.status})`,
+      );
+    }
     throw new Error("OpenAI Codex image generation completed but did not produce an image");
   }
 
