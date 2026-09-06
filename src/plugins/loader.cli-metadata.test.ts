@@ -470,57 +470,59 @@ module.exports = {
     );
   });
 
-  it("skips bundled channel full entries that do not provide a dedicated cli-metadata entry", async () => {
-    const bundledRoot = makePluginLoaderTempDir();
-    const pluginDir = path.join(bundledRoot, "bundled-skip-channel");
-    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+  it.each([
+    { kind: "channel", id: "bundled-skip-channel", moduleKind: "channel" },
+    { kind: "non-channel", id: "bundled-skip-provider", moduleKind: "provider" },
+  ])(
+    "skips bundled $kind full entries that do not provide a dedicated cli-metadata entry",
+    async ({ kind, id, moduleKind }) => {
+      const bundledRoot = makePluginLoaderTempDir();
+      const pluginDir = path.join(bundledRoot, id);
+      const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
-    fs.mkdirSync(pluginDir, { recursive: true });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+      fs.mkdirSync(pluginDir, { recursive: true });
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
 
-    writePluginMetadata({
-      dir: pluginDir,
-      id: "bundled-skip-channel",
-      configSchema: EMPTY_PLUGIN_SCHEMA,
-      channels: ["bundled-skip-channel"],
-      packageJson: {
-        name: "@openclaw/bundled-skip-channel",
-        openclaw: { extensions: ["./index.cjs"] },
-      },
-    });
-    fs.writeFileSync(
-      path.join(pluginDir, "index.cjs"),
-      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+      writePluginMetadata({
+        dir: pluginDir,
+        id,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        ...(kind === "channel" ? { channels: [id] } : {}),
+        packageJson: {
+          name: `@openclaw/${id}`,
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+      });
+      fs.writeFileSync(
+        path.join(pluginDir, "index.cjs"),
+        `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
 module.exports = {
-  id: "bundled-skip-channel",
+  id: ${JSON.stringify(id)},
   register() {
-    throw new Error("bundled channel full entry should not load during CLI metadata capture");
+    throw new Error(${JSON.stringify(`bundled ${moduleKind} full entry should not load during CLI metadata capture`)});
   },
 };`,
-      "utf-8",
-    );
+        "utf-8",
+      );
 
-    const registry = await loadOpenClawPluginCliRegistry({
-      config: {
-        plugins: {
-          allow: ["bundled-skip-channel"],
-          entries: {
-            "bundled-skip-channel": {
-              enabled: true,
+      const registry = await loadOpenClawPluginCliRegistry({
+        config: {
+          plugins: {
+            allow: [id],
+            entries: {
+              [id]: {
+                enabled: true,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(fs.existsSync(fullMarker)).toBe(false);
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
-      "bundled-skip-channel",
-    );
-    expect(registry.plugins.find((entry) => entry.id === "bundled-skip-channel")?.status).toBe(
-      "loaded",
-    );
-  });
+      expect(fs.existsSync(fullMarker)).toBe(false);
+      expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(id);
+      expect(registry.plugins.find((entry) => entry.id === id)?.status).toBe("loaded");
+    },
+  );
 
   it("prefers bundled channel cli-metadata entries over full channel entries", async () => {
     const bundledRoot = makePluginLoaderTempDir();
@@ -597,57 +599,6 @@ module.exports = {
         stdoutIsTTY: true,
       }),
     ).toBe(true);
-  });
-
-  it("skips bundled non-channel full entries that do not provide a dedicated cli-metadata entry", async () => {
-    const bundledRoot = makePluginLoaderTempDir();
-    const pluginDir = path.join(bundledRoot, "bundled-skip-provider");
-    const fullMarker = path.join(pluginDir, "full-loaded.txt");
-
-    fs.mkdirSync(pluginDir, { recursive: true });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
-
-    writePluginMetadata({
-      dir: pluginDir,
-      id: "bundled-skip-provider",
-      configSchema: EMPTY_PLUGIN_SCHEMA,
-      packageJson: {
-        name: "@openclaw/bundled-skip-provider",
-        openclaw: { extensions: ["./index.cjs"] },
-      },
-    });
-    fs.writeFileSync(
-      path.join(pluginDir, "index.cjs"),
-      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
-module.exports = {
-  id: "bundled-skip-provider",
-  register() {
-    throw new Error("bundled provider full entry should not load during CLI metadata capture");
-  },
-};`,
-      "utf-8",
-    );
-
-    const registry = await loadOpenClawPluginCliRegistry({
-      config: {
-        plugins: {
-          allow: ["bundled-skip-provider"],
-          entries: {
-            "bundled-skip-provider": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
-    expect(fs.existsSync(fullMarker)).toBe(false);
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
-      "bundled-skip-provider",
-    );
-    expect(registry.plugins.find((entry) => entry.id === "bundled-skip-provider")?.status).toBe(
-      "loaded",
-    );
   });
 
   it.each([
@@ -1071,73 +1022,33 @@ module.exports = {
     expect(loaded?.error).toContain("plugin register must be synchronous");
   });
 
-  it("applies memory slot gating to non-bundled CLI metadata loads", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
+  it.each([
+    {
+      name: "applies memory slot gating to non-bundled CLI metadata loads",
       id: "memory-external",
-      filename: "memory-external.cjs",
-      body: `module.exports = {
-  id: "memory-external",
-  kind: "memory",
-  register(api) {
-    api.registerCli(() => {}, {
-      descriptors: [
-        {
-          name: "memory-external",
-          description: "External memory CLI metadata",
-          hasSubcommands: true,
-        },
-      ],
-    });
-  },
-};`,
-    });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "memory-external",
-          kind: "memory",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    const registry = await loadOpenClawPluginCliRegistry({
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["memory-external"],
-          slots: { memory: "memory-other" },
-        },
-      },
-    });
-
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
-      "memory-external",
-    );
-    const memory = registry.plugins.find((entry) => entry.id === "memory-external");
-    expect(memory?.status).toBe("disabled");
-    expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
-  });
-
-  it("re-evaluates memory slot gating after resolving exported plugin kind", async () => {
+      description: "External memory CLI metadata",
+      manifestKind: true,
+    },
+    {
+      name: "re-evaluates memory slot gating after resolving exported plugin kind",
+      id: "memory-export-only",
+      description: "Export-only memory CLI metadata",
+      manifestKind: false,
+    },
+  ])("$name", async ({ id, description, manifestKind }) => {
     useNoBundledPlugins();
     const plugin = writePlugin({
-      id: "memory-export-only",
-      filename: "memory-export-only.cjs",
+      id,
+      filename: `${id}.cjs`,
       body: `module.exports = {
-  id: "memory-export-only",
+  id: ${JSON.stringify(id)},
   kind: "memory",
   register(api) {
     api.registerCli(() => {}, {
       descriptors: [
         {
-          name: "memory-export-only",
-          description: "Export-only memory CLI metadata",
+          name: ${JSON.stringify(id)},
+          description: ${JSON.stringify(description)},
           hasSubcommands: true,
         },
       ],
@@ -1145,21 +1056,26 @@ module.exports = {
   },
 };`,
     });
+    if (manifestKind) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify({ id, kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA }, null, 2),
+        "utf-8",
+      );
+    }
 
     const registry = await loadOpenClawPluginCliRegistry({
       config: {
         plugins: {
           load: { paths: [plugin.file] },
-          allow: ["memory-export-only"],
+          allow: [id],
           slots: { memory: "memory-other" },
         },
       },
     });
 
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
-      "memory-export-only",
-    );
-    const memory = registry.plugins.find((entry) => entry.id === "memory-export-only");
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(id);
+    const memory = registry.plugins.find((entry) => entry.id === id);
     expect(memory?.status).toBe("disabled");
     expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
   });
