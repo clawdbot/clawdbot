@@ -6124,7 +6124,7 @@ describe("update-cli", () => {
       listener.listen(absentServicePort, "127.0.0.1");
       await once(listener, "listening");
       await expect(runWithGatewayServiceEnv({ yes: true })).rejects.toEqual(new ExitError(1));
-      expect(getErrorOutput()).toContain("Gateway service inspection is unavailable");
+      expect(getLogOutput()).toContain("Gateway service inspection is unavailable");
       expect(packageInstallCommandCall()).toBeUndefined();
       expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
     } finally {
