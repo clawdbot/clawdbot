@@ -30,6 +30,9 @@ const mockState = vi.hoisted(() => ({
   acpProtocolVersion: 1,
   acpInputMessages: [] as unknown[],
   rawInputChunks: [] as Uint8Array[],
+  acpOutputMessages: [] as unknown[],
+  /** When set, the NDJSON sink rejects every write, standing in for a broken stdout. */
+  acpOutputSinkError: null as Error | null,
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
@@ -131,7 +134,14 @@ vi.mock("@agentclientprotocol/sdk", () => ({
   },
   PROTOCOL_VERSION: mockState.acpProtocolVersion,
   ndJsonStream: vi.fn(() => ({
-    writable: new WritableStream(),
+    writable: new WritableStream({
+      write(message) {
+        if (mockState.acpOutputSinkError) {
+          throw mockState.acpOutputSinkError;
+        }
+        mockState.acpOutputMessages.push(message);
+      },
+    }),
     readable: new ReadableStream({
       start(controller) {
         for (const message of mockState.acpInputMessages) {
@@ -365,6 +375,8 @@ describe("serveAcpGateway startup", () => {
   beforeEach(async () => {
     mockState.acpInputMessages.length = 0;
     mockState.rawInputChunks.length = 0;
+    mockState.acpOutputMessages.length = 0;
+    mockState.acpOutputSinkError = null;
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
@@ -848,5 +860,92 @@ describe("serveAcpGateway startup", () => {
 
     const [message] = await captureAcpMessagesAfterStartup([sessionRequest]);
     expect(message).toBe(sessionRequest);
+  });
+
+  it("orders new-session updates at the ACP stdio boundary without delaying loaded sessions", async () => {
+    mockState.acpInputMessages.push({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/load",
+      params: { sessionId: "existing-session", cwd: "/tmp/openclaw" },
+    });
+    // The ordering boundary only holds updates for a session it is expecting, so the
+    // creating request must reach it before its response can introduce the session ID.
+    mockState.acpInputMessages.push({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "session/new",
+      params: { cwd: "/tmp/openclaw" },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const servePromise = serveAcpGateway({});
+
+    try {
+      await emitHelloAndWaitForAgentSideConnection();
+      mockState.closeAcpInput?.();
+      await readCapturedAcpMessages();
+      const writer = getCapturedAcpStream().writable.getWriter();
+      const update = (sessionId: string) => ({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId,
+          update: { sessionUpdate: "session_info_update", title: "Proof" },
+        },
+      });
+      const existingUpdate = update("existing-session");
+      const newUpdate = update("new-session");
+      const newResult = {
+        jsonrpc: "2.0",
+        id: 2,
+        result: { sessionId: "new-session" },
+      };
+
+      await writer.write(existingUpdate);
+      await vi.waitFor(() => expect(mockState.acpOutputMessages).toEqual([existingUpdate]));
+      await writer.write(newUpdate);
+      expect(mockState.acpOutputMessages).toEqual([existingUpdate]);
+      await writer.write(newResult);
+      await vi.waitFor(() =>
+        expect(mockState.acpOutputMessages).toEqual([existingUpdate, newResult, newUpdate]),
+      );
+      writer.releaseLock();
+    } finally {
+      signalHandlers.get("SIGINT")?.();
+      await servePromise;
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("tears down the agent, Gateway, and state database when the outbound sink fails", async () => {
+    const { onceSpy } = captureProcessSignalHandlers();
+    const servePromise = serveAcpGateway({});
+
+    try {
+      await emitHelloAndWaitForAgentSideConnection();
+      mockState.closeAcpInput?.();
+      await readCapturedAcpMessages();
+
+      const gateway = mockState.gateways[0];
+      expect(gateway).toBeDefined();
+      const stopAndWait = vi.spyOn(gateway, "stopAndWait");
+      expect(mockState.closeOpenClawStateDatabase).not.toHaveBeenCalled();
+
+      // Break the NDJSON sink the way a closed or erroring stdout would. The write
+      // itself is buffered by the transform, so the failure only ever surfaces as a
+      // pipeTo rejection — exactly the promise that used to be discarded.
+      mockState.acpOutputSinkError = new Error("stdout sink failed");
+      const writer = getCapturedAcpStream().writable.getWriter();
+      await writer.write({ jsonrpc: "2.0", id: 9, result: {} }).catch(() => {});
+      writer.releaseLock();
+
+      await servePromise;
+
+      expect(stopAndWait).toHaveBeenCalledOnce();
+      expect(mockState.agentShutdown).toHaveBeenCalledOnce();
+      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
+    } finally {
+      onceSpy.mockRestore();
+    }
   });
 });
