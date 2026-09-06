@@ -25,11 +25,11 @@ function writeFixture(root: string, relativePath: string, source: string): void 
   writeFileSync(target, source, "utf8");
 }
 
-function writeGatewayRunChunk(root: string, source = ""): void {
+function writeGatewayRunChunk(root: string, source = "", chunkName = "run-gateway.js"): void {
   writeFixture(root, "dist/string-coerce.js", "export const normalize = true;");
   writeFixture(
     root,
-    "dist/run-gateway.js",
+    `dist/${chunkName}`,
     [
       'import "./string-coerce.js";',
       "const GATEWAY_AUTH_MODES = [];",
@@ -57,29 +57,33 @@ describe("check-cli-bootstrap-imports", () => {
     ).toEqual(["node:fs", "./side-effect.js", "../value.js"]);
   });
 
-  it("allows a bootstrap graph with builtins and lazy external imports", () => {
-    const root = makeTempRoot();
-    writeFixture(
-      root,
-      "dist/entry.js",
-      `import fs from "node:fs";\nimport "./cli/run-main.js";\nvoid fs;\n`,
-    );
-    writeFixture(
-      root,
-      "dist/cli/run-main.js",
-      `import "../light.js";\nexport async function run() { return import("tslog"); }\n`,
-    );
-    writeFixture(root, "dist/light.js", `import path from "node:path";\nvoid path;\n`);
-    writeGatewayRunChunk(root);
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])(
+    "allows builtins and lazy external imports with %s and a mixed-extension graph",
+    (chunkName) => {
+      const root = makeTempRoot();
+      writeFixture(
+        root,
+        "dist/entry.js",
+        `import fs from "node:fs";\nimport "./cli/run-main.js";\nvoid fs;\n`,
+      );
+      writeFixture(
+        root,
+        "dist/cli/run-main.js",
+        `import "../light-abc123.mjs";\nexport async function run() { return import("tslog"); }\n`,
+      );
+      writeFixture(root, "dist/light-abc123.mjs", 'import "./string-coerce.js";\n');
+      writeGatewayRunChunk(root, "", chunkName);
 
-    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toStrictEqual([]);
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toStrictEqual([]);
-  });
+      expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toStrictEqual([]);
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toStrictEqual([]);
+    },
+  );
 
   it("reports external packages in the static bootstrap graph", () => {
     const root = makeTempRoot();
     writeFixture(root, "dist/entry.js", `import "./cli/run-main.js";\n`);
-    writeFixture(root, "dist/cli/run-main.js", `import "../heavy.js";\n`);
+    writeFixture(root, "dist/cli/run-main.js", `import "../bridge-abc123.mjs";\n`);
+    writeFixture(root, "dist/bridge-abc123.mjs", `import "./heavy.js";\n`);
     writeFixture(root, "dist/heavy.js", `import { Logger } from "tslog";\nvoid Logger;\n`);
     writeGatewayRunChunk(root);
 
@@ -96,36 +100,42 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
-  it("reports cold static imports in the gateway run chunk", () => {
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])(
+    "reports cold static imports in %s",
+    (chunkName) => {
+      const root = makeTempRoot();
+      writeGatewayRunChunk(root, 'import "./restart-sentinel-abc123.mjs";', chunkName);
+      writeFixture(root, "dist/restart-sentinel-abc123.mjs", "export const sentinel = true;");
+
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+        `Gateway run chunk dist/${chunkName} static graph imports cold path "./restart-sentinel-abc123.mjs" from dist/${chunkName}.`,
+      ]);
+    },
+  );
+
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])(
+    "reports transitive cold static imports from %s through a mixed-extension graph",
+    (chunkName) => {
+      const root = makeTempRoot();
+      writeGatewayRunChunk(root, 'import "./gateway-bridge-abc123.mjs";', chunkName);
+      writeFixture(root, "dist/gateway-bridge-abc123.mjs", 'import "./server-close-abc123.js";');
+      writeFixture(root, "dist/server-close-abc123.js", "export const close = true;");
+
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+        `Gateway run chunk dist/${chunkName} static graph imports cold path "./server-close-abc123.js" from dist/gateway-bridge-abc123.mjs.`,
+      ]);
+    },
+  );
+
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])("reports an oversized %s", (chunkName) => {
     const root = makeTempRoot();
-    writeGatewayRunChunk(root, 'import "./restart-sentinel-abc123.js";');
-    writeFixture(root, "dist/restart-sentinel-abc123.js", "export const sentinel = true;");
-
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
-      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./restart-sentinel-abc123.js" from dist/run-gateway.js.',
-    ]);
-  });
-
-  it("reports transitive cold static imports from the gateway run chunk graph", () => {
-    const root = makeTempRoot();
-    writeGatewayRunChunk(root, 'import "./gateway-bridge.js";');
-    writeFixture(root, "dist/gateway-bridge.js", 'import "./server-close-abc123.js";');
-    writeFixture(root, "dist/server-close-abc123.js", "export const close = true;");
-
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
-      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./server-close-abc123.js" from dist/gateway-bridge.js.',
-    ]);
-  });
-
-  it("reports oversized gateway run chunks", () => {
-    const root = makeTempRoot();
-    writeGatewayRunChunk(root, "x".repeat(10));
-    const gatewayRunChunkBytes = statSync(join(root, "dist", "run-gateway.js")).size;
+    writeGatewayRunChunk(root, "x".repeat(10), chunkName);
+    const gatewayRunChunkBytes = statSync(join(root, "dist", chunkName)).size;
 
     expect(
       collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
     ).toEqual([
-      `Gateway run chunk dist/run-gateway.js is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+      `Gateway run chunk dist/${chunkName} is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
     ]);
   });
 

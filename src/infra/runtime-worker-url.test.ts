@@ -19,6 +19,7 @@ describe("resolveRuntimeWorkerUrl", () => {
     for (const currentModuleUrl of [
       pathToFileURL(path.join(root, "dist/agents/code-mode.js")).href,
       pathToFileURL(path.join(root, "dist/selection-abc123.js")).href,
+      pathToFileURL(path.join(root, "dist/selection-abc123.mjs")).href,
     ]) {
       expect(
         fileURLToPath(

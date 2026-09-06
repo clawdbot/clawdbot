@@ -1523,14 +1523,15 @@ exit 7
     }
     expect(staleImportLine).toContain("$updateText -match 'ERR_MODULE_NOT_FOUND'");
     expect(staleImportLine).toContain(`$updateText -match '${staleImportPattern}'`);
-    expect(staleImportPattern).toBe(
-      String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`,
-    );
     expect(staleImportPattern).not.toContain("node_modules\\openclaw\\dist\\");
     expect(staleImportPattern.match(/\\\\/g)).toHaveLength(4);
-    const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.js' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
     const generatedRegex = new RegExp(staleImportPattern);
-    expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
-    expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.js`)).toBe(false);
+    for (const extension of ["js", "mjs"]) {
+      const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.${extension}' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
+      expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
+      expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.${extension}`)).toBe(
+        false,
+      );
+    }
   });
 });
