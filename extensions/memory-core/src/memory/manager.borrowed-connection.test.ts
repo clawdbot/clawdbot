@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
@@ -196,5 +198,53 @@ describe("memory manager shared agent connection", () => {
     await first.close();
     await replacement.sync({ reason: "test", force: true });
     expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+  });
+
+  it("serves published hits while dirty maintenance setup meets a separate writer lock", async () => {
+    const manager = await fixture.getFreshManager(createConfig());
+    await manager.sync({ reason: "baseline", force: true });
+    const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
+    const writer = new DatabaseSync(shared.path);
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      Reflect.set(manager, "dirty", true);
+      const started = performance.now();
+      const results = await manager.search("Alpha");
+      expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+      expect(performance.now() - started).toBeLessThan(1000);
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+      await manager.close();
+    }
+  });
+
+  it("keeps searches and timers responsive while a watched file waits for SQLite write admission", async () => {
+    const manager = await fixture.getFreshManager(createConfig());
+    await manager.sync({ reason: "baseline", force: true });
+    await fs.writeFile(path.join(fixture.paths.memory, "updated.md"), "Updated violet memory.");
+    Reflect.set(manager, "dirty", true);
+    const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
+    const writer = new DatabaseSync(shared.path);
+    writer.exec("BEGIN IMMEDIATE");
+    const started = performance.now();
+    const releaseWriter = setTimeout(() => writer.exec("ROLLBACK"), 100);
+    const sync = manager.sync({ reason: "watch" });
+    try {
+      const [results] = await Promise.all([manager.search("Alpha"), sync]);
+      expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(
+        (await manager.search("violet")).some((result) => result.path === "memory/updated.md"),
+      ).toBe(true);
+    } finally {
+      clearTimeout(releaseWriter);
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK");
+      }
+      writer.close();
+      await sync.catch(() => undefined);
+      await manager.close();
+    }
   });
 });

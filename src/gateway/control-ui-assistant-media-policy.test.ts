@@ -18,9 +18,15 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 const state = vi.hoisted(() => ({
   loaded: vi.fn(),
   auth: vi.fn(),
+  placements: vi.fn(),
 }));
 vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: state.loaded }));
 vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
+vi.mock("./session-worker-placement-context.js", () => ({
+  resolveSessionWorkerPlacementContext: () => ({
+    workerSessionPlacementService: { getMany: state.placements },
+  }),
+}));
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
@@ -40,6 +46,7 @@ let entry: {
 const sessionKey = "agent:main:dashboard:media";
 
 beforeEach(async () => {
+  state.placements.mockReset().mockReturnValue(new Map());
   temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "assistant-image-policy-")));
   project = path.join(temp, "project");
   await fs.mkdir(project);
@@ -481,6 +488,68 @@ describe("assistant image session policy", () => {
         });
         try {
           const denied = await request(source, { ticket, bytes: operation === "bytes" });
+          expect(denied.res.statusCode).toBe(404);
+          expect(denied.bytes).not.toEqual(PNG);
+        } finally {
+          openSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(["metadata", "bytes"] as const)(
+    "withdraws Gateway-local media after cloud dispatch during %s preparation",
+    async (operation) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "placement-state") }, async () => {
+        const { createWorkerSessionPlacementStore } =
+          await import("./worker-environments/placement-store.js");
+        const placements = createWorkerSessionPlacementStore();
+        state.placements.mockImplementation((sessionIds: readonly string[]) =>
+          placements.getMany(sessionIds),
+        );
+        entry.permissionMode = "full";
+        const source = path.join(temp, "gateway-only.png");
+        await fs.writeFile(source, PNG);
+        const ticket = String((await request(source)).payload!.mediaTicket);
+        const openFile = fs.open;
+        let dispatched = false;
+        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+          const file = await openFile(filePath, flags, mode);
+          if (filePath === source && !dispatched) {
+            dispatched = true;
+            let placement = placements.startDispatch({
+              sessionId: entry.sessionId,
+              sessionKey,
+              agentId: "main",
+              executionMode: "worker-turn",
+            });
+            for (const [to, patch] of [
+              ["provisioning", { environmentId: "media-worker" }],
+              ["syncing", { workerBundleHash: "a".repeat(64) }],
+              [
+                "starting",
+                {
+                  workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+                  remoteWorkspaceDir: "/remote/workspace",
+                },
+              ],
+              ["active", { activeOwnerEpoch: 1 }],
+            ] as const) {
+              placement = placements.transition({
+                sessionId: entry.sessionId,
+                from: placement.state,
+                to,
+                expectedGeneration: placement.generation,
+                patch,
+              });
+            }
+          }
+          return file;
+        });
+        try {
+          const denied = await request(source, { ticket, bytes: operation === "bytes" });
+          expect(dispatched).toBe(true);
+          expect(entry.execNode).toBeUndefined();
           expect(denied.res.statusCode).toBe(404);
           expect(denied.bytes).not.toEqual(PNG);
         } finally {
