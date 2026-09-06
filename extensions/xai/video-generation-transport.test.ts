@@ -1,5 +1,4 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { downloadXaiVideo } from "./video-generation-transport.js";
 
@@ -47,34 +46,26 @@ describe("downloadXaiVideo", () => {
     const socketClosed = new Promise<boolean>((resolve) => {
       notifySocketClosed = resolve;
     });
-    const server = createServer((request, response) => {
-      request.socket.once("close", () => notifySocketClosed?.(true));
-      response.writeHead(200, { "content-type": "application/json" });
-      // Headers land, then the body never ends: only an explicit cancel closes this.
-      response.write('{"error":"still streaming');
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    await withServer(
+      (request, response) => {
+        request.socket.once("close", () => notifySocketClosed?.(true));
+        response.writeHead(200, { "content-type": "application/json" });
+        // Headers land, then the body never ends: only an explicit cancel closes this.
+        response.write('{"error":"still streaming');
+      },
+      async (baseUrl) => {
+        await expect(
+          downloadXaiVideo({
+            url: `${baseUrl}/generated.mp4`,
+            defaultTimeoutMs: 5_000,
+            fetchFn: fetch,
+            maxBytes: 10 * 1024 * 1024,
+            allowPrivateNetwork: true,
+          }),
+        ).rejects.toThrow("xAI generated video download: malformed video response");
 
-    try {
-      const { port } = server.address() as AddressInfo;
-      await expect(
-        downloadXaiVideo({
-          url: `http://127.0.0.1:${port}/generated.mp4`,
-          defaultTimeoutMs: 5_000,
-          fetchFn: fetch,
-          maxBytes: 10 * 1024 * 1024,
-          allowPrivateNetwork: true,
-        }),
-      ).rejects.toThrow("xAI generated video download: malformed video response");
-
-      await expect(socketClosed).resolves.toBe(true);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        await expect(socketClosed).resolves.toBe(true);
+      },
+    );
   });
 });
