@@ -20,6 +20,10 @@ const settleWakeProvenance: InputProvenance = {
   sourceTool: "subagent_announce",
 };
 
+function makeClient(): Parameters<typeof resolveGatewayAgentTaskTrackingMode>[0]["client"] {
+  return { internal: {} } as Parameters<typeof resolveGatewayAgentTaskTrackingMode>[0]["client"];
+}
+
 describe("resolveGatewayAgentTaskTrackingMode — real registry adoption", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests({ persist: false });
@@ -41,7 +45,7 @@ describe("resolveGatewayAgentTaskTrackingMode — real registry adoption", () =>
     });
 
     const mode = resolveGatewayAgentTaskTrackingMode({
-      client: { internal: {} },
+      client: makeClient(),
       sessionKey: MIDDLE_SESSION_KEY,
       inputProvenance: settleWakeProvenance,
     });
@@ -64,7 +68,7 @@ describe("resolveGatewayAgentTaskTrackingMode — real registry adoption", () =>
     });
 
     const mode = resolveGatewayAgentTaskTrackingMode({
-      client: { internal: {} },
+      client: makeClient(),
       sessionKey: MIDDLE_SESSION_KEY,
       inputProvenance: settleWakeProvenance,
     });
@@ -86,7 +90,7 @@ describe("resolveGatewayAgentTaskTrackingMode — real registry adoption", () =>
     });
 
     const mode = resolveGatewayAgentTaskTrackingMode({
-      client: { internal: {} },
+      client: makeClient(),
       sessionKey: MIDDLE_SESSION_KEY,
       inputProvenance: {
         kind: "inter_session",
@@ -99,7 +103,7 @@ describe("resolveGatewayAgentTaskTrackingMode — real registry adoption", () =>
 
   it("returns none when the session key has no registered runs at all", () => {
     const mode = resolveGatewayAgentTaskTrackingMode({
-      client: { internal: {} },
+      client: makeClient(),
       sessionKey: "agent:main:subagent:nonexistent",
       inputProvenance: settleWakeProvenance,
     });
