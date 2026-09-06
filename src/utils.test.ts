@@ -303,3 +303,82 @@ describe("resolveUserPath", () => {
     expect(resolveUserPath("   ")).toBe("");
   });
 });
+
+import { normalizeE164, sliceUtf16Safe, truncateUtf16Safe } from "./utils.js";
+
+describe("normalizeE164", () => {
+  it("keeps valid E.164 numbers unchanged", () => {
+    expect(normalizeE164("+1234567890")).toBe("+1234567890");
+  });
+
+  it("adds leading + to plain digit numbers", () => {
+    expect(normalizeE164("1234567890")).toBe("+1234567890");
+  });
+
+  it("strips channel prefixes like whatsapp:", () => {
+    expect(normalizeE164("whatsapp:+1234567890")).toBe("+1234567890");
+    expect(normalizeE164("signal:1234567890")).toBe("+1234567890");
+  });
+
+  it("removes spaces, dashes, and other non-digit characters", () => {
+    expect(normalizeE164("+1 234-567-890")).toBe("+1234567890");
+    expect(normalizeE164("(123) 456-7890")).toBe("+1234567890");
+  });
+});
+
+describe("sliceUtf16Safe", () => {
+  const emojiStr = "a🦞b🦀c";
+
+  it("handles basic ASCII slicing", () => {
+    expect(sliceUtf16Safe("hello", 1, 4)).toBe("ell");
+  });
+
+  it("handles negative indices correctly", () => {
+    expect(sliceUtf16Safe("hello", -2)).toBe("lo");
+    expect(sliceUtf16Safe("hello", 1, -1)).toBe("ell");
+  });
+
+  it("safely avoids splitting surrogate pairs at the start", () => {
+    // "a🦞b🦀c" indices: 0:a, 1:high(🦞), 2:low(🦞), 3:b, 4:high(🦀), 5:low(🦀), 6:c
+    // If we start at index 2 (low surrogate of lobster), it should shift to start at index 3 (b)
+    expect(sliceUtf16Safe(emojiStr, 2)).toBe("b🦀c");
+  });
+
+  it("safely avoids splitting surrogate pairs at the end", () => {
+    // If we end at index 5 (low surrogate of crab), it should shift to end at index 4 (before high surrogate of crab)
+    expect(sliceUtf16Safe(emojiStr, 0, 5)).toBe("a🦞b");
+  });
+
+  it("handles out of bounds indices gracefully", () => {
+    expect(sliceUtf16Safe("hello", -10)).toBe("hello");
+    expect(sliceUtf16Safe("hello", 0, 10)).toBe("hello");
+  });
+
+  it("handles swapped start/end indices gracefully", () => {
+    expect(sliceUtf16Safe("hello", 4, 1)).toBe("ell");
+  });
+});
+
+describe("truncateUtf16Safe", () => {
+  const emojiStr = "a🦞b🦀c";
+
+  it("returns original string if shorter than max length", () => {
+    expect(truncateUtf16Safe("hello", 10)).toBe("hello");
+  });
+
+  it("returns original string if exactly max length", () => {
+    expect(truncateUtf16Safe("hello", 5)).toBe("hello");
+  });
+
+  it("truncates ASCII strings to exact length", () => {
+    expect(truncateUtf16Safe("hello", 4)).toBe("hell");
+  });
+
+  it("safely truncates avoiding splitting surrogate pairs at boundary", () => {
+    // "a🦞b🦀c" indices: 0:a, 1:high(🦞), 2:low(🦞), 3:b, 4:high(🦀), 5:low(🦀), 6:c
+    // Max length 2 ends on low surrogate of lobster, should safely truncate to 1 (before lobster)
+    expect(truncateUtf16Safe(emojiStr, 2)).toBe("a");
+    // Max length 5 ends on low surrogate of crab, should safely truncate to 4 (before crab)
+    expect(truncateUtf16Safe(emojiStr, 5)).toBe("a🦞b");
+  });
+});
