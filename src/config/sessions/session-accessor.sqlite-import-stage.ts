@@ -45,6 +45,7 @@ export function withSqliteSessionImportStage<T>(run: (stage: SqliteSessionImport
       CREATE TABLE selected (id TEXT PRIMARY KEY, seq INTEGER NOT NULL, parent_id TEXT, visible INTEGER NOT NULL) WITHOUT ROWID;
       CREATE TABLE user_keys (id TEXT PRIMARY KEY, visible_key TEXT, stripped_key TEXT) WITHOUT ROWID;
       CREATE INDEX user_keys_visible ON user_keys(visible_key);
+      CREATE TABLE normalized (seq INTEGER PRIMARY KEY, event_json TEXT NOT NULL) WITHOUT ROWID;
       BEGIN;
     `);
     return run(new SqliteSessionImportStage(database));
@@ -126,7 +127,7 @@ export class SqliteSessionImportStage {
     recognized: boolean;
   } {
     this.database.exec(
-      "DELETE FROM tree; DELETE FROM tree_sets; DELETE FROM selected; DELETE FROM user_keys;",
+      "DELETE FROM tree; DELETE FROM tree_sets; DELETE FROM selected; DELETE FROM user_keys; DELETE FROM normalized;",
     );
     type Node = SessionTranscriptTreeNode<Record<string, unknown>>;
     const put = this.database.prepare("INSERT OR REPLACE INTO tree VALUES (?, ?)");
@@ -153,6 +154,10 @@ export class SqliteSessionImportStage {
     const readRow = this.database.prepare(
       "SELECT event_json FROM rows WHERE source = ? AND seq = ?",
     );
+    const readNormalized = this.database.prepare("SELECT event_json FROM normalized WHERE seq = ?");
+    const stashNormalized = this.database.prepare(
+      "INSERT OR REPLACE INTO normalized VALUES (?, ?)",
+    );
     const update = this.database.prepare(
       "UPDATE rows SET event_json = ? WHERE source = ? AND seq = ?",
     );
@@ -172,7 +177,10 @@ export class SqliteSessionImportStage {
         }
         if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
           eventJson = JSON.stringify(entry);
-          update.run(eventJson, source, row.seq);
+          // Rewriting `rows` while its cursor is open re-delivers the row, and the replay
+          // guard below would then discard the re-delivered copy as a duplicate. Stash the
+          // normalized bytes aside and apply them once the scan has finished.
+          stashNormalized.run(row.seq, eventJson);
           changed = true;
         }
         if (entry.type === "session") {
@@ -200,7 +208,8 @@ export class SqliteSessionImportStage {
         if (typeof entry.id === "string" && (indexed || leafControl)) {
           const previous = lookup(entry.id);
           if (previous) {
-            const previousRow = readRow.get(source, Number(previous.entry.importSeq));
+            const previousSeq = Number(previous.entry.importSeq);
+            const previousRow = readNormalized.get(previousSeq) ?? readRow.get(source, previousSeq);
             if (previousRow && String(previousRow.event_json) === eventJson) {
               repeatedRows.add(String(row.seq));
               changed = true;
@@ -241,6 +250,12 @@ export class SqliteSessionImportStage {
       resetDescendantIds: diskSet("reset"),
       invalidLeafControlIds: diskSet("invalid"),
     });
+    this.database
+      .prepare(
+        `UPDATE rows SET event_json = (SELECT event_json FROM normalized WHERE normalized.seq = rows.seq)
+          WHERE source = ? AND seq IN (SELECT seq FROM normalized)`,
+      )
+      .run(source);
     this.database
       .prepare(
         `DELETE FROM rows WHERE source = ? AND CAST(seq AS TEXT) IN (

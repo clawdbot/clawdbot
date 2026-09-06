@@ -206,6 +206,61 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
   });
 });
 
+it("keeps legacy Codex assistant rows that precede later transcript rows during repair", async () => {
+  await withOpenClawTestState({ label: "import-codex-rows" }, async (state) => {
+    const params = target(state, "codex");
+    const codexReply = (id: string, parentId: string, content: string) => ({
+      type: "message",
+      id,
+      parentId,
+      message: { role: "assistant", provider: "codex", api: "openai-chatgpt-responses", content },
+    });
+    const events = [
+      { type: "session", id: "codex", version: 3 },
+      { type: "message", id: "user-1", parentId: null, message: { role: "user", content: "hi" } },
+      codexReply("reply-1", "user-1", "a"),
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "reply-1",
+        message: { role: "user", content: "b" },
+      },
+      codexReply("reply-2", "user-2", "c"),
+      {
+        type: "message",
+        id: "user-3",
+        parentId: "reply-2",
+        message: { role: "user", content: "d" },
+      },
+    ];
+
+    expect(
+      await importSqliteSessionRows({
+        ...params,
+        repairLegacyTranscript: true,
+        readTranscriptEvents: (append) => events.forEach(append),
+      }),
+    ).toMatchObject({ transcriptEvents: events.length });
+
+    // Every row survives in order, and the Codex replies carry normalized provider metadata.
+    expect(loadTranscriptEventsSync({ ...params, sessionId: "codex" })).toEqual(
+      events.map((event) =>
+        expect.objectContaining(
+          event.id.startsWith("reply-")
+            ? {
+                id: event.id,
+                message: expect.objectContaining({
+                  provider: "openai",
+                  api: "openai-chatgpt-responses",
+                }),
+              }
+            : { id: event.id },
+        ),
+      ),
+    );
+  });
+});
+
 it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without append normalization", async () => {
   await withOpenClawTestState({ label: "import-exact" }, async (state) => {
     const params = target(state, "exact");
