@@ -1359,6 +1359,71 @@ describe("printDaemonStatus", () => {
     expect(output).not.toContain("service appears running");
   });
 
+  it("labels diagnostic-only service and runtime beside the probe target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          targetRole: "diagnostic-only",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18900,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18900",
+        },
+        port: { port: 18900, status: "free", listeners: [], hints: [] },
+        rpc: {
+          ok: false,
+          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          url: "ws://127.0.0.1:18900",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    // Both lines that report this service's state must carry the distinction, because they sit
+    // next to a failed probe of a different Gateway.
+    expectMockLineContains(runtime.log, "Service: LaunchAgent (loaded) (diagnostic only");
+    expectMockLineContains(runtime.log, "Runtime: running (pid 8000) (diagnostic only");
+  });
+
+  it("leaves the service and runtime lines unqualified when the service is the probe target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          targetRole: "target",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18900,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18900",
+        },
+        port: { port: 18900, status: "free", listeners: [], hints: [] },
+        rpc: { ok: true, url: "ws://127.0.0.1:18900" },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
+    expect(output).toContain("Runtime: running");
+    expect(output).not.toContain("diagnostic only");
+  });
+
   it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
     // inspectGatewayRestart can set healthy from reachability after ownership failed,
     // while still returning non-empty staleGatewayPids. That must not be treated as
