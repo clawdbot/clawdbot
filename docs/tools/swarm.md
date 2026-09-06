@@ -364,25 +364,33 @@ Keep the parent session open in Chat while a swarm is active. The Control UI and
 native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
 between the transcript and composer.
 
-In the Control UI, each active collector group appears as a card with a completion
-count and phase progress segments. Hover over a card or focus it with the keyboard
-to reveal a list of child names, status icons, and run durations.
+In the Control UI, cards show queued, running, completed, and failed counts with
+visible status markers. Click or tap **Child details**, or activate it with the
+keyboard, to expand available child names, status icons, and run durations. The
+view shows up to four active groups plus the latest completed group, with an
+explicit count when more groups are active. Each card displays at most 64 markers
+and 64 child details; its counts include every accepted group member.
 
-Native Android, iOS, and macOS chat surfaces show phase-grouped grids of child
-status markers, capped at 256 markers per phase with an overflow count for additional
-children. Accessible labels identify each child and its queued, running, done, or
-failed status.
+The latest completed group's counts remain visible after the children finish,
+including when the parent fails before writing its final response. These are
+child outcomes, not confirmation that the parent produced a synthesis. Counts
+come from retained collector records, so reloading the page or cleaning up a
+child session does not reduce the reported total. They expire with the existing
+collector retention policy; this is not a permanent execution archive.
 
-All clients present killed and timed-out children as failed. Each group leaves the
-widget when none of its children are queued or running, and the widget disappears
-when no active groups remain.
+Native Android, iOS, and macOS chat surfaces still show active-only phase-grouped
+grids, capped at 256 markers per phase with an overflow count. Accessible labels
+identify each child's status. All clients present killed and timed-out children
+as failed. Native groups leave the widget when none of their children are queued
+or running; the native widget disappears when no active groups remain.
 
 The session sidebar keeps the normal parent/child tree. Expand the parent row to
 inspect a collector child or open its transcript without losing the swarm hierarchy.
 
-Collector results remain waitable until their group is archived. After every
-member reaches its retention deadline, OpenClaw archives the group's children
-as a batch so completed swarms do not remain in the live session tree.
+Delete-mode collectors can clean up their child sessions immediately after
+completion while retaining their waitable results. Those collector records remain
+available until the group is archived after every member reaches its retention
+deadline. Retained child sessions are archived as a batch at that point.
 
 ## Stop a Swarm
 

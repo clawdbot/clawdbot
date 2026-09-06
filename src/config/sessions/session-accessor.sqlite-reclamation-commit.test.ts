@@ -65,7 +65,7 @@ function createCommitFixture(
       assertCurrent: () => void,
       run: (authorize: () => unknown[]) => Promise<T>,
     ) {
-      return withSqliteReclamationAuthorization(gate, databasePath, assertCurrent, run);
+      return withSqliteReclamationAuthorization(gate, database, assertCurrent, run);
     },
     async close() {
       release();

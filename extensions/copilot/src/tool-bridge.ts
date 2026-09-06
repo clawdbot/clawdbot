@@ -412,6 +412,7 @@ function buildOpenClawCodingToolsOptions(
     },
     messageProvider: a.messageProvider ?? a.messageChannel,
     messageChannel: a.messageChannel,
+    pinnedWidgetAuthoring: a.pinnedWidgetAuthoring,
     // Bridged tools are dispatched here, not through the embedded tool lifecycle,
     // so no tool-start handler reserves a blocking question's prompt for them.
     ...(a.onToolResult

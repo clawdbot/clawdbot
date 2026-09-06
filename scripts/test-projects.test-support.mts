@@ -580,7 +580,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   ]),
   ...[
     "src/system-agent/setup-inference-persist.ts",
-    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,

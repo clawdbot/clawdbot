@@ -1,9 +1,9 @@
 // Next-run regression tests cover unresolved next-run state after service updates.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDefaultIsolatedRunner,
   createIsolatedRegressionJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import * as schedule from "./schedule.js";
@@ -29,13 +29,9 @@ function createIssue66019State(params: {
   nowMs: () => number;
   runIsolatedAgentJob: Parameters<typeof createCronServiceState>[0]["runIsolatedAgentJob"];
 }) {
-  return createCronServiceState({
-    cronEnabled: true,
+  return createCronRegressionState({
     storePath: params.storePath,
-    log: noopLogger,
     nowMs: params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
   });
 }

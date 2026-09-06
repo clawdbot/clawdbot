@@ -100,10 +100,12 @@ describe("runtime postbuild static assets", () => {
       packageOutputs: string[];
     }>(`
       const assets = await import("./scripts/lib/static-extension-assets.mts");
+      const discovered = assets.discoverStaticExtensionAssets();
+      const packageAssets = assets.discoverStaticExtensionAssets({ includeExternalPlugins: true });
       return {
-        outputs: assets.listStaticExtensionAssetOutputs(),
+        outputs: discovered.map(({ dest }) => dest),
         sources: assets.listStaticExtensionAssetSources(),
-        packageOutputs: assets.listStaticExtensionAssetOutputs({ includeExternalPlugins: true }),
+        packageOutputs: packageAssets.map(({ dest }) => dest),
       };
     `);
 
@@ -1128,7 +1130,7 @@ describe("runtime postbuild static assets", () => {
     }
   });
 
-  it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"])(
+  it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-DFJEouXv.js"])(
     "preserves the old updater node-runner ABI through %s",
     async (chunk) => {
       const rootDir = createTempDir("openclaw-runtime-postbuild-");

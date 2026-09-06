@@ -1,9 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
+import { buildSessionListRowMetadataContext } from "../session-utils-projection.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
@@ -29,7 +30,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
@@ -54,6 +55,8 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       includeDerivedTitles: params.includeDerivedTitles,
       includeLastMessage: params.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
+      rowContext: buildSessionListRowMetadataContext({ now: Date.now() }),
+      includeSwarmChildren: true,
     });
     Object.assign(row, readSessionPlacementFields(context, row.sessionId));
     respond(true, { session: row });
@@ -76,7 +79,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         : 200;
 
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(
+    const requestedAgent = resolveRequestedSessionAgentId(
       cfg,
       key,
       normalizeOptionalString(p.agentId),
@@ -111,7 +114,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       },
     );
     const currentCfg = context.getRuntimeConfig();
-    const currentRequestedAgent = resolveRequestedGlobalAgentId(
+    const currentRequestedAgent = resolveRequestedSessionAgentId(
       currentCfg,
       key,
       normalizeOptionalString(p.agentId),

@@ -41,6 +41,10 @@ async function openDashboard(page: Page): Promise<void> {
   const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
   await page.addInitScript(
     ({ key, storageKey }) => {
+      // Init scripts also run in opaque widget frames; only the dashboard owns settings.
+      if (window !== window.top) {
+        return;
+      }
       const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
         string,
         unknown
@@ -115,6 +119,8 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       });
       contexts.add(context);
       const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
       const origin = new URL(controlUi.baseUrl).origin;
       const rendererUrl = `${rendererOrigin}/__openclaw__/cap/canvas-proof/__openclaw__/a2ui/a2ui-v0.9.bundle.js`;
       const messages = [
@@ -274,6 +280,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         scrollbar.thumbBackground,
       );
       expect(scrollbar.ratio).toBeLessThan(0.2);
+      expect(pageErrors).toEqual([]);
       if (scrollbarProofLabel) {
         const screenshotPath = path.resolve(
           createControlUiE2eArtifactDir("widget-scrollbar"),

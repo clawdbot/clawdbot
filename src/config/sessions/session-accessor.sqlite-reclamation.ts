@@ -388,23 +388,27 @@ export async function runSqliteSessionReclamation(params: {
     ? new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
     : undefined;
   const recoveredCommitErrors: unknown[] = [];
-  const [workerResult] = await withSqliteReclamationAuthorization(
-    commitGate,
-    params.plan.databaseOptions.path,
-    assertCommitAllowed,
-    (authorize) =>
-      runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
-        expectedMessageType: "reclaimed",
-        onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
-        transferList: prepareReclamationWorkerTransferList(params.plan),
-        workerData: {
+  const runWorker = (authorize: () => unknown[]) =>
+    runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
+      expectedMessageType: "reclaimed",
+      onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
+      transferList: prepareReclamationWorkerTransferList(params.plan),
+      workerData: {
+        commitGate,
+        operation: "reclaim",
+        plan: params.plan,
+        type: "sqlite-transcript-archive-v2",
+      } satisfies SqliteSessionReclamationWorkerData,
+    });
+  const [workerResult] =
+    commitGate && assertCommitAllowed
+      ? await withSqliteReclamationAuthorization(
           commitGate,
-          operation: "reclaim",
-          plan: params.plan,
-          type: "sqlite-transcript-archive-v2",
-        } satisfies SqliteSessionReclamationWorkerData,
-      }),
-  );
+          openOpenClawAgentDatabase(params.plan.databaseOptions).db,
+          assertCommitAllowed,
+          runWorker,
+        )
+      : await runWorker(() => []);
   if (!workerResult) {
     throw new Error("SQLite session reclamation Worker returned no result");
   }

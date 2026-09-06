@@ -90,6 +90,8 @@ export function resolveGatewayScopedTools(params: {
   replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   clientCaps?: string[];
+  /** Trusted run-local context carried only by a Gateway-launched CLI grant. */
+  pinnedWidgetAuthoring?: boolean;
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -349,6 +351,7 @@ export function resolveGatewayScopedTools(params: {
     modelId: params.modelId,
     modelHasVision: params.modelHasVision,
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
     pluginToolAllowlist: collectExplicitAllowlist([

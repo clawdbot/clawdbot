@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
-import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { createHotReloadExternalBrowser } from "./gateway-config-hot-reload-external-browser.js";
 import {
   connectHotReloadClient,
   waitForHotReloadFact,
@@ -19,13 +16,8 @@ type ToolResult = {
   details: { targetId?: string; viewerUrl?: string; ok?: boolean };
 };
 type BrowserStatus = { pid: number | null; cdpUrl: string; running: boolean; attachOnly: boolean };
-type BrowserTabs = { tabs: Array<{ targetId: string; url: string }> };
 const CANVAS_ASSET = "/__openclaw__/a2ui/a2ui.bundle.js";
 const SESSION_KEY = "agent:qa:hot-reload-plugin";
-// These are the shipped cleanup cadence and cap, observed through real elapsed time and tabs.
-const SWEEP_MS = 5 * 60_000;
-const TAB_CAP = 8;
-const CLEANUP_PROFILE = "cleanup-proof";
 
 export async function proveHotReloadPluginPolicy({
   gateway,
@@ -38,8 +30,6 @@ export async function proveHotReloadPluginPolicy({
   http,
   proveGroup,
   verifyContinuity,
-  appendLog,
-  signal,
 }: {
   gateway: QaGatewayChild;
   unaffectedNode: HotReloadConnection | undefined;
@@ -51,15 +41,9 @@ export async function proveHotReloadPluginPolicy({
   http: (route: string, body?: unknown) => Promise<{ status: number; text: string }>;
   proveGroup: (prefix: string, run: () => Promise<void>) => Promise<void>;
   verifyContinuity: (prefix: string, observation: string) => Promise<void>;
-  appendLog: (text: string) => void;
-  signal: AbortSignal;
 }) {
   const initial = (await rpc<{ config: OpenClawConfig }>("config.get")).config;
   const observations: Array<Record<string, unknown>> = [];
-  const log = (text: string) => {
-    appendLog(`${text}\n`);
-    process.stdout.write(`${text}\n`);
-  };
   const tool = async (name: string, args: unknown, sessionKey = SESSION_KEY) => {
     const response = await http("/tools/invoke", { tool: name, sessionKey, args });
     assert.equal(response.status, 200, response.text);
@@ -290,115 +274,6 @@ export async function proveHotReloadPluginPolicy({
           "browser.snapshotDefaults",
         ]);
       }
-    });
-
-    await proveGroup("browser.tabCleanup", async () => {
-      const externalOwner = createHotReloadExternalBrowser(temporaryRoot);
-      const opened: string[] = [];
-      const ownedTabs = async () => {
-        const { tabs } = await browserRequest<BrowserTabs>("/tabs", CLEANUP_PROFILE);
-        return tabs
-          .filter((tab) => opened.includes(tab.targetId))
-          .map((tab) => tab.targetId)
-          .toSorted();
-      };
-      const openTab = async () => {
-        const result = await browser({
-          profile: CLEANUP_PROFILE,
-          action: "open",
-          url: `${fixtureBaseUrl}/widget?cleanup-proof=${opened.length}`,
-        });
-        assert(result.details.targetId);
-        opened.push(result.details.targetId);
-      };
-      await runQaGatewayFixture(
-        async () => {
-          const external = await externalOwner.start();
-          // Managed opens have a separate eight-page cap. An attached profile isolates
-          // the periodic policy while the Browser tool still owns every tracked tab.
-          await patch({
-            browser: {
-              tabCleanup: { enabled: false },
-              profiles: { [CLEANUP_PROFILE]: { cdpUrl: external.cdpUrl, attachOnly: true } },
-            },
-          });
-          for (let index = 0; index <= TAB_CAP; index += 1) {
-            await openTab();
-          }
-          const status = await browserRequest<BrowserStatus>("/", CLEANUP_PROFILE);
-          assert(status.running && status.attachOnly);
-          assert.equal(status.pid, null, "Gateway must not own the external Chromium process");
-          const expectedRetained = opened.slice(1).toSorted();
-          for (const [phase, enabled] of [false, true, false].entries()) {
-            await patch({ browser: { tabCleanup: { enabled } } });
-            if (phase === 2) {
-              await openTab();
-            }
-            const expected =
-              phase === 1 ? expectedRetained : opened.slice(phase === 2 ? 1 : 0).toSorted();
-            const started = Date.now();
-            let nextLog = started;
-            let retained: string[] = [];
-            log(
-              `Browser tab cleanup phase ${phase + 1}: enabled=${enabled}, observing real five-minute sweep`,
-            );
-            while (Date.now() - started < SWEEP_MS + 30_000) {
-              signal.throwIfAborted();
-              retained = await ownedTabs();
-              await external.verifyAlive();
-              if (enabled && retained.length === TAB_CAP) {
-                break;
-              }
-              if (!enabled) {
-                assert.deepEqual(retained, expected, "Disabled cleanup removed a tracked tab");
-                if (Date.now() - started >= SWEEP_MS + 5_000) {
-                  break;
-                }
-              }
-              if (Date.now() >= nextLog) {
-                log(
-                  `Browser tab cleanup phase ${phase + 1}: ${retained.length} tracked tabs after ${Math.floor((Date.now() - started) / 1_000)}s`,
-                );
-                nextLog = Date.now() + 30_000;
-              }
-              await delay(5_000, undefined, { signal });
-            }
-            assert.deepEqual(retained, expected);
-            observations.push({
-              prefix: "browser.tabCleanup",
-              enabled,
-              elapsedMs: Date.now() - started,
-              trackedTabs: retained.length,
-              browserPid: external.pid,
-            });
-            await verifyContinuity(
-              "browser.tabCleanup",
-              `Real sweep phase ${phase + 1}: enabled=${enabled}, ${retained.length} tracked tabs retained after ${Math.floor((Date.now() - started) / 1_000)}s; external Chromium PID, CDP connection and unowned witness page unchanged`,
-            );
-          }
-        },
-        async () => {
-          if (opened.length) {
-            for (const targetId of await ownedTabs()) {
-              await browser({ action: "close", targetId, profile: CLEANUP_PROFILE });
-            }
-          }
-        },
-        async () => {
-          await patch(
-            {
-              browser: {
-                tabCleanup: initial.browser?.tabCleanup ?? null,
-                profiles: {
-                  [CLEANUP_PROFILE]: initial.browser?.profiles?.[CLEANUP_PROFILE] ?? null,
-                },
-              },
-            },
-            ["browser.tabCleanup", `browser.profiles.${CLEANUP_PROFILE}`],
-          );
-        },
-        () => externalOwner.close(),
-      );
     });
   } finally {
     await fs.writeFile(

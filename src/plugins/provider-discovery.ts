@@ -43,7 +43,7 @@ type PreparedProviderStaticCatalogEntry = Readonly<{
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
-  /** Discovery-entry providers captured for this config/workspace generation. */
+  /** Provider handles captured for this config/workspace generation. */
   providers?: readonly ProviderPlugin[];
   entries: readonly PreparedProviderStaticCatalogEntry[];
 }>;
