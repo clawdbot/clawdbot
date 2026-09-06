@@ -13,8 +13,8 @@ import {
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
 
-export type GoogleContentPart = Part & Record<string, unknown>;
-export type GoogleContent = { role: string; parts: GoogleContentPart[] };
+type GoogleContentPart = Part & Record<string, unknown>;
+type GoogleContent = { role: string; parts: GoogleContentPart[] };
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 
 // SDK history preserves bytes; managed replay also trims and rejects malformed padding.

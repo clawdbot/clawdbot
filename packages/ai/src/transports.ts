@@ -35,6 +35,4 @@ export {
   convertGoogleTools,
   projectGoogleMessages,
   requiresGoogleToolCallId,
-  type GoogleContent,
-  type GoogleContentPart,
 } from "./providers/google-messages.js";
