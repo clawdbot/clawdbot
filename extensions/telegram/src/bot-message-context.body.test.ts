@@ -347,6 +347,52 @@ describe("resolveTelegramInboundBody", () => {
     },
   );
 
+  groupBodyTest(
+    "routes group updates that tag the bot via a text_mention (display-name tap)",
+    {
+      message: {
+        text: "Assistant please read this",
+        entities: [
+          {
+            type: "text_mention",
+            offset: 0,
+            length: 9,
+            user: { id: 7, is_bot: true, first_name: "Assistant" },
+          },
+        ],
+      },
+    },
+    (result, logger) => {
+      // The bot (primaryCtx.me.id === 7) is tagged by display name — no `@bot`
+      // text and no `mention` entity — so this reaches the caller as a mention
+      // only via the text_mention branch, and must be dispatched, not skipped.
+      expect(logger.info).not.toHaveBeenCalledWith(SKIPPED_GROUP, "skipping group message");
+      expect(result?.effectiveWasMentioned).toBe(true);
+    },
+  );
+
+  groupBodyTest(
+    "skips group text_mention entities that target a different user id",
+    {
+      message: {
+        text: "Eve please read this",
+        entities: [
+          {
+            type: "text_mention",
+            offset: 0,
+            length: 3,
+            user: { id: 999, is_bot: false, first_name: "Eve" },
+          },
+        ],
+      },
+    },
+    (result, logger) => {
+      // A text_mention of someone other than the bot is not a mention of us.
+      expect(logger.info).toHaveBeenCalledWith(SKIPPED_GROUP, "skipping group message");
+      expect(result).toBeNull();
+    },
+  );
+
   privateBodyTest(
     "renders Telegram text entities before building the agent body",
     {
