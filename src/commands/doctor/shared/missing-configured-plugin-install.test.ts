@@ -1417,9 +1417,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             }
           }
         }
-        expect(payloadFiles.map((file) => fs.readFileSync(path.join(rootDir, file), "utf8"))).toEqual(
-          originalPayload,
-        );
+        expect(
+          payloadFiles.map((file) => fs.readFileSync(path.join(rootDir, file), "utf8")),
+        ).toEqual(originalPayload);
         expect(records).toEqual(originalRecords);
         expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
         if (outcome === "effect-refused") {
