@@ -2,8 +2,19 @@
 // Trusted host controller; candidate gets no broker, TDLib, capture or host socket.
 import { execFile, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { access, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -11,8 +22,12 @@ import { acquireQaLease } from "../../.agents/skills/telegram-e2e-userbot/script
 import { restoreTelegramTestCredential } from "../../.agents/skills/telegram-e2e-userbot/scripts/telegram-test-credential.mjs";
 import { normalizeTelegramCapture } from "./telegram-capture.ts";
 import { startTelegramProofIngress } from "./telegram-proof-ingress.mts";
-import { telegramProofIdentitySchema, telegramProofPrompt } from "./telegram-request-proof.ts";
-import { assertCurrentTelegramRequest } from "./telegram-run-admission.ts";
+import { parseTelegramProofPlan, type TelegramProofPlan } from "./telegram-proof-plan.ts";
+import { telegramProofIdentitySchema } from "./telegram-request-proof.ts";
+import {
+  assertCurrentTelegramRequest,
+  redeemTelegramReviewProof,
+} from "./telegram-run-admission.ts";
 
 class TelegramProofStageError extends Error {
   readonly stage: string;
@@ -36,14 +51,8 @@ const imageInfo = z
   .length(1);
 const skill = path.resolve(".agents/skills/telegram-e2e-userbot/scripts");
 type QaLease = Awaited<ReturnType<typeof acquireQaLease>>;
-const acquireTelegramQaLease = acquireQaLease as unknown as (options: {
-  kind: string;
-  leaseTtlMs: number;
-  quarantineOnExpiry: boolean;
-  requestId: string;
-}) => Promise<QaLease>;
 
-function telegramCandidateConfig(alias: string, testerId: string) {
+function telegramCandidateConfig(alias: string, testerId: string, plan?: TelegramProofPlan) {
   return {
     gateway: {
       mode: "local",
@@ -52,10 +61,12 @@ function telegramCandidateConfig(alias: string, testerId: string) {
       auth: { mode: "none" },
       controlUi: { enabled: false },
     },
-    logging: { file: "/state/gateway.log" },
+    logging: { file: "/work/crabbox/state/gateway.log" },
     agents: {
       defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { workspace: "/state/workspace", model: { primary: "openai/gpt-5.5" } } },
+      entries: {
+        main: { workspace: "/work/crabbox/state/workspace", model: { primary: "openai/gpt-5.5" } },
+      },
     },
     models: {
       providers: {
@@ -83,8 +94,8 @@ function telegramCandidateConfig(alias: string, testerId: string) {
         dmPolicy: "allowlist",
         allowFrom: [testerId],
         groupPolicy: "disabled",
-        streaming: { mode: "off" },
-        commands: { native: false, nativeSkills: false },
+        streaming: { mode: plan?.settings.streaming ?? "off" },
+        commands: { native: plan?.settings.nativeCommands ?? false, nativeSkills: false },
       },
     },
     messages: { ackReaction: "" },
@@ -197,6 +208,7 @@ if (args[0] === "--preflight") {
   });
 }
 async function run() {
+  const plan = parseTelegramProofPlan(process.env.PROOF_PLAN ?? "", process.env.PLAN_SHA256 ?? "");
   const [
     candidate,
     outputArg,
@@ -217,6 +229,7 @@ async function run() {
     // The consumer binds the request to its source comment and target snapshot.
     // Recomputing it from PR/head would lose that identity and collapse new requests.
     request_id: process.env.REQUEST_ID,
+    plan_sha256: process.env.PLAN_SHA256,
     repository: { id: subject.repositoryId, full_name: process.env.GITHUB_REPOSITORY },
     pull_request: subject.pullRequest,
     candidate_sha: subject.candidateSha,
@@ -238,6 +251,37 @@ async function run() {
   await assertCurrentTelegramRequest(identity, admissionOptions).catch((error: unknown) => {
     throw new TelegramProofStageError("request-admission-before-lease", error);
   });
+  let reviewDeadline = 0,
+    reviewMonotonicDeadline = 0;
+  const authorityState: { file?: string; revoked: boolean } = { revoked: false };
+  const refreshReview = async () => {
+    if (
+      authorityState.revoked ||
+      (reviewDeadline &&
+        (Date.now() >= reviewDeadline || performance.now() >= reviewMonotonicDeadline))
+    ) {
+      throw new Error("Original review confirmation expired");
+    }
+    const started = Date.now(),
+      monotonic = performance.now();
+    const expires = await redeemTelegramReviewProof(identity);
+    if (
+      authorityState.revoked ||
+      expires <= Date.now() ||
+      (reviewDeadline &&
+        (Date.now() >= reviewDeadline || performance.now() >= reviewMonotonicDeadline))
+    ) {
+      throw new Error("Original review confirmation expired");
+    }
+    reviewDeadline = Math.min(expires, started + 30_000);
+    reviewMonotonicDeadline = monotonic + Math.min(expires - started, 30_000);
+    if (authorityState.file) {
+      const temporary = `${authorityState.file}.${randomUUID()}`;
+      await writeFile(temporary, String(reviewDeadline), { mode: 0o600 });
+      await rename(temporary, authorityState.file);
+    }
+  };
+  await refreshReview();
   if (!/^[a-z0-9][a-z0-9/.:@-]*$/.test(bridgeImage)) {
     throw new Error("Invalid trusted bridge image");
   }
@@ -246,38 +290,96 @@ async function run() {
   await mkdir(output, { mode: 0o700 });
   const privateRoot = await mkdtemp(path.join(path.dirname(output), ".telegram-private-"));
   await chmod(privateRoot, 0o700);
-  const nonce = randomBytes(32).toString("hex"),
-    salt = randomBytes(32),
+  const authorityFile = path.join(privateRoot, "review-deadline");
+  authorityState.file = authorityFile;
+  await writeFile(authorityFile, String(reviewDeadline), { mode: 0o600 });
+  // Keep lease recovery records separate from credential material. On uncertain
+  // candidate deletion they remain available to the trusted cleanup operator.
+  const boxRoot = await mkdtemp(path.join(path.dirname(output), ".telegram-crabbox-"));
+  await chmod(boxRoot, 0o700);
+  const salt = randomBytes(32),
     alias = `1:${randomBytes(24).toString("base64url")}`;
   const network = `mantis-tg-${randomUUID()}`,
-    sut = `mantis-tg-sut-${randomUUID()}`,
     bridge = `mantis-tg-bridge-${randomUUID()}`;
+  const boxId = `cbx_${randomBytes(6).toString("hex")}`;
+  const boxEnv = {
+    PATH: process.env.PATH,
+    HOME: boxRoot,
+    XDG_CONFIG_HOME: path.join(boxRoot, "config"),
+    XDG_CACHE_HOME: path.join(boxRoot, "cache"),
+  };
+  const box = async (boxArgs: string[]) =>
+    (
+      await execute("crabbox", boxArgs, {
+        cwd: boxRoot,
+        env: boxEnv,
+        maxBuffer: 2 * 1024 * 1024,
+        timeout: 180_000,
+      })
+    ).stdout;
   let sutId: string | undefined,
     bridgeId: string | undefined,
     networkCreated = false,
     quiescent = true;
+  let boxAttempted = false;
+  let stoppingSut = false;
+  let candidateProcess: ReturnType<typeof spawn> | undefined;
   let lease: QaLease | undefined;
   let ingress: Awaited<ReturnType<typeof startTelegramProofIngress>> | undefined;
   let recorder: ReturnType<typeof spawn> | undefined;
   const aborted = new AbortController(),
-    abort = () => aborted.abort();
+    abort = () => {
+      authorityState.revoked = true;
+      aborted.abort();
+    };
   process.once("SIGTERM", abort);
   process.once("SIGINT", abort);
-  const ensureActive = () => {
-    if (aborted.signal.aborted) {
+  const ensureAuthority = () => {
+    if (
+      aborted.signal.aborted ||
+      Date.now() >= reviewDeadline ||
+      performance.now() >= reviewMonotonicDeadline
+    ) {
       throw new Error("Proof aborted");
     }
     lease?.assertHealthy();
+  };
+  const ensureActive = () => {
+    ensureAuthority();
     ingress?.assertHealthy();
   };
-  const stopSut = async () => {
-    if (!sutId) {
+  let refreshing = false;
+  const reviewTimer = setInterval(() => {
+    if (refreshing) {
       return;
     }
-    await podman(["stop", "--time", "5", sutId]);
-    const state = JSON.parse(await podman(["inspect", "--format", "{{json .State}}", sutId]));
-    if (state.Running) {
-      throw new Error("SUT quiescence not established");
+    refreshing = true;
+    void refreshReview()
+      .catch(abort)
+      .finally(() => {
+        refreshing = false;
+      });
+  }, 10_000);
+  reviewTimer.unref();
+  const stopSut = async () => {
+    if (!boxAttempted || quiescent) {
+      return;
+    }
+    stoppingSut = true;
+    // Independently inspect physical deletion even if CLI bookkeeping failed.
+    await box([
+      "stop",
+      "--provider",
+      "local-container",
+      "--local-container-runtime",
+      "podman",
+      boxId,
+    ]).catch(() => undefined);
+    const remaining = (
+      await podman(["ps", "-a", "--filter", `label=lease=${boxId}`, "--format", "{{.ID}}"])
+    ).trim();
+    if (remaining) {
+      throw new Error("Crabbox candidate deletion is not confirmed");
     }
     quiescent = true;
   };
@@ -288,16 +390,14 @@ async function run() {
     await podman(["network", "create", "--internal", network]);
     networkCreated = true;
     const networks = JSON.parse(await podman(["network", "inspect", network]));
-    if (networks.length !== 1 || networks[0].internal !== true) {
+    if (networks.length !== 1 || (networks[0].internal ?? networks[0].Internal) !== true) {
       throw new Error("Candidate network is not internal");
     }
     // First broker call is after exact runtime and driver preparation.
     stage = "lease-acquisition";
-    lease = await acquireTelegramQaLease({
+    lease = await acquireQaLease({
       kind: "telegram-test-userbot",
       leaseTtlMs: 2 * 60 * 60_000,
-      quarantineOnExpiry: true,
-      requestId: identity.request_id,
     });
     void lease.whenUnhealthy.then(abort);
     const credential = restoreTelegramTestCredential(
@@ -308,6 +408,8 @@ async function run() {
       PATH: process.env.PATH,
       HOME: privateRoot,
       TELEGRAM_USER_DRIVER_TDLIB_PATH: ready.tdlib,
+      TELEGRAM_PROOF_AUTHORITY_FILE: authorityFile,
+      TELEGRAM_PROOF_PARENT_PID: String(process.pid),
       ...credential.driverEnv,
     };
     stage = "leased-identity-validation";
@@ -334,9 +436,21 @@ async function run() {
       alias,
       sutToken: credential.sutToken,
       testerId: credential.testerUserId,
-      nonce,
+      plan,
       providerLog: path.join(privateRoot, "provider.ndjson"),
-      lease,
+      lease: {
+        assertHealthy: ensureAuthority,
+        whenUnhealthy: Promise.race([
+          lease.whenUnhealthy,
+          new Promise<Error>((resolve) => {
+            aborted.signal.addEventListener(
+              "abort",
+              () => resolve(new Error("Original review ended")),
+              { once: true },
+            );
+          }),
+        ]),
+      },
     });
     await ingress.drainStaleUpdates();
     ingress.assertHealthy();
@@ -373,44 +487,111 @@ async function run() {
         "/bridge.sock",
       ])
     ).trim();
-    const config = telegramCandidateConfig(alias, credential.testerUserId);
+    const config = telegramCandidateConfig(alias, credential.testerUserId, plan);
     const configPath = path.join(privateRoot, "candidate-config.json");
-    await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
-    sutId = (
-      await podman([
-        "create",
-        "--name",
-        sut,
-        ...restrictions,
-        "--read-only",
-        "--tmpfs",
-        "/state:rw,nosuid,nodev,size=1g",
-        "--tmpfs",
-        "/tmp:rw,nosuid,nodev,size=512m",
-        "--env",
-        "XDG_CACHE_HOME=/state/cache",
-        "--env",
-        "OPENCLAW_STATE_DIR=/state",
-        "--env",
+    await writeFile(configPath, JSON.stringify(config), { mode: 0o644 });
+    boxAttempted = true;
+    quiescent = false;
+    await box([
+      "warmup",
+      "--provider",
+      "local-container",
+      "--lease-id",
+      boxId,
+      "--local-container-runtime",
+      "podman",
+      "--local-container-image",
+      ready.imageId,
+      "--local-container-network",
+      network,
+      "--local-container-docker-socket=false",
+      "--local-container-memory",
+      "8g",
+      "--local-container-cpus",
+      "2",
+      "--local-container-work-root",
+      "/work/crabbox",
+      "--ttl",
+      "15m",
+      "--idle-timeout",
+      "5m",
+      "--timing-json",
+    ]);
+    const containers = (
+      await podman(["ps", "-a", "--filter", `label=lease=${boxId}`, "--format", "{{.ID}}"])
+    )
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    if (containers.length !== 1) {
+      throw new Error("Crabbox candidate identity is ambiguous");
+    }
+    sutId = containers[0]!;
+    const sutMeta = JSON.parse(await podman(["inspect", sutId]))[0];
+    const bootstrapRoot = path.resolve(sutMeta.Config.Labels.bootstrap_dir ?? "");
+    if (
+      Object.keys(sutMeta.NetworkSettings.Networks).join(",") !== network ||
+      sutMeta.Config.Labels.lease !== boxId ||
+      sutMeta.Config.Labels.docker_socket !== "0" ||
+      !bootstrapRoot.startsWith(boxRoot + path.sep) ||
+      (sutMeta.Mounts ?? []).some(
+        (mount: { Type: string; Source: string; Destination: string; RW: boolean }) =>
+          mount.Type !== "bind" ||
+          mount.Source !== bootstrapRoot ||
+          mount.Destination !== "/tmp/crabbox-bootstrap" ||
+          mount.RW,
+      )
+    ) {
+      throw new Error("Crabbox candidate isolation mismatch");
+    }
+    await podman(["cp", configPath, `${sutId}:/candidate-config.json`]);
+    candidateProcess = spawn(
+      "crabbox",
+      [
+        "run",
+        "--provider",
+        "local-container",
+        "--local-container-runtime",
+        "podman",
+        "--id",
+        boxId,
+        "--no-sync",
+        "--no-hydrate",
+        "--",
+        "env",
+        "OPENCLAW_STATE_DIR=/work/crabbox/state",
         "OPENCLAW_CONFIG_PATH=/candidate-config.json",
-        ready.imageId,
+        "XDG_CACHE_HOME=/work/crabbox/cache",
         "node",
-        "dist/entry.js",
+        "/candidate/dist/entry.js",
         "gateway",
         "--port",
         "19879",
-      ])
-    ).trim();
-    await podman(["cp", configPath, `${sutId}:/candidate-config.json`]);
-    quiescent = false;
-    await podman(["start", sutId]);
-    const sutMeta = JSON.parse(await podman(["inspect", sutId]))[0];
-    if (
-      Object.keys(sutMeta.NetworkSettings.Networks).join(",") !== network ||
-      (sutMeta.Mounts ?? []).some((mount: { Type: string }) => mount.Type === "bind")
-    ) {
-      throw new Error("Candidate isolation mismatch");
+      ],
+      {
+        cwd: boxRoot,
+        env: boxEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let candidateLogBytes = 0;
+    const candidateLogs: Buffer[] = [];
+    for (const stream of [candidateProcess.stdout, candidateProcess.stderr]) {
+      stream?.on("data", (chunk: Buffer) => {
+        candidateLogBytes += chunk.length;
+        if (candidateLogBytes > 1024 * 1024) {
+          abort();
+        } else {
+          candidateLogs.push(Buffer.from(chunk));
+        }
+      });
     }
+    candidateProcess.once("error", abort);
+    candidateProcess.once("exit", () => {
+      if (!stoppingSut) {
+        abort();
+      }
+    });
     const until = Date.now() + 60_000;
     while (!ingress.isPolling()) {
       ensureActive();
@@ -421,30 +602,31 @@ async function run() {
     }
     ensureActive();
     const scenario = path.join(privateRoot, "scenario.json");
-    await writeFile(
-      scenario,
-      JSON.stringify({ actions: [{ type: "send", atMs: 0, text: telegramProofPrompt(nonce) }] }),
-      { mode: 0o600 },
-    );
+    await writeFile(scenario, JSON.stringify({ actions: plan.actions }), { mode: 0o600 });
     const record = path.join(privateRoot, "events.ndjson"),
       summary = path.join(privateRoot, "summary.json"),
       peer = path.join(privateRoot, "ready.json");
     stage = "request-admission-before-send";
     await assertCurrentTelegramRequest(identity, admissionOptions);
+    await refreshReview();
     ensureActive();
-    ingress.armSingleSend();
-    stage = "single-test-server-dm";
+    ingress.armScenario();
+    stage = "selected-test-server-scenario";
     recorder = spawn(
       "python3",
       [
         path.join(skill, "user-record.py"),
+        "--proof-parent-pid",
+        String(process.pid),
+        "--proof-deadline-unix-ms",
+        String(Date.now() + plan.maxDurationMs + 30_000),
         "--scenario",
         scenario,
         "--ready-file",
         peer,
         "--proof-dm-peer",
         "--seconds",
-        "60",
+        String(plan.maxDurationMs / 1000),
         "--chat",
         `@${credential.sutUsername}`,
         "--record",
@@ -470,7 +652,7 @@ async function run() {
       const timer = setTimeout(() => {
         aborted.abort();
         reject(new Error("Recorder deadline"));
-      }, 90_000);
+      }, plan.maxDurationMs + 30_000);
       recorder?.once("error", (error) => {
         clearTimeout(timer);
         reject(error);
@@ -486,16 +668,12 @@ async function run() {
     });
     await writeFile(path.join(privateRoot, "recorder.log"), Buffer.concat(chunks), { mode: 0o600 });
     ensureActive();
-    await stopSut();
-    await writeFile(path.join(privateRoot, "gateway.log"), await podman(["logs", sutId]), {
+    await writeFile(path.join(privateRoot, "gateway.log"), Buffer.concat(candidateLogs), {
       mode: 0o600,
     });
+    await stopSut();
     ensureActive();
     const provider = ingress.providerCapture();
-    if (!provider) {
-      throw new Error("Provider evidence missing");
-    }
-    ingress.assertSingleSendComplete();
     const boundedRead = async (file: string, max: number) => {
       if ((await stat(file)).size > max) {
         throw new Error("Capture oversized");
@@ -504,7 +682,7 @@ async function run() {
     };
     facts = normalizeTelegramCapture({
       identity,
-      nonce,
+      plan,
       salt,
       sutId: Number(credential.sutBotId),
       testerId: user.user.id,
@@ -513,7 +691,11 @@ async function run() {
       summary: JSON.parse(await boundedRead(summary, 1024 * 1024)),
       raw: await boundedRead(record, 8 * 1024 * 1024),
       provider,
-      rejectedReply: ingress.rejectedReplyCapture(),
+      privateValues: [
+        credential.sutToken,
+        credential.sutUsername,
+        ...Object.values(credential.driverEnv),
+      ],
       quiescent,
       leaseHealthy: true,
     });
@@ -565,9 +747,15 @@ async function run() {
     const ingressClosed = await attempt(async () => {
       await ingress?.close();
     });
-    const currentSutId = sutId;
-    if (currentSutId && (await attempt(() => podman(["rm", "--force", currentSutId])))) {
-      quiescent = true;
+    if (boxAttempted && !quiescent) {
+      await attempt(stopSut);
+    }
+    if (
+      candidateProcess &&
+      candidateProcess.exitCode === null &&
+      candidateProcess.signalCode === null
+    ) {
+      candidateProcess.kill("SIGTERM");
     }
     const currentBridgeId = bridgeId;
     if (currentBridgeId) {
@@ -577,6 +765,9 @@ async function run() {
       await attempt(() => podman(["network", "rm", network]));
     }
     const recorderQuiescent = await recorderExited(1);
+    if (quiescent) {
+      await attempt(() => rm(boxRoot, { recursive: true, force: true }));
+    }
     const privateStateErased = await attempt(() =>
       rm(privateRoot, { recursive: true, force: true }),
     );
@@ -584,17 +775,16 @@ async function run() {
       const acquired = lease;
       if (await attempt(() => acquired.release())) {
         lease = undefined;
-      } else if (await attempt(() => acquired.quarantine())) {
-        lease = undefined;
       }
     } else if (lease) {
       const acquired = lease;
-      if (await attempt(() => acquired.quarantine())) {
-        lease = undefined;
-      }
+      // Ingress and TDLib own revocation. An uncertain teardown never frees
+      // an identity early; the unchanged broker's existing TTL reclaims it.
+      await attempt(() => acquired.abandon());
     }
     process.off("SIGTERM", abort);
     process.off("SIGINT", abort);
+    clearInterval(reviewTimer);
   }
   if (primaryError || cleanupErrors.length || lease) {
     throw new AggregateError(
@@ -609,7 +799,7 @@ async function run() {
   }
   for (const [name, value] of Object.entries(facts)) {
     const text = JSON.stringify(value);
-    if (Buffer.byteLength(text) > 8192) {
+    if (Buffer.byteLength(text) > 65536) {
       throw new Error("Public observation oversized");
     }
     await writeFile(path.join(output, name), text + "\n", { mode: 0o600, flag: "wx" });

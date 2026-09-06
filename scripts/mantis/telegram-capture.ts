@@ -1,64 +1,39 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
+import type { TelegramProofPlan } from "./telegram-proof-plan.ts";
 import {
-  telegramProofDigest,
-  telegramProofPrompt,
-  telegramProofReply,
   telegramSendObservationSchema,
   telegramProviderObservationSchema,
   telegramReplyObservationSchema,
 } from "./telegram-request-proof.ts";
 
-const integer = z.number().int().safe().positive();
-const summarySchema = z.object({
-  recordingComplete: z.literal(true),
-  chatId: z.string(),
-  sentMessageId: integer,
-  sentMessageIds: z.array(integer).length(1),
-});
-const readySchema = z.object({
-  chatId: z.number().int().safe(),
-  chatType: z.literal("private"),
-  peerUserId: integer,
-});
 const rowSchema = z.object({
-  kind: z.string(),
+  kind: z.enum(["action", "message", "edit", "edit-meta", "delete", "typing", "reaction"]),
   messageId: z.number().int().safe().nullable(),
-  botApiMessageId: z.number().int().safe().nullable(),
   elapsedMs: z.number().nonnegative(),
-  text: z.string().max(65536).optional(),
-  actionType: z.string().optional(),
-  status: z.string().optional(),
+  senderId: z.number().int().safe().optional(),
+  isSut: z.boolean().optional(),
+  isOutgoing: z.boolean().optional(),
+  text: z.string().max(8192).optional(),
+  actionType: z.string().max(32).optional(),
+  status: z.string().max(32).optional(),
+  replyToMessageId: z.number().int().safe().nullable().optional(),
+  contentType: z.string().max(128).optional(),
+  reactionText: z.string().max(512).optional(),
+  reactionCount: z.number().int().nonnegative().optional(),
+  isPermanent: z.boolean().optional(),
+  hasReplyMarkup: z.boolean().optional(),
   raw: z.unknown().optional(),
 });
-const messageSchema = z.object({
-  id: integer,
-  chat_id: z.number().int().safe(),
-  sender_id: z.object({ "@type": z.literal("messageSenderUser"), user_id: integer }),
-  content: z.object({
-    "@type": z.literal("messageText"),
-    text: z.object({ text: z.string().max(65536) }),
-  }),
-  reply_to: z.object({ message_id: integer.optional() }).optional(),
-  reply_to_message_id: integer.optional(),
-});
-function botMessageId(value: number) {
-  if (value % 1048576 !== 0 || value <= 0) {
-    throw new Error("Non-final TDLib message identity");
-  }
-  return String(value / 1048576);
-}
-
-// Only the trusted controller calls this after the canonical recorder finishes
-// and the SUT is quiescent. Private raw identities never leave this function.
 export function normalizeTelegramCapture(input: {
   identity: {
     request_id: string;
+    plan_sha256: string;
     candidate_sha: string;
     harness: { sha: string };
     run: { id: string; attempt: number };
   };
-  nonce: string;
+  plan: TelegramProofPlan;
   salt: Uint8Array;
   sutId: number;
   testerId: number;
@@ -66,121 +41,177 @@ export function normalizeTelegramCapture(input: {
   ready: unknown;
   summary: unknown;
   raw: string;
-  provider: {
-    inputNonce: string;
-    responseNonce: string;
-    responseSha256: string;
-    count: number;
-  };
+  provider: Array<{ user_text: string; response_text: string; streaming: boolean }>;
   quiescent: boolean;
   leaseHealthy: boolean;
-  rejectedReply?: { textSha256: string };
+  privateValues: string[];
 }) {
   if (
     !input.testDc ||
     !input.quiescent ||
     !input.leaseHealthy ||
-    input.provider.count !== 1 ||
-    input.raw.length > 8 * 1024 * 1024 ||
+    Buffer.byteLength(input.raw) > 8 * 1024 * 1024 ||
     input.salt.byteLength < 32
   ) {
     throw new Error("Incomplete Telegram capture boundary");
   }
-  const ready = readySchema.parse(input.ready);
-  const summary = summarySchema.parse(input.summary);
-  if (
-    ready.peerUserId !== input.sutId ||
-    String(ready.chatId) !== summary.chatId ||
-    summary.sentMessageIds[0] !== summary.sentMessageId
-  ) {
-    throw new Error("Telegram peer/send identity mismatch");
+  const ready = z
+    .object({
+      chatId: z.number().int().safe(),
+      chatType: z.literal("private"),
+      peerUserId: z.number().int().safe().positive(),
+    })
+    .parse(input.ready);
+  const summary = z
+    .object({
+      recordingComplete: z.literal(true),
+      chatId: z.string(),
+      sentMessageIds: z.array(z.number().int().safe()).max(8),
+    })
+    .parse(input.summary);
+  if (ready.peerUserId !== input.sutId || String(ready.chatId) !== summary.chatId) {
+    throw new Error("Recorder does not own the selected Test Server DM");
   }
+  const secrets = [
+    ...input.privateValues,
+    String(input.sutId),
+    String(input.testerId),
+    String(ready.chatId),
+  ]
+    .filter(Boolean)
+    .toSorted((a, b) => b.length - a.length);
+  const redact = (text: string) =>
+    secrets.reduce((value, secret) => value.replaceAll(secret, "[redacted]"), text);
+  const ids = new Map<number, string>();
+  const messageId = (value: number | null | undefined) => {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (!ids.has(value)) {
+      ids.set(value, `message-${ids.size + 1}`);
+    }
+    return ids.get(value)!;
+  };
   const lines = input.raw.trim().split("\n");
-  if (lines.length > 4096) {
-    throw new Error("Oversized Telegram timeline");
+  if (lines.length > 256 || lines.some((line) => Buffer.byteLength(line) > 65536)) {
+    throw new Error("Telegram timeline exceeds the complete observation budget");
   }
-  const rows = lines.map((line) => {
-    if (line.length > 65536) {
-      throw new Error("Oversized TDLib event");
-    }
-    return rowSchema.parse(JSON.parse(line));
-  });
-  const sends = rows
-    .map((row, index) => ({ row, index }))
-    .filter(
-      ({ row }) => row.kind === "action" && row.actionType === "send" && row.status === "completed",
-    );
-  const sent = sends[0];
+  const rows = lines.map((line) => rowSchema.parse(JSON.parse(line)));
+  const actions = rows.filter((row) => row.kind === "action");
   if (
-    sends.length !== 1 ||
-    !sent ||
-    sent.row.messageId !== summary.sentMessageId ||
-    sent.row.text !== telegramProofPrompt(input.nonce)
+    actions.length !== input.plan.actions.length ||
+    actions.some((row, index) => row.actionType !== input.plan.actions[index]!.type) ||
+    actions.filter((row) => row.actionType === "send" && row.status === "completed").length !==
+      summary.sentMessageIds.length
   ) {
-    throw new Error("Missing canonical sent action");
+    throw new Error("Incomplete canonical recorder actions");
   }
-  const sendId = botMessageId(summary.sentMessageId);
-  const replies = rows.slice(sent.index + 1).flatMap((row) => {
-    if (row.kind !== "message") {
-      return [];
+  let previous = -1;
+  const projectEvent = (row: z.infer<typeof rowSchema>) => {
+    if (row.elapsedMs < previous) {
+      throw new Error("Out-of-order recorder timeline");
     }
-    const raw = z
-      .object({ "@type": z.literal("updateNewMessage"), message: messageSchema })
-      .safeParse(row.raw);
-    if (!raw.success) {
-      return [];
-    }
-    const message = raw.data.message;
-    if (
-      message.chat_id !== ready.chatId ||
-      message.sender_id.user_id !== input.sutId ||
-      message.id !== row.messageId ||
-      botMessageId(message.id) !== String(row.botApiMessageId)
-    ) {
-      return [];
-    }
-    if (row.elapsedMs < sent.row.elapsedMs) {
-      throw new Error("Out-of-order Telegram capture");
-    }
-    return [message];
-  });
-  // Streaming is disabled for this bounded scenario. More than one SUT message
-  // is ambiguous, rather than permission to select whichever happens to pass.
-  const reply = replies[0];
-  if (input.rejectedReply ? replies.length !== 0 : replies.length !== 1 || !reply) {
-    throw new Error("Missing or ambiguous same-SUT DM reply");
-  }
-  const expectedResponse = telegramProofDigest(telegramProofReply(input.provider.responseNonce));
-  const rejectedReply =
-    input.rejectedReply &&
-    z
-      .strictObject({
-        textSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    previous = row.elapsedMs;
+    const actor =
+      row.kind === "action" || row.senderId === input.testerId || row.isOutgoing === true
+        ? "tester"
+        : row.senderId === input.sutId || row.isSut === true
+          ? "sut"
+          : "unknown";
+    const source = z
+      .object({
+        message: z
+          .object({ content: z.unknown().optional(), reply_markup: z.unknown().optional() })
+          .optional(),
+        new_content: z.unknown().optional(),
+        reply_markup: z.unknown().optional(),
       })
-      .parse(input.rejectedReply);
-  if (rejectedReply?.textSha256 === expectedResponse) {
-    throw new Error("Blocked reply must be a trusted observed mismatch");
-  }
-  if (
-    input.provider.inputNonce !== input.nonce ||
-    input.provider.responseSha256 !== expectedResponse
-  ) {
-    throw new Error("Provider request correlation mismatch");
-  }
+      .parse(row.raw ?? {});
+    const content = z
+      .object({
+        text: z
+          .object({
+            entities: z
+              .array(
+                z.object({
+                  offset: z.number().int().nonnegative(),
+                  length: z.number().int().nonnegative(),
+                  type: z.object({
+                    "@type": z.string().max(128),
+                    url: z.string().max(2048).optional(),
+                    language: z.string().max(128).optional(),
+                  }),
+                }),
+              )
+              .max(256)
+              .optional(),
+          })
+          .optional(),
+      })
+      .parse(source.message?.content ?? source.new_content ?? {});
+    const keyboard = z
+      .object({
+        rows: z
+          .array(
+            z
+              .array(
+                z.object({
+                  text: z.string().max(128),
+                  type: z.object({ "@type": z.string().max(128) }),
+                }),
+              )
+              .max(8),
+          )
+          .max(8)
+          .optional(),
+      })
+      .parse(source.message?.reply_markup ?? source.reply_markup ?? {});
+    return {
+      kind: row.kind,
+      elapsed_ms: row.elapsedMs,
+      message_id: messageId(row.messageId),
+      actor,
+      ...(row.text !== undefined ? { text: redact(row.text) } : {}),
+      ...(row.actionType !== undefined ? { action_type: row.actionType } : {}),
+      ...(row.status !== undefined ? { status: row.status } : {}),
+      ...(row.replyToMessageId !== undefined ? { reply_to: messageId(row.replyToMessageId) } : {}),
+      ...(row.contentType !== undefined ? { content_type: row.contentType } : {}),
+      ...(row.reactionText !== undefined ? { reaction_text: redact(row.reactionText) } : {}),
+      ...(row.reactionCount !== undefined ? { reaction_count: row.reactionCount } : {}),
+      ...(row.isPermanent !== undefined ? { permanent: row.isPermanent } : {}),
+      ...(row.hasReplyMarkup !== undefined ? { has_reply_markup: row.hasReplyMarkup } : {}),
+      ...(content.text?.entities
+        ? {
+            entities: content.text.entities.map(({ offset, length, type }) =>
+              Object.assign(
+                {
+                  offset,
+                  length,
+                  type: type["@type"],
+                },
+                type.url ? { url: redact(type.url) } : {},
+                type.language ? { language: redact(type.language) } : {},
+              ),
+            ),
+          }
+        : {}),
+      ...(keyboard.rows
+        ? {
+            buttons: keyboard.rows.map((buttons) =>
+              buttons.map((button) => ({ text: redact(button.text), type: button.type["@type"] })),
+            ),
+          }
+        : {}),
+    };
+  };
+  const events = rows.map(projectEvent);
   const conversation = createHmac("sha256", input.salt)
-    .update(
-      JSON.stringify([
-        input.identity.request_id,
-        input.identity.run,
-        ready.chatId,
-        input.sutId,
-        input.testerId,
-      ]),
-    )
+    .update(JSON.stringify([input.identity.request_id, input.identity.run, ready.chatId]))
     .digest("hex");
   const common = {
-    schema: "mantis.telegram-observation.v1",
+    schema: "mantis.telegram-observation.v2",
     request_id: input.identity.request_id,
+    plan_sha256: input.identity.plan_sha256,
     scenario: "telegram-bot-e2e-proof",
     candidate_sha: input.identity.candidate_sha,
     harness_sha: input.identity.harness.sha,
@@ -190,37 +221,28 @@ export function normalizeTelegramCapture(input: {
     test_dc: true,
     chat_type: "dm",
     conversation_digest: conversation,
-    nonce: input.nonce,
     capture: "complete",
   };
-  const quote = reply?.reply_to?.message_id ?? reply?.reply_to_message_id;
-  const replyTo = quote ? botMessageId(quote) : null;
-  if (replyTo !== null && replyTo !== sendId) {
-    throw new Error("Wrong Telegram reply target");
-  }
   return {
     "telegram-send.json": telegramSendObservationSchema.parse({
       ...common,
       kind: "telegram-send",
-      message_id: sendId,
-      text_sha256: telegramProofDigest(sent.row.text),
+      plan: input.plan,
+      actions: events.filter((event) => event.kind === "action"),
     }),
     "provider-request.json": telegramProviderObservationSchema.parse({
       ...common,
       kind: "provider-request",
-      input_nonce: input.provider.inputNonce,
-      response_nonce: input.provider.responseNonce,
-      response_sha256: input.provider.responseSha256,
+      requests: input.provider.map((request) => ({
+        user_text: redact(request.user_text),
+        response_text: redact(request.response_text),
+        streaming: request.streaming,
+      })),
     }),
     "telegram-reply.json": telegramReplyObservationSchema.parse({
       ...common,
       kind: "telegram-reply",
-      from_sut: true,
-      ...(rejectedReply
-        ? { delivery: "blocked_before_forward", message_id: null }
-        : { message_id: botMessageId(reply!.id) }),
-      in_reply_to: replyTo,
-      text_sha256: rejectedReply?.textSha256 ?? telegramProofDigest(reply!.content.text.text),
+      events,
     }),
   };
 }

@@ -3,6 +3,56 @@ import { telegramProofIdentitySchema } from "./telegram-request-proof.ts";
 
 type Identity = z.infer<typeof telegramProofIdentitySchema>;
 
+const producerEndpoint = "https://clawsweeper.openclaw.ai/internal/exact-review/proof/producer";
+
+export async function redeemTelegramReviewProof(identity: Identity): Promise<number> {
+  const source = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!source || !requestToken) {
+    throw new Error("Trusted Actions identity is unavailable");
+  }
+  const url = new URL(source);
+  if (url.protocol !== "https:" || !url.hostname.endsWith(".actions.githubusercontent.com")) {
+    throw new Error("Invalid Actions identity endpoint");
+  }
+  url.searchParams.set("audience", producerEndpoint);
+  const identityResponse = await fetch(url, {
+    headers: { authorization: `Bearer ${requestToken}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!identityResponse.ok) {
+    throw new Error("Actions identity request failed");
+  }
+  const encoded = await identityResponse.text();
+  if (Buffer.byteLength(encoded) > 32768) {
+    throw new Error("Oversized Actions identity");
+  }
+  const token = z.object({ value: z.string().min(1).max(30000) }).parse(JSON.parse(encoded)).value;
+  const response = await fetch(producerEndpoint, {
+    method: "POST",
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      requestId: identity.request_id,
+      planSha256: identity.plan_sha256,
+      runId: identity.run.id,
+      runAttempt: identity.run.attempt,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error("Original review no longer authorizes this proof");
+  }
+  const result = await response.text();
+  if (Buffer.byteLength(result) > 1024) {
+    throw new Error("Oversized proof authority response");
+  }
+  return z
+    .strictObject({ ok: z.literal(true), expiresAt: z.number().int().positive() })
+    .parse(JSON.parse(result)).expiresAt;
+}
+
 async function githubJson(route: string, token: string, fetchImpl: typeof fetch) {
   if (!token) {
     throw new Error("GitHub request token is unavailable");

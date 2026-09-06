@@ -348,6 +348,55 @@ The credential lease is not a scenario sandbox: custom command actions can use
 the leased test identity. Keep credential handling and execution in an explicitly
 authorized, isolated worker, never an ordinary read-only review.
 
+### Selected proof inside a ClawSweeper review
+
+The request-bound proof integration lets ClawSweeper choose a relevant check
+before finishing its current review. It does not run every check on every PR.
+The exact PR head is resolved by the review, not typed by the maintainer.
+`@clawsweeper proof` requests one review with proof available as a manual override;
+the result is evaluated in that review rather than generating a second review.
+
+The automatic surfaces are:
+
+- Telegram Test Server: a bounded, data-only plan of tester messages and button
+  clicks, deterministic model replies, streaming/native-command settings, and
+  the behavior the reviewer needs to observe. This can cover more than a generic
+  greeting, including selected formatting or command behavior.
+- Control UI: the existing fixed chat smoke recipe against a mocked Gateway.
+  This is not an arbitrary browser-task runner or proof of all UI behavior.
+
+The separate fixed Crabline recipe remains a producer entrypoint; it is not a
+third automatic tool or a mandatory three-check batch.
+
+A trusted external controller owns the Telegram userbot and real bot token.
+The candidate receives a disposable token alias and a restricted DM API proxy,
+not the QA lease, Telegram session, GitHub token, or deployment credentials.
+The candidate runs in a disposable Crabbox local-container on an internal
+network without a Docker socket. Deployment requires a Linux/Podman environment
+where this isolated Crabbox SSH lifecycle has been verified; a generic Docker
+smoke run does not establish that compatibility.
+
+The controller reuses the existing Convex acquire, heartbeat, payload, and
+release APIs. No Convex schema update, quarantine endpoint, or broker deployment
+is required. Review ownership and one-run authorization are checked by the
+ClawSweeper service using the trusted workflow's GitHub Actions OIDC identity.
+Expired or revoked authority stops privileged sends and proxy forwarding.
+A recorder parent-death guard stops the recorder if its controller exits.
+These safeguards do not claim that native TDLib background traffic is zero.
+
+The Telegram artifact contains the bounded complete timeline, provider requests,
+formatting entities, and button labels with known private values redacted.
+Oversized or incomplete observations fail closed. Its assertion outcome stays
+`inconclusive`: the original reviewer must assess the observations against the
+claim. A green process exit, canned reply, or video does not automatically clear
+proof or other readiness blockers. Bot registration/webhook operations are
+simulated; live production Telegram, groups, media, and unrestricted agent
+commands are outside this bounded plan.
+Transport profile display names are synthetic, while routing IDs and the selected
+bot username are retained where required. Message text is not rewritten by this
+projection. Tests of real profile names or username-based tester routing are
+outside this proof surface.
+
 ## Machines and secrets
 
 Local CLI Crabbox defaults are `--provider hetzner --class beast`; override

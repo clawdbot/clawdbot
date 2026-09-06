@@ -17,10 +17,12 @@ proving them needs the full update stream:
 """
 
 import argparse
+import ctypes
 from collections import Counter
 import importlib.util
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -375,10 +377,13 @@ class EventRecorder:
         }
 
 
-def build_driver():
+def build_driver(deadline_unix_ms=None):
     """UserDriver owns its own TdClient, so recording shares that one client."""
     config, bot_config = driver.load_config()
-    user_driver = driver.UserDriver(config, bot_config)
+    user_driver = (
+        driver.UserDriver(config, bot_config) if deadline_unix_ms is None
+        else driver.UserDriver(config, bot_config, deadline_unix_ms)
+    )
     user_driver.authorize(need_ready=True)
     return config, bot_config, user_driver
 
@@ -516,6 +521,8 @@ def main():
     parser.add_argument("--output", default="")
     parser.add_argument("--sut-user-id", default="")
     parser.add_argument("--proof-dm-peer", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--proof-parent-pid", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--proof-deadline-unix-ms", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if sum(bool(value) for value in (args.send, args.send_photo, args.scenario)) > 1:
         parser.error("use only one of --send, --send-photo, or --scenario")
@@ -524,7 +531,18 @@ def main():
     if args.barrier_dir and not args.scenario:
         parser.error("--barrier-dir requires --scenario")
 
-    config, bot_config, driver_obj = build_driver()
+    if (args.proof_parent_pid is None) != (args.proof_deadline_unix_ms is None):
+        parser.error("proof parent and deadline must be supplied together")
+    if args.proof_parent_pid is not None:
+        if sys.platform != "linux" or args.proof_parent_pid <= 1:
+            parser.error("trusted proof ownership requires a Linux controller")
+        # Arm before creating TDLib threads; then close the parent-death race.
+        if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            raise RuntimeError("Unable to arm proof parent-death cleanup")
+        if os.getppid() != args.proof_parent_pid or time.time() * 1000 >= args.proof_deadline_unix_ms:
+            raise RuntimeError("Trusted proof owner is no longer active")
+    config, bot_config, driver_obj = (build_driver(args.proof_deadline_unix_ms)
+                                    if args.proof_deadline_unix_ms is not None else build_driver())
 
     # One resolution path for every chat form the driver accepts: numeric id,
     # @username (the DM lane passes the SUT's username), or an invite link.

@@ -4,6 +4,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 
 const ENDPOINT_PREFIX = "/qa-credentials/v1";
@@ -211,7 +212,7 @@ async function resolveCredentialPayload(acquired, identity, requestOptions, limi
 }
 
 export async function acquireQaLease({
-  kind,
+  kind = "",
   ownerId = `qa-lease-${os.hostname()}-${process.pid}-${randomUUID()}`,
   leaseTtlMs = 20 * 60_000,
   heartbeatIntervalMs = 30_000,
@@ -226,13 +227,8 @@ export async function acquireQaLease({
   fetchImpl = fetch,
   sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randomImpl = Math.random,
-  quarantineOnExpiry = false,
-  requestId,
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
-  if (requestId !== undefined && !/^[a-f0-9]{64}$/.test(requestId)) {
-    throw new Error("acquireQaLease requestId must be lowercase SHA256.");
-  }
   const broker = await resolveBrokerConfig({
     env,
     cwd,
@@ -242,19 +238,13 @@ export async function acquireQaLease({
   const requestOptions = { broker, fetchImpl, httpTimeoutMs };
   const startedAt = Date.now();
   let acquired;
+  let confirmedAt;
   for (;;) {
     try {
+      confirmedAt = { wall: Date.now(), monotonic: performance.now() };
       acquired = await callBroker(
         "acquire",
-        {
-          kind,
-          ownerId,
-          actorRole: "ci",
-          leaseTtlMs,
-          heartbeatIntervalMs,
-          quarantineOnExpiry,
-          ...(requestId ? { requestId } : {}),
-        },
+        { kind, ownerId, actorRole: "ci", leaseTtlMs, heartbeatIntervalMs },
         requestOptions,
       );
       break;
@@ -280,35 +270,41 @@ export async function acquireQaLease({
   if (!identity.credentialId || !identity.leaseToken) {
     throw new Error("Broker acquire response is missing lease identity.");
   }
-  if (requestId && acquired.requestId !== requestId) {
-    try {
-      await callBroker("quarantine", identity, requestOptions);
-    } catch (quarantineError) {
-      throw new AggregateError(
-        [
-          new Error("Broker did not acknowledge durable proof request consumption."),
-          quarantineError,
-        ],
-        "Unacknowledged proof request lease could not be quarantined.",
-      );
-    }
-    throw new Error("Broker did not acknowledge durable proof request consumption.");
-  }
   let heartbeatError;
   let heartbeatInFlight;
   let resolveUnhealthy;
   const whenUnhealthy = new Promise((resolve) => {
     resolveUnhealthy = resolve;
   });
+  const invalidate = (error) => {
+    if (!heartbeatError) {
+      heartbeatError = error;
+      resolveUnhealthy(error);
+    }
+  };
   const assertHealthy = () => {
+    // Anchor to request start, not response receipt. Check synchronously at use:
+    // a suspended worker must not forward before its heartbeat timer catches up.
+    const age = Math.max(Date.now() - confirmedAt.wall, performance.now() - confirmedAt.monotonic);
+    if (age >= leaseTtlMs) invalidate(new Error("Credential lease confirmation expired."));
     if (heartbeatError) throw heartbeatError;
   };
   const heartbeat = () => {
     if (heartbeatInFlight || heartbeatError) return heartbeatInFlight;
+    try {
+      assertHealthy();
+    } catch {
+      return;
+    }
+    const requestedAt = { wall: Date.now(), monotonic: performance.now() };
     heartbeatInFlight = callBroker("heartbeat", { ...identity, leaseTtlMs }, requestOptions)
+      .then(() => {
+        if (heartbeatError) return;
+        confirmedAt = requestedAt;
+        assertHealthy();
+      })
       .catch((error) => {
-        heartbeatError = error;
-        resolveUnhealthy(error);
+        invalidate(error);
       })
       .finally(() => {
         heartbeatInFlight = undefined;
@@ -356,16 +352,13 @@ export async function acquireQaLease({
     credentialId: acquired.credentialId,
     whenUnhealthy,
     assertHealthy,
-    quarantine: async () => {
-      if (released) return;
+    abandon: async () => {
+      invalidate(new Error("Credential lease abandoned; waiting for existing broker expiry."));
       await stopHeartbeat();
-      await callBroker("quarantine", identity, requestOptions);
-      released = true;
-      heartbeatError = new Error("Credential identity was quarantined by the broker");
-      resolveUnhealthy(heartbeatError);
     },
     release: async () => {
       if (released) return;
+      invalidate(new Error("Credential lease released."));
       await stopHeartbeat();
       await callBroker("release", identity, requestOptions);
       released = true;

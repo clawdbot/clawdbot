@@ -9,7 +9,6 @@ This broker exposes:
 - `POST /qa-credentials/v1/payload-chunk`
 - `POST /qa-credentials/v1/heartbeat`
 - `POST /qa-credentials/v1/release`
-- `POST /qa-credentials/v1/quarantine`
 - `POST /qa-credentials/v1/admin/add`
 - `POST /qa-credentials/v1/admin/remove`
 - `POST /qa-credentials/v1/admin/list`
@@ -127,35 +126,6 @@ curl -sS -X POST "<site-url>/qa-credentials/v1/release" \
     "leaseToken":"<lease-token>"
   }'
 ```
-
-Quarantine an uncertain active lease (CI or maintainer token):
-
-```bash
-curl -sS -X POST "<site-url>/qa-credentials/v1/quarantine" \
-  -H "authorization: Bearer <token>" \
-  -H "content-type: application/json" \
-  -d '{
-    "kind":"telegram-test-userbot",
-    "ownerId":"local-dev",
-    "actorRole":"maintainer",
-    "credentialId":"<credential-id>",
-    "leaseToken":"<lease-token>"
-  }'
-```
-
-Quarantine requires the exact active lease owner and token. It atomically
-disables the credential, clears the lease, and records a `quarantine` lease
-event. The disabled identity cannot be acquired again; after inspection, a
-maintainer must remove and re-add it before reuse.
-
-The maintainer-invoked Telegram Test Server proof sends a deterministic lowercase
-SHA-256 `requestId` and `"quarantineOnExpiry": true` during acquisition. The
-broker atomically records each exact PR-head request once, echoes it in the
-acquisition response, and rejects every later acquisition for that ID. A
-broker-owned scheduled mutation follows lease heartbeats and disables the
-identity if the controller disappears before an explicit safe release. The
-controller rejects deployments that do not echo the request ID; source
-compatibility alone is not deployment proof.
 
 Admin add (maintainer token only):
 

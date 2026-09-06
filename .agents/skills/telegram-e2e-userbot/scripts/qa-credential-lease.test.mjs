@@ -7,6 +7,57 @@ const env = {
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
 
+test("a resumed event loop cannot use a lease whose confirmation expired", async () => {
+  const operations = [];
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    leaseTtlMs: 100,
+    heartbeatIntervalMs: 10,
+    env,
+    fetchImpl: async (url) => {
+      operations.push(url.split("/").at(-1));
+      return Response.json(
+        url.endsWith("/acquire")
+          ? { status: "ok", credentialId: "synthetic", leaseToken: "synthetic", payload: {} }
+          : { status: "ok" },
+      );
+    },
+  });
+  // Timers cannot run during this suspension; the caller checks before yielding.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+  assert.throws(() => lease.assertHealthy(), /confirmation expired/u);
+  await lease.abandon();
+  assert.deepEqual(operations, ["acquire", "heartbeat"]);
+});
+
+test("release immediately revokes retained access even while the broker reply is pending", async () => {
+  let finishRelease;
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    env,
+    fetchImpl: async (url) => {
+      if (url.endsWith("/acquire"))
+        return Response.json({
+          status: "ok",
+          credentialId: "synthetic",
+          leaseToken: "synthetic",
+          payload: {},
+        });
+      if (url.endsWith("/release"))
+        return new Promise((resolve) => {
+          finishRelease = () => resolve(Response.json({ status: "ok" }));
+        });
+      return Response.json({ status: "ok" });
+    },
+  });
+  const pending = lease.release();
+  assert.throws(() => lease.assertHealthy(), /released/u);
+  assert.match((await lease.whenUnhealthy).message, /released/u);
+  await new Promise((resolve) => setImmediate(resolve));
+  finishRelease();
+  await pending;
+});
+
 test("uses the authenticated Convex CLI when broker variables are absent", async () => {
   const cliCalls = [];
   const brokerCalls = [];
@@ -382,9 +433,7 @@ test("heartbeat loss stops delayed chunk hydration before returning credentials"
     }
     if (url.endsWith("/heartbeat")) {
       heartbeatCount += 1;
-      if (heartbeatCount === 1) {
-        return Response.json({ status: "ok" });
-      }
+      if (heartbeatCount === 1) return Response.json({ status: "ok" });
       return Response.json(
         { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
         { status: 409 },
@@ -465,141 +514,6 @@ test("surfaces terminal heartbeat loss and still releases", async () => {
   );
   await lease.release();
   assert.equal(calls.filter((url) => url.endsWith("/release")).length, 1);
-});
-
-test("quarantines an unhealthy lease without releasing it", async () => {
-  const calls = [];
-  let heartbeatCount = 0;
-  const fetchImpl = async (url) => {
-    calls.push(url);
-    if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-quarantine",
-        leaseToken: "lease-token-quarantine",
-        payload: { schemaVersion: 1 },
-      });
-    }
-    if (url.endsWith("/heartbeat")) {
-      heartbeatCount += 1;
-      if (heartbeatCount === 1) return Response.json({ status: "ok" });
-      return Response.json(
-        { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
-        { status: 409 },
-      );
-    }
-    return Response.json({ status: "ok" });
-  };
-  const lease = await acquireQaLease({
-    kind: "telegram-test-userbot",
-    heartbeatIntervalMs: 5,
-    env,
-    fetchImpl,
-  });
-  await Promise.race([
-    lease.whenUnhealthy,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("heartbeat stayed healthy")), 100),
-    ),
-  ]);
-  await lease.quarantine();
-  await lease.release();
-  assert.equal(calls.filter((url) => url.endsWith("/quarantine")).length, 1);
-  assert.equal(calls.filter((url) => url.endsWith("/release")).length, 0);
-});
-
-test("can quarantine after a failed release response", async () => {
-  const calls = [];
-  const fetchImpl = async (url) => {
-    calls.push(url);
-    if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-release-failed",
-        leaseToken: "lease-token-release-failed",
-        payload: { schemaVersion: 1 },
-      });
-    }
-    if (url.endsWith("/release")) {
-      return Response.json(
-        { status: "error", code: "INTERNAL_ERROR", message: "Release failed." },
-        { status: 500 },
-      );
-    }
-    return Response.json({ status: "ok" });
-  };
-  const lease = await acquireQaLease({ kind: "telegram-test-userbot", env, fetchImpl });
-  await assert.rejects(
-    lease.release(),
-    (error) => error instanceof QaCredentialBrokerError && error.code === "INTERNAL_ERROR",
-  );
-  await lease.quarantine();
-  assert.equal(calls.filter((url) => url.endsWith("/release")).length, 1);
-  assert.equal(calls.filter((url) => url.endsWith("/quarantine")).length, 1);
-});
-
-test("requires durable request consumption and broker-owned expiry quarantine for proof leases", async () => {
-  const requestId = "a".repeat(64);
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    const body = JSON.parse(init.body);
-    calls.push({ url, body });
-    if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-proof",
-        leaseToken: "lease-token-proof",
-        requestId,
-        payload: { schemaVersion: 1 },
-      });
-    }
-    return Response.json({ status: "ok" });
-  };
-  const lease = await acquireQaLease({
-    kind: "telegram-test-userbot",
-    requestId,
-    quarantineOnExpiry: true,
-    env,
-    fetchImpl,
-  });
-  assert.deepEqual(calls.find((call) => call.url.endsWith("/acquire")).body, {
-    kind: "telegram-test-userbot",
-    ownerId: calls.find((call) => call.url.endsWith("/acquire")).body.ownerId,
-    actorRole: "ci",
-    leaseTtlMs: 20 * 60_000,
-    heartbeatIntervalMs: 30_000,
-    quarantineOnExpiry: true,
-    requestId,
-  });
-  await lease.release();
-});
-
-test("quarantines and rejects a proof lease without durable request acknowledgement", async () => {
-  const calls = [];
-  const fetchImpl = async (url) => {
-    calls.push(url);
-    if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-unacknowledged-proof",
-        leaseToken: "lease-token-unacknowledged-proof",
-        payload: { schemaVersion: 1 },
-      });
-    }
-    return Response.json({ status: "ok" });
-  };
-  await assert.rejects(
-    acquireQaLease({
-      kind: "telegram-test-userbot",
-      requestId: "b".repeat(64),
-      quarantineOnExpiry: true,
-      env,
-      fetchImpl,
-    }),
-    /did not acknowledge durable proof request consumption/u,
-  );
-  assert.equal(calls.filter((url) => url.endsWith("/quarantine")).length, 1);
-  assert.equal(calls.filter((url) => url.endsWith("/release")).length, 0);
 });
 
 test("fences a stalled heartbeat and bounds lease cleanup", async () => {

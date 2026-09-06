@@ -78,7 +78,7 @@ elif mode in ("evidence", "telegram-evidence", "telegram-qa-evidence"):
             kind = stat.S_IFMT(entry.external_attr >> 16)
             if name not in required or kind not in (0, stat.S_IFREG) or entry.is_dir() or entry.flag_bits & 1:
                 raise ValueError("unexpected or unsafe evidence entry")
-            if name.endswith(".json") and entry.file_size > (8192 if mode == "telegram-evidence" else 65536):
+            if name.endswith(".json") and entry.file_size > 65536:
                 raise ValueError("oversized evidence JSON")
             with archive.open(entry) as stream:
                 data = stream.read(limit + 1)

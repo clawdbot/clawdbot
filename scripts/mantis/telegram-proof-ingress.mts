@@ -1,64 +1,98 @@
-import { randomBytes } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import http from "node:http";
 import { z } from "zod";
 import { startTelegramTestApiProxy } from "../../.agents/skills/telegram-e2e-userbot/scripts/telegram-test-api-proxy.mjs";
-import {
-  telegramProofDigest,
-  telegramProofPrompt,
-  telegramProofReply,
-} from "./telegram-request-proof.ts";
+import type { TelegramProofPlan } from "./telegram-proof-plan.ts";
 
-const safeSendMessageSchema = z.strictObject({
-  chat_id: z.union([z.number().int().safe(), z.string().regex(/^-?[1-9][0-9]*$/)]),
-  text: z.string().max(4096),
-  parse_mode: z.literal("HTML").optional(),
-  link_preview_options: z.strictObject({ is_disabled: z.literal(true) }).optional(),
+const chat = z.union([z.number().int().safe(), z.string().regex(/^-?[1-9][0-9]*$/)]);
+const markup = z.strictObject({
+  inline_keyboard: z
+    .array(
+      z
+        .array(
+          z.strictObject({
+            text: z.string().max(128),
+            callback_data: z.string().max(64),
+          }),
+        )
+        .max(8),
+    )
+    .max(8),
 });
-const safeDeleteMyCommandsSchema = z.union([
-  z.strictObject({}),
-  z.strictObject({ scope: z.strictObject({ type: z.literal("all_group_chats") }) }),
-]);
+const send = z.strictObject({
+  chat_id: chat,
+  text: z.string().max(4096),
+  parse_mode: z.enum(["HTML", "Markdown", "MarkdownV2"]).optional(),
+  link_preview_options: z.strictObject({ is_disabled: z.boolean() }).optional(),
+  reply_markup: markup.optional(),
+  reply_parameters: z
+    .strictObject({
+      message_id: z.number().int().positive(),
+      allow_sending_without_reply: z.boolean().optional(),
+    })
+    .optional(),
+});
+const edit = send
+  .omit({ reply_parameters: true })
+  .extend({ message_id: z.number().int().positive() });
+const remove = z.strictObject({ chat_id: chat, message_id: z.number().int().positive() });
+
+// Profiles are transport metadata, not scenario observations. Keep routing IDs
+// and the bot's getMe username, but do not disclose real display names to PR code.
+function syntheticProfiles(value: unknown, keepUsername: boolean, depth = 0): unknown {
+  if (depth > 32) {
+    throw new Error("Telegram response exceeds projection depth");
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => syntheticProfiles(item, keepUsername, depth + 1));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== "last_name")
+      .map(([key, item]) => [
+        key,
+        key === "first_name"
+          ? "Proof user"
+          : key === "username" && !keepUsername
+            ? "proof_user"
+            : syntheticProfiles(item, keepUsername, depth + 1),
+      ]),
+  );
+}
 
 export async function startTelegramProofIngress(options: {
   socket: string;
   alias: string;
   sutToken: string;
   testerId: string;
-  nonce: string;
+  plan: TelegramProofPlan;
   providerLog: string;
   lease: { assertHealthy(): void; whenUnhealthy: Promise<Error> };
   fetchImpl?: typeof fetch;
 }) {
   type TestApiProxy = Awaited<ReturnType<typeof startTelegramTestApiProxy>>;
-  const startProxy = startTelegramTestApiProxy as unknown as (_proxyOptions: {
+  const startProxy = startTelegramTestApiProxy as unknown as (_options: {
     leaseHealth: typeof options.lease;
     fetchImpl: typeof fetch;
   }) => Promise<TestApiProxy>;
-  let closed = false;
-  let invalid = false;
-  let polls = 0;
-  let requests = 0;
-  let sendArmed = false;
-  let outboundMessages = 0;
-  let rejectedReply: { textSha256: string } | undefined;
-  let typingActions = 0;
-  let webhookCleanupSimulations = 0;
-  const commandCleanupSimulations = new Set<string>();
-  let provider:
-    | {
-        inputNonce: string;
-        responseNonce: string;
-        responseSha256: string;
-        count: number;
-      }
-    | undefined;
+  let closed = false,
+    invalid = false,
+    armed = false,
+    polls = 0,
+    requests = 0,
+    writes = 0;
+  const provider: Array<{ user_text: string; response_text: string; streaming: boolean }> = [];
+  const messageIds = new Set<number>();
+  const callbackIds = new Set<string>();
   const readers = new Set<AbortController>();
   let stopForwarding!: (error: Error) => void;
-  const forwardingStopped = new Promise<Error>((resolve) => {
+  const stopped = new Promise<Error>((resolve) => {
     stopForwarding = resolve;
   });
-  const cancelForwarding = () => {
+  const cancel = () => {
     stopForwarding(new Error("Telegram proof forwarding stopped"));
     for (const controller of readers) {
       controller.abort();
@@ -70,101 +104,88 @@ export async function startTelegramProofIngress(options: {
     }
     options.lease.assertHealthy();
   };
-  const assertForwardingHealthy = () => {
-    assertHealthy();
-    if (rejectedReply) {
-      throw new Error("Telegram proof reply was rejected");
-    }
-  };
   void options.lease.whenUnhealthy.then(() => {
     invalid = true;
-    cancelForwarding();
+    cancel();
   });
-  // The second HTTP hop owns the external fetch, so it must share ingress
-  // revocation rather than only the longer-lived credential lease.
   const upstream = await startProxy({
     leaseHealth: {
-      assertHealthy: assertForwardingHealthy,
-      whenUnhealthy: Promise.race([options.lease.whenUnhealthy, forwardingStopped]),
+      assertHealthy,
+      whenUnhealthy: Promise.race([options.lease.whenUnhealthy, stopped]),
     },
     fetchImpl: options.fetchImpl ?? fetch,
   });
   const refuse = (response: http.ServerResponse) => {
-    response.writeHead(403, { "Content-Type": "application/json" });
-    response.end(
-      JSON.stringify({ ok: false, description: "Request outside active Telegram proof scope" }),
-    );
+    if (!response.headersSent) {
+      response.writeHead(403, { "Content-Type": "application/json" });
+    }
+    response.end(JSON.stringify({ ok: false, description: "Outside active Telegram proof scope" }));
   };
   const server = http.createServer((request, response) => {
     void (async () => {
       assertHealthy();
-      if (rejectedReply) {
-        request.resume();
-        refuse(response);
-        return;
-      }
-      const probeRead =
+      const probe =
         request.method === "GET" &&
-        (request.url === `/telegram/bot${options.alias}/getMe` ||
-          request.url === `/telegram/bot${options.alias}/getWebhookInfo`);
-      if (
-        ++requests > 256 ||
-        (request.method !== "POST" && !probeRead) ||
-        !request.url?.startsWith("/")
-      ) {
-        throw new Error("Unsupported ingress request");
+        [
+          `/telegram/bot${options.alias}/getMe`,
+          `/telegram/bot${options.alias}/getWebhookInfo`,
+        ].includes(request.url ?? "");
+      if (++requests > 512 || (request.method !== "POST" && !probe)) {
+        throw new Error("Unsupported request");
       }
       const chunks: Buffer[] = [];
       let length = 0;
       for await (const chunk of request) {
         length += chunk.length;
-        if ((probeRead && length !== 0) || length > 256 * 1024) {
-          throw new Error("Oversized ingress body");
+        if (length > 256 * 1024 || (probe && length)) {
+          throw new Error("Oversized request");
         }
         chunks.push(Buffer.from(chunk));
       }
       assertHealthy();
-      const body = Buffer.concat(chunks);
-      const parsed: unknown = JSON.parse(body.toString("utf8") || "{}");
+      const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
       const record = z.record(z.string(), z.unknown()).parse(parsed);
-      // A prior concurrent request may have completed the single bounded failure.
-      if (rejectedReply) {
-        refuse(response);
-        return;
-      }
       if (request.url === "/provider/v1/chat/completions") {
-        if (request.headers.authorization !== `Bearer ${options.alias}`) {
-          throw new Error("Wrong provider capability");
+        if (!armed || request.headers.authorization !== `Bearer ${options.alias}`) {
+          throw new Error("Inactive provider capability");
         }
         const messages = z
           .array(z.object({ role: z.string(), content: z.unknown() }))
           .max(256)
           .parse(record.messages);
-        const text = messages
-          .filter((item) => item.role === "user")
-          .map((item) => JSON.stringify(item.content))
+        const userText = messages
+          .filter((message) => message.role === "user")
+          .map((message) =>
+            typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+          )
           .join("\n");
-        if (!text.includes(telegramProofPrompt(options.nonce))) {
-          throw new Error("Provider request lacks sent-action nonce");
+        const reply = options.plan.modelReplies[provider.length];
+        if (reply === undefined || userText.length > 16384) {
+          throw new Error("Provider budget exhausted");
         }
-        const responseNonce = provider?.responseNonce ?? randomBytes(32).toString("hex");
-        const reply = telegramProofReply(responseNonce);
-        provider = {
-          inputNonce: options.nonce,
-          responseNonce,
-          responseSha256: telegramProofDigest(reply),
-          count: (provider?.count ?? 0) + 1,
+        const entry = {
+          user_text: userText,
+          response_text: reply,
+          streaming: record.stream === true,
         };
-        await appendFile(
-          options.providerLog,
-          `${JSON.stringify({ request: parsed, responseNonce })}\n`,
-          { mode: 0o600 },
-        );
+        // Reserve the response before yielding, so concurrent calls cannot reuse it.
+        provider.push(entry);
+        await appendFile(options.providerLog, JSON.stringify(entry) + "\n", { mode: 0o600 });
         assertHealthy();
         if (record.stream === true) {
           response.writeHead(200, { "Content-Type": "text/event-stream" });
           response.end(
-            `data: ${JSON.stringify({ id: "mantis-mock", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: reply }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "mantis-mock", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+            `data: ${JSON.stringify({
+              id: "mantis-mock",
+              object: "chat.completion.chunk",
+              choices: [
+                { index: 0, delta: { role: "assistant", content: reply }, finish_reason: null },
+              ],
+            })}\n\ndata: ${JSON.stringify({
+              id: "mantis-mock",
+              object: "chat.completion.chunk",
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            })}\n\ndata: [DONE]\n\n`,
           );
         } else {
           response.writeHead(200, { "Content-Type": "application/json" });
@@ -182,128 +203,137 @@ export async function startTelegramProofIngress(options: {
         return;
       }
       const prefix = `/telegram/bot${options.alias}/`;
-      if (!request.url.startsWith(prefix)) {
+      if (!request.url?.startsWith(prefix)) {
         throw new Error("Wrong Telegram capability");
       }
       const method = request.url.slice(prefix.length);
-      let upstreamRecord = record;
-      if (method === "deleteWebhook") {
-        const cleanup = z
-          .strictObject({ drop_pending_updates: z.literal(false) })
-          .safeParse(record);
-        if (!cleanup.success || polls !== 0 || sendArmed || webhookCleanupSimulations !== 0) {
-          throw new Error("Telegram webhook cleanup outside bounded polling startup");
-        }
-        webhookCleanupSimulations += 1;
+      // Startup registry operations are simulated; the scenario tests command
+      // handling, not shared bot registration or webhook administration.
+      if (["deleteWebhook", "deleteMyCommands", "setMyCommands"].includes(method)) {
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true, result: true }));
         return;
       }
-      if (method === "deleteMyCommands") {
-        const cleanup = safeDeleteMyCommandsSchema.safeParse(record);
-        const scope = cleanup.success && "scope" in cleanup.data ? "all_group_chats" : "default";
-        if (!cleanup.success || polls !== 0 || sendArmed || commandCleanupSimulations.has(scope)) {
-          throw new Error("Telegram command cleanup outside bounded polling startup");
+      let outbound: Record<string, unknown>;
+      if (method === "getMe" || method === "getWebhookInfo") {
+        outbound = z.strictObject({}).parse(record);
+      } else if (method === "getUpdates") {
+        outbound = z
+          .strictObject({
+            timeout: z.number().min(0).max(30),
+            offset: z.number().int().safe().optional(),
+            limit: z.number().int().min(1).max(100).optional(),
+            allowed_updates: z.array(z.string().max(64)).max(32).optional(),
+          })
+          .parse(record);
+      } else if (method === "answerCallbackQuery") {
+        const answer = z
+          .strictObject({
+            callback_query_id: z.string().max(256),
+            text: z.string().max(200).optional(),
+            show_alert: z.boolean().optional(),
+            cache_time: z.literal(0).optional(),
+          })
+          .parse(record);
+        if (!armed || ++writes > 64 || !callbackIds.delete(answer.callback_query_id)) {
+          throw new Error("Callback outside this proof");
         }
-        commandCleanupSimulations.add(scope);
-        response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ ok: true, result: true }));
-        return;
-      }
-      const readMethods = new Set(["getMe", "getUpdates", "getWebhookInfo"]);
-      const sendMethods = new Set([
-        "sendMessage",
-        "sendChatAction",
-        "editMessageText",
-        "deleteMessage",
-      ]);
-      if (!readMethods.has(method) && !sendMethods.has(method)) {
-        throw new Error("Telegram method outside basic DM scope");
-      }
-      if (sendMethods.has(method) && String(record.chat_id) !== options.testerId) {
-        throw new Error("Telegram target outside leased DM");
-      }
-      if (method === "sendChatAction") {
-        if (
-          !sendArmed ||
-          outboundMessages !== 0 ||
-          record.action !== "typing" ||
-          ++typingActions > 4
-        ) {
-          throw new Error("Telegram typing action outside bounded reply preparation");
+        outbound = answer;
+      } else {
+        if (!armed || ++writes > 64 || String(record.chat_id) !== options.testerId) {
+          throw new Error("Outside leased DM budget");
         }
-        response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ ok: true, result: true }));
-        return;
-      }
-      if (method === "sendMessage") {
-        upstreamRecord = safeSendMessageSchema.parse(record);
-      }
-      if (sendMethods.has(method)) {
-        if (!sendArmed) {
-          throw new Error("Telegram egress is not armed");
+        if (method === "sendMessage") {
+          outbound = { ...send.parse(record), link_preview_options: { is_disabled: true } };
+        } else if (method === "editMessageText") {
+          outbound = { ...edit.parse(record), link_preview_options: { is_disabled: true } };
+        } else if (method === "deleteMessage") {
+          outbound = remove.parse(record);
+        } else if (method === "sendChatAction") {
+          outbound = z.strictObject({ chat_id: chat, action: z.literal("typing") }).parse(record);
+        } else {
+          throw new Error("Method outside the selected DM observation surface");
         }
-        if (
-          method !== "sendMessage" ||
-          outboundMessages !== 0 ||
-          !provider ||
-          provider.count !== 1
-        ) {
-          throw new Error("Telegram egress exceeds the single expected reply");
+        if ("message_id" in outbound && !messageIds.has(Number(outbound.message_id))) {
+          throw new Error("Mutation targets a message outside this proof");
         }
-        assertHealthy();
-        outboundMessages += 1;
-        if (upstreamRecord.text !== telegramProofReply(provider.responseNonce)) {
-          // Record the failed behavior at its trusted boundary, without sending
-          // arbitrary candidate content to Telegram. All later traffic is refused.
-          rejectedReply = { textSha256: telegramProofDigest(String(upstreamRecord.text)) };
-          cancelForwarding();
-          refuse(response);
-          return;
+        if ("reply_parameters" in outbound) {
+          const parameters = outbound.reply_parameters as { message_id: number };
+          if (!messageIds.has(parameters.message_id)) {
+            throw new Error("Reply targets stale message");
+          }
         }
-      }
-      if (
-        method === "getUpdates" &&
-        (typeof record.timeout !== "number" || record.timeout < 0 || record.timeout > 30)
-      ) {
-        throw new Error("Unbounded polling");
       }
       const controller = new AbortController();
       readers.add(controller);
       try {
-        // Body collection yielded to concurrent requests. Authority must still
-        // belong to this active proof at the last point before forwarding.
-        assertForwardingHealthy();
+        assertHealthy();
         const upstreamUrl = new URL(upstream.apiRoot);
         upstreamUrl.pathname = `/bot${options.sutToken}/${method}`;
         const result = await fetch(upstreamUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(upstreamRecord),
+          body: JSON.stringify(outbound),
           redirect: "error",
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)]),
         });
-        const text = await result.text();
-        if (Buffer.byteLength(text) > 2 * 1024 * 1024) {
-          throw new Error("Oversized Test Server response");
+        const upstreamChunks: Uint8Array[] = [];
+        let size = 0;
+        if (!result.body) {
+          throw new Error("Missing upstream body");
         }
-        const data = z.record(z.string(), z.unknown()).parse(JSON.parse(text));
-        assertForwardingHealthy();
+        for await (const chunk of result.body) {
+          size += chunk.length;
+          if (size > 2 * 1024 * 1024) {
+            throw new Error("Oversized upstream response");
+          }
+          upstreamChunks.push(chunk);
+        }
+        const data = z
+          .record(z.string(), z.unknown())
+          .parse(JSON.parse(Buffer.concat(upstreamChunks).toString("utf8")));
+        assertHealthy();
         if (method === "getUpdates") {
           polls += 1;
           const updates = z.array(z.record(z.string(), z.unknown())).parse(data.result);
           data.result = updates.filter((update) => {
             const message = z
               .object({
+                message_id: z.number().int().positive(),
                 chat: z.object({ id: z.number(), type: z.literal("private") }),
                 from: z.object({ id: z.number() }),
               })
               .safeParse(update.message);
-            return (
+            if (
               message.success &&
               String(message.data.chat.id) === options.testerId &&
               String(message.data.from.id) === options.testerId
-            );
+            ) {
+              if (armed) {
+                messageIds.add(message.data.message_id);
+              }
+              return armed;
+            }
+            const callback = z
+              .object({
+                id: z.string().max(256),
+                from: z.object({ id: z.number() }),
+                message: z.object({
+                  message_id: z.number().int(),
+                  chat: z.object({ id: z.number(), type: z.literal("private") }),
+                }),
+              })
+              .safeParse(update.callback_query);
+            const accepted =
+              armed &&
+              callback.success &&
+              String(callback.data.from.id) === options.testerId &&
+              String(callback.data.message.chat.id) === options.testerId &&
+              messageIds.has(callback.data.message.message_id);
+            if (accepted && callback.success) {
+              callbackIds.add(callback.data.id);
+            }
+            return accepted;
           });
         }
         if (method === "sendMessage" && data.ok === true) {
@@ -314,22 +344,28 @@ export async function startTelegramProofIngress(options: {
             })
             .parse(data.result);
           if (String(sent.chat.id) !== options.testerId) {
-            throw new Error("Unexpected Test Server destination");
+            throw new Error("Unexpected destination");
           }
+          messageIds.add(sent.message_id);
         }
         response.writeHead(result.status, { "Content-Type": "application/json" });
-        response.end(JSON.stringify(data).replaceAll(options.sutToken, "[redacted]"));
+        response.end(
+          JSON.stringify(syntheticProfiles(data, method === "getMe")).replaceAll(
+            options.sutToken,
+            "[redacted]",
+          ),
+        );
       } finally {
         readers.delete(controller);
       }
     })().catch(() => {
-      if (!rejectedReply) {
-        invalid = true;
-      }
-      cancelForwarding();
+      invalid = true;
+      cancel();
       refuse(response);
     });
   });
+  server.requestTimeout = 45_000;
+  server.headersTimeout = 10_000;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.socket, resolve);
@@ -338,29 +374,20 @@ export async function startTelegramProofIngress(options: {
     assertHealthy,
     drainStaleUpdates: () => upstream.drainUpdates(options.sutToken),
     isPolling: () => polls > 0,
-    armSingleSend() {
+    armScenario() {
       assertHealthy();
-      if (sendArmed || outboundMessages !== 0) {
-        throw new Error("Telegram egress was already armed");
+      if (armed) {
+        throw new Error("Scenario already armed");
       }
-      sendArmed = true;
-    },
-    assertSingleSendComplete() {
-      assertHealthy();
-      if (!sendArmed || outboundMessages !== 1) {
-        throw new Error("Exactly one bounded Telegram reply attempt was not observed");
-      }
+      armed = true;
     },
     providerCapture: () => provider,
-    rejectedReplyCapture: () => rejectedReply,
     async close() {
       closed = true;
-      cancelForwarding();
+      cancel();
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
+        server.close(() => resolve());
       });
       await upstream.close();
     },

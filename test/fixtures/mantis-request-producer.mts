@@ -13,23 +13,28 @@ import {
   requestProofDefinitions,
 } from "../../scripts/mantis/request-proof.ts";
 import { normalizeTelegramCapture } from "../../scripts/mantis/telegram-capture.ts";
+import { parseTelegramProofPlan } from "../../scripts/mantis/telegram-proof-plan.ts";
 import {
   telegramQaExecutionSchema,
   telegramQaResultSchema,
   telegramQaObservationsSchema,
   telegramQaScenario,
 } from "../../scripts/mantis/telegram-qa-proof.ts";
-import {
-  telegramProofIdentitySchema,
-  telegramProofPrompt,
-  telegramProofReply,
-} from "../../scripts/mantis/telegram-request-proof.ts";
+import { telegramProofIdentitySchema } from "../../scripts/mantis/telegram-request-proof.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export async function produceRequestFixture(
   input: unknown,
   outcome: "pass" | "fail",
   observationDirectory?: string,
+  proofPlan: unknown = {
+    claim: "A selected reply is observed",
+    actions: [{ type: "send", atMs: 0, text: "hello" }],
+    modelReplies: ["reply"],
+    settings: { streaming: "off", nativeCommands: false },
+    maxDurationMs: 1000,
+    expectations: ["The bot answers reply"],
+  },
 ) {
   const identity = requestIdentitySchema.parse(input);
   const definition = requestProofDefinitions[identity.scenario];
@@ -37,22 +42,35 @@ export async function produceRequestFixture(
   try {
     let files: Record<string, Buffer>;
     if (identity.scenario === "telegram-bot-e2e-proof") {
-      const nonce = "e".repeat(64),
-        responseNonce = "f".repeat(64);
+      const telegramIdentity = telegramProofIdentitySchema.parse(identity);
+      const plan = parseTelegramProofPlan(JSON.stringify(proofPlan), telegramIdentity.plan_sha256);
+      const action = plan.actions[0];
+      if (
+        plan.actions.length !== 1 ||
+        action?.type !== "send" ||
+        action.atMs !== 0 ||
+        plan.modelReplies.length !== 1 ||
+        plan.settings.streaming !== "off"
+      ) {
+        throw new Error(
+          "The offline recorder fixture exercises one immediate send and one non-streaming reply",
+        );
+      }
+      const reply = outcome === "pass" ? plan.modelReplies[0]! : "wrong reply";
       execFileSync(
         "python3",
         [
           path.join(root, "test/fixtures/mantis-telegram-recorder.py"),
           path.join(root, ".agents/skills/telegram-e2e-userbot/scripts/user-record.py"),
           temp,
-          telegramProofPrompt(nonce),
-          outcome === "pass" ? telegramProofReply(responseNonce) : "wrong reply",
+          action.text,
+          reply,
         ],
         { stdio: "pipe", timeout: 10_000 },
       );
       const capture = normalizeTelegramCapture({
-        identity: telegramProofIdentitySchema.parse(identity),
-        nonce,
+        identity: telegramIdentity,
+        plan,
         salt: Buffer.alloc(32, 7),
         sutId: 42,
         testerId: 43,
@@ -60,14 +78,10 @@ export async function produceRequestFixture(
         ready: JSON.parse(readFileSync(path.join(temp, "ready.json"), "utf8")),
         summary: JSON.parse(readFileSync(path.join(temp, "summary.json"), "utf8")),
         raw: readFileSync(path.join(temp, "events.ndjson"), "utf8"),
-        provider: {
-          inputNonce: nonce,
-          responseNonce,
-          responseSha256: digest(Buffer.from(telegramProofReply(responseNonce))),
-          count: 1,
-        },
+        provider: [{ user_text: action.text, response_text: reply, streaming: false }],
         quiescent: true,
         leaseHealthy: true,
+        privateValues: [],
       });
       files = Object.fromEntries(
         Object.entries(capture).map(([name, data]) => [name, Buffer.from(JSON.stringify(data))]),
@@ -210,6 +224,7 @@ globalThis.fetch = async (url) => {
           PATH: process.env.PATH,
           GH_TOKEN: "controlled-fixture-only",
           REQUEST_ID: identity.request_id,
+          ...(identity.plan_sha256 ? { PLAN_SHA256: identity.plan_sha256 } : {}),
           TARGET_PR: String(identity.pull_request),
           CANDIDATE_SHA: identity.candidate_sha,
           GITHUB_REPOSITORY: identity.repository.full_name,
@@ -225,7 +240,9 @@ globalThis.fetch = async (url) => {
         readFileSync(path.join(temp, ".artifacts/mantis-request-finalizer/receipt.json"), "utf8"),
       ),
     );
-    if (receipt.assertion_outcome !== outcome) {
+    const expectedOutcome =
+      identity.scenario === "telegram-bot-e2e-proof" ? "inconclusive" : outcome;
+    if (receipt.assertion_outcome !== expectedOutcome) {
       throw new Error("Producer did not finalize the expected controlled outcome");
     }
     if (identity.scenario === telegramQaScenario) {

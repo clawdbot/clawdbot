@@ -16,6 +16,14 @@ on:
         description: Open pull request whose exact head is under test
         required: true
         type: string
+      proof_plan:
+        description: Strict data-only scenario JSON selected by the original reviewer
+        required: false
+        type: string
+      plan_sha256:
+        description: SHA256 of canonical data-only proof plan
+        required: false
+        type: string
       scenario:
         description: Trusted behavior recipe; Crabline is transport-emulated, not live Telegram
         required: true
@@ -107,6 +115,11 @@ jobs:
     needs: admit_request
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      id-token: write
     environment: ${{ inputs.scenario == 'telegram-bot-e2e-proof' && 'qa-live-shared' || '' }}
     steps:
       - name: Checkout trusted harness
@@ -128,6 +141,19 @@ jobs:
           git archive "$GITHUB_WORKFLOW_SHA" |
             podman build --file scripts/mantis/telegram-test-server-proof.Dockerfile \
               --tag localhost/mantis-telegram-proof -
+      - name: Install pinned Crabbox for disposable candidate lifecycle
+        if: ${{ inputs.scenario == 'telegram-bot-e2e-proof' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/mantis-crabbox"
+          mkdir -p "$install_dir/bin"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://github.com/openclaw/crabbox/releases/download/v0.50.0/crabbox_0.50.0_linux_amd64.tar.gz \
+            --output "$install_dir/crabbox.tar.gz"
+          printf '%s  %s\n' 8ab55a0302e7119a45e7522c2fff2d4e295496c33766c87cf619f342824cab75 "$install_dir/crabbox.tar.gz" | sha256sum --check
+          tar -xzf "$install_dir/crabbox.tar.gz" -C "$install_dir/bin" crabbox
+          echo "$install_dir/bin" >> "$GITHUB_PATH"
       - name: Build exact candidate without credentials or network
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_ref }}
@@ -146,6 +172,8 @@ jobs:
           TARGET_PR: ${{ inputs.pr_number }}
           CANDIDATE_SHA: ${{ inputs.candidate_ref }}
           TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR: ${{ runner.temp }}/mantis-tdlib
+          PROOF_PLAN: ${{ inputs.proof_plan }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           GH_TOKEN: ${{ github.token }}
@@ -176,7 +204,8 @@ jobs:
           TARGET_PR: ${{ inputs.pr_number }}
           CANDIDATE_SHA: ${{ inputs.candidate_ref }}
           SCENARIO: ${{ inputs.scenario }}
-          TRANSPORT: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && 'Crabline Bot API emulator; no Telegram Test Server or TDLib' || 'Telegram Test Server; one DM smoke only' }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          TRANSPORT: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && 'Crabline Bot API emulator; no Telegram Test Server or TDLib' || 'Telegram Test Server; bounded selected DM plan' }}
         run: |
           {
             echo "## Requested Telegram behavior proof"
@@ -185,7 +214,7 @@ jobs:
             printf -- '- Candidate: `%s`\n' "$CANDIDATE_SHA"
             printf -- '- Scenario: %s\n' "$SCENARIO"
             printf -- '- Transport: %s\n' "$TRANSPORT"
-            echo "- Scope: the named trusted recipe only; not general proof of every Telegram change"
+            echo "- Scope: the selected bounded plan or fixed recipe; not general proof of every Telegram change"
             echo "- Limits: no production or personal Telegram, live model, readiness, label, repair, close, or merge effect"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -214,6 +243,7 @@ jobs:
           TARGET_PR: ${{ inputs.pr_number }}
           CANDIDATE_SHA: ${{ inputs.candidate_ref }}
           SCENARIO: ${{ inputs.scenario }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
         run: node scripts/mantis/finalize-request-proof.mts "$SCENARIO"
       - name: Upload request receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

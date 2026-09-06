@@ -38,6 +38,7 @@ const sourcePath = z
 export const requestIdentitySchema = z
   .strictObject({
     request_id: digest,
+    plan_sha256: digest.optional(),
     repository: z.strictObject({
       id: numericId,
       full_name: z.literal("openclaw/openclaw"),
@@ -189,9 +190,9 @@ export function createRequestReceipt(
           ]
         : identity.scenario === "telegram-bot-e2e-proof"
           ? [
-              "One real Telegram Test Server DM with a deterministic mock provider; no production/personal traffic, live model, group, media, edit, reaction, or readiness claim.",
+              "Selected data-only Test Server DM scenario with deterministic model replies; no production/personal traffic, live model, group, media, or readiness claim.",
               "Canonical trusted TDLib recorder and provider capture are outside the isolated candidate; raw identities and credentials are not public observations.",
-              "A bounded wrong-text egress attempt is blocked before Telegram forwarding and reported as failure, not as a delivered reply; malformed or incomplete captures remain inconclusive.",
+              "The original reviewer evaluates the complete bounded observations; a completed recording is not a passing assertion. Bot registration and webhook administration are simulated; TDLib background traffic is not claimed to cease at the action deadline.",
             ]
           : [
               "Black-box behavior of the served candidate UI during external browser input, with a mocked Gateway. No internal client/callsite provenance, live Gateway, provider, channel, delivery, or readiness claim.",

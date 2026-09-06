@@ -1,6 +1,8 @@
 # Trusted Telegram proof harness image. Build before admitting candidate source.
 FROM mcr.microsoft.com/playwright:v1.62.1-noble@sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac
 WORKDIR /harness
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server git rsync curl sudo python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN chmod -R a+rX /harness && corepack enable && corepack pnpm install --frozen-lockfile \
     && mkdir /candidate /out \

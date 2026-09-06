@@ -19,6 +19,7 @@ const scenario = z
 const definition = requestProofDefinitions[scenario];
 const identity = requestIdentitySchema.parse({
   request_id: process.env.REQUEST_ID,
+  ...(process.env.PLAN_SHA256 ? { plan_sha256: process.env.PLAN_SHA256 } : {}),
   repository: { id: process.env.GITHUB_REPOSITORY_ID, full_name: process.env.GITHUB_REPOSITORY },
   pull_request: Number(process.env.TARGET_PR),
   candidate_sha: process.env.CANDIDATE_SHA,
