@@ -17,12 +17,8 @@ import {
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import {
-  externalCliDiscoveryForProviderAuth,
-  removeProviderAuthProfilesWithLock,
-} from "../../agents/auth-profiles.js";
-import {
-  listProfilesForProvider,
   promoteAuthProfileInOrder,
   upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
@@ -801,7 +797,7 @@ export async function modelsAuthClearCooldownCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   const profileId = opts.profileId.trim();
-  const agentDir = await resolveModelsAuthAgentDir(opts.agent);
+  const { agentDir } = await resolveModelsAuthAgent(opts.agent);
   const store = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
   if (!Object.hasOwn(store.profiles, profileId)) {
     throw new Error(
