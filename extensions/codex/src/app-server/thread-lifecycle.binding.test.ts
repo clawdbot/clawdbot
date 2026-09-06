@@ -2975,6 +2975,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
       expect(first.liveThreadEphemeralPolicy).toEqual({
         developerInstructions: "generic policy",
         skillsInstructions: firstSkills,
+        // Creation carries the catalog natively, so compaction restores this one.
+        nativeSkillsInstructions: firstSkills,
       });
       expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toEqual(
         expect.objectContaining({
@@ -3013,6 +3015,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
         liveThreadEphemeralPolicy: {
           developerInstructions: "generic policy",
           skillsInstructions: skills,
+          // A refresh never rewrites native instructions, so the creation-time
+          // catalog stays recorded as the one compaction will restore.
+          nativeSkillsInstructions: firstSkills,
         },
       });
       expect(threadCalls()).toEqual([
