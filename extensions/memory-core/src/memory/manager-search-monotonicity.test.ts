@@ -18,7 +18,6 @@ describe("memory search result monotonicity", () => {
     createCfg({
       vectorEnabled: true,
       minScore: 0,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
 
   async function seedGradedCorpus(files: number): Promise<void> {
@@ -164,6 +163,22 @@ describe("memory search result monotonicity", () => {
       // Widening past the universe must still not disturb the leader.
       const single = await manager.search("alpha", { maxResults: 1, minScore: 0 });
       expect(single[0]?.path).toBe(wide[0]?.path);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps project-aware MMR bounded when the caller asks for more than the universe", async () => {
+    await seedGradedCorpus(260);
+    const manager = await getFreshManager(hybridConfig());
+    try {
+      await manager.sync({ reason: "test" });
+      const results = await manager.search("alpha", {
+        maxResults: 250,
+        minScore: 0,
+        activeProjectKeys: ["pool-project"],
+      });
+      expect(results).toHaveLength(200);
     } finally {
       await manager.close?.();
     }

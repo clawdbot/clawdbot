@@ -26,7 +26,6 @@ describe("memory search index upgrade compatibility", () => {
     createCfg({
       vectorEnabled: true,
       minScore: 0,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
 
   /** Reads the on-disk index shape a migration would have to change. */

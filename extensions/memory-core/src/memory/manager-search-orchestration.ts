@@ -28,9 +28,8 @@ import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
-// Retrieval must not depend on the caller's requested count, or fusion ranks a
-// different candidate set per request. This ceiling already bounded the expanded
-// project window, so it is the widest set the pipeline was built to rank.
+// Requests at or below this floor rank the same candidate set. Project-aware
+// retrieval also stays capped here because MMR is quadratic over the merged set.
 const SEARCH_CANDIDATE_UNIVERSE = 200;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
@@ -62,12 +61,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
-    // Fusion ranks only what retrieval fetched, so a window that tracks the requested
-    // count lets a wider request surface a better top hit. Retrieve one fixed universe
-    // for every count and every path, then trim to the caller.
-    // The universe is a floor, not a cap: a request above it must still be able to
-    // return every qualifying hit, so selection stays caller-sized.
-    const candidateMaxResults = Math.max(SEARCH_CANDIDATE_UNIVERSE, maxResults);
+    // Small requests share one candidate set so fusion cannot promote a weaker top hit.
+    // Ordinary larger requests stay caller-sized, while project-aware requests retain
+    // their historical cap to bound MMR work.
+    const candidateMaxResults = hasActiveProject
+      ? SEARCH_CANDIDATE_UNIVERSE
+      : Math.max(SEARCH_CANDIDATE_UNIVERSE, maxResults);
     // Retrieval owners apply project ranking and eligibility, including lexical recall.
     // Only cap the expanded window here so partial and final recall survive together.
     const selectResults = (results: MemorySearchResult[]) => results.slice(0, maxResults);
