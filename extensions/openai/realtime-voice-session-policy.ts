@@ -24,6 +24,7 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   readRealtimeErrorDetail,
@@ -32,7 +33,14 @@ import {
 import {
   OPENAI_GPT_LIVE_AUTH_REQUIRED,
   OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+  OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED,
+  OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
 } from "./realtime-quicksilver-redaction.js";
+import {
+  OPENAI_GPT_LIVE_MODELS,
+  OPENAI_GPT_LIVE_VOICES,
+  isSupportedOpenAIGptLiveModel,
+} from "./realtime-quicksilver.js";
 
 export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
@@ -82,9 +90,15 @@ export const OPENAI_REALTIME_MODELS = [
   "gpt-realtime-2.1",
   "gpt-realtime-2.1-mini",
   "gpt-realtime-2",
+  ...OPENAI_GPT_LIVE_MODELS,
 ] as const;
 export const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
+export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
+  voicesByModel: Record<string, readonly string[]>;
+} = {
+  voicesByModel: Object.fromEntries(
+    OPENAI_GPT_LIVE_MODELS.map((model) => [model, OPENAI_GPT_LIVE_VOICES]),
+  ),
   transports: ["webrtc", "gateway-relay"],
   inputAudioFormats: [
     REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
@@ -542,9 +556,24 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
     configuredApiKey: string | undefined;
     cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
     agentId?: string;
+    model: string;
   },
   runtime: OpenAIRealtimeHost,
 ) {
+  if (isSupportedOpenAIGptLiveModel(params.model)) {
+    const { resolveAgentDir } = runtime;
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
+      {
+        cfg: params.cfg,
+        agentDir:
+          params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+      },
+      runtime,
+    );
+    if (subscriptionAuth) {
+      return subscriptionAuth;
+    }
+  }
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth.status === "available") {
     return { type: "api-key" as const, token: platformAuth.value };
@@ -559,9 +588,17 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
       runtime,
     )
   ) {
-    throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
+    throw new Error(
+      isSupportedOpenAIGptLiveModel(params.model)
+        ? OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE
+        : OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+    );
   }
-  throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
+  throw new Error(
+    isSupportedOpenAIGptLiveModel(params.model)
+      ? OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED
+      : OPENAI_GPT_LIVE_AUTH_REQUIRED,
+  );
 }
 
 export function hasOpenAIRealtimePlatformAuthInput(

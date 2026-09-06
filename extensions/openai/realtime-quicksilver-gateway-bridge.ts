@@ -44,7 +44,7 @@ const WEBSOCKET_OPEN = 1;
 
 type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
-  voice: string;
+  voice?: string;
   logger: Pick<PluginLogger, "debug" | "warn">;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
   createPeer?: (

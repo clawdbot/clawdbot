@@ -312,6 +312,20 @@ struct TalkModeManagerTests {
         #expect(manager._test_executionMode() == .realtimeRelay)
     }
 
+    @Test func `preserves the released realtime model override`() {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            model: "gpt-live-1-codex",
+            voice: "spruce",
+            mode: "realtime",
+            transport: "gateway-relay")
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+
+        #expect(parsed.realtimeModelId == "gpt-live-1-codex")
+        #expect(manager._test_realtimeModelId() == "gpt-live-1-codex")
+    }
+
     @Test func `resolves realtime voice picker overrides`() {
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride(nil) == nil)
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride("") == nil)

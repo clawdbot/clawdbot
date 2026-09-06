@@ -37,6 +37,14 @@ describe("OpenAI provider policy artifact", () => {
     });
   });
 
+  it("preserves the released realtime route without routing hints", () => {
+    const config = { model: "gpt-live-1-codex", voice: "spruce" };
+
+    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
+      config,
+    });
+  });
+
   it.each([
     ["openai", "gpt-5.6", "gpt-5.6-sol", true],
     ["openai", "gpt-5.6", "gpt-5.6-terra", false],

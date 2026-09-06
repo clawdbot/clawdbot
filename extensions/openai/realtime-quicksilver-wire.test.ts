@@ -69,6 +69,7 @@ describe("GPT-Live session history", () => {
   it("preserves explicit direct WebSocket role-bearing seeds", () => {
     expect(
       buildOpenAIQuicksilverSessionUpdate({
+        model: "gpt-live-test",
         instructions: " Speak briefly. ",
         initialItems: [
           { role: "user", text: "Question" },
@@ -90,6 +91,21 @@ describe("GPT-Live session history", () => {
           },
         ],
       },
+    });
+  });
+
+  it("keeps released and unlisted routes on their own voice profiles", () => {
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice: "SPRUCE" }).audio,
+    ).toEqual({ output: { voice: "spruce" } });
+    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }).audio).toEqual({
+      output: { voice: "cove" },
+    });
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary", voice: "CEDAR" }).audio,
+    ).toEqual({ output: { voice: "cedar" } });
+    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }).audio).toEqual({
+      output: { voice: "marin" },
     });
   });
 });

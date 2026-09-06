@@ -271,6 +271,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     const terminalEvent = connected.detachBuffer();
     this.sendEvent(
       buildOpenAIQuicksilverSessionUpdate({
+        model: this.config.model,
         instructions: this.config.instructions,
         voice: this.config.voice,
       }),

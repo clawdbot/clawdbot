@@ -746,6 +746,63 @@ describe("renderTalk", () => {
     expect(onModelChange).toHaveBeenCalledWith("gpt-realtime");
   });
 
+  it("renders the released realtime route voice family from the catalog", () => {
+    const container = document.createElement("div");
+    const voices = [
+      "arbor",
+      "breeze",
+      "cove",
+      "ember",
+      "juniper",
+      "maple",
+      "sol",
+      "spruce",
+      "vale",
+    ];
+    render(
+      renderTalk({
+        selection: {
+          provider: "openai",
+          model: "gpt-live-1-codex",
+          speakerVoice: "spruce",
+          transport: "webrtc",
+          consultRouting: null,
+          providerEntries: {},
+        },
+        catalog: {
+          kind: "ready",
+          ready: true,
+          activeProvider: "openai",
+          providers: [
+            {
+              id: "openai",
+              label: "OpenAI",
+              configured: true,
+              aliases: [],
+              models: ["gpt-live-1-codex"],
+              voices: [],
+              voicesByModel: { "gpt-live-1-codex": voices },
+              transports: ["webrtc"],
+              defaultModel: "gpt-live-1-codex",
+            },
+          ],
+        },
+        configBusy: false,
+        onProviderChange: vi.fn(),
+        onModelChange: vi.fn(),
+        onVoiceChange: vi.fn(),
+        editor: html``,
+      }),
+      container,
+    );
+
+    expect(
+      [...container.querySelectorAll("select option")].map(
+        (option) => option.getAttribute("value") ?? "",
+      ),
+    ).toEqual(["", ...voices]);
+  });
+
   it.each([
     ["gpt-liveish", false],
     ["gpt-lively", false],

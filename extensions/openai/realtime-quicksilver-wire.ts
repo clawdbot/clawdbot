@@ -125,7 +125,7 @@ export function buildOpenAIQuicksilverSession(params: {
             OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES,
           )
         : ""),
-    audio: { output: { voice: resolveOpenAIQuicksilverVoice(params.voice) } },
+    audio: { output: { voice: resolveOpenAIQuicksilverVoice(params.model, params.voice) } },
     // Set at call creation: an attached sideband cannot change existing-call configuration.
     delegation: params.hostControlsInput
       ? { type: "client", ack_filler: false }
@@ -136,12 +136,12 @@ export function buildOpenAIQuicksilverSession(params: {
 
 /** Builds the direct Frameless Bidi WebSocket handshake used by Codex realtime v3. */
 export function buildOpenAIQuicksilverSessionUpdate(params: {
+  model: string;
   instructions?: string;
   voice?: string;
   initialItems?: readonly OpenAIQuicksilverInitialItem[];
 }): OpenAIQuicksilverSessionUpdate {
   const { model: _model, ...session } = buildOpenAIQuicksilverSession({
-    model: "direct-websocket",
     ...params,
   });
   return { type: "session.update", session };

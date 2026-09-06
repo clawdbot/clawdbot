@@ -2369,6 +2369,7 @@ describe("talk realtime gateway relay", () => {
 
   it.each([
     { name: "opaque", hideModel: true, model: "gpt-live-test-private" },
+    { name: "released", hideModel: false, model: "gpt-live-1-codex" },
     { name: "public", hideModel: false, model: "gpt-realtime-test-public" },
   ])("redacts provider details for a $name relay model", ({ hideModel, model }) => {
     const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];

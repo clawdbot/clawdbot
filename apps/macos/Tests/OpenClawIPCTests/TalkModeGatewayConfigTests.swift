@@ -171,6 +171,22 @@ struct TalkModeGatewayConfigTests {
         #expect(Self.parse(snapshot).realtimeModelId == nil)
     }
 
+    @Test func `released realtime model remains available`() {
+        let snapshot = Self.snapshot(talk: [
+            "realtime": [
+                "provider": "openai",
+                "model": "gpt-live-1-codex",
+                "speakerVoice": "spruce",
+                "mode": "realtime",
+                "transport": "gateway-relay",
+            ],
+        ])
+
+        let parsed = Self.parse(snapshot)
+        #expect(parsed.realtimeModelId == "gpt-live-1-codex")
+        #expect(parsed.realtimeSpeakerVoice == "spruce")
+    }
+
     private static func snapshot(talk: [String: Any]) -> ConfigSnapshot {
         ConfigSnapshot(
             path: nil,

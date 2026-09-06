@@ -98,6 +98,11 @@ class TalkModeConfigParsingTest {
 
   @Test
   fun gatesAndroidRealtimeRelayFromEffectiveModel() {
+    val releasedNative =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"model":"gpt-live-1-codex"}}}""",
+        ).jsonObject
     val browserOnly =
       json
         .parseToJsonElement(
@@ -109,6 +114,7 @@ class TalkModeConfigParsingTest {
           """{"talk":{"realtime":{"model":"gpt-realtime-2.1"}}}""",
         ).jsonObject
 
+    assertFalse(TalkModeGatewayConfigParser.parse(releasedNative).realtimeRelayModelSupported)
     assertFalse(TalkModeGatewayConfigParser.parse(browserOnly).realtimeRelayModelSupported)
     assertTrue(TalkModeGatewayConfigParser.parse(relayCapable).realtimeRelayModelSupported)
   }

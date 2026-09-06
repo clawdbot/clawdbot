@@ -239,12 +239,14 @@ function renderVoiceRow(props: TalkViewProps) {
   const { model, speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
   // A sanitized missing model represents the active route. An explicit reset
   // stays on public provider-default metadata until the config write is acked.
-  const usesActiveRoute =
-    props.modelDefaultPending !== true && (model === null || isTalkGptLiveModel(model));
   const publicModel = props.modelDefaultPending ? provider?.defaultModel : model;
+  const publicVoices = provider?.voicesByModel?.[publicModel ?? ""];
+  const usesActiveRoute =
+    props.modelDefaultPending !== true &&
+    (model === null || (isTalkGptLiveModel(model) && publicVoices === undefined));
   const voices = usesActiveRoute
     ? (provider?.activeVoices ?? provider?.voices ?? [])
-    : (provider?.voicesByModel?.[publicModel ?? ""] ?? provider?.voices ?? []);
+    : (publicVoices ?? provider?.voices ?? []);
   const unsupported =
     usesActiveRoute &&
     provider?.activeVoiceSelectionPolicy === "allowlist-default" &&
