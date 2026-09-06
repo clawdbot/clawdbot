@@ -128,6 +128,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
+    expect(ctx?.ctxPayload?.ModelParentSessionKey).toBeNull();
   });
 
   it("does not use configured bot-private topics without bot topic capability", async () => {
@@ -167,6 +168,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:support:main:thread:1234:42");
+    expect(ctx?.ctxPayload?.ModelParentSessionKey).toBeNull();
   });
 
   it("uses the main session key when no thread id", async () => {

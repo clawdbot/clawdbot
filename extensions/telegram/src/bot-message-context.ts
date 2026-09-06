@@ -521,6 +521,7 @@ export const buildTelegramMessageContext = async ({
     dmThreadId,
     threadSpec,
     route,
+    modelParentSessionKey: useDmThreadSession ? null : undefined,
     rawBody: bodyResult.rawBody,
     bodyText: bodyResult.bodyText,
     historyKey: bodyResult.historyKey ?? "",

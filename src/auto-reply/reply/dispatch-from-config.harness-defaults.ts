@@ -94,12 +94,13 @@ function resolveHarnessDefaultChannel(params: {
 function resolveHarnessDefaultParentSessionKey(params: {
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
-}): string | undefined {
-  return (
-    params.entry?.parentSessionKey ??
-    params.ctx.ModelParentSessionKey ??
-    params.ctx.ParentSessionKey
-  );
+}): string | null | undefined {
+  if (params.entry?.parentSessionKey !== undefined) {
+    return params.entry.parentSessionKey;
+  }
+  return params.ctx.ModelParentSessionKey !== undefined
+    ? params.ctx.ModelParentSessionKey
+    : params.ctx.ParentSessionKey;
 }
 
 export function resolveTurnModelOverride(
@@ -117,7 +118,7 @@ function resolveChannelModelCandidate(params: {
   ctx: FinalizedMsgContext;
   defaultProvider: string;
   entry?: SessionEntry;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
 }): HarnessDefaultCandidate | undefined {
   if (!params.cfg.channels?.modelByChannel) {
     return undefined;
@@ -159,7 +160,7 @@ function resolveStoredModelCandidate(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   entry?: SessionEntry;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
   sessionAgentId: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;

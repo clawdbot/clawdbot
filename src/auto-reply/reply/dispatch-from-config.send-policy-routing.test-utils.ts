@@ -1001,6 +1001,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       (params as { sessionKey?: string }).sessionKey === parentSessionKey
         ? parentEntry
         : sessionStoreMocks.currentEntry) as () => Record<string, unknown> | undefined);
+    sessionStoreMocks.loadSessionStoreEntry.mockClear();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
@@ -1032,6 +1033,67 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     expect(result.queuedFinal).toBe(true);
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible parent-model reply");
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(defaultLoadSessionStoreEntry);
+  });
+
+  it("does not derive a flat DM model override when a Telegram topic suppresses inheritance", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { visibleReplies: "message_tool" },
+      supports: (ctx) =>
+        ctx.provider === "codex"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "codex provider only" },
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    const parentSessionKey = "agent:main:main";
+    const childSessionKey = `${parentSessionKey}:thread:12345:99`;
+    sessionStoreMocks.currentEntry = {
+      sessionId: "child",
+      updatedAt: 0,
+      agentHarnessId: "codex",
+      sendPolicy: "allow",
+    };
+    const parentEntry = {
+      sessionId: "parent",
+      updatedAt: 0,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4.6",
+    };
+    const defaultLoadSessionStoreEntry = () => sessionStoreMocks.currentEntry;
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(((params: unknown) =>
+      (params as { sessionKey?: string }).sessionKey === parentSessionKey
+        ? parentEntry
+        : sessionStoreMocks.currentEntry) as () => Record<string, unknown> | undefined);
+    sessionStoreMocks.loadSessionStoreEntry.mockClear();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "topic reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        CommandSource: undefined,
+        ModelParentSessionKey: null,
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: childSessionKey,
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(sessionStoreMocks.loadSessionStoreEntry).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: parentSessionKey }),
+    );
+    expect(result.queuedFinal).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("topic reply");
     sessionStoreMocks.loadSessionStoreEntry.mockImplementation(defaultLoadSessionStoreEntry);
   });
 

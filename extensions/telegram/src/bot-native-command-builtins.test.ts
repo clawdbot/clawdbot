@@ -175,7 +175,7 @@ describe("Telegram native command built-ins", () => {
     expect(menuRecord.catalog).toEqual(runtimeCatalog);
   });
 
-  it("inherits the parent session model when building DM thread native argument menus", async () => {
+  it("keeps DM thread native argument menus independent from the flat DM model", async () => {
     const cfg: OpenClawConfig = {};
     sessionMocks.sessionStoreEntries.mockReturnValue({
       "agent:main:main": {
@@ -191,14 +191,14 @@ describe("Telegram native command built-ins", () => {
       cfg,
       allowFrom: ["*"],
     });
-    await handler(createTelegramPrivateCommandContext({ threadId: 77 }));
+    await handler(createTelegramPrivateCommandContext({ threadId: 77, botHasTopicsEnabled: true }));
 
     const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
-      ([params]) => params.command.key === "think" && params.provider === "anthropic",
+      ([params]) => params.command.key === "think",
     )?.[0];
     expectRecordFields(
       menuCall,
-      { provider: "anthropic", model: "claude-opus-4-7" },
+      { provider: undefined, model: undefined },
       "thread thinking menu call",
     );
     expectSendMessageCall({

@@ -23,6 +23,7 @@ import {
   buildSenderName,
   getTelegramTextParts,
   resolveTelegramPrimaryMedia,
+  shouldUseTelegramDmThreadSession,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -218,6 +219,12 @@ export function createTelegramMessageSessionRuntime({
       loadSessionEntry: (parentSessionKey) =>
         loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
       sessionKey,
+      parentSessionKey: shouldUseTelegramDmThreadSession({
+        dmThreadId,
+        botHasTopicsEnabled: params.botHasTopicsEnabled,
+      })
+        ? null
+        : undefined,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,

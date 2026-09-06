@@ -19,9 +19,9 @@ describe("resolveStoredModelOverride", () => {
     ).toMatchObject({ routeResolution: "resolved" });
   });
 
-  it("loads parent overrides without requiring a whole session store", () => {
+  it("keeps explicit parent overrides in Telegram direct threads", () => {
     const loadSessionEntry = vi.fn((sessionKey: string) =>
-      sessionKey === "agent:main:telegram:dm:parent"
+      sessionKey === "agent:main:telegram:direct:parent"
         ? {
             sessionId: "parent-session",
             updatedAt: 1782259200000,
@@ -35,7 +35,8 @@ describe("resolveStoredModelOverride", () => {
       resolveStoredModelOverride({
         defaultProvider: "openai",
         loadSessionEntry,
-        sessionKey: "agent:main:telegram:dm:parent:thread:child",
+        sessionKey: "agent:main:telegram:direct:parent:thread:child",
+        parentSessionKey: "agent:main:telegram:direct:parent",
       }),
     ).toEqual({
       provider: "anthropic",
@@ -43,7 +44,49 @@ describe("resolveStoredModelOverride", () => {
       source: "parent",
       routeResolution: "raw",
     });
-    expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
+    expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:direct:parent");
+  });
+
+  it("does not derive a parent when the channel explicitly suppresses model inheritance", () => {
+    const loadSessionEntry = vi.fn(() => ({
+      sessionId: "parent-session",
+      updatedAt: 1782259200000,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-7",
+    }));
+
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        loadSessionEntry,
+        sessionKey: "agent:main:main:thread:12345:99",
+        parentSessionKey: null,
+      }),
+    ).toBeNull();
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit Telegram direct parents for unthreaded sessions", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:telegram:direct:child",
+        parentSessionKey: "agent:main:telegram:direct:parent",
+        sessionStore: {
+          "agent:main:telegram:direct:parent": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-6",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      source: "parent",
+      routeResolution: "raw",
+    });
   });
 
   it("does not inherit active automatic fallback overrides from parent sessions", () => {

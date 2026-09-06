@@ -87,7 +87,7 @@ export type SupplementalContextFacts = {
     historyBody?: string;
     label?: string;
     parentSessionKey?: string;
-    modelParentSessionKey?: string;
+    modelParentSessionKey?: string | null;
     senderAllowed?: boolean;
   };
   channelStructuredContext?: ChannelStructuredContextEntry[];
@@ -162,9 +162,10 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /**
    * Session key used only for inheriting session-scoped model/provider
    * overrides. Unlike ParentSessionKey, this must not trigger transcript
-   * forking or parent-session lifecycle behavior.
+   * forking or parent-session lifecycle behavior. Null explicitly suppresses
+   * model-parent derivation for this channel turn.
    */
-  ModelParentSessionKey?: string;
+  ModelParentSessionKey?: string | null;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;

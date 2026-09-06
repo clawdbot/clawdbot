@@ -209,8 +209,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           sessionKey: sessionState.sessionKey,
           parentSessionKey:
             targetSessionEntry?.parentSessionKey ??
-            params.ctx.ModelParentSessionKey ??
-            params.ctx.ParentSessionKey,
+            (params.ctx.ModelParentSessionKey !== undefined
+              ? params.ctx.ModelParentSessionKey
+              : params.ctx.ParentSessionKey),
           defaultProvider: params.defaultProvider,
         })
       : null;
@@ -237,9 +238,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           groupChannel: targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel,
           groupSubject: targetSessionEntry?.subject ?? params.ctx.GroupSubject,
           parentSessionKey:
-            params.ctx.ModelParentSessionKey ??
-            params.ctx.ParentSessionKey ??
-            targetSessionEntry?.parentSessionKey,
+            params.ctx.ModelParentSessionKey !== undefined
+              ? params.ctx.ModelParentSessionKey
+              : (params.ctx.ParentSessionKey ?? targetSessionEntry?.parentSessionKey),
           directUserIds: [
             deliveryOrigin?.nativeDirectUserId,
             deliveryOrigin?.from,

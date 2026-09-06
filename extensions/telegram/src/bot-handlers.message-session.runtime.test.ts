@@ -5,7 +5,7 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import { createTelegramMessageSessionRuntime } from "./bot-handlers.message-context.js";
 
 describe("createTelegramMessageSessionRuntime", () => {
-  it("inherits a DM topic model override through keyed session loads", () => {
+  it("keeps a DM topic independent from the flat DM model override", () => {
     const storePath = "/tmp/telegram-sessions.sqlite";
     const childSessionKey = "agent:main:main:thread:12345:99";
     const parentSessionKey = "agent:main:main";
@@ -42,10 +42,8 @@ describe("createTelegramMessageSessionRuntime", () => {
     });
 
     expect(state.sessionKey).toBe(childSessionKey);
-    expect(state.model).toBe("anthropic/claude-opus-4-7");
-    expect(getSessionEntry.mock.calls.map(([params]) => params)).toEqual([
-      { storePath, sessionKey: childSessionKey },
-      { storePath, sessionKey: parentSessionKey },
-    ]);
+    expect(state.model).toBeUndefined();
+    expect(getSessionEntry).toHaveBeenCalledOnce();
+    expect(getSessionEntry).toHaveBeenCalledWith({ storePath, sessionKey: childSessionKey });
   });
 });

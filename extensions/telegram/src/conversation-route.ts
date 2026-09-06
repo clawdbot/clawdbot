@@ -69,6 +69,10 @@ export function buildTelegramConversationRouteContext(params: {
       ? buildTelegramConversationId({ chatId: params.chatId, thread: params.threadSpec })
       : resolveTelegramDirectPeerId(params),
     ThreadParentId: buildTelegramParentPeer(params)?.id,
+    ModelParentSessionKey:
+      !params.isGroup && params.threadSpec.scope === "dm" && params.threadSpec.id != null
+        ? null
+        : undefined,
   };
 }
 

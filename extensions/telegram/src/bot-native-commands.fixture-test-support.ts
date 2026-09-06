@@ -67,9 +67,20 @@ export function createTelegramPrivateCommandContext(params?: {
   userId?: number;
   username?: string;
   threadId?: number;
+  botHasTopicsEnabled?: boolean;
 }) {
   return {
     match: params?.match ?? "",
+    ...(params?.botHasTopicsEnabled !== undefined
+      ? {
+          me: {
+            id: 999,
+            is_bot: true,
+            first_name: "OpenClaw",
+            has_topics_enabled: params.botHasTopicsEnabled,
+          },
+        }
+      : {}),
     message: {
       message_id: params?.messageId ?? 1,
       date: params?.date ?? Math.floor(Date.now() / 1000),

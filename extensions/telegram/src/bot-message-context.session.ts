@@ -234,6 +234,7 @@ export async function buildTelegramInboundContextPayload(params: {
   dmThreadId?: number;
   threadSpec: TelegramThreadSpec;
   route: ResolvedAgentRoute;
+  modelParentSessionKey?: string | null;
   rawBody: string;
   bodyText: string;
   historyKey?: string;
@@ -287,6 +288,7 @@ export async function buildTelegramInboundContextPayload(params: {
     dmThreadId,
     threadSpec,
     route,
+    modelParentSessionKey,
     rawBody,
     bodyText,
     historyKey,
@@ -722,6 +724,7 @@ export async function buildTelegramInboundContextPayload(params: {
       dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
+      modelParentSessionKey,
       mainSessionKey: route.mainSessionKey,
     },
     reply: {
