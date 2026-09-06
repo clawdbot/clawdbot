@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
+import type { RouterState } from "@openclaw/uirouter";
 import { render as renderLit, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 // This test owns shell panel routing, not lazy sidebar loading; settle that module at setup.
 import "../components/app-sidebar.ts";
@@ -17,10 +19,7 @@ import { loadSettings } from "./settings.ts";
 type ShellRenderState = {
   runtime: ApplicationRuntime;
   activeSessionKey: string;
-  routeState: {
-    routeId: RouteId;
-    location?: { hash: string; pathname: string; search: string };
-  };
+  routeState: ShellRouteState;
   render: () => TemplateResult;
 };
 
@@ -189,6 +188,25 @@ describe("OpenClaw shell dock suppression", () => {
     ).toBe("agent:main:main");
     expect(container.querySelector("openclaw-browser-panel")).toBeNull();
     expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
+
+    const failedLocation = { pathname: "/chat/main/missing", search: "", hash: "" };
+    shell.routeState = selectShellRouteState({
+      matches: [],
+      pendingMatches: [
+        {
+          routeId: "chat",
+          location: failedLocation,
+          status: "error",
+          error: new Error("Unavailable session"),
+        },
+      ],
+    } as unknown as RouterState<RouteId>);
+    renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { pageRouteFailed: boolean }>(
+        "openclaw-assistant-panel",
+      )?.pageRouteFailed,
+    ).toBe(true);
 
     shell.routeState = {
       routeId: "new-session",

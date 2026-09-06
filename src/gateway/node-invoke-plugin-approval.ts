@@ -209,7 +209,6 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       await handlePendingApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond,
         context: params.context,
         // The carried connection is turn provenance, not the presenter. Keep

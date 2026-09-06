@@ -38,30 +38,23 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
-const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
-
-export const MAX_TRANSIENT_RETRIES = 3;
+export const MAX_TRANSIENT_RETRIES = 8;
 const MAX_TRANSIENT_RETRY_TIME_MS = 90_000;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 1_000;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
-
-export function resolveOverloadProfileRotationLimit(): number {
-  return DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
-}
-
-export function resolveRateLimitProfileRotationLimit(): number {
-  return DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS;
-}
 
 /** Resolves jittered exponential backoff without exceeding the turn retry ceiling. */
 export function resolveTransientRetryDelayMs(params: {
   retryNumber: number;
   retryAfterMs?: number;
-  elapsedMs: number;
+  elapsedMs?: number;
 }): number | undefined {
-  const remainingMs = MAX_TRANSIENT_RETRY_TIME_MS - Math.max(0, params.elapsedMs);
-  if (remainingMs <= 0) {
+  const remainingMs =
+    params.elapsedMs === undefined
+      ? Infinity
+      : MAX_TRANSIENT_RETRY_TIME_MS - Math.max(0, params.elapsedMs);
+  // The header parser uses Infinity for a floor too large to represent safely.
+  if (remainingMs <= 0 || params.retryAfterMs === Infinity) {
     return undefined;
   }
   const exponentialMs = Math.min(

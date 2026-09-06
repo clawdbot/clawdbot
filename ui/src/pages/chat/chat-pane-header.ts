@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
@@ -37,6 +38,7 @@ import {
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
@@ -56,12 +58,23 @@ import {
 import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
 import {
   canManageChatSessionSharing,
+  renderChatSessionPublicIndicator,
   renderChatSessionSharing,
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
-import type { SidebarLayout } from "./sidebar-layout.ts";
+import {
+  ensureSidebarConversation,
+  promoteSidebarPanel,
+  setSidebarDock,
+  setSidebarExpanded,
+  sidebarActivePanel,
+  sidebarDock,
+  sidebarMainPanel,
+  type SidebarLayout,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -90,6 +103,102 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     };
   }
 
+  private renderPanelLayoutActions(
+    layout: SidebarLayout | undefined,
+    definitions: SidebarPanelDefinition[],
+  ) {
+    if (!layout) {
+      return nothing;
+    }
+    const side = sidebarActivePanel(layout);
+    const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
+    const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
+    const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
+    const split = layout.open === true && !layout.expanded;
+    const focusLabel = t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand");
+    const swapLabel =
+      mainDefinition && sideDefinition
+        ? t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label })
+        : "";
+    return html`${
+      mainDefinition?.headerAction
+        ? html`<span class="side-panel__action-group side-panel__action-group--content"
+            >${mainDefinition.headerAction}</span
+          >`
+        : nothing
+    }
+    ${
+      split || layout.expanded
+        ? html`<openclaw-tooltip .content=${focusLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
+              type="button"
+              aria-pressed=${String(layout.expanded === true)}
+              aria-label=${focusLabel}
+              @click=${() =>
+                this.state?.updateSidebarLayout(
+                  setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+                )}
+            >
+              ${layout.expanded ? icons.minimize : icons.maximize}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      split && side && swapLabel
+        ? html`<openclaw-tooltip .content=${swapLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
+              type="button"
+              aria-label=${swapLabel}
+              @click=${() => this.state?.updateSidebarLayout(promoteSidebarPanel(layout, side.id))}
+            >
+              ${icons.arrowLeftRight}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      this.narrow || !split
+        ? nothing
+        : html`<wa-dropdown
+            class="chat-panel-layout-menu"
+            placement="bottom-end"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const dock = event.detail.item.value;
+              if (dock === "left" || dock === "right" || dock === "bottom") {
+                this.state?.updateSidebarLayout(setSidebarDock(layout, dock));
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              class="btn btn--ghost btn--icon chat-icon-btn"
+              type="button"
+              aria-label=${t("chat.sidePanel.layout")}
+              title=${t("chat.sidePanel.layout")}
+            >
+              ${icons.columns2}
+            </button>
+            ${(
+              [
+                ["left", "dockLeft", icons.panelLeftOpen],
+                ["right", "dockRight", icons.panelRightOpen],
+                ["bottom", "dockBottom", icons.panelBottomOpen],
+              ] as const
+            ).map(
+              ([dock, label, icon]) => html`<wa-dropdown-item
+                value=${dock}
+                type="checkbox"
+                ?checked=${sidebarDock(layout) === dock}
+                ><span slot="icon">${icon}</span>${t(`chat.sidePanel.${label}`)}</wa-dropdown-item
+              >`,
+            )}
+          </wa-dropdown>`
+    }`;
+  }
+
   protected renderPaneHeader(
     sessionWorkspace: SessionWorkspaceProps,
     backgroundTasks: BackgroundTasksProps,
@@ -99,7 +208,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     workspaceGit: boolean,
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
+    panelDefinitions = sidebarPanelDefinitions(),
   ) {
+    this.syncSelectedSessionSharing(row);
     const workspace = resolveSessionWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
@@ -113,6 +224,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     // in-flight lookups racing a dispatch can never surface a wrong branch.
     const rowRemote = Boolean(row?.execNode) || isCloudWorkerPlacementState(row?.placement?.state);
     const branch =
+      row?.repository?.branch ||
       row?.worktree?.branch ||
       (rowRemote || !workspace.root ? null : this.headerBranches.get(workspace.root)?.value) ||
       null;
@@ -155,6 +267,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     });
     const sharingVisibilityAccess = readSessionMethodAccess(sharingSnapshot, {
       method: "session.visibility.set",
+      requiredScope: "operator.write",
+    });
+    const publicShareAccess = readSessionMethodAccess(sharingSnapshot, {
+      method: "session.publicShare.set",
       requiredScope: "operator.write",
     });
     const sharingMemberAddAccess = readSessionMethodAccess(sharingSnapshot, {
@@ -220,7 +336,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
+    const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
     const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
@@ -397,6 +514,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
               ? undefined
               : sharingMemberRemoveAccess.reason,
+            publicShareDisabledReason:
+              !row.sessionId || isIncognitoSessionKey(row.key)
+                ? t("chat.sessionSharing.publicUnavailable")
+                : publicShareAccess.allowed
+                  ? undefined
+                  : publicShareAccess.reason,
+            onPublicShareChange: (enabled: boolean) =>
+              void this.setSessionPublicShare(row, enabled),
+            onCopyPublicLink: () => void this.copySessionPublicLink(row),
             ownerViewing,
             personActivity,
             showOwner: showOwnerChip,
@@ -433,7 +559,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelActions: html`${browserPanelAction}${backgroundTasksAction}`,
+      panelLayoutActions: html`${this.renderPanelLayoutActions(
+        currentLayout,
+        panelDefinitions,
+      )}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
@@ -455,6 +585,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         (!this.narrow || !canManageChatSessionSharing(sharing.session))
           ? renderChatSessionSharing(sharing)
           : nothing,
+      publicAccessIndicator:
+        this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : nothing,
       placementControl: renderChatPanePlacement({
         session: row,
         placementStartupStatus,

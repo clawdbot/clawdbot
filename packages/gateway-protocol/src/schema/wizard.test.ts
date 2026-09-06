@@ -19,6 +19,31 @@ describe("WizardNextResultSchema", () => {
     ).toBe(true);
   });
 
+  it.each(["auth", "rate_limit", "billing", "timeout", "format", "unavailable", "unknown"])(
+    "accepts an owner-recorded pre-promotion rejection (%s)",
+    (status) => {
+      expect(
+        validate.Check({
+          done: true,
+          status: "error",
+          error: "The candidate did not pass its live test.",
+          activationRejection: { disposition: "rejected-before-promotion", status },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    { disposition: "rejected-before-promotion", status: "ok" },
+    { disposition: "rejected-before-promotion", status: "invented" },
+    { disposition: "no-mutation", status: "auth" },
+    { disposition: "rejected-before-promotion" },
+    { status: "auth" },
+    { disposition: "rejected-before-promotion", status: "auth", apiKey: "not-a-wire-field" },
+  ])("rejects malformed activation rejection evidence (%j)", (activationRejection) => {
+    expect(validate.Check({ done: true, status: "error", activationRejection })).toBe(false);
+  });
+
   it.each([
     { preparedModelRef: "" },
     { modelActivation: { modelRef: "" } },

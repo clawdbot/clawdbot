@@ -561,7 +561,7 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
       preview: pending.map((source) =>
         source.kind === "ready"
           ? `- Memory Core host events: ${source.filePath} -> SQLite plugin state (${MEMORY_HOST_EVENTS_NAMESPACE})`
-          : `- Memory Core host events: ${source.filePath} requires safe-path repair (${source.reason})`,
+          : `- ${source.reason}`,
       ),
     };
   },
@@ -574,9 +574,7 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
         continue;
       }
       if (source.kind === "rejected") {
-        warnings.push(
-          `Skipped unsafe Memory Core host event source for ${source.workspaceDir}: ${source.reason}`,
-        );
+        warnings.push(source.reason);
         blockedWorkspaces.add(source.workspaceDir);
         continue;
       }

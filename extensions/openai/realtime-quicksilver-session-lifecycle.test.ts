@@ -1,4 +1,5 @@
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
+import { findSourceImportBackedges } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
 import {
@@ -14,6 +15,14 @@ import {
 const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 
 describe("GPT-Live browser session lifecycle", () => {
+  it("keeps broker registration independent of cold SDK host composition", async () => {
+    expect(
+      await findSourceImportBackedges("extensions/openai/realtime-quicksilver-session-owner.ts", [
+        "extensions/openai/realtime-host.ts",
+      ]),
+    ).toEqual([]);
+  });
+
   it("rejects negotiated native control without the modern host binding before reserving", async () => {
     const { realtime, runAgentConsult } = createBroker();
     try {

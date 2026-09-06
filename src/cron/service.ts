@@ -108,12 +108,11 @@ export class CronService implements CronServiceContract {
     return await mutationOps.add(this.state, input, opts);
   }
 
-  async removeStaleJobFamily(family: {
-    declarationKey: string;
-    name: string;
-    ownerPluginTag: string;
-  }) {
-    return await mutationOps.removeStaleJobFamily(this.state, family);
+  async removeStaleJobFamily(
+    family: { declarationKey: string; name: string; ownerPluginTag: string },
+    opts?: { commitGuard?: () => void },
+  ) {
+    return await mutationOps.removeStaleJobFamily(this.state, family, opts);
   }
 
   async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
@@ -135,6 +134,10 @@ export class CronService implements CronServiceContract {
 
   async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
     return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
+  }
+
+  async quiesceJobs(jobs: readonly { id: string; revision: string }[], commitGuard: () => void) {
+    await mutationOps.quiesceJobs(this.state, jobs, commitGuard);
   }
 
   async run(

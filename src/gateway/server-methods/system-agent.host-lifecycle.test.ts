@@ -19,7 +19,7 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import * as systemAgentAudit from "../../system-agent/audit.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { readLastSystemAgentAuditEntry } from "../../system-agent/system-agent.test-helpers.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
@@ -47,7 +47,7 @@ const {
 } = useSystemAgentGatewayTestFixture();
 
 describe("openclaw.chat hosted lifecycle", () => {
-  it.each([
+  it.for([
     { action: "restart", fullPermission: false, loss: "none" },
     { action: "stop", fullPermission: false, loss: "none" },
     { action: "stop", fullPermission: true, loss: "none" },
@@ -59,7 +59,7 @@ describe("openclaw.chat hosted lifecycle", () => {
     })),
   ] as const)(
     "settles delegated $action through host acceptance (Full Access=$fullPermission, loss=$loss)",
-    async ({ action, fullPermission, loss }) => {
+    async ({ action, fullPermission, loss }, testContext) => {
       const preparationStarted = createDeferred();
       const releasePreparation = createDeferred();
       const auditStarted = createDeferred();
@@ -135,7 +135,7 @@ describe("openclaw.chat hosted lifecycle", () => {
       });
       const sessions = new Map<string, SystemAgentChatSession>([["delegate-1", delegatedSession]]);
       let workerActive = true;
-      const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
         approvalKind: "system-agent",
         resolveAllowedDecisions: (request) => request.allowedDecisions,
         validateAgentRuntimeDelegatedAuthority: (authority) =>

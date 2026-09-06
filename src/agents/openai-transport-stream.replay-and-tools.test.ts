@@ -11,6 +11,7 @@ import {
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 type ReplayContextSpec = {
   source?: Pick<Model, "api" | "id" | "provider">;
@@ -71,14 +72,7 @@ function replayContext(spec: ReplayContextSpec) {
       api: spec.source?.api ?? spec.api ?? "openai-responses",
       provider: spec.source?.provider ?? spec.provider ?? "openai",
       model: spec.source?.id ?? spec.model ?? "gpt-5.5",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: spec.stopReason ?? "toolUse",
       timestamp: 1,
       content,

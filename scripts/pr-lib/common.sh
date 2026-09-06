@@ -84,7 +84,11 @@ function split(text, allowUnreleased = false) {
   const parts = text.split(/(?=^## )/m);
   let matches = parts.filter((part) => part.startsWith(heading));
   if (!matches.length && allowUnreleased) {
-    matches = parts.filter((part) => /^## (?:Unreleased|[0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)? \(Unreleased\))\n/i.test(part));
+    // Older draft headings can be placeholders; newer trains remain outside this closeout.
+    matches = parts.filter((part) => {
+      const draft = /^## (?:Unreleased|([0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?) \(Unreleased\))\n/i.exec(part);
+      return draft && (!draft[1] || draft[1].localeCompare(version, "en", { numeric: true }) <= 0);
+    });
   }
   if (matches.length > 1) process.exit(1);
   const index = parts.indexOf(matches[0]);

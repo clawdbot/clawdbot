@@ -92,9 +92,14 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(options?.maxPayload).toBe(16 * 1024 * 1024);
   });
 
-  it.each(["modern", "v2026.8.1"] as const)(
-    "shares GA policy and sideband readiness with the %s host binding",
-    async (binding) => {
+  it.each([
+    { binding: "modern", throwingCloseCallback: false },
+    { binding: "modern", throwingCloseCallback: true },
+    { binding: "v2026.8.1", throwingCloseCallback: false },
+    { binding: "v2026.8.1", throwingCloseCallback: true },
+  ] as const)(
+    "shares GA policy and retires the $binding binding with throwing callback=$throwingCloseCallback",
+    async ({ binding, throwingCloseCallback }) => {
       const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
         session: { clientSecret: "gateway-token" },
       });
@@ -105,6 +110,12 @@ describe("OpenAI realtime voice bridge connection", () => {
       const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
       const onEvent = vi.fn();
       const onReady = vi.fn();
+      const onClose = vi.fn(() => {
+        if (throwingCloseCallback) {
+          throw new Error("close callback failed");
+        }
+      });
+      const onTerminal = vi.fn();
       const cfg = {} as never;
 
       expect(
@@ -130,6 +141,7 @@ describe("OpenAI realtime voice bridge connection", () => {
             bindBridge,
             onEvent,
             onReady,
+            onClose,
             ...(binding === "modern" ? { bindControl } : {}),
           },
         }),
@@ -179,7 +191,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       const bridge = createBridge({
         apiKey: "test-api-key-platform",
         callId: "rtc_gateway",
-        onTerminal: vi.fn(),
+        onTerminal,
       });
       if (binding === "modern") {
         expect(bindControl).toHaveBeenCalledOnce();
@@ -254,7 +266,13 @@ describe("OpenAI realtime voice bridge connection", () => {
           },
         });
       }
-      bridge.close();
+      if (throwingCloseCallback) {
+        expect(() => bridge.close()).toThrow("close callback failed");
+      } else {
+        bridge.close();
+      }
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(onTerminal).toHaveBeenCalledOnce();
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     },
   );

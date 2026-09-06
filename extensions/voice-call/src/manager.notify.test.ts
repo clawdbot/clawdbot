@@ -56,26 +56,15 @@ class FailHangupProvider extends FakeProvider {
   }
 }
 
-function requireCall(
-  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
-  callId: string,
-) {
-  const call = manager.getCall(callId);
-  if (!call) {
-    throw new Error(`expected active call ${callId}`);
-  }
-  return call;
+function requireCall(manager: HarnessManager, callId: string) {
+  return expectDefined(manager.getCall(callId), `active call ${callId}`);
 }
 
-function requireMappedCall(
-  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
-  providerCallId: string,
-) {
-  const call = manager.getCallByProviderCallId(providerCallId);
-  if (!call) {
-    throw new Error(`expected mapped provider call ${providerCallId}`);
-  }
-  return call;
+function requireMappedCall(manager: HarnessManager, providerCallId: string) {
+  return expectDefined(
+    manager.getCallByProviderCallId(providerCallId),
+    `mapped provider call ${providerCallId}`,
+  );
 }
 
 function requireFirstPlayTtsCall(provider: FakeProvider) {

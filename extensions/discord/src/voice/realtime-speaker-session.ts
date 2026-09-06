@@ -32,6 +32,10 @@ import { formatVoiceLogPreview } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
+import {
+  DiscordRealtimeRecording,
+  type DiscordRealtimeRecordingInput,
+} from "./realtime-recording.js";
 import { DiscordRealtimeTurns } from "./realtime-turns.js";
 import {
   logVoiceVerbose,
@@ -124,6 +128,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   private readonly playback: DiscordRealtimePlayback<AgentProxyConsultState>;
   private readonly turns: DiscordRealtimeTurns;
   private readonly consults: DiscordRealtimeConsults;
+  private readonly recording: DiscordRealtimeRecording;
   private lifecycle: {
     status: "inactive" | "starting" | "active" | "stopped";
     generation: number;
@@ -150,6 +155,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       sessionId: string;
     },
   ) {
+    this.recording = this.createRecording();
     this.harness = createRealtimeVoiceSessionHarness<AgentProxyConsultState>({
       talk: {
         sessionId: this.params.sessionId,
@@ -350,7 +356,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       instructions,
       autoRespondToAudio,
       interruptResponseOnInputAudio,
-      markStrategy: "ack-immediately",
+      markStrategy: "transport",
       tools: usesRealtimeAgentHandoff
         ? resolveRealtimeVoiceAgentConsultTools(
             toolPolicy,
@@ -359,7 +365,17 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         : [],
       audioSink: {
         isOpen: () => !this.isStopped(),
-        sendAudio: (audio) => this.playback.sendOutputAudio(audio),
+        sendAudio: (audio, metadata) => this.playback.sendOutputAudio(audio, metadata),
+        sendMark: (markName, acknowledge) => {
+          if (acknowledge) {
+            this.playback.sendOutputMark(acknowledge);
+          } else {
+            // Installed providers with unscoped marks retain immediate acknowledgments;
+            // delaying them could acknowledge a replacement provider connection.
+            this.bridge?.acknowledgeMark(markName);
+          }
+        },
+        getPlaybackState: () => this.playback.getPlaybackState(),
         clearAudio: () => {
           this.markProviderGenerationObserved();
           this.harness.flushOutput(() => this.playback.clearOutputAudio("provider-clear-audio"));
@@ -384,6 +400,9 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         if (!isFinal) {
           this.turns.handlePartialUserTranscript(text);
           return;
+        }
+        if (text.trim()) {
+          this.recording.transcript(text.trim());
         }
         void this.trackOperation(() => this.turns.handleFinalUserTranscript(text)).catch(
           (error: unknown) => this.logRealtimeError(formatErrorMessage(error)),
@@ -458,6 +477,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
 
   close(): void {
     this.lifecycle.status = "stopped";
+    this.recording.close();
     this.drain();
     this.providerContinuityEpoch += 1;
     this.flushSuppressedRealtimeErrors();
@@ -470,27 +490,48 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     this.realtimeProviderId = undefined;
   }
 
-  beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
+  beginSpeakerTurn(
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+    recordingInput?: DiscordRealtimeRecordingInput,
+  ): VoiceRealtimeSpeakerTurn {
     if (!this.inputOpen || this.isStopped()) {
       throw new Error("Discord realtime speaker input is closed");
     }
     const turn = this.turns.beginSpeakerTurn(context, userId);
+    if (recordingInput) {
+      this.recording.attach(recordingInput, { id: userId, label: context.speakerLabel });
+    }
     let closed = false;
     const capture: VoiceRealtimeSpeakerTurn = {
-      sendInputAudio: (audio) => {
+      sendInputAudio: (audio, receipt) => {
         if (!closed) {
+          recordingInput?.submit(receipt);
           this.lastActivityAt = Date.now();
           turn.sendInputAudio(audio);
         }
       },
-      close: () => {
+      close: (reason) => {
         if (closed) {
           return;
         }
         closed = true;
         this.captures.delete(capture);
         this.lastActivityAt = Date.now();
-        turn.close();
+        try {
+          if (reason === "incomplete-input") {
+            recordingInput?.exclude();
+            // Retire this provider connection before a late transcript can dispatch partial speech.
+            this.params.onTerminalError(new Error("Discord realtime received incomplete speech."));
+          } else {
+            turn.close();
+          }
+        } catch (error) {
+          recordingInput?.exclude();
+          throw error;
+        } finally {
+          recordingInput?.sealAudio();
+        }
       },
     };
     this.captures.add(capture);
@@ -617,9 +658,21 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       this.lifecycle.status = "starting";
     }
     this.providerContinuityEpoch += 1;
+    // Provider queues may replay earlier input without new Discord send callbacks.
+    // Only a fresh speaker connection can establish recording receipts again.
+    this.recording.close();
     this.consults.resetProviderContinuity();
     this.turns.resetProviderContinuity();
     this.playback.resetProviderContinuity(reason);
+  }
+
+  private createRecording(): DiscordRealtimeRecording {
+    const epoch = this.providerContinuityEpoch;
+    return new DiscordRealtimeRecording({
+      entry: this.params.entry,
+      isCurrent: () => !this.isStopped() && this.providerContinuityEpoch === epoch,
+      warn: (message) => logger.warn(message),
+    });
   }
 
   private logRealtimeError(message: string): void {

@@ -1,6 +1,14 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
+import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
+import {
+  bindGatewayContextResolver,
+  hasGatewayContextOwner,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -23,6 +31,7 @@ export {
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
+  lifecycleGeneration: string;
   phase: "pending" | "acquired";
   owner?: symbol;
   interrupt?: (reason?: Error) => void;
@@ -359,10 +368,11 @@ export function isSessionWorkAdmissionActive(
   );
 }
 
-export function isSessionWorkAdmissionTargetActive(params: {
+function isSessionWorkAdmissionTargetActive(params: {
   scope: string;
   sessionKey: string;
   sessionId: string;
+  owners?: ReadonlySet<object>;
 }): boolean {
   const identities = normalizeSessionIdentities(params.scope, [
     params.sessionKey,
@@ -374,6 +384,9 @@ export function isSessionWorkAdmissionTargetActive(params: {
     Array.from(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []).some(
       (admission) =>
         admission.phase === "acquired" &&
+        (!params.owners ||
+          (params.owners.has(admission) &&
+            admission.lifecycleGeneration === getAgentRunLifecycleGeneration())) &&
         (admission.identities.size === 1 ||
           identities.every((target) => admission.identities.has(target))),
     ),
@@ -440,10 +453,16 @@ export function getSessionWorkAdmissionOwnerRelease(
 }
 
 /** Active session identities grouped by their authoritative store/lifecycle scope. */
-export function collectActiveSessionWorkAdmissions(): Map<string, Set<string>> {
+export function collectActiveSessionWorkAdmissions(
+  owners?: ReadonlySet<object>,
+): Map<string, Set<string>> {
   const targets = new Map<string, Set<string>>();
   for (const [normalizedIdentity, admissions] of ACTIVE_SESSION_WORK_ADMISSIONS) {
-    if (![...admissions].some((admission) => admission.phase === "acquired")) {
+    if (
+      ![...admissions].some(
+        (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
+      )
+    ) {
       continue;
     }
     const decoded = decodeSessionIdentity(normalizedIdentity);
@@ -455,6 +474,25 @@ export function collectActiveSessionWorkAdmissions(): Map<string, Set<string>> {
     targets.set(decoded.scope, identities);
   }
   return targets;
+}
+
+/** Capture exact host-owned admissions; replacements after an await cannot inherit the snapshot. */
+export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: GatewayContextResolver) {
+  const owners = new Set(
+    [...ACTIVE_SESSION_WORK_ADMISSIONS.values()].flatMap((admissions) =>
+      [...admissions].filter(
+        (admission) =>
+          admission.phase === "acquired" &&
+          admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
+          hasGatewayContextOwner(admission, resolveGatewayContext),
+      ),
+    ),
+  );
+  return {
+    targets: collectActiveSessionWorkAdmissions(owners),
+    isActive: (target: { scope: string; sessionKey: string; sessionId: string }) =>
+      isSessionWorkAdmissionTargetActive({ ...target, owners }),
+  };
 }
 
 /** Unique admitted turns; one lease can be indexed under several identities. */
@@ -484,6 +522,7 @@ export async function beginSessionWorkAdmission(params: {
   identities: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
+  resolveGatewayContext?: GatewayContextResolver;
   assertAllowed: () => Promise<void> | void;
   /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
   revalidateAllowed?: () => Promise<void> | void;
@@ -494,6 +533,10 @@ export async function beginSessionWorkAdmission(params: {
     throw new GatewayDrainingError();
   }
   const rawIdentities = Array.from(params.identities);
+  // An adopted unbound owner must not inherit the adopting request's Gateway.
+  const resolveGatewayContext = Object.hasOwn(params, "resolveGatewayContext")
+    ? params.resolveGatewayContext
+    : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const identities = normalizeSessionIdentities(params.scope, rawIdentities);
   const pendingController = new AbortController();
   const signal = params.signal
@@ -502,6 +545,7 @@ export async function beginSessionWorkAdmission(params: {
   let writerBarrierStarted = false;
   let resolveReleased = () => {};
   const admission: SessionWorkAdmission = {
+    lifecycleGeneration: getAgentRunLifecycleGeneration(),
     phase: "pending",
     ...(params.owner ? { owner: params.owner } : {}),
     handoffIds: new Set(),
@@ -521,6 +565,7 @@ export async function beginSessionWorkAdmission(params: {
       resolveReleased = resolve;
     }),
   };
+  bindGatewayContextResolver(admission, resolveGatewayContext);
   // Reserve before waiting: Stop must own queued ingress as well as running work.
   for (const identity of identities) {
     const active = ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? new Set();
@@ -556,7 +601,9 @@ export async function beginSessionWorkAdmission(params: {
     run: async <T>(run: () => Promise<T>) => {
       const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
       current.add(admission);
-      return await CURRENT_SESSION_WORK_ADMISSIONS.run(current, run);
+      return await CURRENT_SESSION_WORK_ADMISSIONS.run(current, () =>
+        withPluginRuntimeGatewayContextResolver(resolveGatewayContext, run),
+      );
     },
   };
   let removeAbortListener = () => {};

@@ -1,4 +1,4 @@
-import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveEmbeddedAgentSessionProgressState } from "../../agents/embedded-agent-runner/runs.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
@@ -8,6 +8,7 @@ import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm
 import { isAgentRunWaitingForCapacity } from "../../infra/agent-run-capacity-wait.js";
 import {
   resolveProjectedAgentRunProgressState,
+  buildProjectedAgentRunIndex,
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -30,7 +31,7 @@ type VisibleActiveSessionRunState = {
   status?: "queued";
 };
 
-export function collectTrackedActiveSessionRuns(
+function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
   includeTerminalPersistence = false,
 ): TrackedActiveSessionRun[] {
@@ -240,7 +241,7 @@ export function resolveVisibleActiveSessionRunState(params: {
     ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
   });
   const embeddedRunState =
-    sessionId === undefined ? undefined : resolveEmbeddedAgentRunProgressState(sessionId);
+    sessionId === undefined ? undefined : resolveEmbeddedAgentSessionProgressState(sessionId);
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
   const running =
@@ -272,4 +273,43 @@ export function resolveVisibleActiveSessionRunState(params: {
       ? { status: "queued" as const }
       : {}),
   };
+}
+
+/** Request-scoped index; candidate selection must not rescan all controllers per row. */
+export function createVisibleActiveSessionRunProjector(
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+) {
+  const byKey = new Map<string, TrackedActiveSessionRun[]>();
+  const byId = new Map<string, TrackedActiveSessionRun[]>();
+  for (const run of collectTrackedActiveSessionRuns(context)) {
+    for (const [index, key] of [
+      [byKey, run.sessionKey],
+      [byId, run.sessionId],
+    ] as const) {
+      if (key) {
+        const entries = index.get(key) ?? [];
+        entries.push(run);
+        index.set(key, entries);
+      }
+    }
+  }
+  const projectedAgentRunIndex = buildProjectedAgentRunIndex();
+  return (
+    params: Omit<
+      Parameters<typeof resolveVisibleActiveSessionRunState>[0],
+      "context" | "trackedActiveRuns" | "projectedAgentRunIndex" | "includeTerminalPersistence"
+    >,
+  ) =>
+    resolveVisibleActiveSessionRunState({
+      ...params,
+      context,
+      projectedAgentRunIndex,
+      trackedActiveRuns: [
+        ...new Set([
+          ...(byKey.get(params.canonicalKey) ?? []),
+          ...(byKey.get(params.requestedKey) ?? []),
+          ...(byId.get(params.sessionId?.trim() ?? "") ?? []),
+        ]),
+      ],
+    });
 }

@@ -141,6 +141,8 @@ export type GetReplyOptions = {
   promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
+  /** Ephemeral channel owner check for a targeted Stop; never serialized as authority. */
+  isCommandTargetCurrent?: () => boolean;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */

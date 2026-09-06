@@ -203,11 +203,12 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     requestTransportOverrides: params.requestTransportOverrides,
   });
   const requestedRuntime = pinnedHarnessId ?? runtimeOverride;
-  const runtime =
-    requestedRuntime && !isDefaultAgentRuntimeId(requestedRuntime)
-      ? requestedRuntime
-      : policy.runtime;
+  const explicitRuntime = isDefaultAgentRuntimeId(requestedRuntime) ? undefined : requestedRuntime;
+  const runtime = explicitRuntime ?? policy.runtime;
+  // Harness selection owns implicit preferences and their unavailable-runtime fallback.
+  // Authored policies and session pins still require their selected registration.
   if (
+    (!explicitRuntime && policy.runtimeSource === "implicit") ||
     isDefaultAgentRuntimeId(runtime) ||
     runtime === OPENCLAW_AGENT_RUNTIME_ID ||
     isCliRuntimeAliasForProvider({

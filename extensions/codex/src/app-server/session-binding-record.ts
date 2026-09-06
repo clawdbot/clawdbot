@@ -1,5 +1,7 @@
 /** Canonical binding codec and synchronous generation-aware reads; no lifecycle or auth loading. */
 import { createHash } from "node:crypto";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -411,4 +413,30 @@ export function readCurrentCodexAppServerBinding(
   return stored?.state === "active" && ownsStoredSessionGeneration(identity, stored)
     ? stored.binding
     : undefined;
+}
+
+export class CodexSupervisionBindingReplacementError extends Error {
+  constructor(threadId: string, operation: string) {
+    super(
+      `Refusing to replace supervised Codex thread ${threadId} while ${operation}; ` +
+        "its native user-home connection and model ownership must be preserved",
+    );
+    this.name = "CodexSupervisionBindingReplacementError";
+  }
+}
+
+export function assertCodexBindingMayBeReplaced(
+  binding: CodexAppServerThreadBinding | undefined,
+  operation: string,
+  expected?: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
+): void {
+  // A native-prepared attempt has no host-selected model for a replacement thread.
+  if (expected) {
+    throw new AgentHarnessPreflightError(
+      `Codex native model ownership prevents ${operation}. Continue or compact the original session in its native runtime, or create a new chat with a concrete model; the original binding was preserved.`,
+    );
+  }
+  if (binding?.connectionScope === "supervision") {
+    throw new CodexSupervisionBindingReplacementError(binding.threadId, operation);
+  }
 }

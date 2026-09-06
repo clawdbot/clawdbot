@@ -3,10 +3,10 @@ import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayClient } from "./client.js";
 import { rawDataToString } from "./websocket-data.js";
+import { WebSocketServer, type WebSocket } from "./websocket.test-support.js";
 
 describe("GatewayClient websocket opening handshakeTimeout", () => {
   const servers: net.Server[] = [];

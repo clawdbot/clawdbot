@@ -17,10 +17,7 @@ import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
 } from "../store/run-receipt-store.js";
-import {
-  type CronStoreTransactionHooks,
-  saveCronJobsStoreWithTransactionHooks,
-} from "../store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
@@ -203,12 +200,9 @@ export async function ensureLoaded(
     const hydratedRaw = normalized ?? raw;
     let invalidReason = rawInvalidReason ?? getInvalidPersistedCronJobReason(hydratedRaw);
     const hydratedSchedule = isRecord(hydratedRaw.schedule) ? hydratedRaw.schedule : {};
-    if (
-      !invalidReason &&
-      isValidatedCronJob(hydratedRaw) &&
-      hydratedRaw.enabled &&
-      hydratedSchedule.kind === "every"
-    ) {
+    // The satisfiability probe below does not mutate this row, so its typed validation stays valid.
+    const hydratedIsValid = !invalidReason && isValidatedCronJob(hydratedRaw);
+    if (hydratedIsValid && hydratedRaw.enabled && hydratedSchedule.kind === "every") {
       try {
         assertTimeScheduleSatisfiable(
           { ...hydratedRaw, state: {} },
@@ -243,7 +237,7 @@ export async function ensureLoaded(
       continue;
     }
     // Validated above, so the raw record is now a trusted CronJob.
-    if (!isValidatedCronJob(hydratedRaw)) {
+    if (!hydratedIsValid) {
       continue;
     }
     const hydrated = hydratedRaw;
@@ -334,17 +328,11 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
       : undefined;
   const stateOnly = !quarantine && opts?.stateOnly === true;
   try {
-    const saveOptions = quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined;
-    if (opts?.transactionHooks) {
-      await saveCronJobsStoreWithTransactionHooks(
-        state.deps.storePath,
-        store,
-        saveOptions,
-        opts.transactionHooks,
-      );
-    } else {
-      await saveCronJobsStore(state.deps.storePath, store, saveOptions);
-    }
+    await saveCronJobsStore(state.deps.storePath, store, {
+      quarantine,
+      stateOnly,
+      transactionHooks: opts?.transactionHooks,
+    });
   } catch (error) {
     if (
       !quarantine ||

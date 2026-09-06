@@ -18,6 +18,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
   return async (params: {
     deviceId: string;
     artifact: WorkerBundleArtifact;
+    prewarm: boolean;
     signal?: AbortSignal;
   }) => {
     params.signal?.throwIfAborted();
@@ -35,7 +36,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     const { artifact } = params;
     const isAuthorized = () => !params.signal?.aborted && transport.isCurrent(node);
     const bundlePrewarm =
-      (node.workerHost.bundlePrewarm ?? 0) >= WORKER_BUNDLE_PREWARM_VERSION
+      params.prewarm && (node.workerHost.bundlePrewarm ?? 0) >= WORKER_BUNDLE_PREWARM_VERSION
         ? WORKER_BUNDLE_PREWARM_VERSION
         : undefined;
     const prepared = options.transfer.prepare({

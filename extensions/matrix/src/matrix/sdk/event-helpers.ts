@@ -4,6 +4,17 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixRawEvent } from "./types.js";
 
 type MatrixEventContentMode = "current" | "original";
+const matrixEventProjections = new WeakMap<
+  object,
+  {
+    decryptionFailure: boolean;
+    originalContent: Record<string, unknown>;
+  }
+>();
+
+export function getMatrixEventProjection(event: object) {
+  return matrixEventProjections.get(event);
+}
 
 export function matrixEventToRaw(
   event: MatrixEvent,
@@ -30,6 +41,12 @@ export function matrixEventToRaw(
   if (typeof stateKey === "string") {
     raw.state_key = stateKey;
   }
+  // Keep native facts off wire-shaped objects. getContent may reflect a cached
+  // replacement, while mutation baselines need this event's original content.
+  matrixEventProjections.set(raw, {
+    decryptionFailure: event.isDecryptionFailure(),
+    originalContent,
+  });
   return raw;
 }
 

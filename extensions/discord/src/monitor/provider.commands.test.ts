@@ -14,26 +14,6 @@ import { discordSetupPlugin } from "../channel.setup.js";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
 
-const retainNativeCatalog = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/plugin-command-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/plugin-command-runtime")>();
-  return {
-    ...actual,
-    createPluginCommandRuntime: () => {
-      const runtime = actual.createPluginCommandRuntime();
-      return {
-        ...runtime,
-        retainNativeCatalog: (provider: string) => {
-          retainNativeCatalog(provider);
-          runtime.retainNativeCatalog(provider);
-        },
-      };
-    },
-  };
-});
-
 type ResolverParams = Parameters<typeof resolveDiscordProviderCommandSpecs>[0];
 type SkillCommands = ReturnType<NonNullable<ResolverParams["listSkillCommandsForAgents"]>>;
 
@@ -110,7 +90,6 @@ function createResolverHarness(
 describe("resolveDiscordProviderCommandSpecs", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
-    retainNativeCatalog.mockClear();
   });
 
   afterEach(() => {
@@ -155,8 +134,6 @@ describe("resolveDiscordProviderCommandSpecs", () => {
         "5 commands exceed the 4-command Discord limit; removing per-skill commands and keeping /skill.",
       ),
     );
-    expect(retainNativeCatalog).toHaveBeenCalledOnce();
-    expect(retainNativeCatalog).toHaveBeenCalledWith("discord");
   });
 
   it("logs a final built-in collision once when command overflow retries without skills", async () => {
@@ -221,7 +198,6 @@ describe("resolveDiscordProviderCommandSpecs", () => {
     expect(harness.error).toHaveBeenCalledWith(
       danger('discord: plugin command "/vc" duplicates an existing native command. Skipping.'),
     );
-    expect(retainNativeCatalog).not.toHaveBeenCalled();
   });
 
   it("keeps a skill named vc from shadowing or duplicating voice", async () => {

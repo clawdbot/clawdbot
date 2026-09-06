@@ -18,6 +18,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../tasks/detached-task-runtime-contract.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
   isChatAbortControllerEntryAbortable,
@@ -306,19 +307,6 @@ export function abortQueuedCollectorSession(
 }
 
 const SESSION_LIFECYCLE_ABORT_REQUESTER: ChatAbortRequester = { isAdmin: true };
-
-export function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
-  return {
-    chatAbortControllers: context.chatAbortControllers,
-    chatRunState: context.chatRunState,
-    removeChatRun: context.removeChatRun,
-    agentRunSeq: context.agentRunSeq,
-    getRuntimeConfig: context.getRuntimeConfig,
-    broadcast: context.broadcast,
-    nodeSendToSession: context.nodeSendToSession,
-    onRunAborted: context.cancelRunBoundApprovals,
-  };
-}
 
 function resolveAuthorizedQueuedTurnsForSession(params: {
   context: GatewayRequestContext;

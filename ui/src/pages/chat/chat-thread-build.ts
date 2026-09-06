@@ -22,7 +22,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  canvasPreviewsMatch,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
+import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
@@ -54,7 +58,6 @@ import {
   sanitizeStreamText,
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
-  turnHasMatchingAssistant,
   type TurnInsertionBounds,
   userTurnRunId,
 } from "./chat-thread-items.ts";
@@ -104,6 +107,15 @@ export type BuildChatItemsProps = {
   searchQuery?: string;
 };
 
+function canvasAssistantItemKey(
+  message: unknown,
+  source: Parameters<typeof canvasPreviewBaseIdentity>[1],
+  fallback: string,
+): string {
+  const identity = canvasPreviewBaseIdentity(message, source);
+  return identity ? `canvas:${identity}` : `${fallback}:canvas`;
+}
+
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter(
@@ -127,12 +139,43 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
+  const normalizedHistory = history.map(safeNormalizeMessage);
+  const historyItems = buildMessageItems(history);
+  let canvasTurn: {
+    previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
+    lastMatchingAssistantIndex: number;
+  } = {
+    previews: [],
+    lastMatchingAssistantIndex: -1,
+  };
+  // Rows in one turn share these facts so a tool result can see the assistant
+  // projection that follows it, without consuming a view from another turn.
+  const canvasTurns = historyItems.map((item, index) => {
+    const message = normalizedHistory[index];
+    const role = message && normalizeRoleForGrouping(message.role);
+    if (role === "user" || role === "system") {
+      canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
+    }
+    if (
+      role === "assistant" &&
+      message &&
+      (!searchFiltering || messageMatchesSearchQuery(history[index], props.searchQuery ?? ""))
+    ) {
+      canvasTurn.lastMatchingAssistantIndex = index;
+      canvasTurn.previews.push(
+        ...message.content.flatMap((block) =>
+          block.type === "canvas" ? [{ preview: block.preview, item }] : [],
+        ),
+      );
+    }
+    return canvasTurn;
+  });
   const compaction = props.compactionStatus;
   const compactionKey = compaction
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
-  for (const [i, item] of buildMessageItems(history).entries()) {
+  for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
@@ -152,7 +195,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       hasPersistedCompaction ||= matchesLive;
       continue;
     }
-    const normalized = safeNormalizeMessage(msg);
+    const normalized = normalizedHistory[i];
     if (!normalized) {
       continue;
     }
@@ -178,13 +221,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         persistedCanvasIdentities.add(identity);
       }
     }
+    const matchingCanvas =
+      persistedCanvasSource &&
+      canvasTurns[i]!.previews.find(({ preview }) =>
+        canvasPreviewsMatch(preview, persistedCanvasSource.preview),
+      );
+    if (persistedCanvasSource && matchingCanvas) {
+      // Enrich the owned display row, including a later assistant shortcode,
+      // without changing transcript input or introducing a second widget card.
+      matchingCanvas.item.message = appendCanvasBlockToAssistantMessage(
+        matchingCanvas.item.message,
+        persistedCanvasSource.preview,
+        persistedCanvasSource.text,
+      );
+    }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
-      (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
+      !matchingCanvas &&
+      (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
       items.push({
         kind: "message",
-        key: `${itemKey}:canvas`,
+        key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
         message: createCanvasAssistantMessage(
           persistedCanvasSource,
           persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
@@ -260,6 +318,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const projections: ChatProjection[] = buildPendingInputItems(
     pendingInputs,
     props.searchOpen ? props.searchQuery : undefined,
+    props.queue,
   ).map((item) => ({ item }));
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
@@ -378,7 +437,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     // rather than being re-sorted with live stream/tool cards.
     items.splice(insertionIndex, 0, {
       kind: "message",
-      key: `${projection.item.key}:canvas`,
+      key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
       message: createCanvasAssistantMessage(preview, timestamp),
     });
   }

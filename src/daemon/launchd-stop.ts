@@ -4,7 +4,7 @@ import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { sleep } from "../utils.js";
-import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
+import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -89,9 +89,7 @@ export async function stopLaunchAgent({
   const serviceTarget = `${domain}/${label}`;
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
-  if (
-    isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
-  ) {
+  if (await isCurrentProcessInsideLaunchdService(label, process.env)) {
     throw new Error(
       `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
     );
@@ -172,11 +170,7 @@ export async function parkCurrentLaunchAgentForMaintenance(
   const serviceEnv = params.env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
-  if (
-    !isCurrentProcessLaunchdServiceLabel(label, process.env, {
-      allowConfiguredLabelFallback: false,
-    })
-  ) {
+  if (!(await isCurrentProcessInsideLaunchdService(label, process.env))) {
     return false;
   }
   const serviceTarget = `${domain}/${label}`;

@@ -137,6 +137,14 @@ export async function resolveHttpImageRepresentation(
   return createHttpImageRepresentation(body, contentType);
 }
 
+/** Prevent image documents from executing scripts or making cross-origin requests. */
+export function applyHttpImageContentSecurityPolicy(res: ServerResponse): void {
+  res.setHeader(
+    "content-security-policy",
+    "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
+  );
+}
+
 /** Writes the shared private-cache and document-sandbox policy for image bytes. */
 export function sendHttpImageResponse(params: {
   req: IncomingMessage;
@@ -150,10 +158,7 @@ export function sendHttpImageResponse(params: {
   res.setHeader("cache-control", params.cacheControl ?? "private, max-age=3600");
   res.setHeader("cross-origin-resource-policy", "same-origin");
   res.setHeader("x-content-type-options", "nosniff");
-  res.setHeader(
-    "content-security-policy",
-    "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
-  );
+  applyHttpImageContentSecurityPolicy(res);
   res.setHeader("content-disposition", `attachment; filename="${params.filename}"`);
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], image.etag)) {
     res.statusCode = 304;

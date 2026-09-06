@@ -1,4 +1,5 @@
 import {
+  isDeadProcessState,
   readCodexAppServerProcess,
   readCodexAppServerProcessSnapshot,
   type PosixProcess,
@@ -17,19 +18,12 @@ const MAX_CONTAINED_PROCESSES = 512;
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const MAX_PROCESS_QUIESCE_PASSES = 16;
 
-export async function terminateCodexAppServerDescendants(
-  child: ContainableTransport,
-): Promise<(() => void) | "exited" | undefined> {
-  const contained = await containDescendants(child);
-  return contained === "exited" ? contained : contained?.resume;
-}
-
-/** A durable spawn fact, never a command-line match, selects the orphan root. */
+/** Discharges the registered root obligation, including an already-obsolete PID. */
 export async function terminateCodexAppServerOrphan(
   expected: CodexAppServerProcessIdentity,
 ): Promise<boolean> {
   const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
-  const result = await containDescendants(
+  const result = await terminateCodexAppServerDescendants(
     { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
     expected,
     deadline,
@@ -53,7 +47,7 @@ export async function terminateCodexAppServerOrphan(
         return false;
       }
       const current = snapshot.find((row) => row.pid === expected.pid);
-      if (!current || !hasSameIdentity(current, expected) || current.state.startsWith("Z")) {
+      if (!current || !hasSameIdentity(current, expected) || isDeadProcessState(current.state)) {
         gone = true;
         return true;
       }
@@ -72,7 +66,7 @@ export async function terminateCodexAppServerOrphan(
   }
 }
 
-async function containDescendants(
+export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
   expected?: CodexAppServerProcessIdentity,
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
@@ -92,13 +86,13 @@ async function containDescendants(
   const root = snapshot.find((row) => row.pid === rootPid);
   // A retained direct child cannot have its PID reused before Node reaps it.
   // Preserve an OS-observed exit even when Node's exit callback is still queued.
-  if (!expected && (!root || root.state.startsWith("Z"))) {
+  if (!expected && (!root || isDeadProcessState(root.state))) {
     return "exited";
   }
   if (
     !root ||
     !(expected ? isSameLiveProcess(root, expected) : root.ppid === process.pid) ||
-    root.state.startsWith("Z")
+    isDeadProcessState(root.state)
   ) {
     return undefined;
   }
@@ -129,10 +123,38 @@ async function containDescendants(
       if (Date.now() >= deadline) {
         return undefined;
       }
-      if (!descendant.state.startsWith("Z")) {
+      if (!isDeadProcessState(descendant.state)) {
         if (!(await signalSameProcess(descendant, "SIGKILL", deadline)) || Date.now() >= deadline) {
           return undefined;
         }
+      }
+    }
+    // SIGKILL can remain pending for an uninterruptible process. Keep the root
+    // stopped until every retained identity is observed gone, replaced or dead.
+    const remaining = new Map(descendants.map((row) => [row.pid, row]));
+    while (remaining.size > 0) {
+      const terminationSnapshot = await readCodexAppServerProcessSnapshot(deadline, [
+        root.pid,
+        ...remaining.keys(),
+      ]).catch(() => undefined);
+      if (!terminationSnapshot || Date.now() >= deadline) {
+        return undefined;
+      }
+      const currentRoot = terminationSnapshot.find((row) => row.pid === root.pid);
+      if (!currentRoot || !isSameLiveRoot(currentRoot, root, true)) {
+        return undefined;
+      }
+      const currentByPid = new Map(terminationSnapshot.map((row) => [row.pid, row]));
+      for (const [pid, retained] of remaining) {
+        const current = currentByPid.get(pid);
+        if (!current || !hasSameIdentity(current, retained) || isDeadProcessState(current.state)) {
+          remaining.delete(pid);
+        }
+      }
+      if (remaining.size > 0) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
       }
     }
     resumeRootOnUnwind = false;
@@ -289,7 +311,7 @@ function collectDescendants(snapshot: PosixProcess[], rootPids: number[]): Posix
 }
 
 function isStoppedState(state: string): boolean {
-  return state.startsWith("T") || state.startsWith("t") || state.startsWith("Z");
+  return state.startsWith("T") || state.startsWith("t") || isDeadProcessState(state);
 }
 
 function isQuiescedState(state: string): boolean {
@@ -306,7 +328,7 @@ function isSameLiveProcess(
 ): boolean {
   return (
     current.pgid === expected.pgid &&
-    !current.state.startsWith("Z") &&
+    !isDeadProcessState(current.state) &&
     hasSameIdentity(current, expected)
   );
 }

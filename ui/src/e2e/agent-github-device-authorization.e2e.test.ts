@@ -1,8 +1,10 @@
 // Settings proof uses real navigation and controls with synthetic Gateway accounts.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -27,11 +29,12 @@ async function capture(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".settings-workspace"), [
+      page.locator(".settings-section").first(),
+    ]),
+  );
 }
 async function assertDeviceCodeCopy(page: Page, userCode: string) {
   const deviceCode = page.getByText(userCode, { exact: true });
@@ -317,7 +320,7 @@ suite.define(() => {
       const section = page.locator("#settings-profile-github-connections");
       const signIn = page.locator("#settings-profile-identity");
       await expect(signIn).toContainText("@signin-octocat");
-      await section.getByRole("button", { name: "Connect GitHub", exact: true }).click();
+      await section.getByRole("button", { name: "Manage connections", exact: true }).click();
       await expect(section.getByRole("radio", { name: "For me", exact: true })).toBeChecked();
       await gateway.deferNext("users.github.authorize.start");
       await section.getByRole("button", { name: "Continue with GitHub" }).click();

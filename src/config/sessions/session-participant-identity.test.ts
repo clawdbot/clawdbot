@@ -4,6 +4,8 @@ import {
   type SessionParticipantIdentity,
 } from "./session-participant-identity.js";
 
+const invalidIdentity = "Session participant identity is invalid; run openclaw doctor --fix.";
+
 const validIdentities: SessionParticipantIdentity[] = [
   { type: "profile", id: "profile-1" },
   { type: "agent", id: "agent-1" },
@@ -17,6 +19,7 @@ const validIdentities: SessionParticipantIdentity[] = [
     id: "bot-1",
   },
   { type: "legacy", actorType: "", source: null, id: "" },
+  { type: "legacy", actorType: "", source: "", id: "" },
   { type: "legacy", actorType: "person", source: "old-channel", id: "legacy-1" },
   { type: "profile", id: "  " },
   { type: "profile", id: "λ🦞\u0000tail" },
@@ -35,6 +38,12 @@ describe("stored participant identity decoding", () => {
     });
   });
 
+  it("keeps property order when replacing an invalid namespace id", () => {
+    const identity = readParticipantIdentity('{"id":{"ignored":true},"type":"profile"}', " actor ");
+    expect(identity).toEqual({ id: " actor ", type: "profile" });
+    expect(JSON.stringify(identity)).toBe('{"id":" actor ","type":"profile"}');
+  });
+
   it.each([
     "null",
     "[]",
@@ -51,8 +60,8 @@ describe("stored participant identity decoding", () => {
     '{"type":"observation","pluginId":null,"accountId":null,"senderKind":"invalid"}',
     '{"type":"legacy","actorType":null,"source":null}',
   ])("rejects an invalid namespace with the existing repair guidance: %s", (namespace) => {
-    expect(() => readParticipantIdentity(namespace, "actor-1")).toThrow(
-      "Session participant identity is invalid; run openclaw doctor --fix.",
+    expect(() => readParticipantIdentity(namespace, "actor-1")).toThrowError(
+      new Error(invalidIdentity),
     );
   });
 
@@ -61,11 +70,24 @@ describe("stored participant identity decoding", () => {
     ({ id }) => {
       expect(() =>
         Reflect.apply(readParticipantIdentity, undefined, ['{"type":"profile"}', id]),
-      ).toThrow("Session participant identity is invalid; run openclaw doctor --fix.");
+      ).toThrowError(new Error(invalidIdentity));
     },
   );
 
-  it("preserves JSON syntax failures", () => {
-    expect(() => readParticipantIdentity('{"type":', "actor-1")).toThrow(SyntaxError);
-  });
+  it.each(['{"type":', '{"type":"profile",}', '{"type":"pro\\qfile"}'])(
+    "preserves the native JSON syntax error for %s",
+    (namespace) => {
+      let nativeError: unknown;
+      try {
+        JSON.parse(namespace);
+      } catch (error) {
+        nativeError = error;
+      }
+      if (!(nativeError instanceof SyntaxError)) {
+        throw new Error("Fixture must produce a native JSON syntax error");
+      }
+      expect(() => readParticipantIdentity(namespace, "actor-1")).toThrowError(SyntaxError);
+      expect(() => readParticipantIdentity(namespace, "actor-1")).toThrowError(nativeError);
+    },
+  );
 });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStoreAtDatabasePath } from "../agents/auth-profiles/persisted.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import { assertAgentHarnessRunAdmission } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

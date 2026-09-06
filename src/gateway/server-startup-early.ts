@@ -52,7 +52,6 @@ export async function startGatewayEarlyRuntime(params: {
   removeChatRun: GatewayMaintenanceParams["removeChatRun"];
   agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
   nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
-  mediaCleanupTtlMs?: number;
   skillsRefreshDelayMs: number;
   getSkillsRefreshTimer: () => ReturnType<typeof setTimeout> | null;
   setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
@@ -189,9 +188,6 @@ export async function startGatewayEarlyRuntime(params: {
         nodeSendToSession: params.nodeSendToSession,
         isNixMode,
         getRuntimeConfig: params.getRuntimeConfig,
-        ...(typeof params.mediaCleanupTtlMs === "number"
-          ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
-          : {}),
       });
     });
   };

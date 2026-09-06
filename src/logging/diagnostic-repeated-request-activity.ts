@@ -1,3 +1,5 @@
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
+
 // Mechanical request retries stay continuous for one run owner. Only typed
 // semantic progress or owner teardown can clear the clock that recovery reads.
 type RepeatedRequestOwner = { runId: string; sequence: number };
@@ -16,16 +18,6 @@ function nextMutationSequence(): number {
   return mutationSequence;
 }
 
-function currentOwner(owners: Iterable<RepeatedRequestOwner>): RepeatedRequestOwner | undefined {
-  let current: RepeatedRequestOwner | undefined;
-  for (const owner of owners) {
-    if (!current || owner.sequence > current.sequence) {
-      current = owner;
-    }
-  }
-  return current;
-}
-
 export function recordRepeatedRequestObservation(
   activity: DiagnosticRepeatedRequestActivity,
   owners: Iterable<RepeatedRequestOwner>,
@@ -38,9 +30,9 @@ export function recordRepeatedRequestObservation(
   if (params.observationUnit === "turn") {
     return;
   }
-  const owner = currentOwner(owners);
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
   const runId = params.runId?.trim();
-  if (!owner || !runId || owner.runId !== runId) {
+  if (currentOwnerRunId === undefined || !runId || currentOwnerRunId !== runId) {
     return;
   }
   if (activity.repeatedRequestOwnerRunId !== runId) {
@@ -93,13 +85,12 @@ export function mergeRepeatedRequestActivity(
 
 export function resolveRepeatedRequestNoProgressAgeMs(
   activity: DiagnosticRepeatedRequestActivity,
-  owners: Iterable<RepeatedRequestOwner>,
+  currentOwnerRunId: string | undefined,
   now: number,
 ): number | undefined {
-  const owner = currentOwner(owners);
   if (
-    !owner ||
-    owner.runId !== activity.repeatedRequestOwnerRunId ||
+    currentOwnerRunId === undefined ||
+    currentOwnerRunId !== activity.repeatedRequestOwnerRunId ||
     (activity.repeatedRequestCount ?? 0) < 2 ||
     activity.repeatedRequestFirstStartedAt === undefined
   ) {

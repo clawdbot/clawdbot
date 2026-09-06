@@ -2581,7 +2581,7 @@ describe("runCopilotAttempt", () => {
       expect(content).toContain("## Skill Workshop");
       expect(content).toContain("## Delegation");
       expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
-      expect(content).toContain("For the current source conversation, reply normally");
+      expect(content).toContain("You can participate in the conversation throughout your work.");
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),
         expect.any(Object),

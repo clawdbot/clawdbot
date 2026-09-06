@@ -259,7 +259,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           cwd: resolve(repoRoot, unit.outDir),
         });
       }
-      return { ...unit, outputRoot: fs.realpathSync(resolve(repoRoot, unit.outDir)) };
+      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
     }),
   );
   for (const batch of batches) {
