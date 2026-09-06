@@ -3830,7 +3830,7 @@
     margin-right: max(
       var(--chat-frame-inset-right),
       calc(
-        (100% - var(--chat-thread-max-width, 48rem) - var(--chat-frame-inset-left) +
+        (100% - var(--chat-thread-max-width, 100%) - var(--chat-frame-inset-left) +
             var(--chat-frame-inset-right)) /
           2
       )
@@ -3838,7 +3838,7 @@
     margin-left: max(
       var(--chat-frame-inset-left),
       calc(
-        (100% - var(--chat-thread-max-width, 48rem) + var(--chat-frame-inset-left) -
+        (100% - var(--chat-thread-max-width, 100%) + var(--chat-frame-inset-left) -
             var(--chat-frame-inset-right)) /
           2
       )

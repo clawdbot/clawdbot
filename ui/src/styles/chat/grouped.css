@@ -1278,8 +1278,7 @@ img.chat-avatar.chat-avatar--logo {
     margin-inline: 0;
   }
 
-  .chat-avatar,
-  .chat-avatar-slot {
+  .chat-group > :is(.chat-avatar, .chat-avatar-slot) {
     display: none;
   }
 
