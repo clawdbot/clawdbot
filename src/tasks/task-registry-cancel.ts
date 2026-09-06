@@ -238,6 +238,7 @@ export async function cancelTaskById(params: {
           cfg: params.cfg,
           sessionKey: childSessionKey,
           expectedRunId: task.runId,
+          suppressTaskDelivery: true,
           ...(managedBacking?.runtime === "subagent"
             ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
             : {}),

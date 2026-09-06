@@ -516,6 +516,7 @@ export async function killSubagentRunAdmin(
         cfg: params.cfg,
         tree,
         scope,
+        suppressTaskDelivery: params.suppressTaskDelivery,
         beforeSessionKill: control?.beforeSessionKill,
         expectedRunId: params.expectedRunId?.trim() || undefined,
         expectedGeneration: params.expectedGeneration,

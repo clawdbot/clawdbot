@@ -1161,6 +1161,9 @@ describe("task-executor", () => {
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
         expectedRunId: "run-subagent-cancel",
+        // Cancel-by-task-id is an explicit operator cancel: it must suppress the
+        // child's completion delivery the way the bulk stop paths already do.
+        suppressTaskDelivery: true,
         onResult: expect.any(Function),
       });
     });

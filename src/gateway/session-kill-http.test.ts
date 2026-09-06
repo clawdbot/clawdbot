@@ -210,6 +210,9 @@ describe("POST /sessions/:sessionKey/kill", () => {
       cfg,
       sessionKey: WORKER_SESSION_KEY,
       agentId: "main",
+      // An operator kill must suppress the child's completion delivery, matching
+      // the bulk stop paths, so a racing completion cannot be announced after it.
+      suppressTaskDelivery: true,
     });
   });
 
@@ -266,6 +269,9 @@ describe("POST /sessions/:sessionKey/kill", () => {
       cfg,
       sessionKey: WORKER_SESSION_KEY,
       agentId: "main",
+      // An operator kill must suppress the child's completion delivery, matching
+      // the bulk stop paths, so a racing completion cannot be announced after it.
+      suppressTaskDelivery: true,
     });
   });
 
