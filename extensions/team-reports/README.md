@@ -1,8 +1,22 @@
-# Team Reports (plugin)
+# Team Reports
 
-Daily, weekly, and monthly team activity reports built from a GitHub organization's activity and
-(optionally) a Discord guild, with model-written summaries. Reports are stored in a plugin-owned
-SQLite database, served by the Gateway under a configurable route (default `/reports`), and shown
-as a **Reports** tab in the Control UI.
+Bundled OpenClaw plugin for daily, weekly, and monthly GitHub activity reports
+with optional Discord discussion, model-written summaries, and a **Reports**
+tab in the Control UI. Disabled by default.
 
-See `docs/plugins/team-reports.md` for configuration and operation.
+Configure `plugins.entries.team-reports.config` with a GitHub token or
+SecretRef, at least one organization, and team or inline identity entries.
+Restart the Gateway after enabling the plugin or changing its configuration.
+
+```sh
+openclaw team-reports status --json
+openclaw team-reports generate --intraday
+openclaw team-reports list --json
+```
+
+Reports use UTC windows, remain in the plugin-owned SQLite store, and are
+served behind Gateway authentication at `/reports/` by default. Model summary
+calls are optional; set `summaries.enabled: false` for deterministic text.
+
+See the [Team Reports guide](https://docs.openclaw.ai/plugins/team-reports)
+for setup, configuration, attribution rules, exports, and troubleshooting.
