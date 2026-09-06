@@ -1903,7 +1903,16 @@
                       "gateway/configuration",
                       "gateway/configuration-reference",
                       "gateway/config-agents",
+                      "gateway/config-automation",
+                      "gateway/config-browser-ui-desktop",
                       "gateway/config-channels",
+                      "gateway/config-cloud-workers",
+                      "gateway/config-extensions",
+                      "gateway/config-gateway",
+                      "gateway/config-hooks",
+                      "gateway/config-observability",
+                      "gateway/config-runtime",
+                      "gateway/config-secrets-env",
                       "gateway/config-tools",
                       "gateway/configuration-examples"
                     ]

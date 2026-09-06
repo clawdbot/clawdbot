@@ -445,4 +445,4 @@ For OTLP export to a collector, see [OpenTelemetry export](/gateway/opentelemetr
 - [OpenTelemetry export](/gateway/opentelemetry) — OTLP/HTTP export, metric/span catalog, privacy model
 - [Diagnostics flags](/diagnostics/flags) — targeted debug-log flags
 - [Gateway logging internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
-- [Configuration reference](/gateway/configuration-reference#diagnostics) — full `diagnostics.*` field reference
+- [Configuration reference](/gateway/config-observability#diagnostics) — full `diagnostics.*` field reference
