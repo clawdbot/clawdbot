@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
@@ -19,6 +19,8 @@ function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string 
 }
 
 describe("embedded acpx plugin config", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("resolves workspace stateDir and cwd by default", () => {
     const workspaceDir = path.resolve("/tmp/openclaw-acpx");
     const resolved = resolveAcpxPluginConfig({
@@ -84,6 +86,41 @@ describe("embedded acpx plugin config", () => {
       claude: ["node", "/path/to/adapter.mjs", "--verbose"],
       codex: ["codex-acp", "--model", "gpt-5"],
     });
+  });
+
+  it.each([
+    {
+      platform: "win32",
+      command: String.raw`.\agent.exe --stdio`,
+      expected: [String.raw`.\agent.exe`, "--stdio"],
+    },
+    {
+      platform: "win32",
+      command: String.raw`node C:\tools\agent.js`,
+      expected: ["node", String.raw`C:\tools\agent.js`],
+    },
+    {
+      platform: "win32",
+      command: String.raw`"\\server\share\agent.exe" "" "C:\work dir\\"`,
+      expected: [String.raw`\\server\share\agent.exe`, "", "C:\\work dir\\"],
+    },
+    {
+      platform: "win32",
+      command: String.raw`node "say \"hello\""`,
+      expected: ["node", 'say "hello"'],
+    },
+    {
+      platform: "linux",
+      command: String.raw`node ./some\ file.js ""`,
+      expected: ["node", "./some file.js", ""],
+    },
+  ] as const)("preserves $platform command syntax: $command", ({ platform, command, expected }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    const config = resolveAcpxPluginConfig({
+      rawConfig: { agents: { fixture: { command, args: ["suffix"] } } },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+    expect(config.agents.fixture).toEqual([...expected, "suffix"]);
   });
 
   it("preserves structured agent args without shell quoting", () => {

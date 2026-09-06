@@ -122,7 +122,9 @@ export async function ensureManagerRuntimeHandle(params: {
           agent,
           mode,
           ...(resumeSessionId ? { resumeSessionId } : {}),
-          ...(model ? { model, modelExplicit: true } : {}),
+          // Stored options lack caller intent; runtime controls validate the
+          // saved model before submitting any prompt.
+          ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
           cwd,
         }),

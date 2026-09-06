@@ -7,6 +7,7 @@ import path from "node:path";
 import { isPidAlive, runExec } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CODEX_ACP_PACKAGE, LEGACY_CODEX_ACP_PACKAGE } from "./codex-adapter.js";
+import type { AcpxAgentCommand } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import { readAcpxProcessLeaseIdentity } from "./process-lease.js";
 
@@ -128,17 +129,6 @@ function commandMentionsGeneratedWrapper(command: string): boolean {
   return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) => command.includes(basename));
 }
 
-function commandWrapperBelongsToRoot(command: string, wrapperRoot: string | undefined): boolean {
-  if (!wrapperRoot) {
-    return true;
-  }
-  const normalizedCommand = normalizePathLike(command);
-  const normalizedRoot = normalizePathLike(wrapperRoot).replace(/\/+$/, "");
-  return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) =>
-    normalizedCommand.includes(`${normalizedRoot}/${basename}`),
-  );
-}
-
 function commandContainsExactWrapperPath(command: string, wrapperPath: string): boolean {
   const expectedPath = normalizePathLike(wrapperPath);
   // Process display paths can contain spaces and literal quote characters.
@@ -158,17 +148,18 @@ function wrapperPathBelongsToRoot(wrapperPath: string, wrapperRoot: string): boo
 
 /** Check whether a command references an OpenClaw-generated ACPX wrapper path. */
 export function isOpenClawLeaseAwareAcpxProcessCommand(params: {
-  command: string | undefined;
+  command: AcpxAgentCommand | undefined;
   wrapperRoot?: string;
 }): boolean {
-  const command = params.command?.trim();
-  if (!command) {
-    return false;
-  }
-  const normalized = normalizePathLike(command);
-  return (
-    commandMentionsGeneratedWrapper(normalized) &&
-    commandWrapperBelongsToRoot(normalized, params.wrapperRoot)
+  // Inspect literal paths; rendering argv would JSON-escape Windows separators.
+  const command = normalizePathLike(
+    Array.isArray(params.command) ? params.command.join(" ") : (params.command ?? ""),
+  );
+  const root = params.wrapperRoot
+    ? `${normalizePathLike(params.wrapperRoot).replace(/\/+$/, "")}/`
+    : "";
+  return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) =>
+    command.includes(`${root}${basename}`),
   );
 }
 

@@ -51,9 +51,14 @@ async function prompt(
   return JSON.parse(chunks.join(""));
 }
 
-it.each([false, true])(
-  "preserves ACP argv through real processes and reconnect (leased wrapper=%s)",
-  async (wrapped) => {
+it.each([
+  { wrapped: false, form: "path" },
+  { wrapped: true, form: "path" },
+  { wrapped: false, form: "relative" },
+  { wrapped: false, form: "combined" },
+])(
+  "preserves ACP argv through real processes and reconnect (leased=$wrapped, command=$form)",
+  async ({ wrapped, form }) => {
     await withOpenClawTestState({ label: "acpx-argv-process" }, async (state) => {
       const peerDirectory = path.join(state.root, "peer");
       await fs.mkdir(peerDirectory);
@@ -69,8 +74,20 @@ it.each([false, true])(
       }
       const args = [script, peerDirectory, ...samples];
       const agent = wrapped ? "codex" : "fixture";
+      const spawnExecutable =
+        form === "relative" ? `.${path.sep}${path.basename(executable)}` : executable;
+      const configuredCommand =
+        form === "combined"
+          ? `"${spawnExecutable}" "${script}" "${peerDirectory}"`
+          : form === "relative"
+            ? `"${spawnExecutable}"`
+            : executable;
       let config = resolveAcpxPluginConfig({
-        rawConfig: { agents: { [agent]: { command: executable, args } } },
+        rawConfig: {
+          agents: {
+            [agent]: { command: configuredCommand, args: form === "combined" ? samples : args },
+          },
+        },
         workspaceDir: state.root,
       });
       if (wrapped) {
@@ -128,7 +145,7 @@ it.each([false, true])(
             state: "open",
           });
         } else {
-          expect(record?.agentArgv).toEqual([executable, ...args]);
+          expect(record?.agentArgv).toEqual([spawnExecutable, ...args]);
         }
         await runtime.close({ handle, reason: "restart" });
         runtime = createRuntime();

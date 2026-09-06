@@ -14,6 +14,7 @@ export function splitCommandParts(value: AcpxAgentCommand): string[] {
   if (Array.isArray(value)) {
     return value;
   }
+  const windows = process.platform === "win32";
   const parts: string[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
@@ -27,10 +28,20 @@ export function splitCommandParts(value: AcpxAgentCommand): string[] {
       hasPart = true;
       continue;
     }
-    if (ch === "\\" && quote !== "'") {
+    if (ch === "\\" && quote !== "'" && !windows) {
       escaping = true;
       hasPart = true;
       continue;
+    }
+    if (windows && ch === '"' && quote !== "'") {
+      // Windows folds backslash runs only before a double quote (libuv quote_cmd_arg).
+      const backslashes = current.match(/\\+$/)?.[0].length ?? 0;
+      current =
+        current.slice(0, current.length - backslashes) + "\\".repeat(Math.floor(backslashes / 2));
+      if (backslashes % 2 === 1) {
+        current += '"';
+        continue;
+      }
     }
     if (quote) {
       if (ch === quote) {

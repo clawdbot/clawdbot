@@ -864,8 +864,9 @@ thinking level in sync with that response. A model switch may lower the level or
 remove thinking support; subsequent turns and reconnects use the accepted
 selection instead of replaying the old level. Backend defaults do not become new
 session overrides, and the model reference keeps its OpenClaw provider prefix.
-Selected session models remain required across reconnects. An unsupported
-inherited default dropped during initialization is not saved as an override.
+Model overrides are validated before prompt submission, including after reconnect.
+Unsupported inherited defaults dropped during new session initialization are not
+saved as overrides.
 
 `/acp reset-options` also works after a restart when an old working directory or
 model override prevents backend startup. If closing a retained runtime fails,

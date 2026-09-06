@@ -310,7 +310,7 @@ function createResetAwareSessionStore(
         leasedCommand &&
         leaseIdentity?.gatewayInstanceId === params.gatewayInstanceId &&
         isOpenClawLeaseAwareAcpxProcessCommand({
-          command: renderAgentCommand(leasedCommand),
+          command: leasedCommand,
           wrapperRoot: params.wrapperRoot,
         })
       ) {
@@ -1005,7 +1005,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       !this.gatewayInstanceId ||
       !this.processLeaseStore ||
       !isOpenClawLeaseAwareAcpxProcessCommand({
-        command: renderAgentCommand(params.command),
+        command: params.command,
         wrapperRoot: this.wrapperRoot,
       })
     ) {
@@ -1121,7 +1121,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     if (
       !command ||
       !isOpenClawLeaseAwareAcpxProcessCommand({
-        command: renderAgentCommand(command),
+        command,
         wrapperRoot,
       })
     ) {

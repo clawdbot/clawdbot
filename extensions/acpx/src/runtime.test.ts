@@ -400,54 +400,65 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(defaultProbe).not.toHaveBeenCalled();
   });
 
-  it("leases generated-wrapper probes before delegate entry and retains absent wrappers", async () => {
-    const events: string[] = [];
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
-    const leaseStore = makeLeaseStore();
-    leaseStore.store.save.mockImplementation(async (lease: Record<string, unknown>) => {
-      events.push("lease-saved");
-      leaseStore.leases.set(String(lease.leaseId), lease);
-    });
-    const { runtime, delegate } = makeRuntime(
-      baseStore,
-      {
-        openclawGatewayInstanceId: "gateway-test",
-        openclawProcessLeaseStore: leaseStore.store,
-        openclawWrapperRoot: "/tmp/openclaw/acpx",
-        agentRegistry: {
-          resolve: (agentName: string) =>
-            agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
-          list: () => ["codex"],
+  it.each([
+    { wrapperRoot: "/tmp/openclaw/acpx", command: CODEX_ACP_WRAPPER_COMMAND },
+    {
+      wrapperRoot: String.raw`C:\OpenClaw State\acpx`,
+      command: [
+        String.raw`C:\Program Files\node.exe`,
+        String.raw`C:\OpenClaw State\acpx\codex-acp-wrapper.mjs`,
+      ],
+    },
+  ])(
+    "leases generated-wrapper probes before delegate entry ($wrapperRoot)",
+    async ({ wrapperRoot, command }) => {
+      const events: string[] = [];
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => undefined),
+        save: vi.fn(async () => {}),
+      };
+      const leaseStore = makeLeaseStore();
+      leaseStore.store.save.mockImplementation(async (lease: Record<string, unknown>) => {
+        events.push("lease-saved");
+        leaseStore.leases.set(String(lease.leaseId), lease);
+      });
+      const { runtime, delegate } = makeRuntime(
+        baseStore,
+        {
+          openclawGatewayInstanceId: "gateway-test",
+          openclawProcessLeaseStore: leaseStore.store,
+          openclawWrapperRoot: wrapperRoot,
+          agentRegistry: {
+            resolve: (agentName: string) => (agentName === "codex" ? command : agentName),
+            list: () => ["codex"],
+          },
         },
-      },
-      {
-        openclawProcessCleanup: {
-          listProcesses: vi.fn(async () => {
-            events.push("process-inspected");
-            return [];
-          }),
+        {
+          openclawProcessCleanup: {
+            listProcesses: vi.fn(async () => {
+              events.push("process-inspected");
+              return [];
+            }),
+          },
         },
-      },
-    );
-    let launchedCommand = "";
-    vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
-      events.push("probe-entered");
-      launchedCommand = renderAgentCommand(runtimeCommand(runtime));
-    });
+      );
+      let launchedCommand = "";
+      vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
+        events.push("probe-entered");
+        launchedCommand = renderAgentCommand(runtimeCommand(runtime));
+      });
 
-    await runtime.probeAvailability();
+      await runtime.probeAvailability();
 
-    expect(events).toEqual(["lease-saved", "probe-entered", "process-inspected"]);
-    expect(launchedCommand).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
-    expect(launchedCommand).toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`);
-    expect(Array.from(leaseStore.leases.values())).toEqual([
-      expect.objectContaining({ rootPid: 0, state: "open" }),
-    ]);
-    expect(leaseStore.store.markState).not.toHaveBeenCalledWith(expect.any(String), "lost");
-  });
+      expect(events).toEqual(["lease-saved", "probe-entered", "process-inspected"]);
+      expect(launchedCommand).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
+      expect(launchedCommand).toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`);
+      expect(Array.from(leaseStore.leases.values())).toEqual([
+        expect.objectContaining({ rootPid: 0, state: "open" }),
+      ]);
+      expect(leaseStore.store.markState).not.toHaveBeenCalledWith(expect.any(String), "lost");
+    },
+  );
 
   it("reaps a fulfilled probe wrapper that exact live evidence still finds", async () => {
     const baseStore: TestSessionStore = {

@@ -216,6 +216,7 @@ or flag value should remain one argv token:
 - `agents.<id>.args` is optional. Each item is passed unchanged, including empty strings, spaces, quotes, and backslashes. Do not add shell quoting inside the array.
 
 On Windows, put the executable path in `command` and its flags in `args`.
+Quote relative executable paths containing spaces when using a command string.
 Generated adapter wrappers also use argv arrays. Reconnecting an unchanged
 session preserves its saved command representation and conversation history.
 
