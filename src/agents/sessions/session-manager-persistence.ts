@@ -118,17 +118,34 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const candidatePersistedIndex = currentEntries.findIndex(
       (entry) => isRecord(entry) && entry.id === candidate?.id,
     );
-    const retainedContextPrefix =
+    let retainedContextPrefix =
       persistedSuffixStartSeq !== undefined && candidatePersistedIndex >= 0
         ? currentEntries.slice(0, candidatePersistedIndex)
         : [];
-    const expectedPersistedEntries =
-      this.persistenceTarget && persistedSuffixStartSeq !== undefined
-        ? loadTranscriptSuffixEventsBoundedSync(this.persistenceTarget, persistedSuffixStartSeq, {
+    let expectedPersistedEntries = currentEntries;
+    let useFullTranscriptFallback = false;
+    if (this.persistenceTarget && persistedSuffixStartSeq !== undefined) {
+      try {
+        expectedPersistedEntries = loadTranscriptSuffixEventsBoundedSync(
+          this.persistenceTarget,
+          persistedSuffixStartSeq,
+          {
             maxBytes: SYNC_REBUILD_MAX_BYTES,
             maxEvents: SYNC_REBUILD_MAX_ROWS,
-          })
-        : currentEntries;
+          },
+        );
+      } catch (error) {
+        const exceededPlanningLimit =
+          error instanceof Error &&
+          error.message.startsWith("Transcript suffix exceeds synchronous planning ");
+        if (this.boundedContextIncomplete || !exceededPlanningLimit) {
+          throw error;
+        }
+        retainedContextPrefix = [];
+        expectedPersistedEntries = currentEntries;
+        useFullTranscriptFallback = true;
+      }
+    }
     const preparedEntries = [...retainedContextPrefix, ...expectedPersistedEntries];
     const prepared = new SessionManagerPersistence(
       this.cwd,
@@ -180,8 +197,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const localPersistedPrefixLength =
       removeStart + prepared.opaqueFileEntries.filter((entry) => entry.index < removeStart).length;
     const preparedSuffixOffset = retainedContextPrefix.length;
-    const persistedPrefixLength =
-      persistedSuffixStartSeq ?? Math.max(0, localPersistedPrefixLength - preparedSuffixOffset);
+    const persistedPrefixLength = useFullTranscriptFallback
+      ? 0
+      : (persistedSuffixStartSeq ?? Math.max(0, localPersistedPrefixLength - preparedSuffixOffset));
     shiftOpaqueIndexesAfterRemoval(removeStart, removedCount);
     const removedEntries = prepared.fileEntries.splice(removeStart, removedCount) as SessionEntry[];
     const removedParentById = new Map(
@@ -261,19 +279,32 @@ export class SessionManagerPersistence extends SessionManagerCore {
     prepared.appendParentId = replacementParentId;
     const events = prepared.getPersistedFileEntries(prepared.appendParentId, prepared.appendMode);
     const suffixEvents = preparedSuffixOffset > 0 ? events.slice(preparedSuffixOffset) : events;
+    const incrementalPlanningBytes = [...expectedPersistedEntries, ...suffixEvents].reduce<number>(
+      (sum, event) => sum + Buffer.byteLength(JSON.stringify(event), "utf8"),
+      0,
+    );
+    if (
+      !this.boundedContextIncomplete &&
+      (expectedPersistedEntries.length + suffixEvents.length > SYNC_REBUILD_MAX_ROWS ||
+        incrementalPlanningBytes > SYNC_REBUILD_MAX_BYTES)
+    ) {
+      expectedPersistedEntries = currentEntries;
+      useFullTranscriptFallback = true;
+    }
+    const replacementEvents = useFullTranscriptFallback ? events : suffixEvents;
     let committedMutationAt: number | null | undefined;
     if (
       this.persistenceTarget &&
       !replaceTranscriptSuffixEventsSync(
         this.persistenceTarget,
         expectedPersistedEntries,
-        suffixEvents,
-        persistedPrefixLength,
+        replacementEvents,
+        useFullTranscriptFallback ? 0 : persistedPrefixLength,
         this.transcriptMutationAt,
         (mutationAt) => {
           committedMutationAt = mutationAt;
         },
-        persistedSuffixStartSeq !== undefined,
+        persistedSuffixStartSeq !== undefined && !useFullTranscriptFallback,
       )
     ) {
       throw new Error(`SQLite session changed before trimming ${this.sessionId}`);

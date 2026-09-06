@@ -449,7 +449,10 @@ it("keeps a long transcript projection available when removing a trailing entry"
   ).not.toThrow();
 });
 
-it("keeps an oversized transcript projection available when removing a trailing entry", async () => {
+it.each([
+  { oversized: "retained prefix", temporaryContent: "temporary" },
+  { oversized: "removed suffix", temporaryContent: "x".repeat(SYNC_REBUILD_MAX_BYTES + 1) },
+])("removes a trailing entry with an oversized $oversized", async ({ temporaryContent }) => {
   const dir = tempDirs.make("openclaw-session-manager-large-byte-suffix-");
   const scope = {
     agentId: "main",
@@ -461,12 +464,12 @@ it("keeps an oversized transcript projection available when removing a trailing 
   const manager = SessionManager.open(scope, dir);
   manager.appendMessage({
     role: "user",
-    content: "x".repeat(SYNC_REBUILD_MAX_BYTES + 1),
+    content: temporaryContent === "temporary" ? "x".repeat(SYNC_REBUILD_MAX_BYTES + 1) : "retained",
     timestamp: 1,
   });
   const removableId = manager.appendMessage({
     role: "user",
-    content: "temporary",
+    content: temporaryContent,
     timestamp: 2,
   });
   await waitForSessionTranscriptIndexReconcile({
