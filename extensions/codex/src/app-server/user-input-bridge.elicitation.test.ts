@@ -342,6 +342,28 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     expect(gateway.calls).toEqual([]);
   });
 
+  it("rechecks thread correlation on the detached snapshot", async () => {
+    const gateway = createAnsweringGateway([{ name: ["Ada"] }]);
+    const bridge = createBridge({ gatewayCall: gateway.call });
+    let threadReads = 0;
+    const request = new Proxy(formParams(), {
+      getOwnPropertyDescriptor: (target, key) => {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (key !== "threadId" || !descriptor || !("value" in descriptor)) {
+          return descriptor;
+        }
+        threadReads += 1;
+        return { ...descriptor, value: threadReads === 1 ? "thread-1" : "other-thread" };
+      },
+    });
+
+    await expect(
+      bridge.handleElicitationRequest({ id: "changing-thread", params: request }),
+    ).resolves.toBeUndefined();
+    expect(threadReads).toBeGreaterThanOrEqual(2);
+    expect(gateway.calls).toEqual([]);
+  });
+
   it("preserves snapshot rejection and descriptor trap behavior", async () => {
     const bridge = createBridge({ gatewayCall: createAnsweringGateway([]).call });
     const request = formParams();

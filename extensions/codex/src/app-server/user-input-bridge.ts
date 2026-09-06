@@ -184,6 +184,9 @@ export function createCodexUserInputBridge(params: {
           },
         });
       }
+      if (readOwnDataString(requestSnapshot, "threadId") !== params.threadId) {
+        return undefined;
+      }
       const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
       const compiled = compileCodexOrdinaryElicitation({
         snapshot: requestSnapshot,
