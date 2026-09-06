@@ -30,6 +30,15 @@ const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
   () => import("../plugins/plugin-metadata-snapshot.js"),
 );
 
+const loadPluginActivationModule = createLazyRuntimeModule(async () => {
+  const [configState, defaultEnablement, activationContext] = await Promise.all([
+    import("../plugins/config-state.js"),
+    import("../plugins/default-enablement.js"),
+    import("../plugins/activation-context.js"),
+  ]);
+  return { ...configState, ...defaultEnablement, ...activationContext };
+});
+
 type JsonSchemaProperty = {
   type?: string;
   enum?: unknown[];
@@ -65,6 +74,40 @@ function getExistingPluginConfig(
   pluginId: string,
 ): Record<string, unknown> {
   return (config.plugins?.entries?.[pluginId]?.config as Record<string, unknown>) ?? {};
+}
+
+/**
+ * Moves entries saved under a legacy plugin id onto the canonical one.
+ *
+ * An entry on an old key is invisible to a lookup by manifest id, so the wizard reads back
+ * nothing, asks again for fields the user already filled, and then writes a second entry
+ * beside the old one. Folding up front means everything below works on canonical ids.
+ */
+async function foldLegacyPluginEntries(
+  config: OpenClawConfig,
+  pluginIds: readonly string[],
+): Promise<OpenClawConfig> {
+  const { mergePluginEntryAliases, normalizePluginId, normalizePluginTargetConfig } =
+    await loadPluginActivationModule();
+  return pluginIds.reduce((folded, pluginId) => {
+    const resolvedId = normalizePluginId(pluginId);
+    const next = normalizePluginTargetConfig(folded, pluginId);
+    if (!next.plugins?.entries?.[resolvedId]) {
+      return next;
+    }
+    // The normalizer keeps only one of the duplicate entries, so the merged one is written
+    // back over it. Read the merge off the pre-fold config, which still holds both keys.
+    return {
+      ...next,
+      plugins: {
+        ...next.plugins,
+        entries: {
+          ...next.plugins.entries,
+          [resolvedId]: mergePluginEntryAliases(folded, pluginId),
+        },
+      },
+    };
+  }, config);
 }
 
 function toPathSegments(
@@ -189,9 +232,49 @@ async function listEnabledConfigurableManifestPlugins(params: {
     workspaceDir: params.workspaceDir,
     env: process.env,
   });
+  const {
+    resolveEffectivePluginActivationState,
+    isPluginEnabledByDefaultForPlatform,
+    resolvePluginActivationInputs,
+  } = await loadPluginActivationModule();
+
+  // `enabledByDefault || entry.enabled === true` is not what decides whether a plugin runs. It
+  // misses an explicit false overriding a default-on manifest, a global `plugins.enabled: false`,
+  // deny and allow policy, workspace policy, selected slots, auto-enable reasons and
+  // platform-specific defaults.
+  //
+  // Going through resolvePluginActivationInputs rather than normalizing here matters twice
+  // over. Its normalizer resolves built-in aliases, so a legacy plugin id used as an entry key
+  // still lines up with the manifest id, and `applyAutoEnable` materializes the auto-enables
+  // that runtime performs before activation is judged. Reading the raw config instead misses a
+  // plugin that is only on because auto-enable turned it on.
+  const inputs = resolvePluginActivationInputs({
+    rawConfig: params.config,
+    env: process.env,
+    workspaceDir: params.workspaceDir,
+    applyAutoEnable: true,
+    // Hand over the registry this function already loaded. Without it auto-enable detection
+    // re-resolves the setup registry from disk, which is both wasted work here and a second
+    // source for the same answer.
+    manifestRegistry: snapshot.manifestRegistry,
+    // Pass the discovery this snapshot was built from too. With only the registry,
+    // auto-enable re-derives a default-scope discovery and a workspace scoped run ends up
+    // judging activation against a different generation than the inventory came from.
+    discovery: snapshot.discovery,
+  });
+
   return snapshot.plugins.filter((plugin) => {
-    const entry = params.config.plugins?.entries?.[plugin.id];
-    return plugin.enabledByDefault || entry?.enabled === true;
+    const autoEnabledReason = inputs.autoEnabledReasons[plugin.id]?.[0];
+    const activation = resolveEffectivePluginActivationState({
+      id: plugin.id,
+      origin: plugin.origin,
+      config: inputs.normalized,
+      rootConfig: inputs.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+      activationSource: inputs.activationSource,
+      ...(autoEnabledReason ? { autoEnabledReason } : {}),
+    });
+    return activation.activated;
   });
 }
 
@@ -359,9 +442,14 @@ export async function setupPluginConfig(params: {
     workspaceDir: params.workspaceDir,
   });
 
+  const folded = await foldLegacyPluginEntries(
+    params.config,
+    manifestPlugins.map((plugin) => plugin.id),
+  );
+
   const unconfigured = discoverUnconfiguredPlugins({
     manifestPlugins,
-    config: params.config,
+    config: folded,
   });
 
   if (unconfigured.length === 0) {
@@ -387,7 +475,7 @@ export async function setupPluginConfig(params: {
     ],
   });
 
-  let config = params.config;
+  let config = folded;
   for (const pluginId of selected.filter((value) => value !== "__skip__")) {
     const plugin = unconfigured.find((p) => p.id === pluginId);
     if (!plugin) {
@@ -404,7 +492,9 @@ export async function setupPluginConfig(params: {
     });
   }
 
-  return config;
+  // Nothing was answered, so hand back what came in rather than rewriting entry keys the
+  // user did not ask us to touch.
+  return config === folded ? params.config : config;
 }
 
 /**
@@ -425,6 +515,11 @@ export async function configurePluginConfig(params: {
     manifestPlugins,
   });
 
+  const folded = await foldLegacyPluginEntries(
+    params.config,
+    manifestPlugins.map((plugin) => plugin.id),
+  );
+
   if (configurable.length === 0) {
     await params.prompter.note(
       t("wizard.plugins.configureEmpty"),
@@ -437,7 +532,7 @@ export async function configurePluginConfig(params: {
     message: t("wizard.plugins.configureSelect"),
     options: [
       ...configurable.map((p) => {
-        const existing = getExistingPluginConfig(params.config, p.id);
+        const existing = getExistingPluginConfig(folded, p.id);
         const configuredCount = Object.keys(p.uiHints).filter((k) => {
           const val = getPath(existing, toPathSegments(k, existing, p.jsonSchema).map(String));
           return val !== undefined && val !== null && val !== "";
@@ -466,10 +561,13 @@ export async function configurePluginConfig(params: {
     return params.config;
   }
 
-  return promptPluginFields({
+  const next = await promptPluginFields({
     plugin,
-    config: params.config,
+    config: folded,
     prompter: params.prompter,
     showConfigured: true,
   });
+
+  // Same as the onboard path: an untouched config goes back exactly as it came in.
+  return next === folded ? params.config : next;
 }
