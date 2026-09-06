@@ -308,7 +308,7 @@ export class CompilerInputSnapshot {
     const changed = comparisons.find(([, differs]) => differs())?.[0];
     if (changed) {
       throw new Error(
-        `Boundary ${changed} changed during compilation. Another build, lint, or typecheck usually wrote into this checkout or the node_modules it shares (linked worktrees share the primary checkout's node_modules); run those serially and retry.`,
+        `Boundary ${changed} changed during compilation. Another build, lint, or typecheck usually wrote into this checkout's inputs while this one ran; run those serially and retry.`,
       );
     }
     for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
