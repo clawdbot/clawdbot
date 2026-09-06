@@ -78,8 +78,10 @@ export class GithubClient {
       error instanceof GithubSourceError
         ? error.message
         : "Request failed; check API access and connectivity";
-    const message = `${scope}: ${detail}`.split(this.cfg.token || "\0").join("[redacted]");
-    this.status.warnings.push(message);
+    const message = `${scope}: ${detail}`;
+    this.status.warnings.push(
+      this.cfg.token ? message.replaceAll(this.cfg.token, "[redacted]") : message,
+    );
     this.status.stale = true;
   }
 

@@ -1,5 +1,4 @@
-// Frozen domain contract shared by the report core (store, aggregate, render, scheduler)
-// and the activity sources (GitHub, Discord). Keep this file dependency-free.
+// Domain contract shared by the report core and the activity sources.
 
 export type Period = "day" | "week" | "month";
 

@@ -147,19 +147,7 @@ async function readPeopleFile(filePath: string): Promise<Person[]> {
     if (!stat.isFile() || stat.size > MAX_PEOPLE_FILE_BYTES) {
       throw new Error("team-reports.peopleFile must be a regular JSON file of at most 2 MiB.");
     }
-    const buffer = Buffer.alloc(MAX_PEOPLE_FILE_BYTES + 1);
-    let size = 0;
-    while (size < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, size, buffer.length - size, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      size += bytesRead;
-    }
-    if (size > MAX_PEOPLE_FILE_BYTES) {
-      throw new Error("team-reports.peopleFile exceeds 2 MiB.");
-    }
-    const data: unknown = JSON.parse(buffer.subarray(0, size).toString("utf8"));
+    const data: unknown = JSON.parse(await handle.readFile("utf8"));
     return peopleFileSchema.parse(data).people;
   } finally {
     await handle.close();

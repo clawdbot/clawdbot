@@ -251,11 +251,23 @@ function fallbackResult(
     (report.sources.discord?.warnings.length ?? 0) > 0
       ? "Source coverage has gaps; consult the source warnings before interpreting activity."
       : "Counts describe only the configured sources and reporting window.";
-  const highlights = [
-    `${github.total} GitHub activity credits were recorded, including ${github.commits} commits and ${github.prsMerged} merged pull requests.`,
-    `${github.issueComments + github.reviewComments} issue and review comments were recorded.`,
-    `${discord} Discord messages were recorded across ${Object.keys(report.totals.discord.channels).length} channels.`,
-    `${report.activeMembers} of ${report.memberCount} roster members have recorded activity.`,
+  const highlights: Array<[label: string, text: string]> = [
+    [
+      "GitHub",
+      `${github.total} GitHub activity credits were recorded, including ${github.commits} commits and ${github.prsMerged} merged pull requests.`,
+    ],
+    [
+      "Discussion",
+      `${github.issueComments + github.reviewComments} issue and review comments were recorded.`,
+    ],
+    [
+      "Discord",
+      `${discord} Discord messages were recorded across ${Object.keys(report.totals.discord.channels).length} channels.`,
+    ],
+    [
+      "Roster",
+      `${report.activeMembers} of ${report.memberCount} roster members have recorded activity.`,
+    ],
   ];
   return {
     reused: false,
@@ -263,8 +275,8 @@ function fallbackResult(
       source: "fallback",
       generatedAtMs,
       fingerprint,
-      globalSummary: `${report.activeMembers} of ${report.memberCount} roster members have visible activity in this ${report.status} ${report.period.period} report. ${caveat}\n\n${highlights.map((text, index) => `- **${["GitHub", "Discussion", "Discord", "Roster"][index]}:** ${text}`).join("\n")}`,
-      highlights,
+      globalSummary: `${report.activeMembers} of ${report.memberCount} roster members have visible activity in this ${report.status} ${report.period.period} report. ${caveat}\n\n${highlights.map(([label, text]) => `- **${label}:** ${text}`).join("\n")}`,
+      highlights: highlights.map(([, text]) => text),
     },
     report: {
       ...report,

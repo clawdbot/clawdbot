@@ -218,7 +218,6 @@ export class TeamReportsStore {
       period?: Period;
       status?: "partial" | "closed";
       limit?: number;
-      before?: number;
     } = {},
   ): PeriodListEntry[] {
     this.assertOpen();
@@ -239,9 +238,6 @@ export class TeamReportsStore {
     }
     if (options.status) {
       query = query.where("status", "=", options.status);
-    }
-    if (options.before !== undefined) {
-      query = query.where("since_ms", "<", options.before);
     }
     return executeSqliteQuerySync(this.db, query.limit(options.limit ?? 180)).rows;
   }
@@ -319,7 +315,6 @@ export class TeamReportsStore {
     result: {
       finishedAtMs: number;
       status: "ok" | "error";
-      periods?: RunPeriod[];
       stats?: Record<string, unknown>;
       error?: string;
     },
@@ -332,7 +327,6 @@ export class TeamReportsStore {
         .set({
           finished_at_ms: result.finishedAtMs,
           status: result.status,
-          ...(result.periods ? { periods_json: JSON.stringify(result.periods) } : {}),
           stats_json: result.stats ? JSON.stringify(result.stats) : null,
           error: result.error?.slice(0, 2000) ?? null,
         })

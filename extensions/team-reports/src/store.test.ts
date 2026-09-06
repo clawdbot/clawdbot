@@ -174,9 +174,6 @@ describe("Team Reports storage", () => {
       "2026-08-19",
     ]);
     expect(
-      store.listPeriods({ before: Date.parse("2026-08-19T00:00:00Z") }).map((entry) => entry.key),
-    ).toEqual(["2026-08-18", "2026-W34"]);
-    expect(
       store
         .listPersonDays("alice", { since: "2026-08-18", until: "2026-08-20" })
         .map((day) => day.dayKey),
@@ -216,14 +213,8 @@ describe("Team Reports storage", () => {
     expect(() => store.finishRun("first", { finishedAtMs: 4, status: "ok" })).toThrow(
       "not running",
     );
-    store.finishRun("second", {
-      finishedAtMs: 4,
-      status: "ok",
-      periods: [{ period: "day", key: "2026-08-21" }],
-    });
-    expect(store.listRuns(1)).toMatchObject([
-      { id: "second", status: "ok", periods: [{ period: "day", key: "2026-08-21" }] },
-    ]);
+    store.finishRun("second", { finishedAtMs: 4, status: "ok" });
+    expect(store.listRuns(1)).toMatchObject([{ id: "second", status: "ok", periods: [] }]);
   });
 
   it("prunes old complete periods and person days, retaining overlap, active runs, and keep-all state", () => {

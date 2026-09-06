@@ -18,7 +18,7 @@ type TeamReportsHttpOptions = {
   displayTimezone: string;
   getStore: () => TeamReportsStore | undefined;
   status: () => unknown;
-  people?: () => Person[];
+  people: () => Person[];
 };
 
 const DAY_MS = 86_400_000;
@@ -184,7 +184,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     if (first === "people" && route.segments.length <= 2) {
       const latest = store.listPeriods({ period: "day", limit: 1 })[0];
       const recent = latest ? (store.getPeriod("day", latest.key)?.report.members ?? []) : [];
-      const people = visiblePeople(options.people?.() ?? [], recent);
+      const people = visiblePeople(options.people(), recent);
       if (!key) {
         return html(renderPeoplePage(ctx, people));
       }
