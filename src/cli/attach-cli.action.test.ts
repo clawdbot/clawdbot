@@ -249,6 +249,17 @@ describe("openclaw attach (action)", () => {
     expect(out).not.toContain("attach.revoke");
   });
 
+  it("--print-config: warns on stderr that the printed env carries a live bearer token", async () => {
+    await runAttach("--print-config", "--session", "agent:main:cli");
+    const errLine = logs.find((line) => line.startsWith("ERR:"));
+    expect(errLine).toContain("OPENCLAW_MCP_TOKEN");
+    expect(errLine).toContain("secret");
+    // Warning must land before the JSON payload, not interleaved after it.
+    const warnIndex = logs.indexOf(errLine ?? "");
+    const jsonIndex = logs.findIndex((line) => line.includes('"sessionKey"'));
+    expect(warnIndex).toBeLessThan(jsonIndex);
+  });
+
   it("calls attach.grant in CLI mode with an auto-resolved device identity (operator.admin regression guard)", async () => {
     // Regression guard: attach.grant is operator.admin-scoped. mode BACKEND or an explicit
     // deviceIdentity:null drops the operator device identity → the gateway rejects with
