@@ -191,6 +191,20 @@ function isSameFileCheckpoint(
   );
 }
 
+function isSameFileGeneration(
+  previous: FileCheckpoint,
+  current: FileCheckpoint | undefined,
+): boolean {
+  const currentPrefix = current ? Buffer.from(current.prefix, "base64") : undefined;
+  const previousPrefix = Buffer.from(previous.prefix, "base64");
+  return (
+    current?.file === previous.file &&
+    current.identity === previous.identity &&
+    current.prefixLength >= previous.prefixLength &&
+    currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true
+  );
+}
+
 async function followChannelLogs(
   filter: ChannelLogFilter,
   channel: string,
@@ -257,7 +271,20 @@ async function followChannelLogs(
       const checkpointPrefixLength = reanchored
         ? undefined
         : Math.max(previousCheckpoint?.prefixLength ?? 0, Math.min(64, tail.cursor));
-      const checkpoint = await readFileCheckpoint(tail.file, tail.cursor, checkpointPrefixLength);
+      let checkpoint = await readFileCheckpoint(tail.file, tail.cursor, checkpointPrefixLength);
+      if (
+        !reanchored &&
+        previousGeneration !== undefined &&
+        !isSameFileGeneration(previousGeneration, checkpoint)
+      ) {
+        tail = await readConfiguredParsedLogTail({
+          limit: readLimit,
+          maxBytes: MAX_BYTES,
+          filter: (line) => matchesChannel(line, filter),
+        });
+        reanchored = true;
+        checkpoint = await readFileCheckpoint(tail.file, tail.cursor);
+      }
 
       const fileChanged = previousFile !== undefined && tail.file !== previousFile;
       if (json) {

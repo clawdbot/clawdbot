@@ -501,7 +501,7 @@ describe("channelsLogsCommand", () => {
         if (armRace) {
           armedOpenCount += 1;
         }
-        if (armRace && armedOpenCount === 3) {
+        if (armRace && armedOpenCount === 4) {
           await fs.rename(logPath, oldPath);
           await fs.rename(replacementPath, logPath);
         }
@@ -521,7 +521,7 @@ describe("channelsLogsCommand", () => {
       );
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
-      expect(armedOpenCount).toBeGreaterThanOrEqual(3);
+      expect(armedOpenCount).toBeGreaterThanOrEqual(4);
 
       process.emit("SIGINT");
       await follow;
