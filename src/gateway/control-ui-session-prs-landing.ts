@@ -120,7 +120,8 @@ export async function resolveBranchLanding(
       landedHeads.push(head);
     }
   }
-  const landedShas = landedHeads.map((head) => head.sha);
+  // PRs may share a head; their distinct landing receipts still need individual checks below.
+  const landedShas = new Set(landedHeads.map((head) => head.sha));
   const mergeBase = defaultRef ? await gitOutput(root, ["merge-base", defaultRef, "HEAD"]) : null;
   // The stats base is the newest commit whose content is known-published:
   // the ordinary default-branch merge base, or a merged PR head related to
@@ -151,7 +152,7 @@ export async function resolveBranchLanding(
   // head or a fetch-stale tracking ref proves nothing, so those states keep
   // the row stats-only until a rebase or fetch.
   let provenNewPushedWork = false;
-  if (pushedSha && mergeBase && !landedShas.includes(pushedSha.toLowerCase())) {
+  if (pushedSha && mergeBase && !landedShas.has(pushedSha.toLowerCase())) {
     provenNewPushedWork = landedHeads.length > 0;
     for (const head of landedHeads) {
       const incorporated =
