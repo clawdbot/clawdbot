@@ -298,7 +298,10 @@ export type GatewayRestartProbeContext = {
 export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
 ): Promise<GatewayRestartProbeContext> {
-  const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+  const mergedEnv = {
+    ...(process.env as Record<string, string | undefined>),
+    ...(env ?? undefined),
+  } as NodeJS.ProcessEnv;
   const cfg = await createConfigIO({
     env: mergedEnv,
     observe: false,
