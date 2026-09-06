@@ -1,11 +1,15 @@
 /**
  * Regression coverage for transcript replay policy resolution.
- * Exercises provider-family fallbacks, plugin replay hooks, and policy caching.
+ * Exercises provider-family fallbacks, plugin replay hooks, and policy freshness.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { validateAnthropicTurns } from "./embedded-agent-helpers/turns.js";
+
+vi.mock("../plugins/loader.js", () => ({
+  clearPluginRegistryLoadCache: vi.fn(),
+}));
 import type { AgentMessage } from "./runtime/index.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
@@ -257,23 +261,34 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict");
   });
 
-  it("memoizes replay policy resolution for the same config and process env", () => {
+  it("resolves fresh replay policies after plugin runtime discovery invalidation", async () => {
     const config = {} as OpenClawConfig;
+    const { resolveProviderRuntimePlugin } = await import("../plugins/provider-hook-runtime.js");
+    const { invalidatePluginRuntimeDiscoveryAfterConfigMutation } =
+      await import("../plugins/registry-refresh.js");
+    const mockedResolve = vi.mocked(resolveProviderRuntimePlugin);
+    // Same provider id and config after an in-process plugin package swap: the first
+    // resolution must not pin the previous package's policy for the second one.
+    mockedResolve
+      .mockImplementationOnce(() => ({ buildReplayPolicy: () => ({ sanitizeToolCallIds: false }) }))
+      .mockImplementationOnce(() => ({ buildReplayPolicy: () => ({ sanitizeToolCallIds: true }) }));
 
-    const firstPolicy = resolveTranscriptPolicy({
-      provider: "mistral",
-      modelId: "mistral-large-latest",
+    const stalePolicy = resolveTranscriptPolicy({
+      provider: "demo",
       config,
-      env: process.env,
-    });
-    const secondPolicy = resolveTranscriptPolicy({
-      provider: "mistral",
-      modelId: "mistral-large-latest",
-      config,
-      env: process.env,
+      modelApi: "openai-completions",
     });
 
-    expect(secondPolicy).toBe(firstPolicy);
+    await invalidatePluginRuntimeDiscoveryAfterConfigMutation();
+
+    const refreshedPolicy = resolveTranscriptPolicy({
+      provider: "demo",
+      config,
+      modelApi: "openai-completions",
+    });
+
+    expect(stalePolicy.sanitizeToolCallIds).toBe(false);
+    expect(refreshedPolicy.sanitizeToolCallIds).toBe(true);
   });
 
   it("does not reuse cached replay policies across custom env objects", () => {
