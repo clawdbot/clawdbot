@@ -21,11 +21,8 @@ afterEach(() => {
 describe("Ollama provider", () => {
   const createAgentDir = () => mkdtempSync(join(tmpdir(), "openclaw-test-"));
 
-  const fetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>): string[] =>
-    fetchMock.mock.calls.map(([input]) => String(input));
-
   const countFetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>, suffix: string): number =>
-    fetchCallUrls(fetchMock).reduce((count, url) => count + (url.endsWith(suffix) ? 1 : 0), 0);
+    fetchMock.mock.calls.filter(([input]) => String(input).endsWith(suffix)).length;
 
   const stubOllamaFetch = (fetchMock: ReturnType<typeof vi.fn>) => {
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
