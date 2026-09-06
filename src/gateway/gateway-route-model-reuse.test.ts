@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -19,6 +20,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const PROVIDERS = ["route-proof-stable", "route-proof-dynamic"] as const;
 const PLUGIN_ID = "route-model-proof";
+const capacityModelId = (index: number) => `capacity-${index}`;
 type Counts = Record<string, { resolve: number; prepare: number }>;
 
 // This fixture records calls through the public provider and Gateway APIs. Its
@@ -151,7 +153,7 @@ describe("Gateway route model reuse", () => {
           const gateway = instance;
           const pluginDir = path.join(gateway.state.stateDir, "proof-provider");
           await writeProviderProbe(pluginDir);
-          const capacityModels = Array.from({ length: 65 }, (_, index) => `capacity-${index}`);
+          const capacityModels = Array.from({ length: 65 }, (_, index) => capacityModelId(index));
           const modelIds = ["warmup", "stable", "dynamic", ...capacityModels];
           const definitions = modelIds.map((id) => ({
             id,
@@ -302,6 +304,7 @@ describe("Gateway route model reuse", () => {
               ]),
             );
             const after = (await stats()).counts[key];
+            assert(after, `Provider observations missing for ${key}`);
             return {
               resolve: after.resolve - before.resolve,
               prepare: after.prepare - before.prepare,
@@ -309,26 +312,33 @@ describe("Gateway route model reuse", () => {
             };
           };
           await turn(PROVIDERS[0], "warmup");
-          const stable = [await turn(PROVIDERS[0], "stable"), await turn(PROVIDERS[0], "stable")];
+          const stable = [
+            await turn(PROVIDERS[0], "stable"),
+            await turn(PROVIDERS[0], "stable"),
+          ] as const;
           await turn(PROVIDERS[1], "warmup");
           const dynamic = [
             await turn(PROVIDERS[1], "dynamic"),
             await turn(PROVIDERS[1], "dynamic"),
-          ];
+          ] as const;
           // Churn more than a memo-sized set through the Gateway and verify each output.
           // Owner tests isolate exact eviction from other model-discovery caches.
           const cold = [];
           for (const model of capacityModels.slice(0, 64)) {
             cold.push(await turn(PROVIDERS[0], model));
           }
-          const oldestAt64 = await turn(PROVIDERS[0], capacityModels[0]);
-          const newestAt64 = await turn(PROVIDERS[0], capacityModels[63]);
-          await turn(PROVIDERS[0], capacityModels[64]);
-          const oldestAfter65 = await turn(PROVIDERS[0], capacityModels[0]);
-          const newestAfter65 = await turn(PROVIDERS[0], capacityModels[64]);
+          const oldestAt64 = await turn(PROVIDERS[0], capacityModelId(0));
+          const newestAt64 = await turn(PROVIDERS[0], capacityModelId(63));
+          await turn(PROVIDERS[0], capacityModelId(64));
+          const oldestAfter65 = await turn(PROVIDERS[0], capacityModelId(0));
+          const newestAfter65 = await turn(PROVIDERS[0], capacityModelId(64));
           expect(requests.at(-1)?.maxTokens).toBe("1024");
           const currentConfig = await activeClient.request<{ hash: string }>("config.get", {});
           expect(currentConfig.hash).toBeTypeOf("string");
+          const updatedDefinitions = structuredClone(definitions);
+          for (const model of updatedDefinitions) {
+            model.maxTokens = 2048;
+          }
           // config.patch acknowledges a hot write only after runtime application.
           await activeClient.request(
             "config.patch",
@@ -338,7 +348,7 @@ describe("Gateway route model reuse", () => {
                 models: {
                   providers: {
                     [PROVIDERS[0]]: {
-                      models: definitions.map((model) => ({ ...model, maxTokens: 2048 })),
+                      models: updatedDefinitions,
                     },
                   },
                 },
@@ -349,7 +359,7 @@ describe("Gateway route model reuse", () => {
           await expect
             .poll(async () => (await stats()).reloadSettled, { timeout: 30_000 })
             .toBe(true);
-          const afterReload = await turn(PROVIDERS[0], capacityModels[64]);
+          const afterReload = await turn(PROVIDERS[0], capacityModelId(64));
           expect(requests.at(-1)?.maxTokens).toBe("2048");
           expect(gateway.child?.pid).toBe(gatewayPid);
           const churn = {
@@ -388,9 +398,9 @@ describe("Gateway route model reuse", () => {
         },
         async () => {
           server.closeAllConnections();
-          await new Promise<void>((resolve, reject) =>
-            server.close((error) => (error ? reject(error) : resolve())),
-          );
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
         },
       );
     },
