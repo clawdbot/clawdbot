@@ -703,7 +703,7 @@ describe("createAgentSession tool defaults", () => {
         if (!target) {
           throw new Error("Expected a saved transcript target");
         }
-        const events = await loadTranscriptEvents(target);
+        const events = SessionManager.open(target).getEntries();
         expect(
           events.flatMap((event) =>
             event.type === "message" && event.message.role === "toolResult" ? [event.message] : [],
