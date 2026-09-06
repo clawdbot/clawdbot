@@ -41,13 +41,31 @@ lifecycle, such as removal of the node role or a successful reconnect that no
 longer needs that approval.
 
 A pending capability request does not grant access. Approval still requires the
-operator scopes for the requested commands. A connected node adopts the
-approved surface only when its current pairing identity and generation match
-the request, and only up to the capabilities and commands declared by that
-connection.
+operator scopes for the requested commands. Before updating a live connection,
+the Gateway checks its pairing identity and generation against the persisted
+approval and limits access to the capabilities and commands that connection
+declared.
 
 The **5-minute expiry** still applies to **device-pairing** requests,
 not to capability approvals on an already-paired device.
+
+### Upgrades and older writers
+
+Upgrade the Gateway and any CLI that directly writes the same state database
+together. An older app or CLI that only calls the Gateway over RPC is not a
+direct database writer; the Gateway handles those requests.
+
+The capability-request storage format is unchanged. Older Gateway or direct CLI
+writers still apply the former five-minute expiry and can persist deletion of
+aged requests, including during unrelated pairing updates. Downgrading can
+therefore restore the old expiry behavior; lifecycle retention is not guaranteed
+while an older version writes the database.
+
+On upgrade, an aged request that an older version only hid from its output can
+become visible again if it is still stored. It still requires explicit approval.
+An upgrade cannot recover an already deleted request: the node must submit a
+fresh capability request for the operator to review. Existing device pairing and
+previously approved capabilities are separate from that pending request.
 
 ## One-paste node pairing
 
