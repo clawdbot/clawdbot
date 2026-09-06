@@ -1134,7 +1134,7 @@ best-effort and may drop records on saturation, terminal persistence failure,
 or shutdown timeout, so this surface is not a lossless compliance archive.
 
 Recording is on by default and controlled by
-[`logging.audit.enabled`](/gateway/configuration-reference#audit). Message
+[`logging.audit.enabled`](/gateway/config-observability#audit). Message
 recording is separately controlled by `logging.audit.messages` and defaults to
 `"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written

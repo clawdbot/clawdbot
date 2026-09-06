@@ -452,14 +452,13 @@ export function buildPreparedProviderTestPlan(params: {
   sourceCfg: OpenClawConfig;
   preparedConfig: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
-  selectedProfileId?: string;
   providerPlugin?: ProviderPlugin;
   modelRef: string;
   pluginId?: string;
   routeAgentId: string;
   agentDir: string;
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
-}): SetupInferenceTestPlan {
+}): SetupInferenceTestPlan | { error: string } {
   const ref = parseRef(params.modelRef);
   // Auth starters are raw provider input; guided discovery already chose its canonical model.
   ref.model =
@@ -470,6 +469,16 @@ export function buildPreparedProviderTestPlan(params: {
       }),
     ) ?? ref.model;
   const modelRef = `${ref.provider}/${ref.model}`;
+  // Auth can return several providers; only the selected model's credential enters its plan.
+  const providerId = normalizeProviderId(ref.provider);
+  const matchingProfile = params.profiles.find(
+    (profile) => normalizeProviderId(profile.credential.provider) === providerId,
+  );
+  if (params.profiles.length > 0 && !matchingProfile) {
+    return {
+      error: `${params.providerPlugin?.label ?? ref.provider} did not return credentials for "${modelRef}".`,
+    };
+  }
   const projection = {
     baseConfig: params.cfg,
     preparedConfig: params.preparedConfig,
@@ -479,11 +488,11 @@ export function buildPreparedProviderTestPlan(params: {
     pluginId: params.pluginId,
     agentId: params.routeAgentId,
   };
-  const prepared = params.selectedProfileId
+  const prepared = matchingProfile
     ? prepareManualAuthForActivation({
         ...projection,
         profiles: params.profiles,
-        selectedProfileId: params.selectedProfileId,
+        selectedProfileId: matchingProfile.profileId,
       })
     : {
         config: projectManualInferenceConfig(projection),

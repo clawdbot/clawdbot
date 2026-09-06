@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
@@ -1732,10 +1733,7 @@ describe("startGatewayConfigReloader include files", () => {
     const initialSnapshot = await configIo.readConfigFileSnapshot();
     expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
-    let signalWatcherReady!: () => void;
-    const watcherReady = new Promise<void>((resolve) => {
-      signalWatcherReady = resolve;
-    });
+    const { promise: watcherReady, resolve: signalWatcherReady } = createDeferred();
     const reloader = startGatewayConfigReloader({
       initialConfig: initialSnapshot.config,
       initialCompareConfig: initialSnapshot.sourceConfig,
@@ -2337,10 +2335,7 @@ describe("startGatewayConfigReloader", () => {
   )(
     "settles an in-process $kind receipt after its owner is $outcome",
     async ({ kind, outcome }) => {
-      let releaseReload!: () => void;
-      const reloadGate = new Promise<void>((resolve) => {
-        releaseReload = resolve;
-      });
+      const { promise: reloadGate, resolve: releaseReload } = createDeferred();
       const finishReload = async () => {
         await reloadGate;
         if (outcome === "rejected") {
@@ -2413,14 +2408,8 @@ describe("startGatewayConfigReloader", () => {
     setRuntimeConfigSnapshot(initialConfig, initialConfig);
     initializePublishedConfigRuntimeEnv(initialConfig);
 
-    let releaseHotReload!: () => void;
-    const hotReloadGate = new Promise<void>((resolve) => {
-      releaseHotReload = resolve;
-    });
-    let markHotReloadStarted!: () => void;
-    const hotReloadStarted = new Promise<void>((resolve) => {
-      markHotReloadStarted = resolve;
-    });
+    const { promise: hotReloadGate, resolve: releaseHotReload } = createDeferred();
+    const { promise: hotReloadStarted, resolve: markHotReloadStarted } = createDeferred();
     const onHotReload = vi.fn(
       async (
         plan: GatewayReloadPlan,
@@ -3055,14 +3044,8 @@ describe("startGatewayConfigReloader", () => {
             hash: "external-b",
           }),
         );
-      let markStarted: (() => void) | undefined;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      let releaseA: (() => void) | undefined;
-      const blocked = new Promise<void>((resolve) => {
-        releaseA = resolve;
-      });
+      const { promise: started, resolve: markStarted } = createDeferred();
+      const { promise: blocked, resolve: releaseA } = createDeferred();
       const publishA = async (
         _plan: GatewayReloadPlan,
         _nextConfig: OpenClawConfig,
@@ -3122,14 +3105,8 @@ describe("startGatewayConfigReloader", () => {
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValueOnce(makeSnapshot({ config: configA, hash: "post-commit-a" }))
       .mockResolvedValueOnce(makeSnapshot({ config: initialConfig, hash: "reverse-b" }));
-    let recordCommitted: (() => void) | undefined;
-    const committed = new Promise<void>((resolve) => {
-      recordCommitted = resolve;
-    });
-    let releaseTail = () => {};
-    const tailGate = new Promise<void>((resolve) => {
-      releaseTail = resolve;
-    });
+    const { promise: committed, resolve: recordCommitted } = createDeferred();
+    const { promise: tailGate, resolve: releaseTail } = createDeferred();
     const onHotReload = vi.fn(
       async (
         plan: GatewayReloadPlan,
@@ -3318,14 +3295,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "restart-invalid-b",
         }),
       );
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    let releaseA: (() => void) | undefined;
-    const blocked = new Promise<void>((resolve) => {
-      releaseA = resolve;
-    });
+    const { promise: started, resolve: markStarted } = createDeferred();
+    const { promise: blocked, resolve: releaseA } = createDeferred();
     const restartRequests: OpenClawConfig[] = [];
     const harness = createReloaderHarness(readSnapshot, {
       initialConfig,
@@ -3392,14 +3363,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "unlink-b",
         }),
       );
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    let releaseA: (() => void) | undefined;
-    const blocked = new Promise<void>((resolve) => {
-      releaseA = resolve;
-    });
+    const { promise: started, resolve: markStarted } = createDeferred();
+    const { promise: blocked, resolve: releaseA } = createDeferred();
     const harness = createReloaderHarness(readSnapshot, {
       initialConfig,
       onHotReload: async (_plan, _nextConfig, ownership) => {
@@ -3457,14 +3422,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "plugin-read-invalid-b",
         }),
       );
-    let markPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      markPluginReadStarted = resolve;
-    });
-    let releasePluginRead: (() => void) | undefined;
-    const pluginReadBlocked = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: markPluginReadStarted } = createDeferred();
+    const { promise: pluginReadBlocked, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       markPluginReadStarted?.();
       await pluginReadBlocked;
@@ -3509,14 +3468,8 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: nextConfig, hash: "active-reload" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
-    let markReloadStarted: (() => void) | undefined;
-    const reloadStarted = new Promise<void>((resolve) => {
-      markReloadStarted = resolve;
-    });
-    let finishReload: (() => void) | undefined;
-    const reloadBlocked = new Promise<void>((resolve) => {
-      finishReload = resolve;
-    });
+    const { promise: reloadStarted, resolve: markReloadStarted } = createDeferred();
+    const { promise: reloadBlocked, resolve: finishReload } = createDeferred();
     harness.onHotReload.mockImplementationOnce(async () => {
       markReloadStarted?.();
       await reloadBlocked;
@@ -3780,14 +3733,8 @@ describe("startGatewayConfigReloader", () => {
   );
 
   it("keeps restart preparation inside the accepted config root", async () => {
-    let releaseRestart = () => {};
-    let noteRestartStarted = () => {};
-    const restartStarted = new Promise<void>((resolve) => {
-      noteRestartStarted = resolve;
-    });
-    const restartPending = new Promise<void>((resolve) => {
-      releaseRestart = resolve;
-    });
+    const { promise: restartStarted, resolve: noteRestartStarted } = createDeferred();
+    const { promise: restartPending, resolve: releaseRestart } = createDeferred();
     const initialConfig: OpenClawConfig = {
       gateway: { reload: {}, port: 18789 },
     };
@@ -4382,10 +4329,7 @@ describe("startGatewayConfigReloader", () => {
       env: targetEnv,
       previousOwnedEnv: { [envKey]: "old" },
     });
-    let releaseRestart = () => {};
-    const restartGate = new Promise<void>((resolve) => {
-      releaseRestart = resolve;
-    });
+    const { promise: restartGate, resolve: releaseRestart } = createDeferred();
     const harness = createReloaderHarness(
       vi.fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-env" })),
       {
@@ -4515,14 +4459,8 @@ describe("startGatewayConfigReloader", () => {
     },
   ])("preserves slow in-process $label intent across its watcher echo", async (testCase) => {
     const hash = `slow-${testCase.label}`;
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -4570,14 +4508,8 @@ describe("startGatewayConfigReloader", () => {
     const initialConfig = {
       gateway: { reload: {} },
     } satisfies OpenClawConfig;
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -4972,14 +4904,8 @@ describe("startGatewayConfigReloader", () => {
         auth: { mode: "token" as const, token: "resolved-replay-token" },
       },
     } satisfies OpenClawConfig;
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -5042,14 +4968,8 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("preserves the newest pending write when a watcher supersedes a slow write", async () => {
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -5088,14 +5008,8 @@ describe("startGatewayConfigReloader", () => {
     emitWatcherEcho: boolean,
     latestMode: "auto" | "none",
   ) => {
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -5172,14 +5086,8 @@ describe("startGatewayConfigReloader", () => {
   );
 
   it("preserves a pending restart intent when a newer write arrives during missing-file retry", async () => {
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
