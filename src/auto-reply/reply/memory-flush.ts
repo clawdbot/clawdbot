@@ -14,7 +14,6 @@ import {
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
-  SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -143,21 +142,19 @@ function resolveMaintenanceGateState<
 
   const freshOrProjectedTotalTokens =
     resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
-  // Last-resort fallback: when no projected token count and no fresh total are
-  // available (provider outage → usage stale), trust a *versioned* stale
-  // persisted total at a safety factor so the gate keeps its eyes instead of
-  // going blind and silently skipping compaction (#138871). Only versioned
-  // totals (totalTokensVersion === SESSION_TOTAL_TOKENS_VERSION) qualify —
-  // unversioned legacy cumulative CLI totals remain ignored because they
-  // historically over-count retries and are not comparable to a fresh
-  // context snapshot. The discount biases toward the real-world ceiling of a
-  // still-growing transcript rather than over-trusting a frozen snapshot.
-  const staleFallbackTotalTokens =
-    params.entry.totalTokensVersion === SESSION_TOTAL_TOKENS_VERSION
-      ? Math.floor(
-          (resolveSessionTotalTokens(params.entry) ?? 0) * STALE_TOTAL_TOKENS_SAFETY_FACTOR,
-        )
-      : 0;
+  // Last-resort fallback: when no projected token count and no fresh total
+  // are available (provider outage → usage stale), trust the persisted
+  // stale total at a safety factor so the gate keeps its eyes instead of
+  // going blind and silently skipping compaction (#138871). We reach this
+  // branch only when resolveFreshSessionTotalTokens already returned
+  // undefined (totalTokensFresh !== true or version mismatch), so the total
+  // is genuinely stale. The 0.8 discount biases toward the real-world
+  // ceiling of a still-growing transcript rather than over-trusting a
+  // frozen snapshot; it also mitigates legacy cumulative-CLI totals that
+  // historically over-count retries.
+  const staleFallbackTotalTokens = Math.floor(
+    (resolveSessionTotalTokens(params.entry) ?? 0) * STALE_TOTAL_TOKENS_SAFETY_FACTOR,
+  );
   const totalTokens = freshOrProjectedTotalTokens ?? staleFallbackTotalTokens;
   if (!totalTokens || totalTokens <= 0) {
     return null;
