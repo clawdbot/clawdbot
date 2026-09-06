@@ -43,7 +43,11 @@ enum IOSDeviceSettingsConsent: Equatable {
                 The Gateway can request photos and video from this device's camera, subject to iOS permission.
                 """)
         case .healthSummary:
-            String(localized: "The Gateway can request summaries of the Apple Health data you choose to share.")
+            String(localized: """
+            OpenClaw reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is \
+            requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; \
+            raw samples stay on this device and results may remain in chat history.
+            """)
         case .locationAlways:
             String(localized: "The Gateway can request this device's location even when OpenClaw is not in use.")
         case .notificationEnrollment:

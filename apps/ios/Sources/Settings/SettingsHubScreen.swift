@@ -8,7 +8,7 @@ struct SettingsHubScreen: View {
     @Binding var navigationPath: [SettingsRoute]
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onRouteChange: ((SettingsRoute?) -> Void)?
-    var onApprovalNotificationsRoute: ((String) -> Void)?
+    var onApprovalNotificationsRoute: ((String?) -> Void)?
 
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
@@ -26,9 +26,12 @@ struct SettingsHubScreen: View {
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
             isScreenshotMode: ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")),
-            let url = AuthenticatedControlUI.pageURL(config: config, path: "settings", queryItems: [])
+            let url = AuthenticatedControlUI.pageURL(
+                config: config,
+                path: DashboardRouteMap.settingsPath,
+                queryItems: [])
         {
-            SettingsDashboardRoot(
+            EmbeddedDashboardContent(
                 appModel: self.appModel,
                 appearanceModel: self.appearanceModel,
                 gatewayController: self.gatewayController,
@@ -77,10 +80,9 @@ struct SettingsHubScreen: View {
                 }
         } else {
             SettingsProTab(
-                usesOfflineFallback: true,
                 registersNavigationDestinations: false,
                 headerSidebarAction: self.headerSidebarAction,
-                navigateToRoute: self.push)
+                onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
         }
     }
 
@@ -88,7 +90,6 @@ struct SettingsHubScreen: View {
         SettingsProTab(
             directRoute: route,
             registersNavigationDestinations: false,
-            navigateToRoute: self.push,
             onRouteChange: self.onRouteChange,
             onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
     }
@@ -123,7 +124,7 @@ struct SettingsHubScreen: View {
     }
 }
 
-private struct SettingsDashboardRoot: View {
+struct EmbeddedDashboardContent: View {
     @State private var bridge: IOSDeviceSettingsBridge
     let url: URL
     let config: GatewayConnectConfig?

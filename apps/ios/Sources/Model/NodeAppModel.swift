@@ -1392,18 +1392,6 @@ final class NodeAppModel {
         }
     }
 
-    func setTalkProviderSelection(_ rawValue: String) {
-        let selection = TalkModeProviderSelection.resolved(rawValue)
-        UserDefaults.standard.set(selection.rawValue, forKey: TalkModeProviderSelection.storageKey)
-        self.talkMode.applyProviderSelectionChanged()
-    }
-
-    func setTalkRealtimeVoiceSelection(_ rawValue: String) {
-        let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(rawValue) ?? ""
-        UserDefaults.standard.set(voice, forKey: TalkModeRealtimeVoiceSelection.storageKey)
-        self.talkMode.applyProviderSelectionChanged()
-    }
-
     private func requestTalkPermissionUpgrade() {
         if self.forceOperatorTalkPermissionUpgradeRequest {
             guard case .requestFailed = self.talkMode.gatewayTalkPermissionState else { return }
@@ -1774,24 +1762,6 @@ final class NodeAppModel {
             Task { [weak self] in
                 await self?.refreshShareRouteFromGateway()
             }
-        }
-    }
-
-    func setGlobalWakeWords(_ words: [String]) async {
-        let sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
-
-        struct Payload: Codable {
-            var triggers: [String]
-        }
-        let payload = Payload(triggers: sanitized)
-        guard let data = try? JSONEncoder().encode(payload),
-              let json = String(data: data, encoding: .utf8)
-        else { return }
-
-        do {
-            _ = try await self.operatorGateway.request(method: "voicewake.set", paramsJSON: json, timeoutSeconds: 12)
-        } catch {
-            // Best-effort only.
         }
     }
 
@@ -5407,24 +5377,6 @@ extension NodeAppModel {
         } catch {
             // Best-effort only.
         }
-    }
-
-    func runSharePipelineSelfTest() async {
-        self.recordShareEvent("Share self-test running…")
-
-        let payload = SharedContentPayload(
-            title: "OpenClaw Share Self-Test",
-            url: URL(string: "https://openclaw.ai/share-self-test"),
-            text: "Validate iOS share->deep-link->gateway forwarding.")
-        guard let deepLink = ShareToAgentDeepLink.buildURL(
-            from: payload,
-            instruction: "Reply with: SHARE SELF-TEST OK")
-        else {
-            self.recordShareEvent("Self-test failed: could not build deep link.")
-            return
-        }
-
-        await handleDeepLink(url: deepLink)
     }
 
     func refreshLastShareEventFromRelay() {

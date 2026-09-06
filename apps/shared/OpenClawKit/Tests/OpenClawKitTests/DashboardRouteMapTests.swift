@@ -11,12 +11,18 @@ struct DashboardRouteMapTests {
         #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
         #expect(DashboardRouteMap.talkSettingsPath == "/settings/talk")
         #expect(DashboardRouteMap.skillsPagePath == "/skills")
-        #expect(DashboardRouteMap.cronJobsPagePath == "/cron")
+        #expect(DashboardRouteMap.cronJobsPagePath == "/automations")
         #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
         #expect(DashboardRouteMap.devicesSettingsPath == "/settings/devices")
     }
 
-    @Test(arguments: ["/settings/channels", "/settings/talk", "/skills", "/cron"])
+    @Test(arguments: [
+        DashboardRouteMap.channelsSettingsPath, DashboardRouteMap.talkSettingsPath,
+        DashboardRouteMap.skillsPagePath, DashboardRouteMap.cronJobsPagePath,
+        DashboardRouteMap.activityPagePath, DashboardRouteMap.workboardPagePath,
+        DashboardRouteMap.skillWorkshopPagePath, DashboardRouteMap.devicesSettingsPath,
+        DashboardRouteMap.dreamingPagePath, DashboardRouteMap.usagePagePath,
+    ])
     func `same-app path validation accepts rooted paths`(_ path: String) {
         #expect(DashboardRouteMap.isValidSameAppPath(path))
     }
@@ -47,6 +53,13 @@ struct DashboardRouteMapTests {
         DashboardRouteMap.deviceSettingsPath,
         DashboardRouteMap.devicePermissionsSettingsPath,
         DashboardRouteMap.updatesSettingsPath,
+        DashboardRouteMap.activityPagePath,
+        DashboardRouteMap.workboardPagePath,
+        DashboardRouteMap.skillWorkshopPagePath,
+        DashboardRouteMap.devicesSettingsPath,
+        DashboardRouteMap.dreamingPagePath,
+        DashboardRouteMap.usagePagePath,
+        DashboardRouteMap.cronJobsPagePath,
     ])
     func `device settings routes preserve the Gateway base path and auth fragment`(_ path: String) throws {
         let baseURL = try #require(URL(string: "https://gateway.example.test/control/#token=test-token"))

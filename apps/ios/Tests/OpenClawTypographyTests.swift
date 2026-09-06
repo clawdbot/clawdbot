@@ -183,33 +183,11 @@ struct OpenClawTypographyTests {
         let settingsHub = try String(
             contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
             encoding: .utf8)
+        let dashboardPage = try String(
+            contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"),
+            encoding: .utf8)
         let approvalDialog = try String(
             contentsOf: Self.sourceURL("Gateway/ExecApprovalPromptDialog.swift"),
-            encoding: .utf8)
-        let privacyAccess = try String(
-            contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
-            encoding: .utf8)
-        let appleHealthAccess = try String(
-            contentsOf: Self.sourceURL("Health/AppleHealthAccessSectionView.swift"),
-            encoding: .utf8)
-        let skillWorkshop = try String(
-            contentsOf: Self.sourceURL("Design/IPadSkillWorkshopScreen.swift"),
-            encoding: .utf8)
-        let agentDestinations = try String(
-            contentsOf: Self.sourceURL("Design/AgentProTab+Destinations.swift"),
-            encoding: .utf8)
-        let dreaming = try String(
-            contentsOf: Self.sourceURL("Design/AgentProDreamingDestination.swift"),
-            encoding: .utf8)
-        let instances = try String(contentsOf: Self.sourceURL("Design/AgentProNodesDestination.swift"), encoding: .utf8)
-        let channels = try String(
-            contentsOf: Self.sourceURL("Design/SettingsChannelsDestination.swift"),
-            encoding: .utf8)
-        let skills = try String(
-            contentsOf: Self.sourceURL("Design/SettingsSkillsDestination.swift"),
-            encoding: .utf8)
-        let automations = try String(
-            contentsOf: Self.sourceURL("Design/AgentAutomationDetailScreen.swift"),
             encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
         let chatTypography = try String(
@@ -232,14 +210,6 @@ struct OpenClawTypographyTests {
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift"),
             encoding: .utf8)
-
-        #expect(automations.contains(".font(OpenClawType.body)"))
-        #expect(automations.contains(".font(OpenClawType.headline)"))
-        #expect(automations.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(automations.contains(".font(OpenClawType.caption)"))
-        #expect(!automations.contains(".font(.body"))
-        #expect(!automations.contains(".font(.headline"))
-        #expect(!automations.contains(".font(.caption"))
 
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(proComponents.contains("primaryActionTitle.text"))
@@ -303,6 +273,8 @@ struct OpenClawTypographyTests {
             from: "Text(self.appModel.pendingExecApprovalCount.formatted())",
             to: "}")
         #expect(approvalBadge.contains(".font(OpenClawType.captionSemiBold)"))
+        let dashboardClose = try Self.extract(dashboardPage, from: "Text(\"Done\")", to: "}")
+        #expect(dashboardClose.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(settingsSections.contains("Text(warningText)"))
         #expect(settingsSections.contains(".font(OpenClawType.caption)"))
         #expect(approvalDialog.contains("Text(warningText)"))
@@ -312,12 +284,17 @@ struct OpenClawTypographyTests {
         #expect(approvalDialog.contains("exec-approval-review-scroll"))
         #expect(approvalDialog.contains("exec-approval-actions"))
         #expect(approvalDialog.contains("ViewThatFits(in: .horizontal)"))
-        #expect(settingsSections.contains("self.settingsToggle(\"Show Talk Control\", isOn: self.$talkButtonEnabled)"))
         #expect(settingsSections.contains("OpenClawToggleIndicator(isOn: isOn.wrappedValue)"))
-        #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))
         #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
-        #expect(settingsSections.contains("private struct AppearanceSettingsScreen"))
-        #expect(settingsSections.contains("Section(\"Gateway\")"))
+        let gatewayDestination = try Self.extract(
+            settingsSections,
+            from: "var gatewayDestination: some View",
+            to: "private var gatewayStatusCard: some View")
+        let reconnect = try Self.extract(
+            gatewayDestination,
+            from: "Label(\"Reconnect\", systemImage:",
+            to: "}")
+        #expect(reconnect.contains(".font(OpenClawType.body)"))
         #expect(settingsSections.contains("SettingsDetailRow(\"Address\", value: .verbatim(self.gatewayAddress))"))
         #expect(settingsSections.contains("func gatewayActionButton"))
         #expect(settingsSections.contains("func settingsToggle"))
@@ -334,7 +311,7 @@ struct OpenClawTypographyTests {
         let gatewaySecureField = try Self.extract(
             settingsSections,
             from: "func gatewaySecureField",
-            to: "    var voiceFeatureCard")
+            to: "    var diagnosticsAdvancedCard")
         #expect(gatewaySecureField.contains(".accessibilityLabel(Text(placeholder))"))
         #expect(gatewaySecureField.contains(".accessibilityHidden(true)"))
         #expect(gatewaySecureField.contains(".textInputAutocapitalization(.never)"))
@@ -356,28 +333,7 @@ struct OpenClawTypographyTests {
         #expect(settingsUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
         #expect(settingsSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
-        #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
-        #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
-        #expect(appleHealthAccess.contains("Text(healthError)"))
-        #expect(appleHealthAccess.contains(".font(OpenClawType.footnote)"))
-        let permissionRow = try String(
-            contentsOf: Self.sourceURL("Permissions/DevicePermissionRow.swift"),
-            encoding: .utf8)
-        #expect(permissionRow.contains("Text(actionTitle)"))
-        #expect(permissionRow.contains(".font(OpenClawType.footnoteSemiBold)"))
-
-        #expect(!skillWorkshop.contains("Button(\"Done\")"))
-        #expect(skillWorkshop.contains("Label(\"Refresh\", systemImage: \"arrow.clockwise\")"))
-        #expect(skillWorkshop.contains("Text(\"Default agent\")"))
-        #expect(skillWorkshop.contains("Text(\"Inspect\")"))
-        #expect(skillWorkshop.contains("Text(\"Apply\")"))
-        #expect(skillWorkshop.contains("Text(\"Reject\")"))
-
-        #expect(skills.contains("prompt: Text(\"Search ClawHub\").font(OpenClawType.body)"))
-
-        for source in [agentDestinations, dreaming, instances, channels, skills, docs] {
-            #expect(source.contains(".font(OpenClawType.body)"))
-        }
+        #expect(docs.contains(".font(OpenClawType.body)"))
 
         #expect(chatMessageViews.contains("typography: segment.kind.markdownTypography"))
         #expect(chatMessageViews.contains(".font(OpenClawChatTypography.caption)"))

@@ -54,6 +54,29 @@ the Gateway connection controls followed by those four rows in a **Device**
 section. Connection and these device screens remain available without loading
 the Dashboard.
 
+Channels (`/settings/channels`) and Skills (`/skills`) are managed in the
+Dashboard. Appearance, notifications, privacy, permissions, and Voice & Talk
+settings also use the Dashboard pages; the separate native settings screens and
+system-agent settings chat have been removed. Agent selection and read-only
+Files browsing remain native.
+
+The sidebar opens these Gateway pages in the embedded Dashboard without web
+navigation chrome:
+
+| Sidebar destination | Dashboard path            |
+| ------------------- | ------------------------- |
+| Activity            | `/activity`               |
+| Workboard           | `/workboard`              |
+| Skill Workshop      | `/skills/workshop`        |
+| Instances           | `/settings/devices`       |
+| Dreaming            | `/settings/memory/dreams` |
+| Usage               | `/usage`                  |
+| Automations         | `/automations`            |
+
+These pages require the same connected `operator.admin` session as Settings.
+Without that access, they show the native Gateway connection guidance. Instances
+opens **Devices**, the Dashboard owner of paired nodes and connected clients.
+
 ## Session colors
 
 Long-press a session in the sidebar or Sessions screen to open its session actions, then choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.

@@ -110,17 +110,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 .waitForExistence(timeout: 8) == true)
     }
 
-    func testAutomationManagementScreenshot() {
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "control",
-            initialDestination: "cron",
-            name: "automation-management"))
-
-        XCTAssertTrue(self.app?.staticTexts["Release briefing"].waitForExistence(timeout: 8) == true)
-        XCTAssertTrue(self.app?.staticTexts["Weekly project review"].exists == true)
-        self.attachScreenshot(named: "automation-management")
-    }
-
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
         app.launchArguments += ["--openclaw-reset-onboarding"]
@@ -1388,15 +1377,21 @@ extension OpenClawSnapshotUITests {
         hierarchy.name = "\(origin)-approvals-notifications-hierarchy"
         hierarchy.lifetime = .keepAlways
         add(hierarchy)
-        XCTAssertTrue(reachedNotifications, "Open Notifications must push from \(origin) Approvals")
-        XCTAssertTrue(app.switches.firstMatch.exists, "Notifications must render its delivery control")
+        XCTAssertTrue(
+            reachedNotifications,
+            "Open Notifications must open Dashboard notification settings from \(origin) Approvals")
+        let dashboard = app.webViews.firstMatch
+        XCTAssertTrue(
+            dashboard.waitForExistence(timeout: 8),
+            "Notification settings must render in the embedded Dashboard")
+        XCTAssertTrue(dashboard.staticTexts["Notifications"].waitForExistence(timeout: 8))
         XCTAssertFalse(
             approvalDialog.exists,
-            "The approval being reviewed must not cover Notifications")
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.exists)
-        back.tap()
-        XCTAssertTrue(notifications.waitForExistence(timeout: 5), "Back must return to Approvals")
+            "The approval being reviewed must not cover Dashboard notification settings")
+        let close = app.buttons["DashboardPage.Close"]
+        XCTAssertTrue(close.exists)
+        close.tap()
+        XCTAssertTrue(notifications.waitForExistence(timeout: 5), "Done must return to Approvals")
         self.attachScreenshot(named: "\(origin)-approvals-after-back")
     }
 
