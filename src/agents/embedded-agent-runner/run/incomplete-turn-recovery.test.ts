@@ -3,6 +3,7 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
@@ -149,14 +150,7 @@ describe("incomplete-turn recovery policy", () => {
         provider: "anthropic",
         model: "claude-opus-4.7",
         content: [],
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
       }),
     },
     {

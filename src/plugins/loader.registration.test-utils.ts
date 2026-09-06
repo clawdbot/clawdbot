@@ -10,10 +10,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
-import {
-  getDetachedTaskLifecycleRuntimeRegistration,
-  registerDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime-state.js";
+import { setDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.test-support.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { registerEmbeddingProvider } from "./embedding-providers.js";
@@ -72,6 +69,7 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
+  requireActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode,
@@ -959,7 +957,7 @@ describe("loadOpenClawPlugins", () => {
   it("does not replace the active detached task runtime during non-activating loads", () => {
     useNoBundledPlugins();
     const activeRuntime = createDetachedTaskRuntimeStub("active");
-    registerDetachedTaskLifecycleRuntime("active-runtime", activeRuntime);
+    setDetachedTaskLifecycleRuntime(activeRuntime, "active-runtime");
 
     const plugin = writePlugin({
       id: "snapshot-detached-runtime",
@@ -991,7 +989,7 @@ describe("loadOpenClawPlugins", () => {
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-detached-runtime")?.status).toBe(
       "loaded",
     );
-    const runtimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
+    const runtimeRegistration = requireActivePluginRegistry().detachedTaskRuntimes[0];
     expect(runtimeRegistration?.pluginId).toBe("active-runtime");
     expect(runtimeRegistration?.runtime).toBe(activeRuntime);
   });
@@ -1020,6 +1018,38 @@ describe("loadOpenClawPlugins", () => {
     expect(
       (registry.detachedTaskRuntimes[0]?.runtime as { marker?: string } | undefined)?.marker,
     ).toBe("second");
+  });
+
+  it("does not let another plugin replace the detached task runtime", () => {
+    useNoBundledPlugins();
+    const plugins = ["first-plugin", "second-plugin"].map((id) =>
+      writePlugin({
+        id,
+        body: `module.exports = { register(api) {
+          api.registerDetachedTaskRuntime({ marker: ${JSON.stringify(id)} });
+        } };`,
+      }),
+    );
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: plugins.map(({ id }) => id),
+          load: { paths: plugins.map(({ dir }) => dir) },
+        },
+      },
+    });
+
+    expect(registry.detachedTaskRuntimes).toEqual([
+      { pluginId: "first-plugin", runtime: { marker: "first-plugin" } },
+    ]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "second-plugin",
+        message: "detached task runtime already registered by first-plugin",
+      }),
+    );
   });
 
   it("clears newly-registered detached task runtimes when plugin register fails", () => {
@@ -1055,7 +1085,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === "failing-detached-runtime")?.status).toBe(
       "error",
     );
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
   });
 
   it("restores detached task runtime registrations after registry replacement", () => {
@@ -1093,14 +1123,18 @@ describe("loadOpenClawPlugins", () => {
     } satisfies Parameters<typeof loadOpenClawPlugins>[0];
 
     loadOpenClawPlugins(loadOptions);
-    expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]?.pluginId).toBe(
+      "cached-detached-runtime",
+    );
 
     setActivePluginRegistry(createEmptyPluginRegistry());
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
 
     loadOpenClawPlugins(loadOptions);
 
-    expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]?.pluginId).toBe(
+      "cached-detached-runtime",
+    );
   });
 
   it("restores legacy internal hook registrations after registry replacement", async () => {
@@ -1234,7 +1268,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("clears stale detached task runtime registrations on active reloads when no plugin re-registers one", () => {
     useNoBundledPlugins();
-    registerDetachedTaskLifecycleRuntime("stale-runtime", createDetachedTaskRuntimeStub("stale"));
+    setDetachedTaskLifecycleRuntime(createDetachedTaskRuntimeStub("stale"), "stale-runtime");
 
     loadOpenClawPlugins({
       cache: false,
@@ -1246,7 +1280,7 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
   });
 
   it("restores memory capability public artifacts with a fresh registry after replacement", async () => {

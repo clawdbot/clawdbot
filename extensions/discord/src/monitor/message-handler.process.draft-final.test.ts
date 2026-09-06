@@ -497,7 +497,9 @@ describe("processDiscordMessage draft streaming final delivery", () => {
       await runProcessDiscordMessage(ctx);
 
       expect(callbackResult).toBe(true);
-      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("failed"));
+      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("failed"), {
+        complete: true,
+      });
     },
   );
 
@@ -528,7 +530,9 @@ describe("processDiscordMessage draft streaming final delivery", () => {
       await runProcessDiscordMessage(ctx);
 
       expect(callbackResult).toBe(true);
-      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("exit 1"));
+      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("exit 1"), {
+        complete: true,
+      });
     },
   );
 
@@ -762,7 +766,9 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n🛠️ Exec\n• exec done", {
+      complete: true,
+    });
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 

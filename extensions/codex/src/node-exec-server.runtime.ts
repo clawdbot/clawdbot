@@ -138,7 +138,7 @@ function createNodeExecServerProcessOwner(
         if (process.platform === "win32" && child.pid) {
           killProcessTree(child.pid, { graceMs: CODEX_EXEC_SERVER_TERMINATION_GRACE_MS });
         }
-        const exited = await closeCodexAppServerTransportAndWait(child, {
+        const { exited } = await closeCodexAppServerTransportAndWait(child, {
           forceKillDelayMs: CODEX_EXEC_SERVER_TERMINATION_GRACE_MS,
           exitTimeoutMs: CODEX_EXEC_SERVER_REAP_TIMEOUT_MS,
         });
