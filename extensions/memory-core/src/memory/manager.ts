@@ -1,4 +1,6 @@
 // Memory Core plugin module implements the concrete memory index manager.
+import { homedir } from "node:os";
+import path from "node:path";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -80,6 +82,21 @@ export async function closeMemoryIndexManagersForAgent(params: { agentId: string
   });
 }
 
+function resolveSharedMemoryManagerWorkspaceDir(cfg: OpenClawConfig, agentId: string): string {
+  // Canonical workspace rule: when the system agent is configured with an explicit
+  // default workspace, use that path directly so the shared memory manager indexes
+  // from the canonical workspace rather than a per-agent subdirectory.
+  const systemAgentId = String(cfg.agents?.defaults?.systemAgent?.agentId || "").trim();
+  const defaultWorkspace = String(cfg.agents?.defaults?.workspace || "").trim();
+  if (systemAgentId && defaultWorkspace && agentId === systemAgentId) {
+    if (defaultWorkspace === "~") return resolveUserPath(homedir());
+    if (defaultWorkspace.startsWith("~/"))
+      return resolveUserPath(path.join(homedir(), defaultWorkspace.slice(2)));
+    return resolveUserPath(defaultWorkspace);
+  }
+  return resolveAgentWorkspaceDir(cfg, agentId);
+}
+
 export class MemoryIndexManager extends MemorySearchOrchestration implements MemorySearchManager {
   protected readonly cacheKey: string;
   protected readonly purpose: MemoryIndexManagerPurpose;
@@ -139,7 +156,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           if (!settings) {
             return null;
           }
-          const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+          const workspaceDir = resolveSharedMemoryManagerWorkspaceDir(params.cfg, agentId);
           const providerRequirement = resolveMemoryEmbeddingProviderRequirement({
             cfg: params.cfg,
             agentId,
