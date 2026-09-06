@@ -155,7 +155,7 @@ export async function verifyUpdatedGateway(params: {
       summary: "Gateway service, version, plugins, channels, and readiness verified.",
     };
   }
-  const diagnosticLines = [
+  const diagnosticLines: [string, ...string[]] = [
     "Gateway did not become healthy after restart.",
     ...(!readyz ? ["Gateway /readyz did not return HTTP 200."] : []),
     ...(health.healthy && params.requireRunningService
@@ -201,7 +201,7 @@ export async function verifyUpdatedGateway(params: {
   if (params.opts.json) {
     defaultRuntime.error(diagnosticLines.join("\n"));
   } else {
-    defaultRuntime.log(theme.warn(diagnosticLines[0] ?? "Gateway did not become healthy."));
+    defaultRuntime.log(theme.warn(diagnosticLines[0]));
     for (const line of diagnosticLines.slice(1)) {
       defaultRuntime.log(theme.muted(line));
     }

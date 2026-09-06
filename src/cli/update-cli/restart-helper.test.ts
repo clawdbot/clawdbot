@@ -930,34 +930,20 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
       await cleanupScript(scriptPath);
     });
 
-    it("uses custom profile in service names", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "production",
-      });
-      expect(content).toContain("openclaw-gateway-production.service");
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses custom profile in macOS launchd label", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 502;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "staging",
-      });
-      expect(content).toContain("gui/502/ai.openclaw.staging");
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses custom profile in Windows task name", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "production",
-      });
-      expect(content).toContain("$taskName = 'OpenClaw Gateway (production)'");
-      expectWindowsRestartWaitOrdering(content);
+    it.each([
+      ["linux", "production", "openclaw-gateway-production.service"],
+      ["darwin", "staging", "gui/502/ai.openclaw.staging"],
+      ["win32", "production", "$taskName = 'OpenClaw Gateway (production)'"],
+    ])("uses the %s service identity for profile %s", async (platform, profile, expected) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      if (platform === "darwin") {
+        process.getuid = () => 502;
+      }
+      const { scriptPath, content } = await prepareAndReadScript({ OPENCLAW_PROFILE: profile });
+      expect(content).toContain(expected);
+      if (platform === "win32") {
+        expectWindowsRestartWaitOrdering(content);
+      }
       await cleanupScript(scriptPath);
     });
 

@@ -37,7 +37,7 @@ import {
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
-import type { PortConnection, PortListener, PortUsageStatus } from "../../infra/ports-types.js";
+import type { PortConnection } from "../../infra/ports-types.js";
 import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
@@ -60,6 +60,7 @@ import {
   inspectDaemonPortStatuses,
   resolveGatewayStatusSummary,
   type GatewayStatusSummary,
+  type PortStatusSummary,
 } from "./status.gateway.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -223,18 +224,8 @@ export type DaemonStatus = {
   };
   gateway?: GatewayStatusSummary;
   hostDesktop?: HostDesktopStatus;
-  port?: {
-    port: number;
-    status: PortUsageStatus;
-    listeners: PortListener[];
-    hints: string[];
-  };
-  portCli?: {
-    port: number;
-    status: PortUsageStatus;
-    listeners: PortListener[];
-    hints: string[];
-  };
+  port?: PortStatusSummary;
+  portCli?: PortStatusSummary;
   connections?: {
     port: number;
     established: PortConnection[];

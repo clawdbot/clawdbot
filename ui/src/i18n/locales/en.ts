@@ -3460,8 +3460,6 @@ export const en: TranslationMap & {
       unidentified:
         "This connection has no personal profile; sign in through Cloudflare Access, Tailscale Serve, or a trusted proxy to set a name and avatar.",
       writeRequired: "Profile editing requires operator.write access.",
-      notSet: "Identity is not set.",
-      setIdentity: "Set identity",
       avatar: "Avatar",
       avatarDescription: "PNG, JPEG, or WebP. Images are resized to 256 × 256 or smaller.",
       chooseAvatar: "Choose image",
