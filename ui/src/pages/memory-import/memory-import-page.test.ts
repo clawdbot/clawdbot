@@ -124,7 +124,7 @@ describe("MemoryImportPage", () => {
     try {
       roster.reject(new Error("Agent roster unavailable"));
       request.mockImplementation((method: string) =>
-        method === "agents.list" ? new Promise(() => undefined) : Promise.resolve(createPlan()),
+        method === "agents.list" ? createDeferredCore().promise : Promise.resolve(createPlan()),
       );
       await initial;
       await page.updateComplete;
