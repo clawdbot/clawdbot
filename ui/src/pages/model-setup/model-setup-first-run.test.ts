@@ -17,6 +17,7 @@ import {
   mountPage,
   requestParameters,
 } from "./model-setup-first-run.test-support.ts";
+import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
 
 describe("ModelSetupPage first-run inference", () => {
   beforeEach(async () => {
@@ -512,7 +513,11 @@ describe("ModelSetupPage first-run inference", () => {
       }
       expect(original.request).toHaveBeenCalledOnce();
       expect(relaunched.request).toHaveBeenCalledOnce();
-      expect(relaunched.request).toHaveBeenCalledWith("openclaw.setup.verify", { agentId: "main" });
+      expect(relaunched.request).toHaveBeenCalledWith(
+        "openclaw.setup.verify",
+        { agentId: "main" },
+        { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal: expect.any(AbortSignal) },
+      );
     },
   );
 
