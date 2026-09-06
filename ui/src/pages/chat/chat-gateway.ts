@@ -145,12 +145,26 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
     : assistant;
 }
 
-function normalizeChatErrorComparisonText(text: string): string {
-  return text
-    .replace(/^⚠️\s*/u, "")
-    .replace(/^Error:\s*/iu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
+const CHAT_ERROR_ICON_PREFIX_RE = /^(?:\u26A0\uFE0F*\s*)+/u;
+
+const CHAT_ERROR_TEXT_PREFIX_RE = /^(?:Error:\s*)+/iu;
+
+function stripChatErrorPrefix(text: string): string {
+  let previous: string;
+  let next = text;
+  do {
+    previous = next;
+    next = next.replace(CHAT_ERROR_ICON_PREFIX_RE, "").replace(CHAT_ERROR_TEXT_PREFIX_RE, "");
+  } while (next !== previous);
+  return next;
+}
+
+export function normalizeChatErrorComparisonText(text: string): string {
+  // Comparison-only: strip repeated leading warning / Error: prefixes,
+  // including interleaved and variation-selector forms, preserving body emoji.
+  let normalized = text.trimStart();
+  normalized = stripChatErrorPrefix(normalized);
+  return normalized.replace(/\s+/gu, " ").trim();
 }
 
 function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
