@@ -354,7 +354,23 @@ export async function publishBootstrapFile(
       syncFs.unlinkSync(staging.path);
       outcome = { kind: "created" };
     } catch (error) {
-      if (!linked && hasErrnoCode(error, "EEXIST")) {
+      // Windows can deny CreateHardLink with EPERM/EACCES when the name
+      // already exists or is delete-pending. isHardlinkFallbackError also
+      // matches EPERM, so a present target must be classified as exists.
+      let collisionExists = !linked && hasErrnoCode(error, "EEXIST");
+      const collisionDenied =
+        !linked && (hasErrnoCode(error, "EPERM") || hasErrnoCode(error, "EACCES"));
+      if (!collisionExists && collisionDenied) {
+        try {
+          syncFs.lstatSync(targetPath);
+          collisionExists = true;
+        } catch (existsError) {
+          if (!hasErrnoCode(existsError, "ENOENT")) {
+            throw existsError;
+          }
+        }
+      }
+      if (collisionExists) {
         outcome = { kind: "exists" };
       } else if (!linked && isHardlinkFallbackError(error)) {
         outcome = {

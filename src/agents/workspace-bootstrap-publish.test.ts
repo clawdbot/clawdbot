@@ -57,6 +57,27 @@ async function listTempSiblings(dir: string): Promise<string[]> {
   return names.filter((name) => name.startsWith("openclaw-bootstrap-")).toSorted();
 }
 
+function injectExclusiveLinkError(
+  targetPath: string,
+  code: string,
+  opts?: { existingContent?: string },
+) {
+  const realLink = syncFs.linkSync.bind(syncFs);
+  const resolvedTarget = path.resolve(targetPath);
+  const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation((source, target) => {
+    if (path.resolve(String(target)) === resolvedTarget) {
+      if (opts?.existingContent !== undefined) {
+        syncFs.writeFileSync(targetPath, opts.existingContent);
+      }
+      throw Object.assign(new Error(`${code}: exclusive link failed`), { code });
+    }
+    return realLink(source, target);
+  });
+  return () => {
+    linkSpy.mockRestore();
+  };
+}
+
 describe("bootstrap publication atomicity", () => {
   it("does not publish a partial AGENTS.md when the first write fails", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
@@ -233,6 +254,56 @@ describe("bootstrap publication atomicity", () => {
       await expectPathMissing(agentsPath);
     } finally {
       linkSpy.mockRestore();
+    }
+  });
+
+  it.each(["EPERM", "EACCES"] as const)(
+    "keeps a raced existing bootstrap file when exclusive link reports %s",
+    async (code) => {
+      const tempDir = await fs.realpath(await makeTempWorkspace("openclaw-workspace-"));
+      const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+      const existing = "existing operator agents\n";
+      const restore = injectExclusiveLinkError(agentsPath, code, { existingContent: existing });
+
+      try {
+        await expect(workspace.publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(
+          false,
+        );
+        expect(await fs.readFile(agentsPath, "utf8")).toBe(existing);
+      } finally {
+        restore();
+      }
+    },
+  );
+
+  it("still reports unsupported hardlinks when exclusive link reports EPERM and the target is missing", async () => {
+    const tempDir = await fs.realpath(await makeTempWorkspace("openclaw-workspace-"));
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const restore = injectExclusiveLinkError(agentsPath, "EPERM");
+
+    try {
+      await expect(workspace.publishBootstrapFile(agentsPath, "complete\n")).rejects.toThrow(
+        /filesystem does not support atomic bootstrap publication/u,
+      );
+      await expectPathMissing(agentsPath);
+    } finally {
+      restore();
+    }
+  });
+
+  it("still fails exclusive publish when a raced existing target hits a non-collision link error", async () => {
+    const tempDir = await fs.realpath(await makeTempWorkspace("openclaw-workspace-"));
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const existing = "existing operator agents\n";
+    const restore = injectExclusiveLinkError(agentsPath, "ENOSPC", { existingContent: existing });
+
+    try {
+      await expect(
+        workspace.publishBootstrapFile(agentsPath, "replacement\n"),
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+      expect(await fs.readFile(agentsPath, "utf8")).toBe(existing);
+    } finally {
+      restore();
     }
   });
 
