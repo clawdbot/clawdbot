@@ -387,6 +387,7 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
       [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
+      [`git -C ${tempDir} rev-parse ${stableTag}^{commit}`]: { stdout: "b".repeat(40) },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
     };
   }
@@ -483,11 +484,8 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
         return toCommandResult({ stdout: "main" });
       }
-      if (
-        !targetRef &&
-        key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
-      ) {
-        return toCommandResult({ stdout: "origin/main" });
+      if (!targetRef && key === `git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`) {
+        return toCommandResult({ stdout: "refs/remotes/origin/main" });
       }
       if (!targetRef && key === `git -C ${tempDir} rev-parse @{upstream}`) {
         return toCommandResult({ stdout: targetSha });
@@ -584,7 +582,7 @@ describe("runGatewayUpdate", () => {
               worktree = argv.at(-2);
               assert.ok(worktree);
               // Git can retain this lock when creation is forcibly terminated during checkout.
-              await runRealGit(localRoot, "worktree", "lock", "--reason", "initializing", worktree);
+              await runRealGit(worktree, "worktree", "lock", "--reason", "initializing", worktree);
               controller.abort(stopped);
             }
             return result;
@@ -637,7 +635,7 @@ describe("runGatewayUpdate", () => {
 
   function createRealGitUpdateRunner(params: { finalHead?: { root: string; sha: string } } = {}) {
     let headReads = 0;
-    return async (argv: string[], options: { cwd?: string; timeoutMs?: number }) => {
+    return async (argv: string[], options: TestCommandOptions) => {
       if (argv[0] === "git") {
         const finalHead = params.finalHead;
         if (
@@ -653,6 +651,7 @@ describe("runGatewayUpdate", () => {
         }
         return await runCommandWithTimeout(argv, {
           cwd: options.cwd,
+          env: options.env,
           timeoutMs: options.timeoutMs ?? 5000,
         });
       }
@@ -772,9 +771,40 @@ describe("runGatewayUpdate", () => {
       } | void>;
     },
   ) {
+    // These callers script Git responses, including clone's filesystem result.
+    // Native Git cases call runGatewayUpdate directly and never use this adapter.
+    const mirrors = new Map<string, string>();
+    const scriptedCommand = async (
+      argv: string[],
+      runOptions: Parameters<typeof runCommand>[1],
+    ) => {
+      if (argv[0] === "git" && argv[1] === "-C") {
+        const commandRoot = argv[2];
+        assert.ok(commandRoot);
+        if (argv[3] === "clone" && argv[4] === "--mirror") {
+          const result = await runCommand(argv, runOptions);
+          if (result.code === 0) {
+            const mirror = argv.at(-1);
+            assert.ok(mirror);
+            await fs.mkdir(mirror);
+            mirrors.set(mirror, commandRoot);
+          }
+          return result;
+        }
+        const mirror = argv[3]?.startsWith("--git-dir=") ? argv[3].slice(10) : commandRoot;
+        const original = mirrors.get(mirror);
+        if (original) {
+          return runCommand(
+            ["git", "-C", original, ...argv.slice(argv[3]?.startsWith("--git-dir=") ? 4 : 3)],
+            runOptions,
+          );
+        }
+      }
+      return runCommand(argv, runOptions);
+    };
     return runGatewayUpdate({
       cwd: options?.cwd ?? tempDir,
-      runCommand: withGitCandidateFixture(runCommand),
+      runCommand: withGitCandidateFixture(scriptedCommand),
       timeoutMs: 5000,
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
@@ -985,7 +1015,7 @@ describe("runGatewayUpdate", () => {
     const beforeGitMutation = vi.fn<() => Promise<void>>();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+      [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
         code: 1,
         stderr: "no upstream configured",
       },
@@ -1041,8 +1071,8 @@ describe("runGatewayUpdate", () => {
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-        stdout: "origin/main",
+      [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+        stdout: "refs/remotes/origin/main",
       },
       [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
       [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -1130,8 +1160,8 @@ describe("runGatewayUpdate", () => {
     const { runner } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-        stdout: "origin/main",
+      [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+        stdout: "refs/remotes/origin/main",
       },
       [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
       [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -1158,7 +1188,7 @@ describe("runGatewayUpdate", () => {
       ...buildGitWorktreeProbeResponses({ branch: "feature" }),
       [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} show-ref --verify refs/heads/main`]: { stdout: "main\n" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`]: {
+      [`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`]: {
         code: 1,
         stderr: "no upstream configured",
       },
@@ -1172,9 +1202,7 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("no-upstream");
     expect(beforeGitMutation).not.toHaveBeenCalled();
     expect(calls).toContain(`git -C ${tempDir} show-ref --verify refs/heads/main`);
-    expect(calls).toContain(
-      `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`,
-    );
+    expect(calls).toContain(`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`);
     expect(calls).not.toContain(`git -C ${tempDir} remote`);
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
     expect(calls).not.toContain(`git -C ${tempDir} checkout main`);
@@ -1197,7 +1225,7 @@ describe("runGatewayUpdate", () => {
       if (response) {
         return toCommandResult(response);
       }
-      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`) {
+      if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
         return {
           stdout: "",
           stderr: "no upstream configured for branch 'main'",
@@ -1248,9 +1276,7 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain(
-      `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`,
-    );
+    expect(calls).toContain(`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`);
     expect(calls).toContain(`git -C ${tempDir} remote`);
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
     expect(calls).toContain(`git -C ${tempDir} show-ref --verify refs/heads/main`);
@@ -1286,7 +1312,7 @@ describe("runGatewayUpdate", () => {
       if (response) {
         return toCommandResult(response);
       }
-      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`) {
+      if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
         return {
           stdout: "",
           stderr: "no upstream configured for branch 'main'",
@@ -1856,9 +1882,15 @@ describe("runGatewayUpdate", () => {
     expect(preflightInstallCommands).toEqual(["pnpm install"]);
   });
 
-  it.runIf(process.platform !== "win32").each([false, true])(
-    "stages dev preflight in artifact storage without dirtying the checkout (redirected: %s)",
-    async (redirected) => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(
+      [false, true].flatMap((redirected) =>
+        [false, true].map((admission) => ({ redirected, admission })),
+      ),
+    )(
+    "stages dev preflight without dirtying the checkout (redirected: $redirected, admission: $admission)",
+    async ({ redirected, admission }) => {
       const parent = path.join(tempDir, "parent");
       const checkout = path.join(parent, "checkout");
       const alias = path.join(tempDir, "checkout-link");
@@ -1921,21 +1953,32 @@ describe("runGatewayUpdate", () => {
             }
             return runner(argv, options);
           },
-          beforeGitMutation: async () => {
-            for (const root of preflightRoots) {
-              expect(await pathExists(root)).toBe(false);
-            }
-            expect(await runRealGit(checkout, "status", "--porcelain")).toBe("");
-          },
+          ...(admission
+            ? {
+                inspectGitTarget: async () => undefined,
+                beforeGitMutation: async () => {
+                  for (const root of preflightRoots) {
+                    expect(await pathExists(root)).toBe(false);
+                  }
+                  expect(await runRealGit(checkout, "status", "--porcelain")).toBe("");
+                },
+              }
+            : {}),
         });
         expect(result.status).toBe("ok");
         expect(stagedStatuses).toEqual([initialStatus]);
         expect(preflightRoots).toHaveLength(1);
         for (const root of preflightRoots) {
-          expect(root.startsWith(`${artifacts}${path.sep}`)).toBe(true);
+          expect(root.startsWith(`${artifacts}${path.sep}`)).toBe(!admission);
+          if (admission) {
+            expect(root.startsWith(`${checkout}${path.sep}`)).toBe(false);
+          }
+          expect(await pathExists(root)).toBe(false);
         }
         expect(modes).toEqual([0o700]);
-        expect(devices).toEqual([artifactDevice]);
+        if (!admission) {
+          expect(devices).toEqual([artifactDevice]);
+        }
         expect((await fs.stat(checkout)).mode & 0o777).toBe(0o755);
         expect((await fs.stat(parent)).mode & 0o777).toBe(0o555);
         expect((await fs.stat(artifacts)).mode & 0o777).toBe(0o750);
@@ -1958,11 +2001,19 @@ describe("runGatewayUpdate", () => {
     "returns a structured preflight failure when $operation rejects with $code",
     async ({ operation, code, reason }) => {
       await setupGitPackageManagerFixture();
-      const { runCommand } = createDevGitRunner();
       const beforeGitMutation = vi.fn<() => Promise<void>>();
-      const allocator = vi
-        .spyOn(fs, operation)
-        .mockRejectedValueOnce(Object.assign(new Error("preflight allocation failed"), { code }));
+      const allocator = vi.spyOn(fs, operation);
+      const { runCommand } = createDevGitRunner({
+        onCommand: (key) => {
+          // Inject at the worktree allocator, after private target inspection setup.
+          if (key === `git -C ${tempDir} rev-list --max-count=10 upstream123`) {
+            allocator.mockRejectedValueOnce(
+              Object.assign(new Error("preflight allocation failed"), { code }),
+            );
+          }
+          return undefined;
+        },
+      });
       try {
         await expect(
           runWithCommand(runCommand, { channel: "dev", beforeGitMutation }),
@@ -2147,8 +2198,8 @@ describe("runGatewayUpdate", () => {
       const responses = {
         ...buildGitWorktreeProbeResponses(),
         [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-          stdout: "origin/main",
+        [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+          stdout: "refs/remotes/origin/main",
         },
         [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
         [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -2228,8 +2279,8 @@ describe("runGatewayUpdate", () => {
       const responses = {
         ...buildGitWorktreeProbeResponses(),
         [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-          stdout: "origin/main",
+        [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+          stdout: "refs/remotes/origin/main",
         },
         [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
         [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -2370,8 +2421,9 @@ describe("runGatewayUpdate", () => {
     const result = await runWithRunner(runner, { channel: "beta" });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
-    expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
+    expect(calls).toContain(`git -C ${tempDir} rev-parse ${stableTag}^{commit}`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${"b".repeat(40)}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse ${betaTag}^{commit}`);
   });
 
   it("uses stable tag for stable channel even when a newer alpha tag sorts first", async () => {

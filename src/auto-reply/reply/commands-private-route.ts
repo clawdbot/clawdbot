@@ -106,34 +106,42 @@ export async function resolvePrivateCommandRouteTargets(params: {
   });
 }
 
-/** Delivers a sensitive command reply to the resolved private targets. */
+/** Tries private targets in priority order until delivery stops or owns further recovery. */
 export async function deliverPrivateCommandReply(params: {
   commandParams: HandleCommandsParams;
   targets: PrivateCommandRouteTarget[];
   reply: ReplyPayload;
-}): Promise<boolean> {
-  const results = await Promise.allSettled(
-    params.targets.map((target) =>
-      routeReply({
-        payload: params.reply,
-        channel: target.channel as OriginatingChannelType,
-        to: target.to,
-        accountId: target.accountId ?? undefined,
-        threadId: target.threadId ?? undefined,
-        cfg: params.commandParams.cfg,
-        agentId: params.commandParams.agentId,
-        sessionKey: params.commandParams.sessionKey,
-        policyConversationType: "direct",
-        mirror: false,
-        isGroup: false,
-        replyKind: "final",
-      }),
-    ),
-  );
-  return results.some(
-    (result) =>
-      result.status === "fulfilled" && (result.value.delivered || result.value.suppressed === true),
-  );
+}): Promise<"delivered" | "pending" | "suppressed" | "failed"> {
+  for (const target of params.targets) {
+    const result = await routeReply({
+      payload: params.reply,
+      channel: target.channel as OriginatingChannelType,
+      to: target.to,
+      accountId: target.accountId ?? undefined,
+      threadId: target.threadId ?? undefined,
+      cfg: params.commandParams.cfg,
+      agentId: params.commandParams.agentId,
+      sessionKey: params.commandParams.sessionKey,
+      policyConversationType: "direct",
+      mirror: false,
+      isGroup: false,
+      replyKind: "final",
+    }).catch(() => undefined);
+    // Transport failures resolve with custody; rejection is a pre-send preparation failure.
+    if (!result) {
+      continue;
+    }
+    if (result.queueCustody === "held" || result.ambiguous) {
+      return "pending";
+    }
+    if (result.delivered) {
+      return "delivered";
+    }
+    if (result.suppressed) {
+      return "suppressed";
+    }
+  }
+  return "failed";
 }
 
 /** Reads the command message thread id from command context. */

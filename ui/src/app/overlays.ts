@@ -295,6 +295,7 @@ export function createApplicationOverlays(
     acknowledgeUpdateRun: updates.acknowledgeUpdateRun,
     runUpdate: updates.runUpdate,
     holdUpdate: updates.holdUpdate,
+    reportUpdateFailure: updates.reportUpdateFailure,
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
         ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??

@@ -796,9 +796,9 @@ export function pluginStateImportBatch(
               registerPluginStateEntry(store, { ...params, ...entry }, retention),
             );
           } catch (error) {
-            // Corruption must reach the shared database owner so it evicts the
-            // damaged handle; an unsafe transaction cannot commit its prefix.
-            if (isSqliteCorruptionError(error)) {
+            // Only a surviving outer transaction can commit its prefix. Lost
+            // savepoints close the handle; corruption must still reach its owner.
+            if (!store.db.isOpen || !store.db.isTransaction || isSqliteCorruptionError(error)) {
               throw error;
             }
             return err(error);

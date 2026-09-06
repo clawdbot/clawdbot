@@ -13,6 +13,7 @@ import {
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "./event-ledger-bytes.js";
 import {
   cloneAcpLedgerValue,
   createAcpPromptUpdates,
@@ -99,21 +100,25 @@ function upsertSqliteSession(
   if (existing) {
     const cwd = params.cwd || existing.cwd;
     const complete = normalizeSqliteInteger(existing.complete) === 1 || params.complete ? 1 : 0;
-    // SET expressions read the pre-update row, so the aggregate sheds the old
-    // key/cwd lengths and gains the new ones; drift here would silently
-    // unbound the byte budget.
-    db.prepare(
-      `UPDATE acp_replay_sessions
-          SET estimated_bytes = estimated_bytes - length(session_key) - length(cwd) + ?,
-              session_key = ?, cwd = ?, complete = ?, updated_at = ?
-        WHERE session_id = ?`,
-    ).run(
-      params.sessionKey.length + cwd.length,
-      params.sessionKey,
-      cwd,
-      complete,
-      now,
-      params.sessionId,
+    const metadataDelta =
+      estimateAcpSessionRowBytes({ ...params, cwd }) -
+      estimateAcpSessionRowBytes({
+        sessionId: params.sessionId,
+        sessionKey: existing.session_key,
+        cwd: existing.cwd,
+      });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<AcpLedgerDatabase>(db)
+        .updateTable("acp_replay_sessions")
+        .set((eb) => ({
+          estimated_bytes: eb("estimated_bytes", "+", metadataDelta),
+          session_key: params.sessionKey,
+          cwd,
+          complete,
+          updated_at: now,
+        }))
+        .where("session_id", "=", params.sessionId),
     );
     return normalizeSqliteInteger(existing.next_seq);
   }
@@ -123,7 +128,7 @@ function upsertSqliteSession(
   }
   // A fresh or reset session's footprint is just its own row overhead; event
   // bytes accumulate onto the aggregate as appends land.
-  const rowBytes = estimateSessionRowBytes({
+  const rowBytes = estimateAcpSessionRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cwd: params.cwd,
@@ -164,29 +169,6 @@ function estimateSqliteLedgerBytes(db: DatabaseSync): number {
     .prepare("SELECT COALESCE(SUM(estimated_bytes), 0) AS total FROM acp_replay_sessions")
     .get() as { total?: number | bigint } | undefined;
   return normalizeSqliteInteger(row?.total ?? 0);
-}
-
-function estimateSessionRowBytes(params: {
-  sessionId: string;
-  sessionKey: string;
-  cwd: string;
-}): number {
-  return params.sessionId.length + params.sessionKey.length + params.cwd.length + 32;
-}
-
-function estimateEventRowBytes(params: {
-  sessionId: string;
-  sessionKey: string;
-  runId?: string;
-  updateJson: string;
-}): number {
-  return (
-    params.sessionId.length +
-    params.sessionKey.length +
-    params.updateJson.length +
-    (params.runId?.length ?? 0) +
-    32
-  );
 }
 
 const LEDGER_TRIM_EVENT_BATCH = 64;
@@ -299,7 +281,7 @@ function appendSqliteUpdate(
   });
   const now = state.now();
   const updateJson = JSON.stringify(cloneAcpLedgerValue(params.update));
-  const eventBytes = estimateEventRowBytes({
+  const eventBytes = estimateAcpEventRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     ...(params.runId !== undefined ? { runId: params.runId } : {}),
@@ -317,19 +299,17 @@ function appendSqliteUpdate(
     updateJson,
     eventBytes,
   );
-  // The delta covers the new event plus any session-key length change; SET
-  // expressions read the pre-update row, keeping the aggregate exact.
-  db.prepare(
-    `UPDATE acp_replay_sessions
-        SET estimated_bytes = estimated_bytes - length(session_key) + ?,
-            session_key = ?, updated_at = ?, next_seq = ?
-      WHERE session_id = ?`,
-  ).run(
-    params.sessionKey.length + eventBytes,
-    params.sessionKey,
-    now,
-    nextSeq + 1,
-    params.sessionId,
+  // Upsert already accounted for metadata; only the new event remains.
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<AcpLedgerDatabase>(db)
+      .updateTable("acp_replay_sessions")
+      .set((eb) => ({
+        estimated_bytes: eb("estimated_bytes", "+", eventBytes),
+        updated_at: now,
+        next_seq: nextSeq + 1,
+      }))
+      .where("session_id", "=", params.sessionId),
   );
   trimSqliteLedger(db, state);
 }

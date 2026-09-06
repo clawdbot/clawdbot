@@ -166,8 +166,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         deferredTtsTextPending = "";
       }
       if (finalReply.dedupedAgainstBlock) {
-        // The delivering block already settled into the turn ledger.
-        await suppressPendingFinalDelivery(reply);
+        // Pending block coverage already retired this final's prepared duplicate.
+        if (!finalReply.pendingBlock) {
+          await suppressPendingFinalDelivery(reply);
+        }
         continue;
       }
       attemptedFinalDelivery = true;
@@ -175,6 +177,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         finalDeliveries.push(finalReply.dispatcherOutcome);
+      }
+      if (finalReply.pendingBlock) {
+        // New audio can settle independently while the original text remains unconfirmed.
+        continue;
       }
       // Queue admission can still be cancelled or fail. Keep the owner's receipt
       // until this exact final payload settles as delivered.
@@ -340,6 +346,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
+    !turnLedger.hasPendingDelivery() &&
     !turnLedger.hasVisibleDelivery();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
@@ -477,6 +484,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ...(noVisibleReplyFallbackDirected &&
     queuedSettleResult === "settled" &&
     !turnLedger.hasVisibleDelivery() &&
+    !turnLedger.hasPendingDelivery() &&
     !noVisibleReplyFallbackDelivered &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&

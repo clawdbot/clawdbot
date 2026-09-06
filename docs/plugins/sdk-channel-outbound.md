@@ -237,6 +237,14 @@ Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
 
+Failure is not permission to send the same payload through another path.
+Once admitted, the queue owns retry or reconciliation until its exact owner
+acknowledges or terminally retires the intent. Pending custody is not a
+delivery receipt: preserve partial receipts, and do not report an unconfirmed
+`ask_user` prompt as visible. Gateway `OUTBOUND_DELIVERY_QUEUED` responses mean
+delivery is pending and must not be resent; an ambiguous send may need
+reconciliation rather than an automatic retry.
+
 When a transport creates a thread during its first successful send, the
 outbound adapter may implement `adoptTargetFromDelivery(...)`. Return the
 typed thread ID from the platform receipt and core carries it into later

@@ -19,6 +19,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -44,6 +47,21 @@ import type { UpdateRunResult } from "./update-runner.js";
 // above it rather than reusing the per-step value as the whole-process kill.
 const FINALIZE_PROCESS_TIMEOUT_FLOOR_MS = 30 * 60_000;
 const FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER = 6;
+
+export async function readPreUpdateConfigForPostCoreFinalize(): Promise<
+  PreUpdateConfigRestoreInput | undefined
+> {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  if (!snapshot.valid) {
+    return undefined;
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    authoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig) // SAFETY: the valid snapshot supplies a parsed config object.
+      : snapshot.sourceConfig,
+  };
+}
 
 // Strip the running gateway's service identity from the finalizer child so it is
 // not mistaken for the managed service process (matches the CLI post-core spawn).

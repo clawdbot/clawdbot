@@ -1036,6 +1036,10 @@ unconfirmed message is resolved or discarded, and the queue explains that blocka
 earlier message lets the next queued message proceed when the session is ready. Unconfirmed local
 commands keep their retry/discard queue controls.
 
+If the Gateway reports that a `/steer` or `/redirect` message failed to start, the Control UI
+restores the submitted draft when the composer is still empty. It preserves newer text and
+attachments. If you switched conversations, recovery stays with the original conversation.
+
 Queued messages and drafts keep the conversation and agent selected when they were created.
 Switching agents, opening a split pane, or reloading does not move them to another destination.
 A literal `global` conversation keeps its captured agent; an agent's main conversation stays

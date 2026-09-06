@@ -635,6 +635,7 @@ export const en: TranslationMap & {
       hostHint:
         "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
+    report: {},
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -4067,6 +4068,7 @@ export const en: TranslationMap & {
     placeholder: "Search chats and commands…",
     noResults: "No results",
     searchFailed: "Chat search failed — check the gateway logs and retry",
+    modelSearchFailed: "Model search unavailable. Change your search to retry.",
     searchPartial: "Transcript search unavailable — showing chat titles and metadata",
     searchIncomplete: "Transcript matches may be incomplete — indexing or search limits apply",
     categories: {

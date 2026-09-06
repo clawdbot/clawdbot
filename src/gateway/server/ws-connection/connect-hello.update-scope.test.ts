@@ -349,6 +349,7 @@ describe("sendGatewayHello update detail scope", () => {
           "update.runs.get",
           "update.runs.list",
           "gateway.suspend.handoff",
+          "update.report",
           "skills.workshop.read",
         ]);
         expect(original.hello.snapshot.controlUiIdentityUrl).toBe(

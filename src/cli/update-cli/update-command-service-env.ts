@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../../daemon/constants.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
@@ -23,7 +24,7 @@ function applyManagedServiceSelectorEnv(params: {
   const resolved = { ...params.baseEnv };
   const selectorEnv = params.selectorEnv ?? params.serviceEnv;
   for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
-    if (selectorEnv[key]?.trim()) {
+    if (resolveEnvironmentValue(selectorEnv, key)?.trim()) {
       resolved[key] = params.serviceEnv[key];
     } else {
       delete resolved[key];
@@ -36,7 +37,14 @@ export function resolveServiceRefreshEnv(
   env: NodeJS.ProcessEnv,
   invocationCwd?: string,
 ): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
+  // A plain copy loses Windows process.env's case-insensitive lookups. Keep
+  // immutable snapshots usable by the config and database path resolvers.
+  const resolvedEnv: NodeJS.ProcessEnv =
+    process.platform === "win32"
+      ? Object.fromEntries(
+          Object.entries(mergeProcessEnv([env])).map(([key, value]) => [key.toUpperCase(), value]),
+        )
+      : { ...env };
   for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
     const rawValue = resolvedEnv[key]?.trim();
     if (!rawValue) {
@@ -138,7 +146,9 @@ export function resolveUpdateTargetEnv(params?: {
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }): NodeJS.ProcessEnv {
-  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(
+    resolveServiceRefreshEnv(params?.baseEnv ?? process.env, params?.invocationCwd),
+  );
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }

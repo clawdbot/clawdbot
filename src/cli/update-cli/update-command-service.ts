@@ -40,15 +40,13 @@ import {
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
-import {
-  revalidateManagedGatewayServiceAfterUpdate,
-  type ManagedGatewayUpdateVerdict,
-} from "./update-command-service-maintenance.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
   resolveGatewayServiceManagementBlockMessageForUpdate,
   resolveUpdatedGatewayRestartPort,
+  type ManagedGatewayUpdateVerdict,
 } from "./update-command-service-plan.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,

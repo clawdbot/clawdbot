@@ -2,6 +2,7 @@
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import { markLegacyMigrationSourceRemoved } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
@@ -9,10 +10,7 @@ import {
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import {
-  markLegacySubagentRegistrySourceRemoved,
-  recordLegacySubagentRegistryDiscard,
-} from "./state-migrations.subagent-registry-db.js";
+import { recordLegacySubagentRegistryDiscard } from "./state-migrations.subagent-registry-db.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_SUBAGENT_REGISTRY_MAX_BYTES = 16 * 1024 * 1024;
@@ -59,7 +57,7 @@ async function recoverInterruptedClaim(params: {
     sourceSize: claimed.size,
   });
   await params.source.remove({ skipSourceCheck: true });
-  markLegacySubagentRegistrySourceRemoved(result.sourceKey, params.env);
+  markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
 }
 
 async function migrateWithExclusiveStateOwnership(params: {
@@ -154,7 +152,7 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    markLegacySubagentRegistrySourceRemoved(result.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     warnings.push(
       `Legacy subagent registry was removed, but its receipt could not be finalized: ${String(error)}`,

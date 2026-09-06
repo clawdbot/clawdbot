@@ -4,10 +4,7 @@ import type {
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
-import {
-  prepareSystemAgentRunAdmission,
-  resolveAdmittedRunActiveAssertion,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
@@ -266,23 +263,14 @@ describe("generic plugin-owned live session registry", () => {
     expect(owner.capability.current()).toBe(owner.session);
     owner.revokeCaller();
     expect(owner.controller.signal.aborted).toBe(false);
-    expect(resolveAdmittedRunActiveAssertion(owner.context.params.admittedRunContext)).toBeTypeOf(
-      "function",
-    );
     expect(() => owner.capability.current()).toThrow("caller is no longer active");
     expect(() => owner.capability.activate(owner.session)).toThrow("caller is no longer active");
-    await closeCliLiveSession(owner.context, "restart");
-    expect(owner.close).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a caller-revoked restart before closing the registered process", async () => {
-    const owner = await createOwner();
-    owner.register();
-    owner.revokeCaller();
     await expect(restartCliLiveSession(owner.context)).rejects.toThrow(
       "caller is no longer active",
     );
     expect(owner.close).not.toHaveBeenCalled();
+    await closeCliLiveSession(owner.context, "restart");
+    expect(owner.close).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -309,9 +297,6 @@ describe("generic plugin-owned live session registry", () => {
           restarting.revokeCaller();
         }
         expect(restarting.controller.signal.aborted).toBe(false);
-        expect(
-          resolveAdmittedRunActiveAssertion(restarting.context.params.admittedRunContext),
-        ).toBeTypeOf("function");
       } finally {
         held.resolve();
       }

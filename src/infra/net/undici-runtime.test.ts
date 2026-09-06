@@ -131,6 +131,19 @@ function invokeProxyClientFactory(options: Record<string, unknown>): void {
   clientFactory(new URL("https://127.0.0.1:8443"), { connect: proxyConnect });
 }
 
+describe("installed dispatcher lifecycle", () => {
+  it.each([
+    ["close", "closed"],
+    ["destroy", "destroyed"],
+  ] as const)("supports %s without a runtime override", async (method, state) => {
+    const dispatcher = createHttp1Agent();
+
+    await dispatcher[method]();
+
+    expect(dispatcher[state]).toBe(true);
+  });
+});
+
 describe("undici dispatcher errors", () => {
   it.each([
     {

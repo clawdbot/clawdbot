@@ -19,8 +19,15 @@ const EXPORT_TRAJECTORY_EXEC_SCOPE_KEY = "chat:export-trajectory";
 const MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS = 8192;
 const EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for the trajectory export. Run /export-trajectory from an owner DM so the sensitive trajectory bundle is not posted in this chat.";
-const EXPORT_TRAJECTORY_PRIVATE_ROUTE_ACK =
-  "Trajectory exports are sensitive. I sent the export request and approval prompt to the owner privately.";
+const EXPORT_TRAJECTORY_PRIVATE_ROUTE_REPLIES = {
+  delivered:
+    "Trajectory exports are sensitive. I sent the trajectory export details to the owner privately.",
+  pending:
+    "Trajectory exports are sensitive. Private delivery of the export request is pending; I can't confirm receipt yet.",
+  suppressed:
+    "Trajectory exports are sensitive. Private delivery of the export request was suppressed.",
+  failed: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE,
+};
 
 export async function buildExportTrajectoryCommandReply(
   params: HandleCommandsParams,
@@ -58,15 +65,13 @@ export async function buildExportTrajectoryCommandReply(
     const privateReply = await buildExportTrajectoryApprovalReply(params, request, {
       privateApprovalTarget: privateTarget,
     });
-    const delivered = await deliverPrivateCommandReply({
+    const outcome = await deliverPrivateCommandReply({
       commandParams: params,
       targets: [privateTarget],
       reply: privateReply,
     });
     return {
-      text: delivered
-        ? EXPORT_TRAJECTORY_PRIVATE_ROUTE_ACK
-        : EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE,
+      text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_REPLIES[outcome],
     };
   }
   return await buildExportTrajectoryApprovalReply(params, request);

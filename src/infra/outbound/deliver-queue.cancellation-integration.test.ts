@@ -202,6 +202,7 @@ describe("queued cancellation during adapter preparation", () => {
         adapter.releasePreparation();
         expect(await outcome).toMatchObject({
           message: expect.stringContaining("Operation aborted"),
+          queueCustody: "released",
         });
         expect(adapter.send).not.toHaveBeenCalled();
         expect(adapter.afterSendFailure).toHaveBeenCalledOnce();
@@ -252,7 +253,7 @@ describe("queued cancellation during adapter preparation", () => {
       controller.abort(new Error("old question ended"));
       expect(readQueuedEntry(stateDir, queueId).producerClaimId).toBe(replacementClaim);
       adapter.releasePreparation();
-      await outcome;
+      expect(await outcome).toMatchObject({ queueCustody: "held" });
       expect(readQueuedEntry(stateDir, queueId).producerClaimId).toBe(replacementClaim);
       expect(adapter.send).not.toHaveBeenCalled();
       expect(adapter.releaseResource).toHaveBeenCalledOnce();
@@ -316,6 +317,7 @@ describe("queued cancellation during adapter preparation", () => {
       adapter.releasePreparation();
       expect(await outcome).toMatchObject({
         message: expect.stringContaining("Operation aborted"),
+        queueCustody: "released",
       });
       expect(await loadPendingDeliveries(stateDir)).toEqual([]);
       expect(adapter.releaseResource).toHaveBeenCalledOnce();
@@ -370,7 +372,7 @@ describe("queued cancellation during adapter preparation", () => {
           expect(settled).toMatchObject({ results: [{ messageId: "accepted-message" }] });
           expect(await loadPendingDeliveries(stateDir)).toEqual([]);
         } else {
-          expect(settled).toHaveProperty("error");
+          expect(settled).toMatchObject({ error: { queueCustody: "held" } });
           expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("unknown_after_send");
         }
       } finally {

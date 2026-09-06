@@ -15,6 +15,7 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
+import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
@@ -56,6 +57,7 @@ type CommandPaletteProps = {
   activeId: string | null;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
+  modelSearchFailed: boolean;
   sessionSearchFailed: boolean;
   sessionSearchPartial: boolean;
   sessionSearchIncomplete: boolean;
@@ -216,6 +218,13 @@ function renderCommandPalette(props: CommandPaletteProps) {
         />
         <div id=${paletteListboxId} class="cmd-palette__results" role="listbox">
           ${
+            props.modelSearchFailed
+              ? html`<div class="cmd-palette__empty" role="status">
+                  ${t("palette.modelSearchFailed")}
+                </div>`
+              : nothing
+          }
+          ${
             props.sessionSearchPartial || props.sessionSearchIncomplete
               ? html`<div class="cmd-palette__empty" role="status">
                   ${t(
@@ -297,6 +306,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
   @state() private catalogItems: readonly PaletteItem[] = [];
+  @state() private modelSearchFailed = false;
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;
   @state() private sessionSearchIncomplete = false;
@@ -310,18 +320,40 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     promise: Promise<void>;
     loadedAt?: number;
   };
-  private sessionSearchSource?: {
-    gateway: ApplicationContext<RouteId>["gateway"];
-    client: ApplicationContext<RouteId>["gateway"]["snapshot"]["client"];
-    connected: boolean;
-  };
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => {
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
+    },
+    ensureInitialData: () => this.scheduleSessionSearch(this.query),
+  });
 
   constructor() {
     super();
-    this.subscriptions.watch(
+    this.subscriptions.effect(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-      (gateway) => this.synchronizeGateway(gateway),
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          if (
+            this.context?.gateway === gateway &&
+            (event.event === "config.changed" || event.event === "chat.metadata.changed")
+          ) {
+            if (this.open) {
+              void this.ensureCatalogItems(true);
+            } else {
+              this.clearCatalogSearch();
+            }
+          }
+        }),
+    );
+    this.subscriptions.watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        this.clearCatalogSearch();
+        this.scheduleSessionSearch(this.query);
+      },
     );
   }
 
@@ -337,7 +369,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
-    this.sessionSearchSource = undefined;
     super.disconnectedCallback();
   }
 
@@ -367,29 +398,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     }
   };
 
-  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
-    const snapshot = gateway.snapshot;
-    const previous = this.sessionSearchSource;
-    const sourceChanged = previous?.gateway !== gateway;
-    const clientChanged = previous?.client !== snapshot.client;
-    const reconnected = previous?.connected === false && snapshot.phase === "connected";
-    this.sessionSearchSource = {
-      gateway,
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    };
-
-    if (sourceChanged || clientChanged || snapshot.phase !== "connected") {
-      // Query results belong to one runtime/client connection. Discard them as
-      // soon as that owner changes so detached or reconnecting rows stay inert.
-      this.clearSessionSearch();
-      this.clearCatalogSearch();
-    }
-    if (snapshot.phase === "connected" && (sourceChanged || clientChanged || reconnected)) {
-      this.scheduleSessionSearch(this.query);
-    }
-  }
-
   private clearSessionSearch() {
     if (this.sessionSearchTimer !== null) {
       globalThis.clearTimeout(this.sessionSearchTimer);
@@ -405,18 +413,21 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   private clearCatalogSearch() {
     this.catalogLoad = undefined;
     this.catalogItems = [];
+    this.modelSearchFailed = false;
   }
 
-  private ensureCatalogItems(): Promise<void> {
+  private ensureCatalogItems(force = false): Promise<void> {
     const context = this.context;
     const gateway = context?.gateway;
     const client = gateway?.snapshot.client;
-    if (!context || gateway?.snapshot.phase !== "connected" || !client) {
+    if (!context || !this.gateway.connected || !gateway || !client) {
       return Promise.resolve();
     }
-    const agentId = resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    const agentId =
+      context.agentSelection.state.selectedId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot);
     const current = this.catalogLoad;
     if (
+      !force &&
       current?.client === client &&
       current.agentId === agentId &&
       (current.loadedAt === undefined || Date.now() - current.loadedAt < CATALOG_CACHE_TTL_MS)
@@ -424,19 +435,28 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       return current.promise;
     }
     const snapshot = gateway.snapshot;
+    const previousModels =
+      current?.client === client && current.agentId === agentId
+        ? this.catalogItems.filter((item) => item.category === "models")
+        : [];
     const promise = loadCommandPaletteCatalogItems({
       client,
       agentId,
       agents: () => context.agents?.ensureList?.() ?? Promise.resolve(null),
       methodAvailable: (method) => Boolean(isGatewayMethodAdvertised(snapshot, method)),
-    }).then((items) => {
+    }).then(({ items, modelSearchFailed }) => {
       if (
         this.catalogLoad?.promise === promise &&
         this.context?.gateway === gateway &&
+        this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
       ) {
-        this.catalogItems = toCommandPaletteItems(items);
-        this.catalogLoad.loadedAt = Date.now();
+        this.catalogItems = [
+          ...toCommandPaletteItems(items),
+          ...(modelSearchFailed ? previousModels : []),
+        ];
+        this.modelSearchFailed = modelSearchFailed;
+        this.catalogLoad.loadedAt = modelSearchFailed ? 0 : Date.now();
       }
     });
     this.catalogLoad = { client, agentId, promise };
@@ -474,13 +494,15 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.open &&
       this.context?.sessions === sessions &&
       this.context?.gateway === gateway &&
+      this.context?.agentSelection === context?.agentSelection &&
       gateway.snapshot.client === client &&
       gateway.snapshot.phase === "connected";
     const transcriptSearchAvailable = isGatewayMethodAdvertised(
       gateway.snapshot,
       "sessions.search",
     );
-    const defaultAgentId = resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    const defaultAgentId =
+      context?.agentSelection.state.selectedId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot);
     const transcriptSearch = transcriptSearchAvailable
       ? searchVisibleSessionTranscripts({
           client,
@@ -598,6 +620,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeId: this.activeId,
       sessionItems: this.sessionItems,
+      modelSearchFailed: this.modelSearchFailed,
       catalogItems: [
         ...toCommandPaletteItems(
           getStaticCommandPaletteCatalogItems(

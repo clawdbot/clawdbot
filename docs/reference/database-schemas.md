@@ -20,6 +20,26 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### ACP replay accounting
+
+The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge
+replay history. Their `estimated_bytes` columns count the UTF-8 bytes of each
+persisted text field, plus 32 bytes per row. Session totals include their events.
+This is a retained-content estimate, not a limit on SQLite file, page, or WAL size.
+
+Older releases counted characters inconsistently, undercounting Unicode and
+allowing unchanged metadata writes to drift. The existing app-version upgrade
+repair and explicit shared-state schema repair rebuild all derived totals
+atomically, preserving event JSON text, identifiers, timestamps, and sequence.
+Repair does not prune history. The next ordinary session write applies the
+existing caps and eviction order, so corrected Unicode history may trim sooner
+and use transcript fallback when loaded.
+
+A current-app-version reopen skips this repair. Replacing code without changing
+the app version does not repair an already-open or current-version database;
+explicit schema repair remains the repair owner for that case. Accounting repair
+cannot recover history already evicted by an older writer. See [ACP CLI](/cli/acp).
+
 ### Meeting transcript tables
 
 Meeting captures use three `STRICT` tables in the shared
@@ -561,6 +581,8 @@ Schema 9 stores an `agent_databases.path` value relative to the state directory 
 The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
 
 Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
+
+If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
 
 The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
 

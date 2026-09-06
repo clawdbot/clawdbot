@@ -295,6 +295,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               respond: respondWithAuthority,
               client,
               isWebchatConnect: params.isWebchatConnect,
+              hasCurrentClientAuthority,
               extraHandlers,
               methodRegistry: getMethodRegistry?.(),
               context,
