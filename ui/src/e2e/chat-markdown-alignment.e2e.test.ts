@@ -1,7 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -9,16 +13,93 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+async function expectOrderedMarkersInsidePaint(page: Page, markdown: Locator) {
+  const items = markdown.locator("ol").first().getByRole("listitem");
+  expect(await items.count()).toBe(100);
+  const measurements = [];
+  for (const number of [1, 10, 100]) {
+    const item = items.nth(number - 1);
+    await item.scrollIntoViewIfNeeded();
+    const geometry = await item.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const width = Number.parseFloat(getComputedStyle(element, "::marker").width);
+      const rtl = getComputedStyle(element).direction === "rtl";
+      const clips = [];
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (
+          style.overflowX !== "visible" ||
+          style.contentVisibility === "auto" ||
+          style.contain.includes("paint") ||
+          style.contain === "strict" ||
+          style.contain === "content"
+        ) {
+          const left = parent.getBoundingClientRect().left + parent.clientLeft;
+          clips.push({ className: parent.className, left, right: left + parent.clientWidth });
+        }
+      }
+      return {
+        left: rtl ? box.right : box.left - width,
+        right: rtl ? box.right + width : box.left,
+        width,
+        clips,
+      };
+    });
+    measurements.push({ number, ...geometry });
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(suite.artifactDir, `ordered-marker-${number}.png`),
+      });
+    }
+    expect.soft(Number.isFinite(geometry.width), `item ${number}: native marker width`).toBe(true);
+    expect
+      .soft(geometry.clips.length, `item ${number}: transcript clipping boundary`)
+      .toBeGreaterThan(0);
+    for (const clip of geometry.clips) {
+      expect
+        .soft(geometry.left, `item ${number}: ${clip.className} leading edge`)
+        .toBeGreaterThanOrEqual(clip.left);
+      expect
+        .soft(geometry.right, `item ${number}: ${clip.className} trailing edge`)
+        .toBeLessThanOrEqual(clip.right);
+    }
+  }
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    const presentation = await markdown.evaluate((root) => ({
+      direction: getComputedStyle(root).direction,
+      font: getComputedStyle(root).font,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    }));
+    await writeFile(
+      path.join(suite.artifactDir, "ordered-markers.json"),
+      JSON.stringify({ presentation, measurements }, null, 2),
+    );
+  }
+}
+
 suite.define(() => {
-  it("aligns Markdown markers and text while containing expanded disclosures", async () => {
+  it.each([
+    { width: 1180, largeText: true },
+    { width: 390, largeText: true },
+    { width: 1180, largeText: false },
+  ])("aligns LTR lists at $width px (large: $largeText)", async ({ width, largeText }) => {
     await suite.withPage(
       {
         colorScheme: "light",
         locale: "en-US",
         serviceWorkers: "block",
-        viewport: { height: 800, width: 1180 },
+        viewport: { height: 800, width },
       },
       async ({ page }) => {
+        if (largeText) {
+          await page.addInitScript((settingsKey) => {
+            localStorage.setItem(
+              settingsKey,
+              JSON.stringify({ fontChat: "jetbrains-mono", textScale: 140 }),
+            );
+          }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
+        }
         await installMockGateway(page, {
           historyMessages: [
             {
@@ -30,7 +111,7 @@ suite.define(() => {
                     "",
                     "- Bullet item",
                     "",
-                    "1. Numbered item",
+                    ...Array.from({ length: 100 }, (_, index) => `${index + 1}. Numbered item`),
                     "",
                     "- [ ] Unchecked task",
                     "",
@@ -58,6 +139,8 @@ suite.define(() => {
           hasText: "Alignment check",
         });
         await markdown.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        await expectOrderedMarkersInsidePaint(page, markdown);
 
         const geometry = await markdown.evaluate((root) => {
           const textRect = (selector: string) => {
@@ -110,6 +193,8 @@ suite.define(() => {
             collapsedSummaryTextX: collapsedSummaryTextRect.x,
             detailsRight: details.getBoundingClientRect().right,
             detailsX: details.getBoundingClientRect().x,
+            fontSize: Number.parseFloat(getComputedStyle(root).fontSize),
+            fontFamily: getComputedStyle(root).fontFamily,
             numberedTextX: textRect("ol > li").x,
             rootRight: root.getBoundingClientRect().right,
             rootX: root.getBoundingClientRect().x,
@@ -118,8 +203,18 @@ suite.define(() => {
           };
         });
 
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(suite.artifactDir, "markdown-marker-alignment.png"),
+          });
+        }
+
         const textStarts = [geometry.bulletTextX, geometry.numberedTextX, geometry.taskTextX];
         expect(Math.max(...textStarts) - Math.min(...textStarts)).toBeLessThanOrEqual(1);
+        expect(geometry.fontSize).toBeCloseTo(largeText ? 19.6 : 14, 1);
+        expect(geometry.fontFamily).toContain(largeText ? "JetBrains Mono" : "Instrument Sans");
         expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
         expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
         expect(Math.abs(geometry.checkboxLineCenterDelta)).toBeLessThanOrEqual(1);
@@ -254,15 +349,21 @@ suite.define(() => {
     );
   });
 
-  it("preserves Markdown marker and disclosure alignment in RTL transcripts", async () => {
+  it.each([1180, 390])("contains RTL markers and aligns Markdown at %ipx", async (width) => {
     await suite.withPage(
       {
         colorScheme: "light",
         locale: "ar",
         serviceWorkers: "block",
-        viewport: { height: 800, width: 1180 },
+        viewport: { height: 800, width },
       },
       async ({ page }) => {
+        await page.addInitScript((settingsKey) => {
+          localStorage.setItem(
+            settingsKey,
+            JSON.stringify({ fontChat: "jetbrains-mono", textScale: 140 }),
+          );
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
         await installMockGateway(page, {
           historyMessages: [
             {
@@ -274,7 +375,7 @@ suite.define(() => {
                     "",
                     "- عنصر نقطي",
                     "",
-                    "1. عنصر مرقم",
+                    ...Array.from({ length: 100 }, (_, index) => `${index + 1}. عنصر مرقم`),
                     "",
                     "- [ ] مهمة غير مكتملة",
                     "",
@@ -297,6 +398,8 @@ suite.define(() => {
           hasText: "فحص المحاذاة",
         });
         await markdown.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        await expectOrderedMarkersInsidePaint(page, markdown);
 
         const geometry = await markdown.evaluate((root) => {
           const textRight = (selector: string) => {
@@ -318,11 +421,9 @@ suite.define(() => {
           };
           const checkbox = root.querySelector(".task-list-item-checkbox");
           const task = root.querySelector(".task-list-item");
-          const unorderedList = root.querySelector("ul:not(.contains-task-list)");
-          const orderedList = root.querySelector("ol");
           const summary = root.querySelector("details > summary");
           const details = root.querySelector("details");
-          if (!checkbox || !task || !unorderedList || !orderedList || !summary || !details) {
+          if (!checkbox || !task || !summary || !details) {
             throw new Error("Missing RTL Markdown geometry");
           }
           const checkboxRect = checkbox.getBoundingClientRect();
@@ -333,7 +434,6 @@ suite.define(() => {
             chevronInlineStart: getComputedStyle(summary, "::before").insetInlineStart,
             detailsRight: detailsRect.right,
             detailsX: detailsRect.x,
-            orderedPaddingInlineStart: getComputedStyle(orderedList).paddingInlineStart,
             rootRight: rootRect.right,
             rootX: rootRect.x,
             summaryPaddingInlineStart: getComputedStyle(summary).paddingInlineStart,
@@ -343,15 +443,12 @@ suite.define(() => {
               textRight("ol > li"),
               textRight(".task-list-item"),
             ],
-            unorderedPaddingInlineStart: getComputedStyle(unorderedList).paddingInlineStart,
           };
         });
 
         expect(
           Math.max(...geometry.textStarts) - Math.min(...geometry.textStarts),
         ).toBeLessThanOrEqual(1);
-        expect(Number.parseFloat(geometry.unorderedPaddingInlineStart)).toBe(24);
-        expect(Number.parseFloat(geometry.orderedPaddingInlineStart)).toBe(24);
         expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
         expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
         expect(Number.parseFloat(geometry.chevronInlineStart)).toBe(0);
