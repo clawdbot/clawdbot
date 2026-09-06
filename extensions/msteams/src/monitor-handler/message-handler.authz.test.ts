@@ -711,7 +711,9 @@ describe("msteams monitor handler authz", () => {
     resetThreadMocks();
     const shouldComputeCommandAuthorized = vi.fn(() => true);
     const { deps } = createDeps(
-      { channels: { msteams: { dmPolicy: "open", allowFrom: ["attacker-aad"] } } } as OpenClawConfig,
+      {
+        channels: { msteams: { dmPolicy: "open", allowFrom: ["attacker-aad"] } },
+      } as OpenClawConfig,
       { isControlCommandMessage: vi.fn(() => false), shouldComputeCommandAuthorized },
     );
     await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("msg-plugin"));
