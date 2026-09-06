@@ -362,7 +362,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       const commentary = "I am saving the note.";
       const base = createSettledProviderFailureAttempt({ assistantTexts: [commentary] });
       const toolAssistant = base.messagesSnapshot[1];
-      if (toolAssistant.role !== "assistant" || !base.currentAttemptCompletedAssistant) {
+      if (toolAssistant?.role !== "assistant" || !base.currentAttemptCompletedAssistant) {
         throw new Error("Missing assistant fixture");
       }
       toolAssistant.content.unshift({ type: "text", text: commentary });
