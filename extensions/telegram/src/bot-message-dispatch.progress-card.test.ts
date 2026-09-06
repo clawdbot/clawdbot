@@ -99,6 +99,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         const edit = vi
           .spyOn(bot.api, "editMessageText")
           .mockImplementation(async (_chatId, messageId, text) => {
+            if (typeof text !== "string") {
+              throw new Error("Expected a plain-text Telegram edit");
+            }
             visible.set(messageId, text);
             return true;
           });

@@ -513,7 +513,7 @@ export function createChannelProgressDraftCompositor(params: {
       }
       reasoningRawText = "";
     },
-    resetReasoningProgress() {
+    resetReasoningProgress(this: void) {
       reasoningRawText = "";
     },
     mergeReasoningProgress,
