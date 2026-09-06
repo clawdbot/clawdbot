@@ -219,7 +219,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       }
     } finally {
       // Release native recovery before triage can start another update.
-      inspection?.windowsTaskAutoStartRecovery?.complete(restartSafe);
+      await inspection?.windowsTaskAutoStartRecovery?.complete(restartSafe);
       stop();
     }
     const ownedServiceEnv =

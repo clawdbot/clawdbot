@@ -3281,7 +3281,7 @@ extension NodeAppModel {
         }
     }
 
-    func sendDirectWatchSetup(includeVoice: Bool = false) async throws -> WatchNotificationSendResult {
+    func sendDirectWatchSetup() async throws -> WatchNotificationSendResult {
         struct SetupCodeResponse: Decodable {
             var setupCode: String
         }
@@ -3308,9 +3308,7 @@ extension NodeAppModel {
 
         let response = try await operatorGateway.request(
             method: "device.pair.setupCode",
-            paramsJSON: includeVoice
-                ? #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#
-                : #"{"includeQr":false,"bootstrapProfile":"node"}"#,
+            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#,
             timeoutSeconds: 20,
             ifCurrentRoute: route)
         let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)

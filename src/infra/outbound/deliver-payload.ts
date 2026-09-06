@@ -111,13 +111,20 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
     return value;
   }
   let changed = false;
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    const stripped = stripInternalRuntimeScaffoldingFromValue(entry);
-    changed ||= stripped !== entry;
-    next[key] = stripped;
+  const entries = Object.entries(value);
+  for (const entry of entries) {
+    const stripped = stripInternalRuntimeScaffoldingFromValue(entry[1]);
+    changed ||= stripped !== entry[1];
+    entry[1] = stripped;
   }
-  return changed ? next : value;
+  if (!changed) {
+    return value;
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of entries) {
+    next[key] = entry;
+  }
+  return next;
 }
 
 /** Every media reference a payload set carries, in payload order. */

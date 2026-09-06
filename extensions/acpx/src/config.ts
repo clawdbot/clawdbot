@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { splitCommandParts } from "./command-line.js";
 import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
@@ -142,13 +143,6 @@ function resolveTsxImportSpecifier(): string {
   }
 }
 
-function shellQuoteCommandArg(arg: string): string {
-  if (!/[\s'"\\$|&;<>{}()*?[\]~`]/.test(arg)) {
-    return arg;
-  }
-  return `'${arg.replace(/'/g, "'\"'\"'")}'`;
-}
-
 function resolvePluginToolsMcpServerConfig(moduleUrl: string = import.meta.url): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
@@ -252,10 +246,10 @@ export function resolveAcpxPluginConfig(params: {
   const agents = Object.fromEntries(
     Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
       const cmd = entry.command.trim();
-      const cmdArgs = entry.args ?? [];
-      const fullCommand =
-        cmdArgs.length > 0 ? `${cmd} ${cmdArgs.map(shellQuoteCommandArg).join(" ")}` : cmd;
-      return [normalizeLowercaseStringOrEmpty(name), fullCommand];
+      // Only explicit absolute paths bypass parsing; workspace files must not
+      // reinterpret a configured command prefix as a different executable.
+      const command = path.isAbsolute(cmd) && fs.existsSync(cmd) ? [cmd] : splitCommandParts(cmd);
+      return [normalizeLowercaseStringOrEmpty(name), [...command, ...(entry.args ?? [])]];
     }),
   );
 

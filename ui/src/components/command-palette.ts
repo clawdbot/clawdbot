@@ -4,14 +4,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
-import type { SessionsSearchHit } from "../../../packages/gateway-protocol/src/index.js";
 import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { filterVisibleSessionRows, getVisibleSessionRows } from "../lib/sessions/index.ts";
 import {
   parseAgentSessionKey,
@@ -30,8 +27,9 @@ import {
 } from "./command-palette-catalog-search.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import {
-  sessionMetadataMatchRank,
-  transcriptSearchSnippet,
+  buildCommandPaletteSessionItems,
+  SESSION_ACTION_PREFIX,
+  SESSION_SEARCH_LIMIT,
 } from "./command-palette-session-search.ts";
 import { icons } from "./icons.ts";
 import "./modal-dialog.ts";
@@ -42,10 +40,8 @@ import {
 
 type PaletteItem = CommandPaletteItem;
 
-const SESSION_ACTION_PREFIX = "session:";
 const SESSION_SEARCH_DEBOUNCE_MS = 50;
 const SESSION_SEARCH_MIN_CHARS = 2;
-const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 const SESSION_TRANSCRIPT_MAX_LIST_PAGES = 4;
@@ -566,50 +562,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.sessionSearchIncomplete =
         transcriptOutcome?.error !== true &&
         (transcriptResult?.indexing === true || transcriptResult?.truncated === true);
-      const transcriptHitByKey = new Map<string, SessionsSearchHit>();
-      for (const hit of transcriptResult?.results ?? []) {
-        if (!transcriptHitByKey.has(hit.sessionKey)) {
-          transcriptHitByKey.set(hit.sessionKey, hit);
-        }
-      }
-      const rowsByKey = new Map(visibleRows.map((row) => [row.key, row] as const));
-      for (const row of transcriptResult?.sessions ?? []) {
-        if (!rowsByKey.has(row.key)) {
-          rowsByKey.set(row.key, row);
-        }
-      }
-      this.sessionItems = [...rowsByKey.values()]
-        .map((row) => ({
-          row,
-          metadataRank: Math.max(
-            visibleKeys.has(row.key) ? 1 : 0,
-            sessionMetadataMatchRank(row, search),
-          ),
-          transcriptHit: transcriptHitByKey.get(row.key),
-        }))
-        .filter(({ metadataRank, transcriptHit }) => metadataRank > 0 || transcriptHit)
-        .toSorted((left, right) => {
-          const metadataDiff = right.metadataRank - left.metadataRank;
-          if (metadataDiff !== 0) {
-            return metadataDiff;
-          }
-          const transcriptDiff =
-            (right.transcriptHit?.score ?? Number.NEGATIVE_INFINITY) -
-            (left.transcriptHit?.score ?? Number.NEGATIVE_INFINITY);
-          return transcriptDiff || (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0);
-        })
-        .slice(0, SESSION_SEARCH_LIMIT)
-        .map(({ row, transcriptHit }) => ({
-          id: `session-${row.key}`,
-          label: resolveSessionDisplayName(row.key, row),
-          icon: "messageSquare" as const,
-          category: "chats" as const,
-          action: `${SESSION_ACTION_PREFIX}${row.key}`,
-          description:
-            transcriptHit && sessionMetadataMatchRank(row, search) === 0
-              ? transcriptSearchSnippet(transcriptHit.snippet)
-              : formatRelativeTimestamp(row.updatedAt, { fallback: "" }),
-        }));
+      this.sessionItems = buildCommandPaletteSessionItems({
+        visibleRows,
+        visibleKeys,
+        transcriptResult,
+        search,
+      });
     } catch {
       // Session search is best-effort; navigation commands stay usable. But a
       // failed search must not render as "No results" — that reads as a

@@ -19,7 +19,7 @@ function reserveIpcFd(stdio: StdioEntry[]): void {
   stdio[fd] = "ipc";
 }
 
-export function runServiceChildRelay(): void {
+function runServiceChildRelay(): void {
   let generation: string | undefined;
   let anchor: ChildProcess | undefined;
   let parentLost = false;
@@ -109,7 +109,6 @@ export function runServiceChildRelay(): void {
       report({ type: "relay-error", generation: generation!, error: error.message });
     });
     anchor.once("exit", (code, signal) => {
-      report({ type: "anchor-exit", generation: generation!, code, signal });
       process.exit(code === 0 || signal === "SIGKILL" ? 0 : 1);
     });
   });

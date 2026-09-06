@@ -126,6 +126,26 @@ export class WorkerTaskPool<Input, Output> {
     }
   }
 
+  // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
+  private createWorker(slot: Slot<Input, Output>): Worker {
+    const worker = new Worker(this.options.workerUrl, {
+      execArgv: this.options.workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : [],
+      ...this.options.workerOptions,
+    });
+    slot.worker = worker;
+    worker.on("message", (message: unknown) => this.receive(slot, message));
+    worker.on("error", (error) =>
+      this.fail(slot, new WorkerTaskError(String(error), "unavailable")),
+    );
+    worker.on("messageerror", (error) =>
+      this.fail(slot, new WorkerTaskError(String(error), "unavailable")),
+    );
+    worker.once("exit", (code) =>
+      this.fail(slot, new WorkerTaskError(`worker exited with code ${code}`, "unavailable")),
+    );
+    return worker;
+  }
+
   private async start(slot: Slot<Input, Output>, task: Task<Input, Output>): Promise<void> {
     // Execution owns the input now; retaining it on task duplicates the worker's clone.
     const taskInput = task.input!;
@@ -145,26 +165,10 @@ export class WorkerTaskPool<Input, Output> {
       return;
     }
     try {
-      if (!slot.worker) {
-        const worker = new Worker(this.options.workerUrl, {
-          execArgv: this.options.workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : [],
-          ...this.options.workerOptions,
-        });
-        slot.worker = worker;
-        worker.on("message", (message: unknown) => this.receive(slot, message));
-        worker.on("error", (error) =>
-          this.fail(slot, new WorkerTaskError(String(error), "unavailable")),
-        );
-        worker.on("messageerror", (error) =>
-          this.fail(slot, new WorkerTaskError(String(error), "unavailable")),
-        );
-        worker.once("exit", (code) =>
-          this.fail(slot, new WorkerTaskError(`worker exited with code ${code}`, "unavailable")),
-        );
-      }
+      const worker = slot.worker ?? this.createWorker(slot);
       const transferList = task.options.transferList?.(input);
       if (!task.done) {
-        slot.worker.postMessage({ input }, transferList);
+        worker.postMessage({ input }, transferList);
       }
     } catch (error) {
       this.fail(slot, new WorkerTaskError(String(error), "unavailable"));

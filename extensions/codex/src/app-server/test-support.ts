@@ -144,6 +144,7 @@ export async function waitForHarnessRequest(
 export function createClientHarness(
   options: {
     autoEmitExit?: boolean;
+    maxFrameBytes?: number;
     onWrite?: (line: string, send: (message: unknown) => void) => void;
   } = {},
 ) {
@@ -190,6 +191,7 @@ export function createClientHarness(
     return result;
   }) as typeof stdin.destroy;
   const process: HarnessProcess = Object.assign(new EventEmitter(), {
+    maxFrameBytes: options.maxFrameBytes,
     stdin,
     stdout,
     stderr: new PassThrough(),

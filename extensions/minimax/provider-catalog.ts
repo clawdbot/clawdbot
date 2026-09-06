@@ -48,47 +48,18 @@ export function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.en
   }
 }
 
-function buildMinimaxModel(params: {
-  id: string;
-  name: string;
-  reasoning: boolean;
-  input: ModelDefinitionConfig["input"];
-  cost: ModelDefinitionConfig["cost"];
-  contextWindow: number;
-}): ModelDefinitionConfig {
-  return {
-    id: params.id,
-    name: params.name,
-    reasoning: params.reasoning,
-    input: params.input,
-    cost: params.cost,
-    contextWindow: params.contextWindow,
-    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
-  };
-}
-
-function buildMinimaxTextModel(params: {
-  id: string;
-  name: string;
-  reasoning: boolean;
-  input: ModelDefinitionConfig["input"];
-  cost: ModelDefinitionConfig["cost"];
-  contextWindow: number;
-}): ModelDefinitionConfig {
-  return buildMinimaxModel(params);
-}
-
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
   return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
     const model = MINIMAX_TEXT_MODEL_CATALOG[id];
-    return buildMinimaxTextModel({
+    return {
       id,
       name: model.name,
       reasoning: model.reasoning,
       input: [...model.input],
       cost: resolveMinimaxApiCost(id),
       contextWindow: model.contextWindow,
-    });
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+    };
   });
 }
 

@@ -243,6 +243,11 @@ An ordinary stop logs `active-work drain settled; beginning server close` before
 teardown, including after a drain timeout or failure. Diagnostics do not change
 drain budgets or the service manager's stop deadline.
 
+A client disconnect leaves interactive setup available for reconnect. A Gateway
+stop or restart closes setup prompts before draining work. Settings writes already
+in progress may finish, but setup will not wait for another answer during shutdown.
+After the Gateway starts again, reopen setup and check the saved settings.
+
 ## Query a running Gateway
 
 All query commands use WebSocket RPC.

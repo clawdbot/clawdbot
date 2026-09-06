@@ -6,9 +6,9 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
+import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
-import { runAgentLoop, type AgentEvent } from "./runtime/index.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 export const NATIVE_REASONING_BENCH_PREFIX = "REASONING_BENCH:";

@@ -3,7 +3,6 @@
 export {
   getChannelPlugin,
   getLoadedChannelPlugin,
-  getLoadedChannelPluginOrigin,
   listChannelPlugins,
   normalizeChannelId,
   resolveChannelPluginRegistration,

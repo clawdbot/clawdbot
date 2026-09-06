@@ -8,7 +8,10 @@ import {
   type MockGatewayControls,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "active turn recovery",
@@ -236,11 +239,7 @@ async function finishRecoveredTurn(
 }
 
 async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1] = {}) {
-  const context = await suite.newBrowserContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
   const page = await context.newPage();
   const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -350,7 +349,7 @@ suite.define(() => {
   it.each([true, false])(
     "keeps an owned reconnect prompt before a durable reply while history recovery is pending (active=%s)",
     async (active) => {
-      const { context, page, gateway } = await openActiveTurn();
+      const { context, page, gateway } = await openActiveTurn({ deferredMethods: ["chat.send"] });
       const readPane = () =>
         page.locator("openclaw-chat-pane").evaluate((element) => {
           const state = (element as HTMLElement & { state: ChatPageHost }).state;
@@ -379,6 +378,8 @@ suite.define(() => {
         if (typeof runId !== "string") {
           throw new Error("chat.send did not carry its generated run ID");
         }
+        // This scenario commits the user below while disconnected, after acceptance.
+        await gateway.resolveDeferred("chat.send", { runId, status: "started" });
         await expect.poll(readPane).toMatchObject({
           runId,
           sending: false,
