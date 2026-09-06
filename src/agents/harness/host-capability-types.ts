@@ -41,6 +41,11 @@ export type AgentHarnessHostCapabilities = Readonly<{
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Rebuilds retained attachments under this host's captured media policy and run authority. */
+  prepareContextMedia?: (request: {
+    message: import("../runtime/index.js").AgentMessage;
+    maxChars: number;
+  }) => Promise<{ text?: string; images: import("../../llm/types.js").ImageContent[] }>;
   /** Closure-bound event sink backed by the host-owned trajectory recorder. */
   trajectory?: Readonly<{
     recordEvent: (type: string, data?: Record<string, unknown>) => void;

@@ -39,11 +39,6 @@ import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
-  checkTargetDatabaseSchemas,
-  formatSchemaRefusalLines,
-  hasSchemaRefusal,
-} from "./schema-preflight.js";
-import {
   DEFAULT_PACKAGE_NAME,
   normalizeTag,
   readPackageName,
@@ -56,6 +51,7 @@ import {
 } from "./shared.js";
 import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
@@ -65,6 +61,7 @@ import {
   prepareUpdateCommand,
   readDevUpdateTarget,
 } from "./update-command-run.js";
+import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
@@ -149,13 +146,15 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
               };
             }
           } finally {
-            recoveryState.windowsTaskAutoStartRecovery?.complete();
+            await recoveryState.windowsTaskAutoStartRecovery?.complete();
           }
           if (failure) {
-            if (failure.error instanceof UpdateCommandFailure) {
-              completeUpdateCommandRun(failure.error.result, run);
-            } else {
-              failUpdateCommandRun(failure.error, run);
+            if (!recoveryState.ledgerHandoffOwned) {
+              if (failure.error instanceof UpdateCommandFailure) {
+                completeUpdateCommandRun(failure.error.result, run);
+              } else {
+                failUpdateCommandRun(failure.error, run);
+              }
             }
             throw failure.error;
           }
@@ -408,8 +407,7 @@ async function updateCommandInternal(
       !switchToPackage &&
       currentVersion != null &&
       targetVersion != null &&
-      currentVersion === targetVersion &&
-      (requestedChannel === null || requestedChannel === storedChannel);
+      currentVersion === targetVersion;
     downgradeRisk =
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
@@ -473,15 +471,24 @@ async function updateCommandInternal(
     },
     { env: run.env },
   );
-  recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
-  const packageSchemaPreflight = await checkTargetDatabaseSchemas(packageTargetSchemaVersions);
-  if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
-    await refuseUpdate(
-      "database-schema-preflight",
-      formatSchemaRefusalLines(packageSchemaPreflight).join("\n"),
-    );
+  const schemaPreflight = await preflightUpdateCommandSchemas({
+    root,
+    updateInstallKind,
+    switchToGit,
+    shouldRestart,
+    updateStepTimeoutMs,
+    invocationCwd,
+    managedServiceRootRedirect,
+    channel,
+    devTarget,
+    packageTargetSchemaVersions,
+    opts,
+    refuseUpdate,
+  });
+  if (!schemaPreflight) {
     return;
   }
+  const { packageSchemaPreflight, preflightNotes } = schemaPreflight;
 
   if (opts.dryRun) {
     finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
@@ -507,7 +514,26 @@ async function updateCommandInternal(
       managedServiceRootRedirect,
       explicitTag,
       packageSchemaPreflight,
+      preflightNotes,
       opts,
+    });
+    return;
+  }
+
+  if (packageAlreadyCurrent) {
+    const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
+    await finishAlreadyCurrentUpdate({
+      opts,
+      result: {
+        status: "skipped",
+        mode: packageInstallTarget?.manager ?? "unknown",
+        root,
+        reason: "already-current",
+        before: { version: currentVersion },
+        after: { version: currentVersion },
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      },
     });
     return;
   }
@@ -586,21 +612,35 @@ async function updateCommandInternal(
   }
 
   // Preload execution and recovery before the package swap can remove these chunks.
-  const { executeMutableUpdate, finishUpdate } = await import("./update-execution.runtime.js");
-
-  // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
-  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
-
-  // Startup migrations belong to the freshly installed Doctor. Admit shared-state
-  // mutation only after every pre-install refusal has passed.
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: resolveOpenClawStateSqlitePath(process.env),
-  });
-  await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+  const {
+    executeMutableUpdate,
+    finishUpdate,
+    finishAlreadyCurrentUpdate,
+    continueMigratedUpdateInFreshProcess,
+    inspectActivatedUpdateState,
+  } = await import("./update-execution.runtime.js");
 
   const { progress: displayProgress, stop } = presentation;
   const progress = createUpdateRunProgress(run, displayProgress);
-  const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  let preUpdatePluginInstallRecords: Awaited<
+    ReturnType<typeof loadInstalledPluginIndexInstallRecords>
+  > = {};
+  let mutableUpdatePrepared = false;
+  const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv) => {
+    if (mutableUpdatePrepared) {
+      return;
+    }
+    // Cleanup, state-write admission and updater autostart belong after complete target admission.
+    await withOwnedManagedUpdateEnv(env, async () => {
+      await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
+      await assertOpenClawStateWriteAllowedAtPath({
+        databasePath: resolveOpenClawStateSqlitePath(process.env),
+      });
+      await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+      preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+    });
+    mutableUpdatePrepared = true;
+  };
 
   const execution = await executeMutableUpdate({
     root,
@@ -626,12 +666,22 @@ async function updateCommandInternal(
     managedServiceRootRedirect,
     invocationCwd,
     recoveryState,
+    prepareMutableUpdate,
+    onActivation: () => {
+      presentation.suspend();
+      progress.deferLedgerWrites();
+    },
   });
   if (!execution) {
     return;
   }
   const { result, preManagedServiceStop, ownedManagedUpdateContext, recoveryEnv } = execution;
   result.runId = run.runId;
+  if (result.status === "skipped" && result.reason === "already-current") {
+    stop();
+    await finishAlreadyCurrentUpdate({ opts, result, env: ownedManagedUpdateContext?.env });
+    return;
+  }
   recoveryState.triageTarget.root = result.root ?? root;
   recoveryState.triageTarget.failureResult = result;
   recoveryState.triageTarget.env =
@@ -640,7 +690,7 @@ async function updateCommandInternal(
   const finalizationPluginInstallRecords =
     ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords;
   stop();
-  await finishUpdate({
+  const finalization = {
     result,
     failure: execution.failure,
     root,
@@ -661,5 +711,33 @@ async function updateCommandInternal(
     packageUpdateNodeRunner,
     updateStepTimeoutMs,
     invocationCwd,
+    packageTransaction: execution.packageTransaction,
+    schemaVersions: execution.schemaVersions,
+    previousVerified: execution.previousVerified,
+  };
+  const rollbackBlockedReason = await inspectActivatedUpdateState({
+    result,
+    root,
+    packageUpdateNodeRunner,
+    schemaVersions: execution.schemaVersions,
+    candidateSchemaVersions: execution.candidateSchemaVersions,
+    config: finalizationConfigSnapshot.config,
+    env: ownedManagedUpdateContext?.env ?? run.env,
   });
+  if (rollbackBlockedReason) {
+    // A migrated database belongs to the candidate runtime. The old process
+    // must not reopen it, including during error reporting or outer cleanup.
+    recoveryState.ledgerHandoffOwned = true;
+    const continued = await continueMigratedUpdateInFreshProcess(
+      { ...finalization, rollbackBlockedReason },
+      progress.pendingSteps,
+    );
+    if (continued.exitCode !== 0) {
+      throw new UpdateCommandFailure(continued.result, continued.exitCode);
+    }
+    return;
+  }
+  progress.flushLedgerWrites();
+  presentation.resume();
+  await finishUpdate(finalization);
 }

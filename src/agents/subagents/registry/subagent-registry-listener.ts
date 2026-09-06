@@ -9,7 +9,10 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
-import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
+import {
+  markSubagentRunPausedAfterYield,
+  preserveSubagentRunForRestart,
+} from "./subagent-registry-run-manager.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryListener(config: {
@@ -102,6 +105,10 @@ export function createSubagentRegistryListener(config: {
           startedAt,
           endedAt,
         });
+        if (preserveSubagentRunForRestart({ entry, terminal: terminalOutcome, persist })) {
+          pendingLifecycle.clear(evt.runId);
+          return;
+        }
         const classification = classifySubagentTerminalOutcome(terminalOutcome);
         if (
           classification === "cancellation" &&

@@ -752,6 +752,7 @@ export const en: TranslationMap & {
       binding: "Binding",
       useDefault: "Use default",
       any: "any",
+      unavailable: "Unavailable",
     },
     inventory: {
       title: "Paired devices",
@@ -3526,10 +3527,6 @@ export const en: TranslationMap & {
   skillWorkshop: {
     title: "Skill Workshop",
     header: {
-      useCurrentChat: "Use current chat",
-      useCurrentChatAria: "Use current chat for revision requests",
-      useCurrentChatTooltip:
-        "Send revision requests to the current chat session instead of the proposal's workshop session.",
       selfLearning: "Self-learning",
       selfLearningAria: "Toggle autonomous self-learning",
       selfLearningTooltip:
@@ -3698,7 +3695,6 @@ export const en: TranslationMap & {
     today: {
       emptyTitle: "Nothing waiting today",
       emptyBody: "Your agent hasn't drafted anything new. Switch to Board to browse history.",
-      new: "NEW",
       waiting: "WAITING",
       reviewed: "REVIEWED",
       agent: "agent",
@@ -3720,10 +3716,9 @@ export const en: TranslationMap & {
       notForMe: "Not for me",
       upNext: "Up next · {count} more waiting",
       seeAll: "See all proposals →",
-      collection: "Your collection · {count} in use",
-      manage: "Manage →",
-      workflowHeading: "How the agent will use it",
-      applicabilityHeading: "When the agent should use it",
+      recentlyApplied: "Recently applied",
+      manage: "View history →",
+      readSkill: "Read full skill",
     },
   },
   // Chat swarm summaries render before the lazy Activity catalog loads.
@@ -4647,6 +4642,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
+      retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
       creatingWorktree: "Creating worktree…",
@@ -5500,6 +5496,8 @@ export const en: TranslationMap & {
         "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
     },
     pendingInputs: {
+      resuming:
+        "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:

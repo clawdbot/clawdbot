@@ -1,16 +1,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 // Verifies schema hint metadata and sensitive path handling.
-import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
+import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import {
-  buildBaseHints,
-  collectMatchingSchemaPaths,
-  mapSensitivePaths,
-  testApi,
-} from "./schema.hints.js";
+import { buildBaseHints, mapSensitivePaths, testApi } from "./schema.hints.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -128,6 +123,17 @@ describe("mapSensitivePaths", () => {
       merged: z
         .object({ id: z.string() })
         .and(z.object({ nested: z.string().register(sensitive) })),
+      deferred: z.lazy(() => z.object({ value: z.string().register(sensitive) })),
+      defaulted: z.string().register(sensitive).default("synthetic"),
+      nullable: z.string().register(sensitive).nullable().readonly(),
+      preprocessed: z.preprocess(
+        (value) => value,
+        z.object({ value: z.string().register(sensitive) }),
+      ),
+      discriminated: z.discriminatedUnion("type", [
+        z.object({ type: z.literal("none") }),
+        z.object({ type: z.literal("token"), value: z.string().register(sensitive) }),
+      ]),
     });
 
     const result = mapSensitivePaths(GrandSchema, "", {});
@@ -141,6 +147,11 @@ describe("mapSensitivePaths", () => {
     expect(result["headersNested.*.nested"]?.sensitive).toBe(true);
     expect(result["auth.value"]?.sensitive).toBe(true);
     expect(result["merged.nested"]?.sensitive).toBe(true);
+    expect(result["deferred.value"]?.sensitive).toBe(true);
+    expect(result["defaulted"]?.sensitive).toBe(true);
+    expect(result["nullable"]?.sensitive).toBe(true);
+    expect(result["preprocessed.value"]?.sensitive).toBe(true);
+    expect(result["discriminated.value"]?.sensitive).toBe(true);
   });
 
   it("should not detect non-sensitive fields nested inside all structural Zod types", () => {
@@ -252,15 +263,15 @@ describe("mapSensitivePaths", () => {
     expect(hints["appSecret"]?.sensitive).toBe(true);
     expect(hints["nested.verificationToken"]?.sensitive).toBe(true);
   });
-});
-
-describe("collectMatchingSchemaPaths", () => {
-  it("finds base-config URL fields that may embed secrets", () => {
-    const paths = collectMatchingSchemaPaths(OpenClawSchema, "", isSensitiveUrlConfigPath);
-
-    expect(paths.has("mcp.servers.*.url")).toBe(true);
-    expect(paths.has("models.providers.*.baseUrl")).toBe(true);
-    expect(paths.has("models.providers.*.request.proxy.url")).toBe(true);
-    expect(paths.has("tools.media.audio.request.proxy.url")).toBe(true);
+  it("tags base-config URL fields that may embed secrets", () => {
+    const hints = mapSensitivePaths(OpenClawSchema, "", {});
+    for (const path of [
+      "mcp.servers.*.url",
+      "models.providers.*.baseUrl",
+      "models.providers.*.request.proxy.url",
+      "tools.media.audio.request.proxy.url",
+    ]) {
+      expect(hints[path]?.tags, path).toContain(SENSITIVE_URL_HINT_TAG);
+    }
   });
 });

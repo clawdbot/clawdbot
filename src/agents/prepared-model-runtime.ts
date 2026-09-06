@@ -14,6 +14,7 @@ import {
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
 import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
+import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -370,21 +371,22 @@ export async function prepareModelRuntimeSnapshot(
   );
 }
 
-/** Refreshes stale inventory only for an explicit catalog read; turn admission remains static. */
-export async function refreshStalePreparedModelRuntimeCatalog(
+/** Initializes or refreshes inventory on catalog demand; turn admission remains static. */
+export async function refreshPreparedModelRuntimeCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
+  options: { refresh?: boolean } = {},
 ): Promise<ModelCatalogSnapshot | undefined> {
   const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
-  if (
-    !owner ||
-    owners.get(ownerKey(owner.input)) !== owner ||
-    !owner.catalogStale ||
-    !snapshot.loadFullModelCatalog
-  ) {
+  if (!owner || owners.get(ownerKey(owner.input)) !== owner || !snapshot.loadFullModelCatalog) {
+    return undefined;
+  }
+  const currentCatalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
+  const refresh = options.refresh === true || owner.catalogStale;
+  if (!refresh && isPreparedModelCatalogFull(currentCatalog)) {
     return undefined;
   }
   const generation = owner.generation;
-  const catalog = await snapshot.loadFullModelCatalog({ refresh: true });
+  const catalog = await snapshot.loadFullModelCatalog({ refresh });
   if (
     owner.catalogStale &&
     owner.generation === generation &&

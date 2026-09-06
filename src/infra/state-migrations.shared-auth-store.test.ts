@@ -23,6 +23,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import * as doctor from "./state-migrations.doctor.js";
 import * as migration from "./state-migrations.shared-auth-store.js";
 
@@ -99,6 +100,127 @@ describe("shared auth store relocation", () => {
     }
     return { env, stateDir, sourcePath, ownership, sqlite, migration };
   }
+
+  it.each(["legacy-main", "state-db"])(
+    "preserves copied auth SQLite artifacts during %s inspection",
+    async (location) => {
+      const fixture = await createEmptyFixture(false);
+      const statePath = resolveOpenClawStateSqlitePath(fixture.env);
+      const seedPath = path.join(tempDirs.make("openclaw-auth-wal-seed-"), "seed.sqlite");
+      for (const target of [fixture.sourcePath, statePath]) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        const seed = new DatabaseSync(seedPath);
+        try {
+          seed.exec(`
+            PRAGMA journal_mode = WAL;
+            PRAGMA wal_autocheckpoint = 0;
+            CREATE TABLE IF NOT EXISTS auth_profile_store (store_key TEXT, store_json TEXT, updated_at INTEGER);
+            CREATE TABLE IF NOT EXISTS config_machine_state (state_key TEXT, value_json TEXT, updated_at_ms INTEGER);
+            CREATE TABLE IF NOT EXISTS migration_sources (source_key TEXT, migration_kind TEXT, source_path TEXT, removed_source INTEGER);
+            PRAGMA wal_checkpoint(TRUNCATE);
+          `);
+          if (target === fixture.sourcePath) {
+            seed
+              .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+              .run(JSON.stringify(makeStore("openai:copied", "fixture-key")));
+          } else {
+            seed
+              .prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)")
+              .run(JSON.stringify({ location }));
+            seed
+              .prepare(
+                "INSERT INTO migration_sources VALUES ('pending', 'shared-auth-store-state-db', ?, 0)",
+              )
+              .run(fixture.sourcePath);
+          }
+          fs.copyFileSync(seedPath, target);
+          fs.copyFileSync(`${seedPath}-wal`, `${target}-wal`);
+        } finally {
+          seed.close();
+        }
+      }
+      const inventory = () =>
+        [fixture.sourcePath, statePath].flatMap((file) =>
+          ["", "-wal", "-shm", "-journal"].map((suffix) => ({
+            path: `${file}${suffix}`,
+            bytes: fs.existsSync(`${file}${suffix}`) ? fs.readFileSync(`${file}${suffix}`) : null,
+          })),
+        );
+      const before = inventory();
+      expect(fs.existsSync(`${fixture.sourcePath}-shm`)).toBe(false);
+      expect(fs.existsSync(`${statePath}-shm`)).toBe(false);
+      expect(
+        migration.detectSharedAuthStoreMigration({
+          stateDir: fixture.stateDir,
+          env: fixture.env,
+          doctorOnlyStateMigrations: true,
+          artifactPreservingReadOnly: true,
+        }),
+      ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+      expect(inventory()).toEqual(before);
+    },
+  );
+
+  it("does not pin runtime auth ownership during copied inspection", async () => {
+    const fixture = await createEmptyFixture(false);
+    expect(
+      migration.detectSharedAuthStoreMigration({
+        stateDir: fixture.stateDir,
+        env: fixture.env,
+        doctorOnlyStateMigrations: true,
+        artifactPreservingReadOnly: true,
+      }),
+    ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+    const statePath = resolveOpenClawStateSqlitePath(fixture.env);
+    expect(fs.existsSync(statePath)).toBe(false);
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    const database = new DatabaseSync(statePath);
+    try {
+      database.exec(`
+        CREATE TABLE config_machine_state (state_key TEXT, value_json TEXT, updated_at_ms INTEGER);
+        INSERT INTO config_machine_state VALUES ('auth.sharedStore', '{"location":"state-db"}', 1);
+      `);
+    } finally {
+      database.close();
+    }
+    expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+      location: "state-db",
+    });
+  });
+
+  it.runIf(process.platform === "linux")(
+    "preserves the live auth source's POSIX locks during copied inspection",
+    async () => {
+      const fixture = await createEmptyFixture(false);
+      fs.mkdirSync(path.dirname(fixture.sourcePath), { recursive: true });
+      const writer = new DatabaseSync(fixture.sourcePath);
+      try {
+        writer.exec(`
+          PRAGMA journal_mode = WAL;
+          CREATE TABLE auth_profile_store (store_key TEXT, store_json TEXT, updated_at INTEGER);
+          INSERT INTO auth_profile_store VALUES ('primary', '{"version":1,"profiles":{}}', 1);
+        `);
+        const before = readMainDatabasePosixLocks(fixture.sourcePath);
+        expect(before).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
+        expect(
+          migration.detectSharedAuthStoreMigration({
+            stateDir: fixture.stateDir,
+            env: fixture.env,
+            doctorOnlyStateMigrations: true,
+            artifactPreservingReadOnly: true,
+          }),
+        ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+        expect(readMainDatabasePosixLocks(fixture.sourcePath)).toEqual(before);
+        expect(writer.prepare("SELECT store_key FROM auth_profile_store").all()).toEqual([
+          { store_key: "primary" },
+        ]);
+      } finally {
+        writer.close();
+      }
+    },
+  );
 
   it.each([
     { label: "fresh profile", createSourceDatabase: false },

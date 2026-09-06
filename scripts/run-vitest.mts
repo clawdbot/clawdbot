@@ -19,7 +19,6 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   prepareE2eVitestRuntime,
   resolveVitestCliEntry,
-  resolveVitestRuntimeCliSelections,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
 import {
@@ -47,6 +46,7 @@ import {
   runVitestCli,
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
+import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,

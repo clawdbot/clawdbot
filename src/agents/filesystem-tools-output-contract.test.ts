@@ -6,7 +6,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import {
+  createCodeModeHarness,
+  resetCodeModeTestState,
+  runUntilCompleted,
+} from "./code-mode.test-support.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import { createFindTool } from "./sessions/tools/find.js";
+import { createGrepTool } from "./sessions/tools/grep.js";
+import { createLsTool } from "./sessions/tools/ls.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
@@ -18,6 +27,16 @@ function expectContract(tool: AnyAgentTool, details: unknown): void {
   expect(Value.Check(tool.outputSchema!, details)).toBe(true);
 }
 
+async function callThroughCodeMode(tool: AnyAgentTool, args: Record<string, unknown>) {
+  const harness = createCodeModeHarness();
+  applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, tool] });
+  return await runUntilCompleted({
+    execTool: harness.tools[0]!,
+    waitTool: harness.tools[1]!,
+    code: `return await ${tool.name}(${JSON.stringify(args)});`,
+  });
+}
+
 describe("filesystem tool output contracts", () => {
   let tmpDir = "";
 
@@ -26,8 +45,115 @@ describe("filesystem tool output contracts", () => {
   });
 
   afterEach(async () => {
+    resetCodeModeTestState();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
+
+  it.each([
+    { mode: "empty", files: [], args: {}, output: "(empty directory)" },
+    {
+      mode: "complete",
+      files: ["alpha.txt", "beta.txt"],
+      args: {},
+      output: '"alpha.txt"\n"beta.txt"',
+    },
+    {
+      mode: "paged",
+      files: ["alpha.txt", "beta.txt"],
+      args: { limit: 1 },
+      output: '"alpha.txt"\n\n[More entries. Continue with the same path and after="alpha.txt".]',
+      nextAfter: "alpha.txt",
+    },
+  ])(
+    "preserves $mode directory output through Code Mode",
+    async ({ files, args, output, nextAfter }) => {
+      await Promise.all(files.map((file) => fs.writeFile(path.join(tmpDir, file), "fixture\n")));
+      const tool = createLsTool(tmpDir) as unknown as AnyAgentTool;
+      const direct = await tool.execute("direct-ls", args);
+      const result = await callThroughCodeMode(tool, args);
+
+      expect(direct.content).toEqual([{ type: "text", text: output }]);
+      expect(result).toMatchObject({
+        status: "completed",
+        value: { content: output, ...(nextAfter === undefined ? {} : { nextAfter }) },
+      });
+    },
+  );
+
+  it.each([
+    { mode: "matching", files: ["alpha.txt"], limit: 10, content: "alpha.txt" },
+    { mode: "empty", files: [], limit: 10, content: "No files found matching pattern" },
+    {
+      mode: "limited",
+      files: ["alpha.txt", "beta.txt"],
+      limit: 1,
+      content: "alpha.txt\n\n[1 results limit reached]",
+      resultLimitReached: 1,
+    },
+  ])(
+    "preserves $mode file search output through Code Mode",
+    async ({ files, limit, content, resultLimitReached }) => {
+      await Promise.all(files.map((file) => fs.writeFile(path.join(tmpDir, file), "fixture\n")));
+      const tool = createFindTool(tmpDir, {
+        operations: {
+          exists: (absolutePath) =>
+            fs.access(absolutePath).then(
+              () => true,
+              () => false,
+            ),
+          glob: async (pattern, cwd, options) => {
+            const matches: string[] = [];
+            for await (const match of fs.glob(pattern, { cwd })) {
+              matches.push(match);
+            }
+            return matches.toSorted().slice(0, options.limit);
+          },
+        },
+      }) as unknown as AnyAgentTool;
+      const args = { pattern: "*.txt", limit };
+      const direct = await tool.execute("direct-find", args);
+      const result = await callThroughCodeMode(tool, args);
+
+      expect(direct.content).toEqual([{ type: "text", text: content }]);
+      expect(result).toMatchObject({
+        status: "completed",
+        value: { content, ...(resultLimitReached === undefined ? {} : { resultLimitReached }) },
+      });
+    },
+  );
+
+  it.each([
+    {
+      mode: "matching",
+      pattern: "needle",
+      limit: 10,
+      content: "sample.txt:1: needle alpha\nsample.txt:2: needle beta",
+    },
+    { mode: "empty", pattern: "absent", limit: 10, content: "No matches found" },
+    {
+      mode: "limited",
+      pattern: "needle",
+      limit: 1,
+      content:
+        "sample.txt:1: needle alpha\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]",
+      matchLimitReached: 1,
+    },
+  ])(
+    "preserves $mode text search output through Code Mode",
+    async ({ pattern, limit, content, matchLimitReached }) => {
+      await fs.writeFile(path.join(tmpDir, "sample.txt"), "needle alpha\nneedle beta\n");
+      const tool = createGrepTool(tmpDir) as unknown as AnyAgentTool;
+      const args = { pattern, limit };
+      const direct = await tool.execute("direct-grep", args);
+      const result = await callThroughCodeMode(tool, args);
+
+      expect(direct.content).toEqual([{ type: "text", text: content }]);
+      expect(result).toMatchObject({
+        status: "completed",
+        value: { content, ...(matchLimitReached === undefined ? {} : { matchLimitReached }) },
+      });
+    },
+  );
 
   it("validates read text, image, truncation, and optional-not-found results", async () => {
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "ordinary text\n", "utf8");

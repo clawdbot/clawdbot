@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
-import { SessionHistorySseState } from "./session-history-state.js";
+import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 
 const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
 const failed = {
@@ -28,14 +29,28 @@ function projectedIds(messages: unknown[]) {
 describe("recovered assistant errors", () => {
   it.each([
     { content: [] },
+    { content: [{ type: "input_text", text: "" }] },
+    { content: [{ type: "input_text", text: STREAM_ERROR_FALLBACK_TEXT }] },
+    { content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }] },
+    { content: [{ type: "reasoning", text: "Internal reasoning" }] },
+    { content: [{ type: "redacted_thinking", data: "redacted" }] },
     { content: "" },
     { content: [{ type: "text", text: "  " }] },
     { content: [{ type: "thinking", thinking: "private reasoning" }] },
-  ])("retires a non-visible failed attempt after its run answers: %j", ({ content }) => {
-    const failure = { ...failed, content };
-    const raw = [user, failure, answer];
+  ])("retires repeated non-visible failed attempts after their run answers: %j", ({ content }) => {
+    const failures = Array.from({ length: 4 }, (_, attempt) => ({
+      ...failed,
+      content,
+      __openclaw: { ...failed["__openclaw"], id: `attempt-${attempt}`, seq: attempt + 2 },
+    }));
+    const final = { ...answer, __openclaw: { ...answer["__openclaw"], seq: 6 } };
+    const raw = [user, ...failures, final];
     const original = structuredClone(raw);
-    expect(projectedIds(raw)).toEqual([user["__openclaw"], answer["__openclaw"]]);
+    expect(projectedIds(raw)).toEqual([user["__openclaw"], final["__openclaw"]]);
+    expect(buildSessionHistorySnapshot({ rawMessages: raw }).history.messages).toEqual([
+      user,
+      final,
+    ]);
     expect(raw).toEqual(original);
   });
 

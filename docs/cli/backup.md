@@ -214,6 +214,11 @@ openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --
 openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --agent main
 ```
 
+Git history output must fit within a 16 MiB read. If a log request reports an
+output-limit error, retry with a smaller `--limit`. An oversized commit subject
+can exceed the limit even with `--limit 1`; inspect that history directly with
+Git. OpenClaw reports the failure without returning partial history entries.
+
 Verification restores the selected snapshot into private scratch space, checks each table's row count and SHA-256, runs `PRAGMA integrity_check` and `PRAGMA foreign_key_check`, and removes the scratch copy. Restore writes only to a fresh target and refuses existing `-wal`, `-shm`, and `-journal` sidecars:
 
 ```bash
