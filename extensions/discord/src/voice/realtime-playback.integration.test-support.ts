@@ -11,6 +11,7 @@ import { DiscordRealtimePlayer } from "./realtime-player.js";
 import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
+import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
 
 export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) => void) {
   const voiceSdk = loadDiscordVoiceSdk();
@@ -30,6 +31,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
   );
   const entry: VoiceSessionEntry = {
     generation: 1,
+    captureOnly: false,
     autoJoinWhenOccupied: false,
     sessionLifecycle: { status: "active" },
     guildId: "guild",
@@ -49,6 +51,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
     player,
     playbackQueue: Promise.resolve(),
     processingQueue: Promise.resolve(),
+    conversations: new DiscordVoiceConversationQueue(),
     audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
     capture: createVoiceCaptureState(),

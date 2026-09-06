@@ -15,6 +15,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/cohere",
     manifestAuth: { applyConfig: applyCohereConfig },
     catalog: {
+      discoveryMode: "strict",
       liveModelDiscovery: COHERE_LIVE_MODEL_DISCOVERY,
     },
     wrapStreamFn: wrapCohereProviderStream,

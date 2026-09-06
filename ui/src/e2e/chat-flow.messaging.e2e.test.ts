@@ -12,15 +12,12 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 async function withChatPage(run: (page: Page) => Promise<void>): Promise<void> {
-  const context = await suite.newBrowserContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
   try {
     await run(await context.newPage());
   } finally {

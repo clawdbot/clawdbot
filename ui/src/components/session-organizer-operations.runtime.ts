@@ -1,8 +1,8 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
@@ -17,6 +17,7 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
+import { showInputDialog } from "./input-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
   patchSessionRows,
@@ -375,10 +376,20 @@ export async function runBatchSessionAction(
 export async function renameSession(
   host: SessionOrganizerControllerHost,
   session: SidebarRecentSession,
-  label: string,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
-  await patchSession(host, session, { label: normalizeOptionalString(label) ?? null }, scope);
+  const value = await showInputDialog({
+    signal: scope.signal,
+    title: t("sessionsView.renameSessionPrompt"),
+    defaultValue: session.renameValue,
+  });
+  if (value === null) {
+    return;
+  }
+  const patch = resolveSessionRenamePatch(value, session.renameValue, session.userLabel);
+  if (patch) {
+    await patchSession(host, session, patch, scope);
+  }
 }
 
 export async function assignSessionOwner(

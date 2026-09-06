@@ -56,6 +56,16 @@ type CommanderUpdateOptions = Record<string, unknown> & {
   yes?: boolean;
 };
 
+function requiredUpdateLeafString(opts: Record<string, unknown>, key: string): string {
+  const value = opts[key];
+  if (typeof value !== "string") {
+    throw new Error(
+      `Missing required update option --${key.replaceAll(/[A-Z]/g, "-$&").toLowerCase()}`,
+    );
+  }
+  return value;
+}
+
 // Leaves opt into dry-run explicitly; unsupported leaves reject it before owner work.
 function createUpdateLeafAction(
   action: (opts: Record<string, unknown>, command: Command) => Promise<void>,
@@ -233,6 +243,29 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
 
   registerUpdateFinalizationCommand(update, "repair", false);
   registerUpdateFinalizationCommand(update, "finalize", true);
+
+  update
+    .command("migration-plan", { hidden: true })
+    .description("Plan Doctor-owned state migrations against an isolated snapshot")
+    .requiredOption("--snapshot-home <path>", "Copied environment home")
+    .requiredOption("--snapshot-config <path>", "Copied OpenClaw config")
+    .requiredOption("--snapshot-state <path>", "Copied OpenClaw state directory")
+    .option("--dry-run", "Accepted for parity; migration planning is always read-only", true)
+    .option("--json", "Output result as JSON", true)
+    .action(
+      createUpdateLeafAction(
+        async (opts) => {
+          const { updateMigrationPlanCommand } =
+            await import("./update-cli/update-command-migration-plan.js");
+          await updateMigrationPlanCommand({
+            snapshotConfig: requiredUpdateLeafString(opts, "snapshotConfig"),
+            snapshotHome: requiredUpdateLeafString(opts, "snapshotHome"),
+            snapshotState: requiredUpdateLeafString(opts, "snapshotState"),
+          });
+        },
+        { supportsDryRun: true },
+      ),
+    );
 
   update
     .command("wizard")

@@ -3,7 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
+import { resolveGlobalDedupeCache } from "../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -18,22 +18,20 @@ const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
  * message cannot bypass dedupe by entering through a different chunk copy.
  */
 const INBOUND_DEDUPE_CACHE_KEY = Symbol.for("openclaw.inboundDedupeCache");
-const INBOUND_DEDUPE_INFLIGHT_KEY = Symbol.for("openclaw.inboundDedupeInflight");
+const INBOUND_DEDUPE_INFLIGHT_KEY = Symbol.for("openclaw.inboundDedupeClaims");
 
-const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
+const inboundDedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
 const inboundDedupeInFlight = resolveGlobalSingleton(
   INBOUND_DEDUPE_INFLIGHT_KEY,
-  () => new Set<string>(),
+  () => new Map<string, object>(),
 );
 
 type InboundDedupeClaimResult =
-  | { status: "invalid" }
-  | { status: "duplicate"; key: string }
-  | { status: "inflight"; key: string }
-  | { status: "claimed"; key: string };
+  | { status: "invalid" | "duplicate" | "inflight"; commit?: never; release?: never }
+  | { status: "claimed"; commit: () => void; release: () => void };
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
@@ -79,39 +77,36 @@ function buildInboundDedupeKey(ctx: MsgContext): string | null {
   return JSON.stringify([sessionScope, routeKey, messageId]);
 }
 
-export function claimInboundDedupe(
-  ctx: MsgContext,
-  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
-): InboundDedupeClaimResult {
+export function claimInboundDedupe(ctx: MsgContext): InboundDedupeClaimResult {
   const key = buildInboundDedupeKey(ctx);
   if (!key) {
     return { status: "invalid" };
   }
-  const cache = opts?.cache ?? inboundDedupeCache;
-  if (cache.peek(key, opts?.now)) {
-    return { status: "duplicate", key };
+  if (inboundDedupeCache.peek(key)) {
+    return { status: "duplicate" };
   }
-  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
-  if (inFlight.has(key)) {
-    return { status: "inflight", key };
+  if (inboundDedupeInFlight.has(key)) {
+    return { status: "inflight" };
   }
-  inFlight.add(key);
-  return { status: "claimed", key };
-}
-
-export function commitInboundDedupe(
-  key: string,
-  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
-): void {
-  const cache = opts?.cache ?? inboundDedupeCache;
-  cache.check(key, opts?.now);
-  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
-  inFlight.delete(key);
-}
-
-export function releaseInboundDedupe(key: string, opts?: { inFlight?: Set<string> }): void {
-  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
-  inFlight.delete(key);
+  const owner = {};
+  inboundDedupeInFlight.set(key, owner);
+  return {
+    status: "claimed",
+    commit: () => {
+      // Abandonment can precede dispatch finalization; retired claims cannot recommit.
+      if (inboundDedupeInFlight.get(key) === owner) {
+        inboundDedupeCache.check(key, undefined, owner);
+        inboundDedupeInFlight.delete(key);
+      }
+    },
+    release: () => {
+      if (inboundDedupeInFlight.get(key) === owner) {
+        inboundDedupeInFlight.delete(key);
+      }
+      // Expiry may have admitted a newer attempt; release only this claim's entry.
+      inboundDedupeCache.delete(key, owner);
+    },
+  };
 }
 
 export function resetInboundDedupe(): void {

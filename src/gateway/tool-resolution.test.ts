@@ -7,6 +7,7 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
@@ -136,6 +137,30 @@ describe("resolveGatewayScopedTools", () => {
     expect(imageTool?.description).toContain("private model context");
   });
 
+  it.each([
+    { first: undefined, second: false },
+    { first: false, second: undefined },
+  ])(
+    "keeps unknown and disabled model vision distinct in cached tools: $first then $second",
+    async ({ first, second }) => {
+      const cache = new McpLoopbackToolCache();
+      const cfg: OpenClawConfig = { tools: { allow: ["computer"] } };
+      for (const modelHasVision of [first, second]) {
+        const result = await cache.resolve({
+          cfg,
+          context: {
+            sessionKey: "agent:main:vision-context",
+            senderIsOwner: true,
+            modelHasVision,
+          },
+        });
+        expect(result.tools.some((tool) => tool.name === "computer")).toBe(
+          modelHasVision !== false,
+        );
+      }
+    },
+  );
+
   it("applies a borrowed runtime policy without reassigning session tools", () => {
     const cfg = {
       agents: {
@@ -201,19 +226,23 @@ describe("resolveGatewayScopedTools", () => {
     "materializes $label loopback $mode without widening its cap",
     async ({ resolve, toolsAllow, expected }) => {
       const scope = {
-        cfg: { tools: { profile: "minimal", alsoAllow: ["ls", "read"] } } as OpenClawConfig,
-        sessionKey: "agent:main:cron:listing-surface",
-        workspaceDir: path.join(os.tmpdir(), "openclaw-listing-surface"),
-        senderIsOwner: true,
-        disablePluginTools: true,
-        toolsAllow,
+        cfg: {
+          plugins: { enabled: false },
+          tools: { profile: "minimal", alsoAllow: ["ls", "read"] },
+        } satisfies OpenClawConfig,
+        context: {
+          sessionKey: "agent:main:cron:listing-surface",
+          workspaceDir: path.join(os.tmpdir(), "openclaw-listing-surface"),
+          senderIsOwner: true,
+          toolsAllow,
+        },
       };
       const allowed = await resolve(scope);
       expect(allowed.tools.map((tool) => tool.name)).toEqual(expected);
 
       const denied = await resolve({
         ...scope,
-        cfg: { tools: { profile: "minimal", alsoAllow: ["ls", "read"], deny: ["ls"] } },
+        cfg: { ...scope.cfg, tools: { ...scope.cfg.tools, deny: ["ls"] } },
       });
       expect(denied.tools.map((tool) => tool.name)).toEqual(
         expected.filter((name) => name !== "ls"),
@@ -327,7 +356,6 @@ describe("resolveGatewayScopedTools", () => {
       expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
       expect(toolResult.details).toEqual({
         status: "yielded",
-        message: "waiting on subagents",
         acknowledgment: "I’m waiting on the subagents.",
       });
     } finally {
