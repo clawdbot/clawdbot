@@ -2,6 +2,7 @@ import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -43,7 +44,9 @@ export function resolveStrandedReplyRecovery(params: {
   if (
     !shouldClassifyPrivateMessageToolFinal(params) ||
     params.payloads.some(
-      (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+      (payload) =>
+        isReplyPayloadTerminalContent(payload) &&
+        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
     )
   ) {
     return { kind: "none" };

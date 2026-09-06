@@ -1,6 +1,7 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import { isMainThread, threadId } from "node:worker_threads";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -83,6 +84,9 @@ export function startAgentDatabaseOpenTiming(agentId: string, pathname: string) 
         agentId,
         elapsedMs,
         path: pathname,
+        pid: process.pid,
+        threadId,
+        isMainThread,
         phaseDurationsMs,
         thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
       });

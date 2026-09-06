@@ -357,6 +357,47 @@ describe("stripInternalRuntimeScaffolding", () => {
     });
   });
 
+  it.each([
+    { strip: false, nullPrototype: false },
+    { strip: false, nullPrototype: true },
+    { strip: true, nullPrototype: false },
+    { strip: true, nullPrototype: true },
+  ])("preserves payload shape and identity for %j", ({ strip, nullPrototype }) => {
+    const sibling = { text: "keep" };
+    const items = [sibling];
+    items.length = 2;
+    const symbol = Symbol("metadata");
+    let reads = 0;
+    const channelData = {
+      get label() {
+        reads += 1;
+        return strip ? "visible<previous_response>internal</previous_response>" : "visible";
+      },
+      sibling,
+      items,
+      [symbol]: "metadata",
+    };
+    Object.defineProperty(channelData, "hidden", { value: "metadata" });
+    if (nullPrototype) {
+      Object.setPrototypeOf(channelData, null);
+    }
+    const payload = { text: "hello", channelData };
+
+    const result = stripInternalRuntimeScaffoldingFromPayload(payload);
+
+    expect(reads).toBe(1);
+    expect(result.channelData?.label).toBe("visible");
+    expect(result.channelData?.sibling).toBe(sibling);
+    expect(result.channelData?.items).toBe(items);
+    if (strip) {
+      expect(result).not.toBe(payload);
+      expect(Object.getPrototypeOf(result.channelData)).toBe(Object.prototype);
+      expect(Reflect.ownKeys(result.channelData!)).toEqual(["label", "sibling", "items"]);
+    } else {
+      expect(result).toBe(payload);
+    }
+  });
+
   it("does not let Markdown fences bypass private runtime scaffolding removal", () => {
     expect(
       stripInternalRuntimeScaffolding(

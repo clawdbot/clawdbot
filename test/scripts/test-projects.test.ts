@@ -6,10 +6,8 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
-import {
-  resolveVitestPretestBuildMode,
-  resolveVitestRuntimeCliSelections,
-} from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
@@ -66,6 +64,25 @@ describe("test runtime prerequisites", () => {
     ],
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
+    ["migrated update process", ["src/cli/update-cli/update-command-migrated.test.ts"], "runtime"],
+    ["update rollback", ["src/cli/update-cli/update-command-rollback.test.ts"], "runtime"],
+    [
+      "update recovery",
+      ["src/cli/update-cli/update-command-post-update-recovery.test.ts"],
+      "runtime",
+    ],
+    [
+      "update service recovery",
+      ["src/cli/update-cli/update-command-service.integration.test.ts"],
+      "runtime",
+    ],
+    [
+      "candidate Gateway canary",
+      ["src/infra/update-candidate-canary.integration.test.ts"],
+      "runtime",
+    ],
+    ["infra config", ["test/vitest/vitest.infra.config.ts"], "runtime"],
+    ["ordinary update unit test", ["src/infra/update-candidate-canary.test.ts"], undefined],
     ["CLI directory", ["src/cli"], "runtime"],
     ["CLI config", ["test/vitest/vitest.cli.config.ts"], undefined],
     ["CLI process config", ["test/vitest/vitest.cli-process.config.ts"], "runtime"],
@@ -155,6 +172,22 @@ describe("test runtime prerequisites", () => {
       {},
     );
     expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
+  });
+
+  it("projects invocation-owned include files when selecting prerequisites", () => {
+    const selections = resolveVitestRuntimeCliSelections(
+      "test/vitest/vitest.gateway-server.config.ts",
+      ["run"],
+      {},
+    );
+    for (const selection of selections) {
+      selection.includePatterns = ["src/gateway/server-request-context.test.ts"];
+    }
+    expect(resolveVitestPretestBuildMode(selections)).toBeUndefined();
+    for (const selection of selections) {
+      selection.includePatterns = ["src/gateway/server-sidecar-retention.test.ts"];
+    }
+    expect(resolveVitestPretestBuildMode(selections)).toBe("runtime");
   });
 
   it("combines private QA and runtime readers into one private build", () => {
@@ -2516,6 +2549,10 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     "src/cli/help-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
+    "src/cli/update-cli/update-command-migrated.test.ts",
+    "src/cli/update-cli/update-command-rollback.test.ts",
+    "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-service.integration.test.ts",
     "src/cli/one-shot-exit.test.ts",
     "src/cli/program/subcli-descriptors.test.ts",
     "src/cli/state-dir-gateway-check.process.test.ts",

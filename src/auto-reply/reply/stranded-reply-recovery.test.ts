@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/types.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -68,6 +69,30 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
 describe("resolveStrandedReplyRecovery", () => {
   const substantiveFinal =
     "This reply is substantive enough to look user-facing. It contains a second sentence so the private-final policy treats it as stranded output.";
+
+  it.each([
+    { payload: { text: "The recovered answer is ready." }, expected: "none" },
+    {
+      payload: { text: "The fallback model is active.", isFallbackNotice: true },
+      expected: "retry",
+    },
+  ])(
+    "distinguishes a pending terminal answer from a notice: $expected",
+    ({ payload, expected }) => {
+      const recovery = resolveStrandedReplyRecovery({
+        base: createMockFollowupRun({ prompt: "question" }),
+        payloads: [markReplyPayloadForSourceSuppressionDelivery(payload)],
+        finalText: substantiveFinal,
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: false,
+        successfulSourceReplyDelivery: false,
+        isHeartbeat: false,
+        isRoomEvent: false,
+      });
+
+      expect(recovery.kind).toBe(expected);
+    },
+  );
 
   it("creates one priority retry for a substantive private final", () => {
     const base = createMockFollowupRun({ prompt: "question" });

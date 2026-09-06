@@ -370,8 +370,14 @@ describe("runCodexAppServerAttempt steering", () => {
   ])(
     "persists every completed answer before $name",
     async ({ barrierType, isInboundUserMessage, provenance }) => {
-      const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+      const { requests, completeTurn, notify } = createStartedThreadHarness();
       const params = createSteeringParams();
+      const started = createDeferred<void>();
+      params.onAgentEvent = (event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "start") {
+          started.resolve();
+        }
+      };
       const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
       const sessionTarget = {
         agentId: "main",
@@ -426,10 +432,13 @@ describe("runCodexAppServerAttempt steering", () => {
         hasPersisted: () => steerPersisted,
       } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
+      // Transcript ordering is independent of wall-clock filesystem latency.
+      vi.useFakeTimers();
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: { appServer: { mode: "yolo" } },
       });
-      await waitForMethod("turn/start");
+      await started.promise;
+      expect(requests.some((entry) => entry.method === "turn/start")).toBe(true);
       const onQueueAccepted = vi.fn();
       await notify({
         method: "item/completed",
@@ -514,6 +523,7 @@ describe("runCodexAppServerAttempt steering", () => {
         fastWait,
       );
       const steer = requests.find((entry) => entry.method === "turn/steer");
+      const persistedBeforeNativeSubmission = userTurnTranscriptRecorder.hasPersisted();
       const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
         ?.clientUserMessageId;
       if (!clientUserMessageId) {
@@ -576,8 +586,10 @@ describe("runCodexAppServerAttempt steering", () => {
         },
       });
       await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
+      const completedRun = await run;
 
+      expect(readAttemptTerminal(completedRun)).toMatchObject({ aborted: false, timedOut: false });
+      expect(persistedBeforeNativeSubmission).toBe(true);
       expect(steer?.params).toMatchObject({
         threadId: "thread-1",
         expectedTurnId: "turn-1",
@@ -655,6 +667,15 @@ describe("runCodexAppServerAttempt steering", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         item: { id: "unrelated-user-message", type: "userMessage", clientId: "other-client-id" },
+      },
+    });
+    expect(deliverySettled).toBe(false);
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "other-turn",
+        item: { id: "wrong-turn-user-message", type: "userMessage", clientId: clientUserMessageId },
       },
     });
     expect(deliverySettled).toBe(false);

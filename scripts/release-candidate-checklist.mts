@@ -1983,6 +1983,17 @@ async function main() {
     : "";
   const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
 
+  // Discover invalid plugin inputs and registry failures before starting expensive validation.
+  // Publishers rebuild these read-only plans; this snapshot never authorizes publication.
+  const pluginNpmPlan = await collectPluginPlanWithRetry(
+    "scripts/plugin-npm-release-plan.ts",
+    options,
+  );
+  const pluginClawHubPlan = await collectPluginPlanWithRetry(
+    "scripts/plugin-clawhub-release-plan.ts",
+    options,
+  );
+
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
     const targetContextRef = releaseBranchForTag(options.tag);
@@ -2218,14 +2229,6 @@ async function main() {
     npmRun.runAttempt,
     targetSha,
     fullValidationEvidence.coveragePolicy,
-  );
-  const pluginNpmPlan = await collectPluginPlanWithRetry(
-    "scripts/plugin-npm-release-plan.ts",
-    options,
-  );
-  const pluginClawHubPlan = await collectPluginPlanWithRetry(
-    "scripts/plugin-clawhub-release-plan.ts",
-    options,
   );
   const publishCommand = buildPublishCommand(
     {

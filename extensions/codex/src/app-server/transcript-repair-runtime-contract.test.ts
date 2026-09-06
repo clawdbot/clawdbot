@@ -9,16 +9,21 @@ import { describe, expect, it } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 
 describe("Codex transcript projection runtime contract", () => {
-  it("drops only the duplicate trailing current prompt while preserving prior structured context", () => {
+  it("drops only the duplicate trailing current prompt while preserving prior structured context", async () => {
     const prompt = "newest inbound message";
+    const currentUserMessage = {
+      ...currentPromptHistoryMessage(prompt),
+      idempotencyKey: "current:user",
+    };
 
-    const result = projectContextEngineAssemblyForCodex({
+    const result = await projectContextEngineAssemblyForCodex({
       prompt,
+      currentUserTurnIdempotencyKey: "current:user",
       originalHistoryMessages: [structuredHistoryMessage()],
       assembledMessages: [
         structuredHistoryMessage(),
         assistantHistoryMessage(),
-        currentPromptHistoryMessage(prompt),
+        currentUserMessage,
       ],
     });
 
@@ -28,8 +33,8 @@ describe("Codex transcript projection runtime contract", () => {
     expect(result.promptText).not.toContain("[user]\nnewest inbound message");
   });
 
-  it("keeps media-only user history visible as omitted media instead of dropping the turn", () => {
-    const result = projectContextEngineAssemblyForCodex({
+  it("keeps media-only user history visible as omitted media instead of dropping the turn", async () => {
+    const result = await projectContextEngineAssemblyForCodex({
       prompt: "newest inbound message",
       originalHistoryMessages: [mediaOnlyHistoryMessage()],
       assembledMessages: [

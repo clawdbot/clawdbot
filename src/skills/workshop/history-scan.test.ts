@@ -106,11 +106,7 @@ describe("Skill Workshop history scan", () => {
     expect(prompt).not.toContain("credential-like-private-instance");
     expect(prompt).toContain("NOTHING_TO_LEARN");
 
-    const checkpointedPrompt = buildSkillHistoryScanPrompt({
-      requireCompletion: true,
-      sessions: [],
-    });
-    expect(checkpointedPrompt).toContain("action=complete as your final tool call");
+    expect(prompt).toContain("action=complete as your final tool call");
   });
 
   it("recognizes wrapped legacy hook turns without excluding tool output", () => {
@@ -365,15 +361,7 @@ describe("Skill Workshop history scan", () => {
     ).toBe(false);
   });
 
-  it("rejects run failures but permits bounded failed mutation attempts", () => {
-    expect(() =>
-      resolveSkillHistoryScanReviewOutcome({
-        ideasFound: 1,
-        proposalMutationBudgetRemaining: 2,
-        successfulMutations: 1,
-        runError: new Error("late failure"),
-      }),
-    ).toThrow("late failure");
+  it("rejects failed mutations and inconsistent proposal accounting", () => {
     expect(
       resolveSkillHistoryScanReviewOutcome({
         ideasFound: 1,

@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -36,6 +35,7 @@ import {
   runObsidianSearch,
 } from "./obsidian.js";
 import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
+import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
 import {
   getMemoryWikiPage,
   searchMemoryWiki,
@@ -386,15 +386,6 @@ async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }
   throw new Error("wiki apply synthesis requires --body or --body-file.");
 }
 
-type MemoryWikiMutationResult = Awaited<ReturnType<typeof applyMemoryWikiMutation>>;
-
-function formatMemoryWikiMutationSummary(result: MemoryWikiMutationResult, json?: boolean): string {
-  if (json) {
-    return JSON.stringify(result, null, 2);
-  }
-  return `${result.changed ? "Updated" : "No changes for"} ${result.pagePath} via ${result.operation}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}`;
-}
-
 function formatJsonOrText<T>(
   result: T,
   json: boolean | undefined,
@@ -653,17 +644,7 @@ async function runWikiSearch(params: {
     searchCorpus: params.searchCorpus,
     mode: params.mode,
   });
-  const summary = params.json
-    ? JSON.stringify(results, null, 2)
-    : results.length === 0
-      ? "No wiki or memory results."
-      : results
-          .map(
-            (result, index) =>
-              `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
-          )
-          .join("\n\n");
-  writeOutput(summary, params.stdout);
+  writeOutput(formatJsonOrText(results, params.json, renderWikiSearchResults), params.stdout);
   return results;
 }
 
@@ -734,7 +715,7 @@ async function runWikiApplySynthesis(params: {
       ...(params.status?.trim() ? { status: params.status.trim() } : {}),
     },
   });
-  writeOutput(formatMemoryWikiMutationSummary(result, params.json), params.stdout);
+  writeOutput(formatJsonOrText(result, params.json, renderWikiMutationSummary), params.stdout);
   return result;
 }
 
@@ -774,7 +755,7 @@ async function runWikiApplyMetadata(params: {
       ...(params.status?.trim() ? { status: params.status.trim() } : {}),
     },
   });
-  writeOutput(formatMemoryWikiMutationSummary(result, params.json), params.stdout);
+  writeOutput(formatJsonOrText(result, params.json, renderWikiMutationSummary), params.stdout);
   return result;
 }
 

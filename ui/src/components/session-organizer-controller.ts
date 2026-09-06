@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSidebarEntry,
   serializeSidebarEntry,
@@ -402,24 +401,12 @@ export class SessionOrganizerController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const showInputDialog = await this.loadInputDialog();
-    const nextLabel =
-      (await showInputDialog?.({
-        title: t("sessionsView.renameSessionPrompt"),
-        // The stored label, not the resolved display name: pre-filling the
-        // derived string persists it on submit and it then outranks every
-        // later derivation. Matches the Sessions page rename.
-        defaultValue: normalizeOptionalString(session.userLabel) ?? "",
-      })) ?? null;
-    if (nextLabel === null) {
-      return;
-    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.renameSession(this.host, session, nextLabel, scope);
+    await operations?.renameSession(this.host, session, scope);
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {

@@ -236,14 +236,6 @@ export function registerQrCli(program: Command) {
 
         const setupCode = encodePairingSetupCode(resolved.payload);
 
-        if (opts.setupCodeOnly) {
-          if (resolved.accessDowngraded) {
-            defaultRuntime.error(theme.warn(LIMITED_TRANSPORT_WARNING));
-          }
-          defaultRuntime.log(setupCode);
-          return;
-        }
-
         if (opts.json) {
           defaultRuntime.writeJson({
             setupCode,
@@ -254,6 +246,14 @@ export function registerQrCli(program: Command) {
             access: resolved.access,
             ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
           });
+          return;
+        }
+
+        if (opts.setupCodeOnly) {
+          if (resolved.accessDowngraded) {
+            defaultRuntime.error(theme.warn(LIMITED_TRANSPORT_WARNING));
+          }
+          defaultRuntime.log(setupCode);
           return;
         }
 

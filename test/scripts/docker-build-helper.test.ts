@@ -6131,10 +6131,30 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(updateRunner).toContain("--mode fallback");
   });
 
-  it("keeps private bundled plugins discoverable without persisting a curated registry", () => {
+  it("keeps the shared e2e image on the packaged tarball install path", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
-    expect(dockerfile).toContain("runBundledPluginPostinstall");
-    expect(dockerfile).not.toContain("node /app/scripts/postinstall-bundled-plugins.mjs");
+
+    expect(dockerfile).not.toContain("pnpm install --frozen-lockfile");
+    expect(dockerfile).not.toContain("COPY . .");
+    expect(dockerfile).toMatch(
+      /^COPY --from=openclaw_package --chown=appuser:appuser openclaw-current\.tgz \/tmp\/openclaw-current\.tgz$/m,
+    );
+    // Cache registry dependencies by manifest, not by each PR's built tarball.
+    expect(dockerfile).toContain(
+      "COPY --from=functional-manifest --chown=appuser:appuser /tmp/openclaw-deps /tmp/openclaw-deps",
+    );
+    expect(dockerfile).toContain("npm install --omit=dev --no-fund --no-audit");
+    expect(dockerfile).not.toContain("npm install -g --prefix");
+    expect(dockerfile).toContain(
+      "COPY --from=functional-deps --chown=appuser:appuser /tmp/openclaw-deps/node_modules /app/node_modules",
+    );
+    // Complete the lifecycle before the self-link lets pruning cycle back into /app.
+    const postinstallIndex = dockerfile.indexOf(
+      "node /app/scripts/postinstall-bundled-plugins.mjs",
+    );
+    const selfLinkIndex = dockerfile.indexOf("ln -sfn /app /app/node_modules/openclaw");
+    expect(postinstallIndex).toBeGreaterThan(-1);
+    expect(selfLinkIndex).toBeGreaterThan(postinstallIndex);
   });
 
   it("keeps onboarding Docker E2E resource-guarded", () => {

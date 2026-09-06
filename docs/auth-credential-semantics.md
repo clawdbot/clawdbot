@@ -83,6 +83,20 @@ Do not write `type: "aws-sdk"` into the credential store; stored credentials are
 
 Prepared agent requests use their selected plugin metadata, configuration, workspace, and environment for auth profile eligibility, ordering, and environment credential evidence. An empty selected plugin set remains authoritative; another request’s plugin aliases cannot add profiles or change the credential owner.
 
+## Model catalog discovery
+
+Stored-profile selection for model discovery follows the canonical auth order and
+eligibility rules. A cooldown limited to one model does not suppress account-wide
+catalog discovery. Configured subscription modes remain attached to direct
+credentials, and successful OAuth preparation supplies the resolved current token
+to its catalog consumer rather than the captured store's older token.
+
+API-key-oriented and full-auth catalog callbacks retain their existing source
+priorities. Plugins must keep credential bytes and their authentication mode from
+the same selection. Catalog failure and recovery preserve the
+[model inventory contract](/concepts/models#selection-source-and-fallback-strictness);
+they do not change message-execution profile rotation or session pins.
+
 ## Probe target resolution
 
 - Probe targets can come from auth profiles, environment credentials, or `models.json` (result `source`: `profile`, `env`, `models.json`).

@@ -25,6 +25,7 @@ import {
   isNonSecretApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -556,12 +557,13 @@ function buildStaticOllamaCloudProvider(): ModelProviderConfig {
 async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderConfig> {
   const discovered = await buildOllamaProvider(OLLAMA_CLOUD_BASE_URL, {
     ...(apiKey ? { apiKey } : {}),
-    quiet: true,
+    discoveryMode: "strict",
   });
-  if (!discovered.models?.length) {
-    return buildStaticOllamaCloudProvider();
-  }
-  if (!apiKey || discovered.models.some((model) => model.id === OLLAMA_GLM52_CLOUD_MODEL_ID)) {
+  if (
+    !discovered.models.length ||
+    !apiKey ||
+    discovered.models.some((model) => model.id === OLLAMA_GLM52_CLOUD_MODEL_ID)
+  ) {
     return discovered;
   }
   const showInfo = await queryOllamaModelShowInfo(
@@ -791,22 +793,26 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx: ProviderCatalogContext) => {
-          const resolvedAuth = ctx.resolveProviderApiKey(OLLAMA_CLOUD_PROVIDER_ID);
-          const apiKey = resolvedAuth.apiKey ?? resolvedAuth.discoveryApiKey;
-          if (!apiKey) {
+          if (ctx.providerIds && !ctx.providerIds.includes(OLLAMA_CLOUD_PROVIDER_ID)) {
             return null;
           }
-          const discoveryApiKey = readUsableOllamaShowApiKey({
-            env: ctx.env,
-            allowAmbientEnvFallback: true,
-            resolved: resolvedAuth,
+          const resolvedAuth = ctx.resolveProviderApiKey(OLLAMA_CLOUD_PROVIDER_ID);
+          const apiKey = resolvedAuth.apiKey ?? resolvedAuth.discoveryApiKey;
+          const discoveryApiKey =
+            resolvedAuth.discoveryApiKey ?? readConcreteOllamaApiKey(resolvedAuth.apiKey);
+          if (!apiKey || !discoveryApiKey) {
+            return null;
+          }
+          return await runLiveProviderCatalog({
+            providerId: OLLAMA_CLOUD_PROVIDER_ID,
+            profileId: resolvedAuth.profileId,
+            run: async () => ({
+              provider: {
+                ...(await buildOllamaCloudProvider(discoveryApiKey)),
+                apiKey,
+              },
+            }),
           });
-          return {
-            provider: {
-              ...(await buildOllamaCloudProvider(discoveryApiKey)),
-              apiKey,
-            },
-          };
         },
       },
       staticCatalog: {

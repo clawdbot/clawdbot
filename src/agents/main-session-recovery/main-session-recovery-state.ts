@@ -374,7 +374,7 @@ export function transitionMainSessionRecovery(
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
         !entry.mainRestartRecovery
       ) {
-        // Rows interrupted by an older shipped version acquire identity before scanning.
+        // Acquire recovery identity before scanning interrupted rows.
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
       let state = entry.mainRestartRecovery;

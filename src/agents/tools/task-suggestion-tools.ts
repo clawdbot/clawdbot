@@ -36,7 +36,8 @@ const SuggestTaskToolSchema = Type.Object(
       Type.String({
         minLength: 1,
         maxLength: 4_096,
-        description: "Absolute path inside a git checkout; defaults to the current project.",
+        description:
+          "Absolute working directory for the follow-up; defaults to the current folder. Git is not required.",
       }),
     ),
   },
@@ -84,7 +85,8 @@ export function createTaskSuggestionTools(params: {
         "Requests to stay scoped or skip cleanup apply to doing the work, not to flagging it: this only records a suggestion card in the operator's UI; nothing runs unless they accept it, and your current turn continues uninterrupted.",
         "Do not flag vague code-smell observations or low-confidence hunches.",
         "The prompt must stand alone: the started task sees only that text, never this conversation.",
-        "cwd must be an absolute path inside a git checkout.",
+        "Accepting opens a new session in the suggested folder, without requiring Git or creating a worktree. If the task later needs a worktree, the new session must explain why and ask the user first.",
+        "cwd must be an absolute working directory; local debugging and non-code tasks are supported.",
         "Suggestions are ephemeral; ids do not survive a gateway restart.",
       ].join(" "),
       parameters: SuggestTaskToolSchema,

@@ -163,8 +163,10 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext) {
   }
   const usesPortalBearerAuth =
     apiKeyAuth.apiKey === "MINIMAX_OAUTH_TOKEN" ||
-    (profileAuth.mode === "token" && profileAuth.apiKey === apiKey) ||
-    (!apiKeyAuth.apiKey && !explicitApiKey && profileAuth.mode === "oauth");
+    (apiKeyAuth.apiKey && apiKeyAuth.mode
+      ? apiKeyAuth.mode === "token" || apiKeyAuth.mode === "oauth"
+      : (profileAuth.mode === "token" && profileAuth.apiKey === apiKey) ||
+        (!apiKeyAuth.apiKey && !explicitApiKey && profileAuth.mode === "oauth"));
 
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
 

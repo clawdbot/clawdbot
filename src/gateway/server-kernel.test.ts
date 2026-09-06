@@ -657,7 +657,7 @@ describe("createGatewayKernel", () => {
         sidecarStartup: "defer",
       });
       expect(kernel.transportBridge.current()).toBeUndefined();
-      await expect(kernel.ensureSandboxHostPort()).rejects.toThrow(
+      await expect(kernel.transportBridge.ensureSandboxHostPort()).rejects.toThrow(
         "Gateway listener must start before the sandbox host",
       );
 
