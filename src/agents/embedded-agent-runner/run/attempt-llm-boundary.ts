@@ -3,6 +3,7 @@
  */
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import type { ImageContent } from "../../../llm/types.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
@@ -11,7 +12,7 @@ import {
   retainRuntimeContextMessageForPrompt,
   stripHistoricalRuntimeContextCustomMessages,
 } from "../../internal-runtime-context.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
@@ -133,15 +134,16 @@ function buildCurrentPromptBoundaryInput(params: {
 
 /**
  * Temporarily injects a runtime-context message for prompt conversion and retry.
- * Cleanup restores the original continuation hook and removes only the injected
- * message object.
+ * Cleanup restores the original prompt/continuation hooks and removes only
+ * the injected message object.
  */
 export function installRuntimeContextMessageForPrompt(params: {
   session: {
     messages: AgentMessage[];
     agent: {
       state: { messages: AgentMessage[] };
-      continue?: () => Promise<void>;
+      prompt?: Agent["prompt"];
+      continue?: Agent["continue"];
       transformContext?: PromptContextTransform;
     };
   };
@@ -153,7 +155,11 @@ export function installRuntimeContextMessageForPrompt(params: {
     return () => undefined;
   }
   const owner = retainRuntimeContextMessageForPrompt(message);
+  let retired = false;
   const install = (retry: boolean) => {
+    if (retired) {
+      return;
+    }
     const messages = session.messages;
     if (messages.includes(message)) {
       return;
@@ -198,20 +204,37 @@ export function installRuntimeContextMessageForPrompt(params: {
       ? await originalTransformContext.call(agent, messages, signal)
       : messages;
   };
-  const originalContinue = Reflect.get(agent, "continue", agent) as unknown;
-  if (typeof originalContinue === "function") {
-    const continueWithAgent = originalContinue.bind(agent) as () => Promise<void>;
-    agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
+  const originalPrompt = agent.prompt;
+  if (originalPrompt) {
+    const promptWithAgent = originalPrompt.bind(agent);
+    agent.prompt = function promptWithRuntimeContext(
+      input: string | AgentMessage | AgentMessage[],
+      images?: ImageContent[],
+    ): Promise<void> {
+      // SDK pre-prompt compaction can rebuild history before this first call.
+      // Install before input normalization and initial steering to bind the original user.
+      install(false);
+      return typeof input === "string" ? promptWithAgent(input, images) : promptWithAgent(input);
+    };
+  }
+  const originalContinue = agent.continue;
+  if (originalContinue) {
+    const continueWithAgent = originalContinue.bind(agent);
+    agent.continue = function continueWithRuntimeContext(): Promise<void> {
       // Pi overflow recovery can rebuild state from the persisted branch before retrying.
       install(true);
       return continueWithAgent();
     };
   }
   return () => {
+    retired = true;
     owner.release();
     agent.transformContext = originalTransformContext;
-    if (typeof originalContinue === "function") {
-      agent.continue = originalContinue as typeof agent.continue;
+    if (originalPrompt) {
+      agent.prompt = originalPrompt;
+    }
+    if (originalContinue) {
+      agent.continue = originalContinue;
     }
     session.agent.state.messages = session.messages.filter((candidate) => candidate !== message);
   };
@@ -311,8 +334,11 @@ export function installModelPromptTransform(params: {
     | undefined;
   agent.transformContext = async (messages, signal) => {
     if (!targetPrompt && params.shouldCapturePrompt()) {
-      targetPrompt = messages[findActiveUserMessageIndex(messages)];
-      const retainedOwner = resolveRuntimeContextPromptOwner(messages)?.owner;
+      const retainedContext = resolveRuntimeContextPromptOwner(messages);
+      // Initial steering can already follow this prompt at the first projection.
+      // The retained carrier identifies its original user before that newer input.
+      targetPrompt = messages[retainedContext?.userIndex ?? findActiveUserMessageIndex(messages)];
+      const retainedOwner = retainedContext?.owner;
       if (retainedOwner?.user === targetPrompt) {
         promptOwner = retainedOwner;
       }

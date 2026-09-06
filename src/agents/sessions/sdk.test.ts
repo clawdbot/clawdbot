@@ -31,17 +31,18 @@ vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
 import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
+import {
+  createCompactionHandlers,
+  createResourceLoader,
+} from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
-import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import type { ToolDefinition } from "./extensions/types.js";
 import * as publicSessionSdk from "./index.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
-import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
 
 const testModel: Model = {
   id: "test-model",
@@ -69,7 +70,7 @@ describe("createAgentSession runtime ownership", () => {
       const { session } = await createAgentSessionForEmbeddedRunner(
         {
           model: testModel,
-          resourceLoader: createEmptyResourceLoader(),
+          resourceLoader: createResourceLoader(),
           sessionManager,
           settingsManager: SettingsManager.inMemory(),
           modelRegistry: createTestModelRegistry(),
@@ -89,7 +90,7 @@ describe("createAgentSession runtime ownership", () => {
     const modelRegistry = createTestModelRegistry();
     const { session } = await createAgentSession({
       model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry,
@@ -110,7 +111,7 @@ describe("createAgentSession runtime ownership", () => {
         agentDir,
         cwd,
         model: testModel,
-        resourceLoader: createEmptyResourceLoader(),
+        resourceLoader: createResourceLoader(),
         settingsManager: SettingsManager.inMemory(),
         modelRegistry: createTestModelRegistry(),
       });
@@ -174,10 +175,6 @@ function createRecoveredAssistantStream() {
   });
 }
 
-function createEmptyResourceLoader(): ResourceLoader {
-  return createResourceLoaderWithHandlers(new Map());
-}
-
 function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelRegistry {
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   for (const api of ["openai-responses", "bedrock-converse-stream"] as const) {
@@ -189,47 +186,11 @@ function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelReg
   return modelRegistry;
 }
 
-function createResourceLoaderWithHandlers(
-  handlers: Map<string, Array<(...args: unknown[]) => Promise<unknown>>>,
-): ResourceLoader {
-  const extensionsResult: LoadExtensionsResult = {
-    extensions:
-      handlers.size > 0
-        ? [
-            {
-              path: "<test-extension>",
-              resolvedPath: "<test-extension>",
-              sourceInfo: createSyntheticSourceInfo("<test-extension>", { source: "temporary" }),
-              handlers,
-              tools: new Map(),
-              messageRenderers: new Map(),
-              commands: new Map(),
-              flags: new Map(),
-              shortcuts: new Map(),
-            },
-          ]
-        : [],
-    errors: [],
-    runtime: createExtensionRuntime(),
-  };
-  return {
-    getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  };
-}
-
 async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOptions> {
   streamMocks.streamSimple.mockClear();
   const { session } = await createAgentSession({
     model,
-    resourceLoader: createEmptyResourceLoader(),
+    resourceLoader: createResourceLoader(),
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory(),
     modelRegistry: createTestModelRegistry(),
@@ -286,7 +247,7 @@ async function createSessionFromManager(sessionManager: SessionManager) {
   const { session } = await createAgentSession({
     authStorage: AuthStorage.inMemory(),
     model: testModel,
-    resourceLoader: createEmptyResourceLoader(),
+    resourceLoader: createResourceLoader(),
     sessionManager,
     settingsManager: SettingsManager.inMemory(),
     modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -377,7 +338,7 @@ describe("AgentSession tree navigation", () => {
     const { session } = await createAgentSession({
       authStorage,
       model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager,
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: createTestModelRegistry(authStorage),
@@ -558,7 +519,7 @@ describe("createAgentSession tool defaults", () => {
   it("forwards max thinking budgets from settings to the agent", async () => {
     const { session } = await createAgentSession({
       model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
         thinkingBudgets: {
@@ -595,7 +556,7 @@ describe("createAgentSession tool defaults", () => {
       model: testModel,
       noTools: "builtin",
       customTools: [customTool],
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -626,7 +587,7 @@ describe("createAgentSession tool defaults", () => {
       model: testModel,
       noTools: "builtin",
       customTools: [hiddenTool],
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -658,7 +619,7 @@ describe("createAgentSession tool defaults", () => {
       model: testModel,
       noTools: "builtin",
       customTools: [customTool],
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -687,6 +648,42 @@ describe("createAgentSession tool defaults", () => {
     expect(exactPromptOptions.promptGuidelines).toEqual(["Use custom_lookup for test values."]);
   });
 
+  it("keeps the public manual compaction result inside its write settlement", async () => {
+    const observed: unknown[] = [];
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "Earlier context. ".repeat(100),
+      timestamp: 1,
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "Current question",
+      timestamp: 2,
+    });
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    const { session } = await createAgentSession({
+      model: testModel,
+      sessionManager,
+      modelRegistry: createTestModelRegistry(authStorage),
+      settingsManager: SettingsManager.inMemory({ compaction: { keepRecentTokens: 1 } }),
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      withSessionWriteSettlement: async (run) => {
+        const result = await run();
+        observed.push(result);
+        return result;
+      },
+    });
+    try {
+      const result = await session.compact();
+      expect(result.summary).toBe("condensed history");
+      expect(observed).toEqual([result]);
+    } finally {
+      session.dispose();
+    }
+  });
+
   it("runs session message persistence under the configured write settlement", async () => {
     // Transcript writes share the caller-provided settlement boundary so
     // concurrent event handlers cannot interleave persistence.
@@ -694,7 +691,7 @@ describe("createAgentSession tool defaults", () => {
     const sessionManager = SessionManager.inMemory();
     const { session } = await createAgentSession({
       model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager,
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -741,7 +738,7 @@ describe("createAgentSession tool defaults", () => {
 
     const { session } = await createAgentSession({
       model: testModel,
-      resourceLoader: createResourceLoaderWithHandlers(handlers),
+      resourceLoader: createResourceLoader(handlers),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -776,7 +773,7 @@ describe("createAgentSession tool defaults", () => {
 
     const { session } = await createAgentSession({
       model: testModel,
-      resourceLoader: createResourceLoaderWithHandlers(handlers),
+      resourceLoader: createResourceLoader(handlers),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -819,7 +816,7 @@ describe("createAgentSession tool defaults", () => {
     const events: string[] = [];
     const { session } = await createAgentSession({
       model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -875,7 +872,7 @@ describe("createAgentSession thinking level defaults", () => {
     } satisfies Model;
     const { session } = await createAgentSession({
       model: ollamaModel,
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -903,7 +900,7 @@ describe("createAgentSession thinking level defaults", () => {
 
     const { session } = await createAgentSession({
       model: { ...testModel, provider: "ollama", reasoning: true },
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "low" }),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -924,7 +921,7 @@ describe("createAgentSession thinking level defaults", () => {
 
     const { session } = await createAgentSession({
       model: customOllamaModel,
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -953,7 +950,7 @@ describe("createAgentSession thinking level defaults", () => {
 
       const { session } = await createAgentSession({
         model: { ...testModel, reasoning: true },
-        resourceLoader: createEmptyResourceLoader(),
+        resourceLoader: createResourceLoader(),
         sessionManager: SessionManager.inMemory(),
         settingsManager: SettingsManager.inMemory(),
         modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -977,7 +974,7 @@ describe("createAgentSession thinking level defaults", () => {
 
     const { session } = await createAgentSession({
       model: { ...testModel, provider: "ollama", reasoning: true },
-      resourceLoader: createEmptyResourceLoader(),
+      resourceLoader: createResourceLoader(),
       sessionManager,
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -992,8 +989,9 @@ describe("AgentSession retry behavior", () => {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     return await createAgentSession({
-      model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
+      // Retry-only cases need room for the default SDK prompt and reserve.
+      model: { ...testModel, contextWindow: 32_768 },
+      resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
         retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },

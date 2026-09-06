@@ -11,6 +11,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -24,10 +26,12 @@ import {
   requireActivePluginRegistry,
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
+import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
+import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -1954,6 +1958,68 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       limitHistoryTurnsMock.mockImplementation(originalHistoryLimit);
     });
 
+    it("returns a structured automatic retention skip without reporting compaction failure", async () => {
+      const { isBenignCompactionSkipResult } = await import("./compact-reasons.js");
+      const { createAgentSessionForEmbeddedRunner } = await import("../sessions/sdk.js");
+      const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
+      const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
+      const { attachCompactionAccountingRecorder } =
+        await import("./run/compaction-accounting-bridge.js");
+      const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
+      sessionManager.appendMessage({ role: "user", content: "a".repeat(46_191), timestamp: 1 });
+      const assistant = createAssistant(testModel, [{ type: "text", text: "ACK" }]);
+      sessionManager.appendMessage({
+        ...assistant,
+        usage: { ...assistant.usage, input: 19_140, output: 2, totalTokens: 19_142 },
+      });
+      const pendingUserEntryId = sessionManager.appendMessage({
+        role: "user",
+        content: "b".repeat(52_602),
+        timestamp: 3,
+      });
+      const contextEngineRuntimeContext = {};
+      attachCompactionAccountingRecorder(contextEngineRuntimeContext, { pendingUserEntryId });
+      const conversation = () =>
+        sessionManager.getBranch().filter((entry) => entry.type === "message");
+      const before = structuredClone(conversation());
+      const stream = vi.fn<StreamFn>();
+      vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
+      limitHistoryTurnsMock.mockImplementation((messages) => messages);
+      vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+        streamFn: stream,
+        strategy: "session-custom",
+      });
+      vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(async ({ model }) => {
+        if (!model) {
+          throw new Error("Expected prepared compaction model");
+        }
+        return await createTestSession({
+          model: { ...testModel, ...model },
+          sessionManager,
+          settingsManager: SettingsManager.inMemory({
+            compaction: { keepRecentTokens: 20_000 },
+            retry: { enabled: false },
+          }),
+          resourceLoader: createResourceLoader(),
+        });
+      });
+      const result = await compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({ trigger: "budget", contextEngineRuntimeContext }),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        compacted: false,
+        reason: "Nothing to compact (session too small)",
+      });
+      expect(isBenignCompactionSkipResult(result)).toBe(true);
+      expect(conversation()).toEqual(before);
+      expect(
+        sessionManager.getBranch().filter((entry) => entry.type === "compaction"),
+      ).toHaveLength(0);
+      expect(stream).not.toHaveBeenCalled();
+      expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    });
+
     it.each([
       { scenario: "provider timeout", errorMessage: "request timed out", outcome: "fallback" },
       {
@@ -3412,6 +3478,210 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     mockQueuedRouteAwareModel();
   });
 
+  it.each([
+    { route: "native", blocked: "session" },
+    { route: "native", blocked: "global" },
+    { route: "native", blocked: "injected" },
+    { route: "context-engine", blocked: "session" },
+    { route: "context-engine", blocked: "global" },
+    { route: "context-engine", blocked: "injected" },
+  ] as const)(
+    "cancels $route compaction before the $blocked queue admits it",
+    async ({ route, blocked }) => {
+      const queue = await vi.importActual<typeof import("../../process/command-queue.js")>(
+        "../../process/command-queue.js",
+      );
+      const controller = new AbortController();
+      const queued = createDeferred();
+      const release = createDeferred();
+      const globalLane = `compaction-test:${route}:${blocked}`;
+      const blockedLane =
+        blocked === "session"
+          ? "test-session-lane"
+          : blocked === "global"
+            ? "test-global-lane"
+            : globalLane;
+      const blocker = queue.enqueueCommandInLane(blockedLane, () => release.promise);
+      const enqueue = <T>(
+        lane: string,
+        task: () => T | Promise<T>,
+        options?: CommandQueueEnqueueOptions,
+      ) =>
+        queue.enqueueCommandInLane(lane, async () => task(), {
+          ...options,
+          onQueued: () => {
+            options?.onQueued?.();
+            if (lane === blockedLane) {
+              queued.resolve();
+            }
+          },
+        });
+      enqueueCommandInLaneMock.mockImplementation(
+        (lane, task, ...[options]: [CommandQueueEnqueueOptions?]) =>
+          enqueue(String(lane), task, options),
+      );
+      const overrides = {
+        abortSignal: controller.signal,
+        lane: globalLane,
+        enqueue:
+          blocked === "injected"
+            ? <T>(task: () => Promise<T>, options?: CommandQueueEnqueueOptions) =>
+                enqueue(globalLane, task, options)
+            : undefined,
+      };
+      if (route === "native") {
+        resolveContextEngineMock.mockResolvedValue({
+          info: { ownsCompaction: false },
+          compact: contextEngineCompactMock,
+        });
+        maybeCompactAgentHarnessSessionMock.mockResolvedValue({ ok: true, compacted: false });
+      }
+      const params =
+        route === "native"
+          ? await nativeCompactionArgs({
+              ...overrides,
+              agentHarnessId: "codex",
+              provider: "openai",
+              model: "gpt-5.5",
+            })
+          : wrappedCompactionArgs(overrides);
+      const pending = compactEmbeddedAgentSession(params);
+      try {
+        await Promise.race([
+          queued.promise,
+          pending.then((result) => {
+            throw new Error(
+              `Compaction did not reach its blocked queue: ${JSON.stringify({ result, lanes: enqueueCommandInLaneMock.mock.calls.map((call) => call[0]) })}`,
+            );
+          }),
+        ]);
+        expect(contextEngineCompactMock).not.toHaveBeenCalled();
+        expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+        controller.abort(new Error("Foreground turn preempted queued maintenance"));
+        expect(queue.getCommandLaneSnapshot(blockedLane).queuedCount).toBe(0);
+        await expect(pending).resolves.toMatchObject({
+          ok: false,
+          compacted: false,
+          reason: "compaction aborted",
+        });
+      } finally {
+        release.resolve();
+        await Promise.allSettled([blocker, pending]);
+      }
+      expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("settles optional session maintenance before manual compaction", async () => {
+    const owner = createSessionMaintenanceOwner({
+      sessionKey: TEST_SESSION_KEY,
+      preemptible: true,
+    });
+    const started = createDeferred();
+    const interrupted = createDeferred();
+    const release = createDeferred();
+    const maintenance = owner.track(
+      owner.run(async () => {
+        owner.signal.addEventListener("abort", () => interrupted.resolve(), { once: true });
+        started.resolve();
+        await release.promise;
+      }),
+    );
+    await started.promise;
+    const pending = compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" }));
+    try {
+      await expect(
+        Promise.race([
+          interrupted.promise.then(() => "preempted"),
+          pending.then(() => "compacted before maintenance settled"),
+        ]),
+      ).resolves.toBe("preempted");
+      expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      release.resolve();
+      await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+      expect(contextEngineCompactMock).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([maintenance, pending]);
+    }
+  });
+
+  it("drains committed maintenance before rejecting a manual request pinned to its predecessor", async () => {
+    const { acceptCompactionSuccessor } = await import("./compaction-successor.js");
+    const params = wrappedCompactionArgs({ trigger: "manual" });
+    const predecessor = expectDefined(
+      loadSessionEntryReadOnly(params.sessionTarget),
+      "predecessor",
+    );
+    const successorTarget = { ...params.sessionTarget, sessionId: "maintenance-successor" };
+    const owner = createSessionMaintenanceOwner({
+      sessionKey: TEST_SESSION_KEY,
+      preemptible: true,
+    });
+    const committed = createDeferred();
+    const interrupted = createDeferred();
+    const releaseCleanup = createDeferred();
+    const events: string[] = [];
+    owner.signal.addEventListener("abort", () => interrupted.resolve(), { once: true });
+    const maintenance = owner.track(
+      owner.run(async () => {
+        await acceptCompactionSuccessor({
+          currentTarget: params.sessionTarget,
+          expectedEntry: {
+            sessionId: predecessor.sessionId,
+            lifecycleRevision: predecessor.lifecycleRevision,
+            activeWriterRunId: predecessor.activeWriterRunId,
+          },
+          assertActive: owner.assertCurrent,
+          result: {
+            ok: true,
+            compacted: true,
+            result: { sessionTarget: successorTarget, tokensBefore: 90_000, tokensAfter: 100 },
+          },
+        });
+        SessionManager.open(successorTarget).appendMessage({
+          role: "user",
+          content: [{ type: "text", text: "Retain this successor history." }],
+          timestamp: 1,
+        });
+        committed.resolve();
+        await releaseCleanup.promise;
+        events.push("maintenance cleanup finished");
+      }),
+    );
+    await Promise.race([committed.promise, maintenance]);
+    const transcriptBefore = await loadTranscriptEvents(successorTarget);
+    const acceptedEntry = loadSessionEntryReadOnly(successorTarget);
+    const pending = compactEmbeddedAgentSession(params);
+    const settled = pending.then(
+      () => events.push("manual resolved"),
+      () => events.push("manual rejected"),
+    );
+    try {
+      await expect(
+        Promise.race([
+          interrupted.promise.then(() => "preempted"),
+          settled.then(() => "manual settled before cleanup"),
+        ]),
+      ).resolves.toBe("preempted");
+      expect(events).toEqual([]);
+      expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      releaseCleanup.resolve();
+      await expect(pending).rejects.toThrow("session writer claim changed");
+      await settled;
+      expect(events).toEqual(["maintenance cleanup finished", "manual rejected"]);
+      expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(successorTarget)).toEqual(acceptedEntry);
+      expect(await loadTranscriptEvents(successorTarget)).toEqual(transcriptBefore);
+    } finally {
+      releaseCleanup.resolve();
+      await Promise.allSettled([maintenance, pending, settled]);
+    }
+  });
+
   it("reports target-only cancellation during prepared runtime lease admission", async () => {
     const sourceController = new AbortController();
     const admissionStarted = createDeferred<AbortSignal | undefined>();
@@ -4056,8 +4326,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     ).rejects.toThrow("cannot override the active session agent");
   });
 
-  it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
+  it.each([true, false])("pairs successful engine hooks (compacted=%s)", async (compacted) => {
     hookRunner.hasHooks.mockReturnValue(true);
+    if (!compacted) {
+      contextEngineCompactMock.mockResolvedValueOnce({ ok: true, compacted: false });
+    }
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
@@ -4066,7 +4339,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.compacted).toBe(compacted);
     expect(result.compactionKind).toBe("context-engine");
 
     expect(mockCallArg(hookRunner.runBeforeCompaction)).toEqual({
@@ -4077,10 +4350,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       sessionKey: TEST_SESSION_KEY,
       messageProvider: "telegram",
     });
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
       messageCount: -1,
-      compactedCount: -1,
-      tokenCount: 50,
+      compactedCount: compacted ? -1 : 0,
+      tokenCount: compacted ? 50 : undefined,
       sessionFile: TEST_SESSION_KEY,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {

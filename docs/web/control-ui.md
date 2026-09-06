@@ -1012,6 +1012,12 @@ Chat error banners, including cloud runner failures, show short messages in full
   </Accordion>
 </AccordionGroup>
 
+### Source previews and copying code
+
+**View Raw Text** keeps Markdown notation literal, including nested code fences.
+Decoded text artifacts use the same literal preview. **Copy code** preserves the
+code's leading whitespace and final newline when present.
+
 ### Markdown tables
 
 Markdown tables scroll horizontally within the conversation. **Copy table** copies

@@ -261,7 +261,7 @@ The built-in OpenClaw runtime has three scheduling paths:
 
    One provider shape is terminal rather than compaction-recoverable. When the refusal states a single request larger than the provider's entire token limit - Groq answers an oversized request with an HTTP 413 naming TPM and stating `Limit <n>, Requested <m>` - no bucket state can admit it. Compaction budgets against the model's context window rather than that per-request ceiling, and its own summarization request is refused by the same ceiling, so it can only spend further calls that cannot succeed. OpenClaw surfaces the reset guidance immediately instead of compacting, adopting a successor transcript, or retrying. Ordinary TPM throttling, which states a requested size within the limit, stays a rate limit and keeps its normal backoff.
 
-2. **Usage-based maintenance**: normal replies check projected usage before their turn; successful direct commands, including `agent --local` and Gateway agent RPC runs, check after the completed turn is persisted and any pending final reply is protected. Both block on projected usage at or above the active model window minus the selected compaction reserve, subject to an applicable server compaction threshold floor. The memory-flush soft margin does not lower this blocking threshold. Disabling memory flush does not disable this compaction. Direct-command maintenance respects `compaction.enabled: false` and skips a second compaction when the completed run already compacted.
+2. **Usage-based maintenance**: replies and direct commands using OpenClaw's managed loop check projected usage before inference. Required memory checkpointing precedes compaction at or above the active model window minus the selected compaction reserve, subject to an applicable server compaction threshold floor. Successful Gateway commands using that loop also schedule optional maintenance after delivering their completed reply; one-shot local commands skip that optional work. Generic CLI backends retain their existing host compaction before delivery, and native backends retain their own compaction policy. The memory-flush soft margin does not lower the blocking threshold. Disabling memory flush does not disable compaction. Direct-command maintenance respects `compaction.enabled: false` and skips a second post-turn compaction when the completed run already compacted.
 3. **Session-internal threshold maintenance**: default-mode sessions can also compact when actual context usage exceeds the model window minus the session reserve. Safeguard mode disables this competing session-internal path and leaves proactive scheduling to the maintenance owner above.
 
 The persisted `contextBudgetStatus` is a pre-prompt pressure estimate, not an execution command. Completed direct commands, normal replies, and queued follow-up replies record it when the runtime supplies one. `/status` can show this estimate, marked with `~` and `est`, when fresh token usage is unavailable. Compaction and session resets invalidate old estimates; a completed run without a diagnostic clears the previous one unless that run preserves the session's model state (for example, a heartbeat). Its `route` and `shouldCompact` fields can report pressure while the provider attempt is still admitted. Use completed compaction counts and transcript entries to verify that compaction actually happened.
@@ -288,11 +288,15 @@ Two additional guards run outside these paths:
 
 OpenClaw enforces a built-in reserve for embedded runs and caps it at one quarter of the active model context window. The default reserve remains 20,000 tokens for windows of 80,000 tokens or larger. Smaller windows retain at least three quarters of their capacity for prompts and conversation, while the reserve leaves room for compaction summaries and housekeeping such as the memory flush.
 
-Direct-command post-turn maintenance shares the command's remaining timeout
-allowance across memory flushing and compaction. Expiry cancels maintenance
-without discarding an already completed reply; accepted compaction commits remain
-accounted for. Explicit caller cancellation and session ownership checks still
-apply, and an unlimited command timeout remains unlimited.
+Optional maintenance for chat replies and managed Gateway agent commands has a
+fresh session owner and shares the turn's remaining timeout allowance across
+memory flushing and compaction. It starts after actual delivery and persistence
+settle, even if the bounded follow-up admission wait has already expired.
+The completed reply returns first. A new foreground turn cancels and settles
+optional maintenance before acquiring the session lane. Restart and session
+replacement also cancel stale work. Accepted compaction commits remain accounted
+for, and an unlimited command timeout remains unlimited. One-shot local commands using OpenClaw's managed loop
+record an intentional skip without marking a memory flush successful.
 
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
@@ -332,6 +336,13 @@ OpenClaw supports "silent" turns for background tasks where the user should not 
 ## Pre-compaction memory flush
 
 Before auto-compaction happens, OpenClaw can run a silent agentic turn that writes durable state to disk (for example `memory/YYYY-MM-DD.md` in the agent workspace) so compaction cannot erase critical context. It monitors session context usage, and once it crosses a soft threshold below the compaction threshold, it sends a silent "write memory now" directive using the exact silent token `NO_REPLY` / `no_reply` so the user sees nothing.
+
+Memory flushing runs against a private, detached view of the conversation. Its
+internal prompts and replies never enter the original transcript, including when
+a new user message interrupts it. Memory-file writes remain durable. Required
+preflight excludes the already-admitted waiting user; post-reply flushing includes
+the completed turn. Any compaction inside the flush affects only its private view;
+the original conversation has a separate compaction step.
 
 Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agents-defaults-compaction):
 
