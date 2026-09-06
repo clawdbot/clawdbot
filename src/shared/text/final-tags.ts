@@ -1,4 +1,6 @@
 // Final tag helpers detect final-answer tag regions in assistant text.
+import { findCodeRegions } from "./code-regions.js";
+
 type FinalTagMatch = {
   index: number;
   text: string;
@@ -130,11 +132,27 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
   return matches;
 }
 
-/** Removes valid `<final>` tags while preserving their enclosed visible answer text. */
+/** Removes final-answer markers outside Markdown code while preserving their enclosed answer. */
 export function stripFinalTags(text: string): string {
+  const matches = findFinalTagMatches(text);
+  if (matches.length === 0) {
+    return text;
+  }
+  // Literal examples must survive the final delivery sanitizer, just as they do reasoning cleanup.
+  const codeRegions = findCodeRegions(text);
+  let codeIndex = 0;
   let output = "";
   let lastIndex = 0;
-  for (const match of findFinalTagMatches(text)) {
+  for (const match of matches) {
+    // Both lists are ordered; advance once rather than rescanning every code region per tag.
+    let codeRegion = codeRegions[codeIndex];
+    while (codeRegion && codeRegion.end <= match.index) {
+      codeIndex += 1;
+      codeRegion = codeRegions[codeIndex];
+    }
+    if (codeRegion && codeRegion.start <= match.index) {
+      continue;
+    }
     output += text.slice(lastIndex, match.index);
     lastIndex = match.index + match.text.length;
   }

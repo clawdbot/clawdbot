@@ -89,6 +89,36 @@ async function setupStop() {
 }
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  it("retires an idle MCP runtime on explicit Stop", async () => {
+    const state = await setupStop();
+    const { getOrCreateSessionMcpRuntime } =
+      await import("../../agents/agent-bundle-mcp-manager.test-support.js");
+    const { getSessionMcpRuntimeManagerForTesting } =
+      await import("../../agents/agent-bundle-mcp-manager-api.js");
+    const manager = getSessionMcpRuntimeManagerForTesting();
+    try {
+      await getOrCreateSessionMcpRuntime({
+        sessionId: state.entry.sessionId,
+        sessionKey,
+        workspaceDir: state.params.workspaceDir,
+        cfg: { mcp: { servers: {} } },
+        manifestRegistry: { plugins: [] },
+      });
+      if (pathKind === "fast") {
+        await tryFastAbortFromMessage({
+          ctx: state.ctx,
+          cfg: state.cfg,
+          isCommandTargetCurrent: state.isCommandTargetCurrent,
+        });
+      } else {
+        await handleStopCommand(state.params, true);
+      }
+      expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBeUndefined();
+    } finally {
+      await manager.disposeAll();
+    }
+  });
+
   it("stops the selected agent's global session in an explicit roster", async () => {
     const state = await setupStop();
     const agentId = "selected";

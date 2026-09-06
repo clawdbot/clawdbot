@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import {
   sortPromptCacheToolsByName,
+  splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
@@ -32,6 +33,7 @@ import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import { prependRuntimeContextForModel } from "./run/runtime-context-prompt.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
 // CachedContent metadata responses are tiny (name + expireTime); cap the read so
@@ -88,7 +90,6 @@ type PrepareGooglePromptCacheStreamFnParams = {
   sessionManager: GooglePromptCacheSessionManager;
   signal?: AbortSignal;
   streamFn: StreamFn | undefined;
-  systemPrompt?: string;
 };
 
 type GooglePromptCacheDeps = {
@@ -108,13 +109,6 @@ function resolveGooglePromptCacheRefreshWindowMs(cacheRetention: CacheRetention)
 
 function digestSystemPrompt(systemPrompt: string): string {
   return crypto.createHash("sha256").update(systemPrompt).digest("hex");
-}
-
-function resolveManagedSystemPrompt(systemPrompt: string | undefined): string | undefined {
-  const stripped =
-    typeof systemPrompt === "string" ? stripSystemPromptCacheBoundary(systemPrompt) : "";
-  const sanitized = sanitizeTransportPayloadText(stripped);
-  return sanitized.trim() ? sanitized : undefined;
 }
 
 function resolveExplicitCachedContent(
@@ -290,17 +284,6 @@ function buildManagedGooglePromptCacheConfig(
     cacheConfigDigest,
     tools,
     toolConfig,
-  };
-}
-
-function buildManagedContextForCachedContent(context: GooglePromptCacheContext) {
-  if (!context.systemPrompt && !context.tools?.length) {
-    return context;
-  }
-  return {
-    ...context,
-    systemPrompt: undefined,
-    tools: undefined,
   };
 }
 
@@ -586,14 +569,18 @@ export async function prepareGooglePromptCacheStreamFn(
   if (resolvedRetention !== "short" && resolvedRetention !== "long") {
     return undefined;
   }
-  const systemPrompt = resolveManagedSystemPrompt(params.systemPrompt);
   const apiKey = params.apiKey?.trim();
-  if (!systemPrompt || !apiKey) {
+  if (!apiKey) {
     return undefined;
   }
 
   const inner = params.streamFn;
   return async (model, context, options) => {
+    const split = splitSystemPromptCacheBoundary(context.systemPrompt ?? "");
+    const systemPrompt = sanitizeTransportPayloadText(split?.stablePrefix ?? "");
+    if (!split || !systemPrompt.trim()) {
+      return inner(model, context, options);
+    }
     const cacheConfig = buildManagedGooglePromptCacheConfig(context, options);
     const cachedContent = await ensureGooglePromptCache(
       {
@@ -620,7 +607,17 @@ export async function prepareGooglePromptCacheStreamFn(
     return streamWithPayloadPatch(
       inner,
       model,
-      buildManagedContextForCachedContent(context),
+      {
+        ...context,
+        systemPrompt: undefined,
+        tools: undefined,
+        // Only a ready cache owns the stable system instructions. Keep fallback
+        // requests intact, and never persist this per-request suffix projection.
+        messages: prependRuntimeContextForModel(
+          context.messages,
+          sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(split.dynamicSuffix)),
+        ),
+      },
       options,
       (payload) => {
         payload.cachedContent = cachedContent;

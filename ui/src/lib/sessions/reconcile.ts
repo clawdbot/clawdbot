@@ -1,6 +1,8 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
+import { formatUiExternalText } from "../format-error.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
   compareSessionRowsByUpdatedAt,
@@ -42,6 +44,7 @@ export type SessionRunTerminal = {
   runId?: string | null;
   /** Latest session status after this owned model run leaves the active registry. */
   status: SessionRunStatus;
+  errorMessage?: string;
   endedAt: number;
 };
 
@@ -85,6 +88,7 @@ type SessionChangedEventInfo = {
   runId: string | null;
   clientRunId: string | null;
   hasActiveRun: boolean | null;
+  activeRunIds?: string[] | null;
   status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
@@ -318,6 +322,7 @@ function recordValue(record: Record<string, unknown>, key: string): unknown {
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
   return value === "running" ||
+    value === "queued" ||
     value === "done" ||
     value === "failed" ||
     value === "killed" ||
@@ -356,6 +361,9 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
         : null;
   const updatedAt = recordValue(source, "updatedAt");
   const thinkingLevel = recordValue(source, "thinkingLevel");
+  const activeRunIds = Object.hasOwn(source, "activeRunIds")
+    ? recordValue(source, "activeRunIds")
+    : recordValue(event, "activeRunIds");
   return [
     {
       key,
@@ -379,6 +387,11 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
         stringValue(recordValue(source, "clientRunId")) ??
         null,
       hasActiveRun,
+      activeRunIds:
+        activeRunIds === null ||
+        (Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string"))
+          ? activeRunIds
+          : undefined,
       status:
         sessionRunStatus(recordValue(source, "status")) ??
         sessionRunStatus(recordValue(event, "status")),
@@ -675,6 +688,11 @@ export function reconcileSessionRunTerminal(
     return result;
   }
   const runId = terminal.runId?.trim() || null;
+  // Match the Gateway's compact session error projection, redacting before truncation.
+  const errorMessage = truncateUtf16Safe(
+    formatUiExternalText(terminal.errorMessage).replace(/\s+/g, " ").trim(),
+    160,
+  );
   let changed = false;
   const sessions = result.sessions.map((row): GatewaySessionRow => {
     if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
@@ -691,6 +709,10 @@ export function reconcileSessionRunTerminal(
       changed = true;
       return { ...row, activeRunIds: remainingRunIds, hasActiveRun: true, status: "running" };
     }
+    const lastRunError =
+      terminal.status === "failed" || terminal.status === "timeout"
+        ? errorMessage || row.lastRunError
+        : undefined;
     const endedAt = row.endedAt ?? terminal.endedAt;
     const runtimeMs =
       typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
@@ -704,6 +726,7 @@ export function reconcileSessionRunTerminal(
     if (
       row.hasActiveRun === false &&
       row.status === terminal.status &&
+      row.lastRunError === lastRunError &&
       row.endedAt === endedAt &&
       row.runtimeMs === runtimeMs &&
       row.activeRunIds === activeRunIds &&
@@ -717,6 +740,7 @@ export function reconcileSessionRunTerminal(
       activeRunIds,
       hasActiveRun: false,
       status: terminal.status,
+      lastRunError,
       endedAt,
       runtimeMs,
       abortedLastRun,

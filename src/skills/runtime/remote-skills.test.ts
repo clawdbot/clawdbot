@@ -303,7 +303,7 @@ metadata:
     expect(warningText).toContain("BAD_INDENT");
   });
 
-  it("replaces a node catalog and invalidates the snapshot", () => {
+  it("replaces a changed node catalog without invalidating an identical catalog", () => {
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
       connId: "conn-1",
@@ -314,6 +314,12 @@ metadata:
       skills: [{ name: "first", description: "First", content: content("first", "First") }],
     });
     const firstVersion = getSkillsSnapshotVersion();
+
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      skills: [{ name: "first", description: "First", content: content("first", "First") }],
+    });
+    expect(getSkillsSnapshotVersion()).toBe(firstVersion);
 
     replaceRemoteNodeSkills({
       nodeId: "node-1",

@@ -41,7 +41,6 @@ const run = LedgerRecordSchema.parse({
     versionMatch: true,
     pluginErrors: [],
     channelsReady: true,
-    inferenceProbe: "passed",
     noticeDelivered: true,
     doctorHint: "openclaw doctor",
   },

@@ -49,17 +49,6 @@ export type AcpEventLedger = {
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
 };
 
-export type AcpLedgerSession = {
-  sessionId: string;
-  sessionKey: string;
-  cwd: string;
-  complete: boolean;
-  createdAt: number;
-  updatedAt: number;
-  nextSeq: number;
-  events: AcpEventLedgerEntry[];
-};
-
 export type AcpLedgerOptions = {
   maxSessions?: number;
   maxEventsPerSession?: number;

@@ -23,7 +23,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
   readTranscriptEventRows,
   readTranscriptSnapshot,
@@ -70,7 +70,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 // Transcript write owner. Queue coordination surrounds synchronous SQLite commit sections.
 
@@ -133,7 +133,7 @@ export async function replaceSessionWithBranchedTranscript(
   const nextScope = { ...fencedScope, sessionId: branch.sessionId };
   const nextResolved = { ...resolved, sessionId: branch.sessionId };
   await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const identities = runOpenClawAgentWriteTransaction((database) => {
+    const publish = runOpenClawAgentWriteTransaction((database) => {
       const fresh = readSessionEntryRow(database, resolved.sessionKey)?.entry;
       if (
         fresh?.sessionId !== resolved.sessionId ||
@@ -159,14 +159,19 @@ export async function replaceSessionWithBranchedTranscript(
       });
       assertLockedTranscriptWriteAllowed(database, nextResolved, nextScope);
       replaceSqliteTranscriptEventsInTransaction(database, nextResolved, branch.events);
-      return { previous, current: readSessionIdentitySnapshot(database, identityKeys) };
+      return prepareSessionIdentityPublication(
+        database,
+        resolved.agentId,
+        previous,
+        readSessionIdentitySnapshot(database, identityKeys),
+      );
     }, databaseOptions);
     // Adopt the runtime tree after commit and before observers can use the new identity.
     // A failed transcript insert must neither adopt nor announce the rolled-back branch.
     try {
       onCommitted(nextScope);
     } finally {
-      emitCommittedSessionIdentityDiff(resolved.agentId, identities.previous, identities.current);
+      publish();
     }
   });
 }
@@ -256,9 +261,7 @@ export async function trimTranscriptForManualCompact(
       );
     }
     const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
-    let previousIdentity = new Map<string, SessionEntry>();
-    let currentIdentity = new Map<string, SessionEntry>();
-    runOpenClawAgentWriteTransaction((writeDatabase) => {
+    const publish = runOpenClawAgentWriteTransaction((writeDatabase) => {
       assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshotRows);
       const freshSessionSnapshot = readSessionEntrySelectionSnapshot(
         writeDatabase,
@@ -275,7 +278,7 @@ export async function trimTranscriptForManualCompact(
         throw new Error(`SQLite session changed before compacting ${resolved.sessionId}`);
       }
       const identityKeys = collectSessionEntryLookupKeys(writeDatabase, resolved.sessionKey);
-      previousIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
+      const previousIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
       replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
       const nextEntry = cloneSessionEntry(freshEntry);
       delete nextEntry.contextBudgetStatus;
@@ -290,9 +293,15 @@ export async function trimTranscriptForManualCompact(
       writeSessionEntry(writeDatabase, resolved.sessionKey, nextEntry, {
         previousEntry: freshEntry,
       });
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
+      const currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
+      return prepareSessionIdentityPublication(
+        writeDatabase,
+        resolved.agentId,
+        previousIdentity,
+        currentIdentity,
+      );
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
+    publish();
     return { kept: retainedLines.length, trimmed: true };
   });
 }

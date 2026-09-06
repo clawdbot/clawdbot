@@ -199,12 +199,31 @@ describe("discordApprovalNativeRuntime", () => {
       label: "Denied",
       accentColor: 0xed4245,
     },
+    {
+      approvalKind: "system-agent",
+      phase: "resolved",
+      decision: "deny",
+      applicationStatus: "not-applied",
+      terminalStatus: undefined,
+      label: "Not applied",
+      accentColor: 0xed4245,
+    },
+    {
+      approvalKind: "system-agent",
+      phase: "resolved",
+      decision: "deny",
+      applicationStatus: "not-applied",
+      terminalStatus: "cancelled",
+      label: "Cancelled",
+      accentColor: 0xed4245,
+    },
     { approvalKind: "exec", phase: "expired", label: "Expired", accentColor: 0x99aab5 },
     { approvalKind: "plugin", phase: "expired", label: "Expired", accentColor: 0x99aab5 },
   ] as const)(
     "preserves $approvalKind $phase approval components and terminal preview limits ($label)",
     async (scenario) => {
       const plugin = scenario.approvalKind === "plugin";
+      const systemAgent = scenario.approvalKind === "system-agent";
       const commandLimit = plugin ? 700 : 500;
       const secondaryLimit = plugin ? 1_000 : 300;
       const command = `${"x".repeat(commandLimit)}😀`;
@@ -220,6 +239,13 @@ describe("discordApprovalNativeRuntime", () => {
           : { commandText: command, commandPreview: secondary }),
         ...(scenario.phase === "resolved"
           ? { decision: scenario.decision, resolvedBy: "<@456>" }
+          : {}),
+        ...(systemAgent
+          ? {
+              operationSummary: command,
+              applicationStatus: scenario.applicationStatus,
+              terminalStatus: scenario.terminalStatus,
+            }
           : {}),
       };
       const args = {
@@ -245,8 +271,14 @@ describe("discordApprovalNativeRuntime", () => {
       expect(container).toMatchObject({
         accent_color: scenario.accentColor,
         components: expect.arrayContaining([
-          { content: `## ${plugin ? "Plugin" : "Exec"} Approval: ${scenario.label}`, type: 10 },
-          { content: `### Command\n\`\`\`\n${"x".repeat(commandLimit)}...\n\`\`\``, type: 10 },
+          {
+            content: `## ${plugin ? "Plugin" : systemAgent ? "OpenClaw Change" : "Exec"} Approval: ${scenario.label}`,
+            type: 10,
+          },
+          {
+            content: `### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${"x".repeat(commandLimit)}...\n\`\`\``,
+            type: 10,
+          },
           {
             content: `### Shell Preview\n\`\`\`\n${"y".repeat(secondaryLimit)}...\n\`\`\``,
             type: 10,

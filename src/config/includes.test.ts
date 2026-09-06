@@ -208,6 +208,7 @@ describe("resolveConfigIncludes", () => {
         value: { id: "first" },
         kind: "single",
         hasSiblingOverrides: false,
+        hasArrayAncestor: true,
         targetPath: configPath("first.json"),
       },
       {
@@ -215,6 +216,7 @@ describe("resolveConfigIncludes", () => {
         value: { enabled: true, mode: "strict" },
         kind: "multiple",
         hasSiblingOverrides: true,
+        hasArrayAncestor: true,
         targetPaths: [configPath("second.json"), configPath("third.json")],
       },
     ]);

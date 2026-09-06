@@ -111,7 +111,8 @@ function appendLog(line) {
   }
 }
 
-const { createManagedHandoffLeaseStore } = require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
+const { assertOpenClawStateWriteAllowed, createManagedHandoffLeaseStore, resolveImmutableSqliteFileUri } =
+  require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 const leaseStore = createManagedHandoffLeaseStore({
   databasePath: params.updateLeaseDatabasePath,
   serviceManagerEnv: params.serviceManagerEnv,
@@ -176,16 +177,6 @@ function cleanupSensitiveFiles() {
 }
 
 
-// Keep this self-contained helper aligned with resolveImmutableSqliteFileUri;
-// the detached script cannot import the TypeScript runtime after replacement.
-function resolveImmutableStateDatabaseUri(databasePath) {
-  if (process.platform === "win32") {
-    const namespacedPath = path.toNamespacedPath(path.resolve(databasePath));
-    return "file:" + encodeURIComponent(namespacedPath) + "?mode=ro&immutable=1";
-  }
-  return pathToFileURL(path.resolve(databasePath)).href + "?mode=ro&immutable=1";
-}
-
 function assertStateDatabaseWriteAllowed(database) {
   if (
     !params.stateDatabasePath ||
@@ -198,7 +189,7 @@ function assertStateDatabaseWriteAllowed(database) {
   let db = database;
   if (!db) {
     const sqlite = require("node:sqlite");
-    db = new sqlite.DatabaseSync(resolveImmutableStateDatabaseUri(params.stateDatabasePath), {
+    db = new sqlite.DatabaseSync(resolveImmutableSqliteFileUri(params.stateDatabasePath), {
       readOnly: true,
     });
   }
@@ -206,40 +197,7 @@ function assertStateDatabaseWriteAllowed(database) {
     if (ownsDatabase) {
       db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
     }
-    const table = db
-      .prepare(
-        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = 'config_machine_state' LIMIT 1",
-      )
-      .get();
-    if (!table) return;
-    const row = db
-      .prepare(
-        "SELECT value_json FROM config_machine_state WHERE state_key = 'gateway.supervision' LIMIT 1",
-      )
-      .get();
-    if (!row) return;
-    const value = parseJsonColumn(row.value_json);
-    const keys =
-      value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).sort() : [];
-    if (
-      keys.join(",") !== "claimedAt,managerId,mode,version" ||
-      value.version !== 1 ||
-      value.mode !== "external" ||
-      typeof value.managerId !== "string" ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.managerId) ||
-      !Number.isSafeInteger(value.claimedAt) ||
-      value.claimedAt < 0 ||
-      value.claimedAt > 8640000000000000
-    ) {
-      throw new Error("shared-state ownership metadata is malformed");
-    }
-    if ((process.env.OPENCLAW_SUPERVISOR_MODE || "").trim().toLowerCase() !== "external") {
-      throw new Error(
-        "shared state is externally supervised by " +
-          value.managerId +
-          "; use that external supervisor with OPENCLAW_SUPERVISOR_MODE=external",
-      );
-    }
+    assertOpenClawStateWriteAllowed({ database: db, databasePath: params.stateDatabasePath });
   } finally {
     if (ownsDatabase) {
       db.close();
@@ -1053,7 +1011,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   // the new process to answer; never reuse the pre-activation runtime identity.
   runLedger?.recordUpdateRunVerification(params.runId, {
     serviceRunning, pid: servicePid, runningVersion: undefined, runningBuildId: undefined, versionMatch: undefined,
-    readyz: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined, inferenceProbe: undefined,
+    readyz: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
   });
   if (restored) {
     try {

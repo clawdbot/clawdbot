@@ -36,6 +36,60 @@ function session(
 }
 
 describe("TranscriptsStore", () => {
+  it.each([undefined, null, "invalid", "generated", "supplied"])(
+    "retains the admitted ID origin %s across updates, reopen, and Doctor restoration",
+    async (origin) => {
+      const { store } = createStore();
+      const target = {
+        ...session(),
+        metadata: {
+          agentId: "original",
+          ...(origin === undefined ? {} : { sessionIdOrigin: origin }),
+        },
+      };
+      await store.writeSession(target);
+      await store.appendUtteranceForSession(target, { text: "Saved history" });
+      closeOpenClawStateDatabaseForTest();
+      for (const metadata of [undefined, { sessionIdOrigin: "generated", agentId: "updated" }]) {
+        await store.writeSession({ ...target, metadata, stoppedAt: "2026-07-01T10:01:00.000Z" });
+        const stored = await store.readSession(target.sessionId);
+        expect(stored?.metadata?.sessionIdOrigin).toEqual(origin);
+        expect(Object.hasOwn(stored?.metadata ?? {}, "sessionIdOrigin")).toBe(origin !== undefined);
+        expect(stored?.metadata?.agentId).toBe(metadata?.agentId);
+        expect(await store.readUtterancesForSession(target)).toMatchObject([
+          { text: "Saved history" },
+        ]);
+      }
+      const canonical = await store.readSession(target.sessionId);
+      const exported = await store.materializeSessionArtifacts(target, "all");
+      const restoredState = tempDirs.make("transcript-origin-restore-");
+      fs.mkdirSync(path.join(restoredState, "transcripts", "2026-07-01"), { recursive: true });
+      fs.cpSync(
+        exported.sessionDir,
+        path.join(restoredState, "transcripts", "2026-07-01", target.sessionId),
+        { recursive: true },
+      );
+      closeOpenClawStateDatabaseForTest();
+      const { detectLegacyMeetingTranscripts, migrateLegacyMeetingTranscripts } =
+        await import("../infra/state-migrations.meeting-transcripts.js");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: restoredState };
+      const migrated = await migrateLegacyMeetingTranscripts({
+        detected: detectLegacyMeetingTranscripts({
+          stateDir: restoredState,
+          doctorOnlyStateMigrations: true,
+        }),
+        stateDir: restoredState,
+        env,
+      });
+      expect(migrated.warnings).toEqual([]);
+      const restored = new TranscriptsStore(path.join(restoredState, "transcripts"), { env });
+      expect(await restored.readSession(target.sessionId)).toEqual(canonical);
+      expect(await restored.readUtterancesForSession(target)).toMatchObject([
+        { text: "Saved history" },
+      ]);
+    },
+  );
+
   it("encodes portable slugs for Windows-reserved and trailing-dot IDs", () => {
     expect(safeTranscriptPathSegment("CON")).toBe("%43%4F%4E");
     expect(safeTranscriptPathSegment("foo.")).toBe("%66%6F%6F%2E");

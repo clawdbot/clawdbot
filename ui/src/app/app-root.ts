@@ -30,7 +30,7 @@ import {
   QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
-import { isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
@@ -114,6 +114,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    const embedHost = nativeEmbedHost();
+    this.ownerDocument.documentElement.classList.toggle(
+      "openclaw-native-embed",
+      embedHost !== null,
+    );
+    if (embedHost) {
+      void import("../styles/native-embed.css");
+    }
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
@@ -591,6 +599,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
             resourceBasePath: context.resourceBasePath,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
+            reconnectPending:
+              gatewaySnapshot.lastError !== null &&
+              (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),
             lastErrorCode: gatewaySnapshot.lastErrorCode,
             lastErrorAuthReason: gatewaySnapshot.lastErrorAuthReason,
             hasToken: Boolean(this.loginToken.trim()),

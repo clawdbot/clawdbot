@@ -604,20 +604,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(firstMockArg(runEmbeddedAgentMock).thinkLevel).toBe("low");
   });
 
-  it("rejects a rooted turn before a configured CLI runtime starts", async () => {
-    resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
-
-    const params = makeParams({ executionRoot: "/tmp/workshop-skills" });
-    const result = await runCronIsolatedAgentTurn(params);
-
-    expect(result).toMatchObject({
-      status: "error",
-      admissionDisposition: "rejected",
-    });
-    expect(runCliAgentMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
   it.each([undefined, "/tmp/workshop-skills"])(
     "preserves containment with execution root %s",
     async (executionRoot) => {

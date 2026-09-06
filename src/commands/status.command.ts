@@ -133,12 +133,7 @@ export async function statusCommand(
 
   const scan = await statusScanModuleLoader
     .load()
-    .then(({ scanStatus }) =>
-      scanStatus(
-        { json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep },
-        runtime,
-      ),
-    );
+    .then(({ scanStatus }) => scanStatus({ timeoutMs: opts.timeoutMs, deep: opts.deep }));
 
   const {
     cfg,

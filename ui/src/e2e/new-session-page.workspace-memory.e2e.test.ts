@@ -716,9 +716,10 @@ suite.define(() => {
           .toBe(1);
 
         await gateway.deferNext("users.prefs.set");
-        const modelSelect = page.locator('[data-chat-model-select="true"]');
+        const newSession = page.locator("openclaw-new-session-page");
+        const modelSelect = newSession.locator('[data-chat-model-select="true"]');
         await modelSelect.click();
-        await page.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+        await newSession.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBe(2);
@@ -802,9 +803,10 @@ suite.define(() => {
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
         .click();
       await page.keyboard.press("Escape");
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      const newSession = page.locator("openclaw-new-session-page");
+      const modelSelect = newSession.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
 
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
@@ -892,9 +894,9 @@ suite.define(() => {
         "openclaw-next",
       );
 
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const newSession = page.locator("openclaw-new-session-page");
+      await newSession.locator('[data-chat-model-select="true"]').click();
+      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({
         workspace: MOVED_WORKSPACE,

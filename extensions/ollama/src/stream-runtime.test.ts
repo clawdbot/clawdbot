@@ -664,16 +664,20 @@ describe("convertToOllamaMessages", () => {
     });
   });
 
-  it("converts assistant messages with toolCall content blocks", () => {
+  it("preserves assistant thinking alongside text and tool calls", () => {
     const result = convertAssistantContent([
+      { type: "thinking", thinking: "Check the directory.\n" },
+      { type: "thinking", thinking: "Then report its contents." },
+      { type: "thinking", thinking: "redacted reasoning", redacted: true },
       { type: "text", text: "Let me check." },
       { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
     ]);
-    expect(requireEntry(result, 0, "first converted Ollama message").role).toBe("assistant");
-    expect(requireEntry(result, 0, "first converted Ollama message").content).toBe("Let me check.");
-    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
-      { id: "call_1", function: { name: "bash", arguments: { command: "ls" } } },
-    ]);
+    expect(requireEntry(result, 0, "first converted Ollama message")).toEqual({
+      role: "assistant",
+      content: "Let me check.",
+      thinking: "Check the directory.\nThen report its contents.",
+      tool_calls: [{ id: "call_1", function: { name: "bash", arguments: { command: "ls" } } }],
+    });
   });
 
   it("preserves assistant tool-call ids before Ollama replay", () => {
@@ -1716,7 +1720,7 @@ async function createOllamaTestStream(params: {
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
   context?: Record<string, unknown>;
-  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2];
+  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] & Record<string, unknown>;
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
@@ -3194,6 +3198,49 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("keeps serialized native Ollama tools stable when discovery order changes", async () => {
+    const tools = [
+      {
+        name: "write",
+        description: "Write a file",
+        parameters: {
+          type: "object",
+          properties: { content: { type: "string" } },
+        },
+      },
+      {
+        name: "read",
+        description: "Read a file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+        },
+      },
+    ];
+    const serializedTools: string[] = [];
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      fetchWithSsrFGuardMock.mockClear();
+      await expectSuccessfulOllamaRequest(
+        {
+          baseUrl: "http://ollama-host:11434",
+          context: {
+            messages: [{ role: "user", content: "hello" }],
+            tools: orderedTools,
+          },
+        },
+        ({ body }) => {
+          expect(body.tools).toHaveLength(2);
+          expect(body.tools).toEqual(
+            expect.arrayContaining(tools.map((tool) => ({ type: "function", function: tool }))),
+          );
+          serializedTools.push(JSON.stringify(body.tools));
+        },
+      );
+    }
+    expect(serializedTools[1]).toBe(serializedTools[0]);
+    expect(tools.map((tool) => tool.name)).toEqual(["write", "read"]);
+  });
+
   it("lets native Ollama tools win over responseFormat", async () => {
     await expectSuccessfulOllamaRequest(
       {
@@ -3285,9 +3332,58 @@ describe("createOllamaStreamFn", () => {
 
   it.each([
     {
+      name: "applies native Ollama runtime sampling overrides",
+      options: { topP: 0.7, seed: 42, frequencyPenalty: -0.5, presencePenalty: 1.25 },
+      expected: { top_p: 0.7, seed: 42, frequency_penalty: -0.5, presence_penalty: 1.25 },
+    },
+    {
+      name: "preserves zero native Ollama runtime sampling overrides",
+      options: { topP: 0, seed: 0, frequencyPenalty: 0, presencePenalty: 0 },
+      expected: { top_p: 0, seed: 0, frequency_penalty: 0, presence_penalty: 0 },
+    },
+    {
+      name: "preserves native Ollama model sampling defaults without runtime overrides",
+      options: {
+        topP: undefined,
+        seed: undefined,
+        frequencyPenalty: undefined,
+        presencePenalty: undefined,
+      },
+      expected: { top_p: 0.9, seed: 7, frequency_penalty: 0.5, presence_penalty: 0.75 },
+    },
+  ])("$name", async ({ options, expected }) => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        model: {
+          params: {
+            temperature: 0.8,
+            top_p: 0.9,
+            seed: 7,
+            frequency_penalty: 0.5,
+            presence_penalty: 0.75,
+          },
+        },
+        options,
+      },
+      ({ body }) => {
+        expect(body.options).toMatchObject(expected);
+      },
+    );
+  });
+
+  it.each([
+    {
       name: "sets top_p=1 for native Ollama greedy sampling requests",
       params: { num_ctx: 4096, top_p: 0.9, thinking: false },
       temperature: 0,
+      expectedTopP: 1,
+    },
+    {
+      name: "normalizes runtime topP for native Ollama greedy sampling requests",
+      params: { top_p: 0.9 },
+      temperature: 0,
+      topP: 0.6,
       expectedTopP: 1,
     },
     {
@@ -3302,9 +3398,9 @@ describe("createOllamaStreamFn", () => {
       temperature: 0.2,
       expectedTopP: 0.9,
     },
-  ])("$name", async ({ params, temperature, expectedTopP }) => {
+  ])("$name", async ({ params, temperature, topP, expectedTopP }) => {
     await expectSuccessfulOllamaRequest(
-      { baseUrl: "http://ollama-host:11434", model: { params }, options: { temperature } },
+      { baseUrl: "http://ollama-host:11434", model: { params }, options: { temperature, topP } },
       ({ body }) => {
         const options = requireRecord(body.options, "Ollama sampling options");
         expect(options.temperature).toBe(temperature);

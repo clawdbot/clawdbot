@@ -1,10 +1,12 @@
-import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
+import type { DesktopObserveRequester } from "./observe-requester.js";
 import {
   preauthenticateRfb,
   RfbPreauthBuffer,
@@ -17,7 +19,6 @@ import type { DesktopSessionRegistry } from "./session-registry.js";
 
 export const DESKTOP_OBSERVE_PATH = "/desktop/observe";
 const TOKEN_TTL_MS = 60_000;
-const TOKEN_PATTERN = /^[a-f0-9]{48}$/u;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
@@ -29,6 +30,7 @@ type DesktopCloseTrigger =
   | "browser-error"
   | "stream-close"
   | "stream-error"
+  | "authority-revoked"
   | "invalid-view-only-stream"
   | "authentication-failed";
 
@@ -38,17 +40,11 @@ type DesktopObserverTokenEntry = {
   control: boolean;
   attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
-  expiresAt: number;
-  expiryTimer: ReturnType<typeof setTimeout>;
+  requester?: DesktopObserveRequester;
 };
 
-const observerTokens = new Map<string, DesktopObserverTokenEntry>();
+const observerTokens = createOneTimeTicketStore<DesktopObserverTokenEntry>({ ttlMs: TOKEN_TTL_MS });
 const desktopObserverWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
-
-function deleteDesktopObserverToken(token: string): void {
-  clearTimeout(observerTokens.get(token)?.expiryTimer);
-  observerTokens.delete(token);
-}
 
 export function mintDesktopObserverToken(params: {
   sourceKey: string;
@@ -56,44 +52,22 @@ export function mintDesktopObserverToken(params: {
   control: boolean;
   attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
+  requester?: DesktopObserveRequester;
   nowMs?: number;
 }): { token: string; expiresAtMs: number } {
-  const nowMs = params.nowMs ?? Date.now();
-  const token = crypto.randomBytes(24).toString("hex");
-  const expiresAtMs = nowMs + TOKEN_TTL_MS;
-  const expiryTimer = setTimeout(() => deleteDesktopObserverToken(token), TOKEN_TTL_MS);
-  expiryTimer.unref?.();
-  observerTokens.set(token, {
-    sourceKey: params.sourceKey,
-    ownerEpoch: params.ownerEpoch,
-    control: params.control,
-    attachment: params.attachment,
-    ...(params.preauth ? { preauth: params.preauth } : {}),
-    expiresAt: expiresAtMs,
-    expiryTimer,
+  const { nowMs, ...payload } = params;
+  return observerTokens.mint(payload, {
+    nowMs,
+    revokeSignal:
+      params.requester?.isCurrent() === false ? AbortSignal.abort() : params.requester?.signal,
   });
-  return { token, expiresAtMs };
 }
 
 function consumeDesktopObserverToken(
   token: string,
   nowMs = Date.now(),
 ): DesktopObserverTokenEntry | undefined {
-  const normalized = token.trim();
-  if (!TOKEN_PATTERN.test(normalized)) {
-    return undefined;
-  }
-  const entry = observerTokens.get(normalized);
-  if (!entry) {
-    return undefined;
-  }
-  deleteDesktopObserverToken(normalized);
-  return entry.expiresAt > nowMs ? entry : undefined;
-}
-
-function writeUnauthorized(socket: Duplex): void {
-  socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-  socket.destroy();
+  return observerTokens.consume(token, nowMs);
 }
 
 function rawDataBuffer(data: RawData): Buffer {
@@ -182,8 +156,8 @@ export function handleDesktopObserveUpgrade(
   }
   const token = resource.searchParams.get("token") ?? "";
   const entry = consumeDesktopObserverToken(token);
-  if (!entry) {
-    writeUnauthorized(socket);
+  if (!entry || entry.requester?.isCurrent() === false) {
+    rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
   desktopObserverWss.handleUpgrade(req, socket, head, (ws) => {
@@ -227,6 +201,7 @@ export function handleDesktopObserveUpgrade(
       }
       // Keep the first cleanup decision when its destroyed stream emits a later close.
       closeCause = { trigger, code };
+      entry.requester?.signal?.removeEventListener("abort", onRequesterGone);
       stopKeepalive();
       clearInterval(resumeTimer);
       resumeTimer = undefined;
@@ -239,6 +214,7 @@ export function handleDesktopObserveUpgrade(
         ws.close(code, reason);
       }
     };
+    const onRequesterGone = () => closeBoth(4006, "authority_revoked", "authority-revoked");
 
     const startSplice = (browserRemainder: Buffer = Buffer.alloc(0), preauthenticated = false) => {
       const clientMessageFilter = entry.control
@@ -247,6 +223,10 @@ export function handleDesktopObserveUpgrade(
             startPhase: preauthenticated ? "clientInit" : "version",
           });
       const forwardClientChunk = (chunk: Buffer) => {
+        if (entry.requester?.isCurrent() === false) {
+          onRequesterGone();
+          return;
+        }
         const result = clientMessageFilter?.filter(chunk);
         if (result && "error" in result) {
           closeBoth(1008, "invalid view-only RFB stream", "invalid-view-only-stream");
@@ -265,6 +245,10 @@ export function handleDesktopObserveUpgrade(
       });
       desktopSocket.on("data", (chunk) => {
         if (closeCause || ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        if (entry.requester?.isCurrent() === false) {
+          onRequesterGone();
           return;
         }
         ws.send(chunk, { binary: true });
@@ -307,6 +291,12 @@ export function handleDesktopObserveUpgrade(
         "stream-error",
       ),
     );
+
+    entry.requester?.signal?.addEventListener("abort", onRequesterGone, { once: true });
+    if (entry.requester?.signal?.aborted || entry.requester?.isCurrent() === false) {
+      onRequesterGone();
+      return;
+    }
 
     if (!entry.preauth) {
       startSplice();

@@ -12,12 +12,17 @@ import {
   runSourceRuntime,
 } from "../commands/doctor-config-preflight.process.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
@@ -49,7 +54,12 @@ function createDoctorRuntime(root: string) {
       : runBuiltRuntime(runtimeRoot, env, args, 60_000, 4 * 1024 * 1024);
 }
 
-function runDoctor(params: { root: string; configPath: string; repair?: boolean }) {
+function runDoctor(params: {
+  root: string;
+  configPath: string;
+  repair?: boolean;
+  env?: NodeJS.ProcessEnv;
+}) {
   // Only the immutable package is shared across cases; scenario state stays separate.
   doctorRuntime ??= createDoctorRuntime(runtimeDirs.make("openclaw-doctor-runtime-"));
   return doctorRuntime(
@@ -70,6 +80,7 @@ function runDoctor(params: { root: string; configPath: string; repair?: boolean 
       VITEST: undefined,
       VITEST_POOL_ID: undefined,
       VITEST_WORKER_ID: undefined,
+      ...params.env,
     },
     [
       "doctor",
@@ -82,6 +93,54 @@ function runDoctor(params: { root: string; configPath: string; repair?: boolean 
 }
 
 describe("Doctor report process output", () => {
+  it("refuses an unfenced schema bump without publication metadata before CLI debug capture can write state", () => {
+    const root = tempDirs.make("openclaw-doctor-update-schema-");
+    const configPath = path.join(root, "openclaw.json");
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "state"), OPENCLAW_CONFIG_PATH: configPath };
+    fs.writeFileSync(configPath, "{}\n");
+    const shared = openOpenClawStateDatabase({ env }).path;
+    createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, { env });
+    closeOpenClawStateDatabaseForTest();
+    const legacy = new DatabaseSync(shared);
+    legacy.exec(
+      `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}; DROP TABLE config_machine_state;`,
+    );
+    legacy.close();
+    const databaseBefore = fs.readFileSync(shared);
+    const sidecarsBefore = ["-wal", "-shm"].map((suffix) => fs.existsSync(`${shared}${suffix}`));
+    const configBefore = fs.readFileSync(configPath);
+
+    const result = runDoctor({
+      root,
+      configPath,
+      repair: true,
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_DEBUG_PROXY_ENABLED: "1",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(
+      ["-wal", "-shm"].map((suffix) => fs.existsSync(`${shared}${suffix}`)),
+      result.stderr,
+    ).toEqual(sidecarsBefore);
+    expect(fs.readFileSync(shared).equals(databaseBefore), result.stderr).toBe(true);
+    const after = new DatabaseSync(shared, { readOnly: true });
+    try {
+      expect(after.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION - 1,
+      );
+    } finally {
+      after.close();
+    }
+    expect(fs.readFileSync(configPath)).toEqual(configBefore);
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(
+      "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2",
+    );
+  });
+
   it("reports deferred Doctor-only state after config refusal, then converges", () => {
     const root = tempDirs.make("openclaw-doctor-deferred-state-");
     const stateDir = path.join(root, "state");

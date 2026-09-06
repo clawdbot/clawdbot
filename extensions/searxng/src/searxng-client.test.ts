@@ -93,85 +93,93 @@ describe("searxng client", () => {
     ).toEqual([{ title: "One", url: "https://example.com/1", content: "A" }]);
   });
 
-  it("retries an empty category search with general results", async () => {
-    endpointMockState.responses.push(
-      new Response(JSON.stringify({ results: [] }), { status: 200 }),
-      new Response(
-        JSON.stringify({
-          results: [
-            {
-              title: "Beijing hourly weather",
-              url: "https://example.com/weather",
-              content: "Hourly forecast",
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-    );
+  it.each(["weather", "weather,news"])(
+    "retries an empty category search with general results (%s)",
+    async (categories) => {
+      endpointMockState.responses.push(
+        new Response(JSON.stringify({ results: [] }), { status: 200 }),
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                title: "Beijing hourly weather",
+                url: "https://example.com/weather",
+                content: "Hourly forecast",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
 
-    const result = await runSearxngSearch({
-      baseUrl: "http://127.0.0.1:8888",
-      query: "beijing hourly weather",
-      categories: "weather",
-      count: 5,
-    });
+      const result = await runSearxngSearch({
+        baseUrl: "http://127.0.0.1:8888",
+        query: "beijing hourly weather",
+        categories,
+        count: 5,
+      });
 
-    expect(endpointMockState.calls).toHaveLength(2);
-    const firstCall = expectDefined(endpointMockState.calls[0], "first SearXNG endpoint call");
-    const secondCall = expectDefined(endpointMockState.calls[1], "second SearXNG endpoint call");
-    expect(new URL(firstCall.url).searchParams.get("categories")).toBe("weather");
-    expect(new URL(secondCall.url).searchParams.get("categories")).toBe("general");
-    expect(result.provider).toBe("searxng");
-    expect(result.query).toBe("beijing hourly weather");
-    expect(result.count).toBe(1);
-    const results = result.results as Array<{
-      url?: string;
-      siteName?: string;
-      title?: string;
-      snippet?: string;
-    }>;
-    expect(results).toHaveLength(1);
-    expect(results[0]?.url).toBe("https://example.com/weather");
-    expect(results[0]?.siteName).toBe("example.com");
-    expect(results[0]?.title).toContain("Beijing hourly weather");
-    expect(results[0]?.snippet).toContain("Hourly forecast");
-    expect(result.externalContent).toEqual({
-      provider: "searxng",
-      source: "web_search",
-      untrusted: true,
-      wrapped: true,
-    });
-  });
-
-  it("does not retry empty general category searches", async () => {
-    endpointMockState.responses.push(
-      new Response(JSON.stringify({ results: [] }), { status: 200 }),
-    );
-
-    const result = await runSearxngSearch({
-      baseUrl: "http://127.0.0.1:8888",
-      query: "openclaw",
-      categories: "general",
-      count: 5,
-    });
-
-    expect(endpointMockState.calls).toHaveLength(1);
-    const { tookMs, ...stableResult } = result;
-    expect(typeof tookMs).toBe("number");
-    expect(stableResult).toEqual({
-      query: "openclaw",
-      provider: "searxng",
-      count: 0,
-      externalContent: {
+      expect(endpointMockState.calls).toHaveLength(2);
+      const firstCall = expectDefined(endpointMockState.calls[0], "first SearXNG endpoint call");
+      const secondCall = expectDefined(endpointMockState.calls[1], "second SearXNG endpoint call");
+      expect(new URL(firstCall.url).searchParams.get("categories")).toBe(categories);
+      expect(new URL(secondCall.url).searchParams.get("categories")).toBe("general");
+      expect(result.provider).toBe("searxng");
+      expect(result.query).toBe("beijing hourly weather");
+      expect(result.count).toBe(1);
+      const results = result.results as Array<{
+        url?: string;
+        siteName?: string;
+        title?: string;
+        snippet?: string;
+      }>;
+      expect(results).toHaveLength(1);
+      expect(results[0]?.url).toBe("https://example.com/weather");
+      expect(results[0]?.siteName).toBe("example.com");
+      expect(results[0]?.title).toContain("Beijing hourly weather");
+      expect(results[0]?.snippet).toContain("Hourly forecast");
+      expect(result.externalContent).toEqual({
         provider: "searxng",
         source: "web_search",
         untrusted: true,
         wrapped: true,
-      },
-      results: [],
-    });
-  });
+      });
+    },
+  );
+
+  it.each(["general", "general,news", undefined])(
+    "does not retry empty category searches containing general or no category (%s)",
+    async (categories) => {
+      endpointMockState.responses.push(
+        new Response(JSON.stringify({ results: [] }), { status: 200 }),
+      );
+
+      const result = await runSearxngSearch({
+        baseUrl: "http://127.0.0.1:8888",
+        query: "openclaw",
+        categories,
+        count: 5,
+      });
+
+      expect(endpointMockState.calls).toHaveLength(1);
+      const firstCall = expectDefined(endpointMockState.calls[0], "first SearXNG endpoint call");
+      expect(new URL(firstCall.url).searchParams.get("categories")).toBe(categories ?? null);
+      const { tookMs, ...stableResult } = result;
+      expect(typeof tookMs).toBe("number");
+      expect(stableResult).toEqual({
+        query: "openclaw",
+        provider: "searxng",
+        count: 0,
+        externalContent: {
+          provider: "searxng",
+          source: "web_search",
+          untrusted: true,
+          wrapped: true,
+        },
+        results: [],
+      });
+    },
+  );
 
   it("forwards the abort signal to the guarded endpoint", async () => {
     endpointMockState.responses.push(
@@ -212,14 +220,6 @@ describe("searxng client", () => {
         categories: "general",
       }),
     ).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
-  });
-
-  it("detects category searches that should retry with general", () => {
-    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("weather")).toBe(true);
-    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("weather,news")).toBe(true);
-    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("general")).toBe(false);
-    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("general,news")).toBe(false);
-    expect(testing.shouldRetryEmptyCategorySearchWithGeneral(undefined)).toBe(false);
   });
 
   it("preserves img_src from image search results", () => {

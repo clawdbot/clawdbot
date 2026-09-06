@@ -657,6 +657,37 @@ describe("short-term promotion", () => {
     );
   });
 
+  it("keeps blocked origins out of ranking before applying the candidate limit", async (workspaceDir) => {
+    const nowMs = Date.parse("2026-04-03T10:00:00.000Z");
+    const origins = ["untrusted", "system", "owner", "agent", undefined] as const;
+    await recordMemoryRecalls(
+      workspaceDir,
+      "release notes",
+      origins.map((originClass, index) =>
+        memoryRecallResult(
+          "memory/2026-04-02.md",
+          index + 1,
+          index + 1,
+          index < 2 ? 0.99 : 0.1,
+          `Keep release notes beside the deployment checklist ${index}.`,
+          originClass
+            ? { provenance: { originClass, sessionKind: "interactive", observedAt: nowMs } }
+            : {},
+        ),
+      ),
+      { nowMs },
+    );
+
+    const ranked = await rankAllCandidates(workspaceDir, { nowMs });
+    expect(ranked.map((candidate) => candidate.startLine).toSorted((a, b) => a - b)).toEqual([
+      3, 4, 5,
+    ]);
+    expect(await rankAllCandidates(workspaceDir, { nowMs, limit: 1 })).toEqual(ranked.slice(0, 1));
+    expect(
+      await rankAllCandidates(workspaceDir, { nowMs, limit: 1, includePromoted: true }),
+    ).toEqual(ranked.slice(0, 1));
+  });
+
   it("records recalls and ranks candidates with weighted scores", async (workspaceDir) => {
     const shortTermResult = memoryRecallResult(
       "memory/2026-04-02.md",

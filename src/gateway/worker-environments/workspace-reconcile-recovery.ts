@@ -245,7 +245,8 @@ export async function applyWorkspacePatch(params: {
     return;
   }
   // Run no-index with discovery disabled so workspace .gitattributes and
-  // repository filter config cannot reinterpret authenticated patch bytes.
+  // repository filters cannot reinterpret authenticated bytes. Disable inherited
+  // autocrlf too: no-index still runs Git's working-tree newline conversion.
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-no-git-"),
   );
@@ -253,6 +254,8 @@ export async function applyWorkspacePatch(params: {
     await requireGit(
       params.root,
       [
+        "-c",
+        "core.autocrlf=false",
         "apply",
         "--no-index",
         "--binary",

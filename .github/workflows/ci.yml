@@ -1307,6 +1307,8 @@ jobs:
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
           const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
           const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+          const fullNativeValidation =
+            eventName === "workflow_dispatch" && !releaseGate && releaseScope === "full";
           if (releaseScope !== "full" && !npmQualification) {
             throw new Error("release_scope must be full, npm-beta, or npm-stable");
           }
@@ -1439,6 +1441,16 @@ jobs:
           const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
           const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
+          const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+          // Unit tests do not compile the benchmark. Keep its build when inputs
+          // change, or when the existing changed-path manifest cannot narrow scope.
+          const androidBenchmarkChanged = !changedPaths?.length || changedPaths.some((path) =>
+            !path.trim() ||
+            matchesGlob(path, "apps/android/{benchmark,buildSrc,build-logic,gradle,Config}/**") ||
+            matchesGlob(path, "apps/android/**/*.gradle{,.kts}") ||
+            matchesGlob(path, "apps/android/**/gradle.properties") ||
+            matchesGlob(path, "apps/android/gradlew{,.bat}"),
+          );
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
@@ -1498,6 +1510,10 @@ jobs:
             typeof changedNodeTestPlan.resolveChangedDockerSeedLanes === "function"
               ? changedNodeTestPlan.resolveChangedDockerSeedLanes(changedPaths)
               : [];
+          if (isCanonicalRepository && eventName === "push" &&
+              process.env.GITHUB_REF === "refs/heads/main" && supportsDockerSeedE2e) {
+            dockerSeedLanes.push("published-upgrade-survivor");
+          }
           // Canonical pushes also use compact bins: 80+ single-group jobs
           // drain the runner pool for minutes, and per-shard check names on
           // main have no branch-protection consumers. Dispatch (release
@@ -1810,19 +1826,34 @@ jobs:
                     {
                       check_name: "android-test-play",
                       task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                      ...(androidTestTier ? { lint: true } : {}),
                     },
-                    { check_name: "android-test-third-party", task: "test-third-party" },
-                    ...(!useCompatibleAndroidCi
-                      ? [{ check_name: "android-test-wear", task: "test-wear" }]
-                      : []),
                     {
-                      check_name: "android-build-play",
-                      task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                      check_name: "android-test-third-party",
+                      task: "test-third-party",
+                      ...(androidTestTier ? { lint: true } : {}),
                     },
+                    ...(!useCompatibleAndroidCi
+                      ? [{
+                          check_name: "android-test-wear",
+                          task: "test-wear",
+                          ...(androidTestTier ? { lint: true } : {}),
+                        }]
+                      : []),
+                    ...(!androidTestTier
+                      ? [{
+                          check_name: "android-build-play",
+                          task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                        }]
+                      : []),
                     ...(!useCompatibleAndroidCi
                       ? [
-                          { check_name: "android-build-wear", task: "build-wear" },
-                          { check_name: "android-ktlint", task: "ktlint" },
+                          ...(!androidTestTier ? [{ check_name: "android-build-wear", task: "build-wear" }] : []),
+                          {
+                            check_name: "android-ktlint",
+                            task: "ktlint",
+                            ...(androidTestTier && androidBenchmarkChanged ? { build_benchmark: true } : {}),
+                          },
                         ]
                       : []),
                   ]
@@ -3291,7 +3322,7 @@ jobs:
   checks-node-compat:
     permissions:
       contents: read
-    name: checks-node-compat-node22
+    name: checks-node-compat-node24
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
@@ -3302,14 +3333,14 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          node-version: "22.23.2"
+          node-version: "24.16.0"
           install-bun: "false"
           build-all-cache-scope: full
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 
-      - name: Run Node 22 compatibility
+      - name: Run Node 24 minimum compatibility
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
@@ -3318,6 +3349,7 @@ jobs:
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
+          pnpm test src/config/sessions/session-suggestion-store.test.ts src/config/sessions/session-sharing-store.test.ts src/config/sessions/session-accessor.creation-snapshot.test.ts
 
   checks-node-core-test-nondist-shard:
     permissions:
@@ -4416,7 +4448,7 @@ jobs:
 
       - name: Setup Node.js
         env:
-          REQUESTED_NODE_VERSION: "22.x"
+          REQUESTED_NODE_VERSION: "24.x"
         run: |
           set -euo pipefail
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -4426,7 +4458,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          node-version: 22.x
+          node-version: 24.x
 
       - name: Runtime versions
         run: |
@@ -4539,19 +4571,20 @@ jobs:
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    # Release products are not inputs to the debug/coverage test graph. Keep
-    # both cold builds mandatory without charging one worker their combined time.
+    # Debug/coverage tests remain required; full validation adds an independent
+    # optimized build whose products are not inputs to the test graph.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: [release, tests]
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
     # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
     # Use the existing hosted image and budget from the first attempt.
     runs-on: macos-26
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
@@ -4587,7 +4620,7 @@ jobs:
           fi
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
@@ -4693,7 +4726,7 @@ jobs:
           swift --version
 
       - name: Native state schema version contract
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
             node scripts/check-native-state-schema-version.mjs
@@ -4705,7 +4738,7 @@ jobs:
           fi
 
       - name: Swift lint
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh macos
@@ -4813,7 +4846,7 @@ jobs:
 
       - name: Render isolated macOS health fixtures
         id: health-render
-        if: ${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
 
       - name: Upload macOS health component renders
@@ -4831,7 +4864,7 @@ jobs:
           retention-days: 7
 
       - name: Save SwiftPM cache
-        if: matrix.phase == 'release' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
@@ -4856,14 +4889,15 @@ jobs:
     name: ${{ format('ios-build ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
-    # Release device products are not inputs to the simulator test graph.
+    # Automatic CI compiles and lints; full manual validation adds independent
+    # Release device and simulator test phases.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && (needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
     # Blacksmith macOS 26 admission stalled while hosted retries completed.
-    # Start both phases on the verified hosted image instead of waiting to retry.
+    # Start each phase on the verified hosted image instead of waiting to retry.
     runs-on: macos-26
     timeout-minutes: 150
     env:
@@ -4972,7 +5006,7 @@ jobs:
           fi
 
       - name: Swift lint
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh ios
@@ -4983,7 +5017,7 @@ jobs:
           fi
 
       - name: Build iOS app
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: pnpm ios:build
 
       # Debug's incremental compilation can miss actor-isolation diagnostics
@@ -5041,6 +5075,7 @@ jobs:
             -only-testing:OpenClawTests/LocationServiceCallbackTests \
             -only-testing:OpenClawTests/LocationServiceOrderingTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
+            -only-testing:OpenClawTests/OpenClawAppDelegateTests \
             -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
             -only-testing:OpenClawTests/WatchSessionActivationGateTests \
             -only-testing:OpenClawTests/OpenClawTypographyTests \
@@ -5131,11 +5166,10 @@ jobs:
       contents: read
     name: "ios-screenshots-${{ matrix.device_family }}"
     # Each shard builds its own simulator app; ios-build produces no input here.
-    # The final CI gate still requires both build and screenshot evidence.
+    # Full manual validation requires both build and screenshot evidence.
     needs: [preflight]
-    # Full manual/release validation always captures. PRs and their exact-head
-    # release-gate substitutes use the same conservative screenshot-risk scope.
-    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    # PRs and their exact-head release-gate substitutes retain only the build smoke.
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     # Keep capture on the same verified hosted image as the iOS build phases.
     runs-on: macos-26
     timeout-minutes: 90
@@ -5205,18 +5239,8 @@ jobs:
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
-          OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"
+          OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}
         run: pnpm ios:screenshots
-
-      - name: Capture Apple Watch screenshot
-        id: watch_screenshot
-        if: matrix.device_family == 'ipad-13'
-        run: |
-          source scripts/lib/ios-fastlane.sh
-          (
-            cd apps/ios
-            run_ios_fastlane ios watch_screenshot
-          )
 
       - name: Package iOS screenshot shard evidence
         id: package_screenshot_evidence
@@ -5263,7 +5287,7 @@ jobs:
           retention-days: 14
 
       - name: Upload failed iOS screenshot attempt evidence
-        if: ${{ always() && (steps.device_screenshots.outcome == 'failure' || steps.watch_screenshot.outcome == 'failure' || steps.package_screenshot_evidence.outcome == 'failure') }}
+        if: ${{ always() && (steps.device_screenshots.outcome == 'failure' || steps.package_screenshot_evidence.outcome == 'failure') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-screenshot-failure-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
@@ -5279,7 +5303,7 @@ jobs:
       contents: read
     name: "ios-screenshot-evidence"
     needs: [preflight, ios-screenshot-shard]
-    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -5481,6 +5505,8 @@ jobs:
         env:
           CI_RUNNER_BACKEND: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'openclaw/openclaw')) && 'github' || 'blacksmith' }}
           TASK: ${{ matrix.task }}
+          RUN_LINT: ${{ matrix.lint && 'true' || 'false' }}
+          BUILD_BENCHMARK: ${{ matrix.build_benchmark && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -5489,6 +5515,9 @@ jobs:
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
+              fi
               ;;
             test-play-compat)
               # Frozen targets predate the Wear shared project. Keep their app-owned
@@ -5499,10 +5528,16 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testThirdPartyDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :app:lintThirdPartyDebug
+              fi
               ;;
             test-wear)
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :wear:testDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :wear:lintDebug
+              fi
               ;;
             build-play)
               if [ "$CI_RUNNER_BACKEND" = "github" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -5546,6 +5581,9 @@ jobs:
                 :benchmark:ktlintCheck \
                 :wear:ktlintCheck \
                 :wear-shared:ktlintCheck
+              if [ "$BUILD_BENCHMARK" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :benchmark:assembleDebug
+              fi
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2
@@ -5588,6 +5626,9 @@ jobs:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
           OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1"
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: openclaw@latest
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: legacy-operator-state
+          OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: auto-auth
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
         run: pnpm test:docker:all
@@ -5675,8 +5716,8 @@ jobs:
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
-            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
-            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |

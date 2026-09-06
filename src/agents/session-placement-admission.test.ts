@@ -416,6 +416,25 @@ describe("local turn placement admission", () => {
     expect(secondClaim).toHaveBeenCalledOnce();
   });
 
+  it.each([true, false])(
+    "acknowledges CLI continuation only after successful settlement (%s)",
+    async (settled) => {
+      settleRequesterAfterSessionSpawns.mockReturnValueOnce(settled).mockReturnValueOnce(false);
+      const claim = {
+        sessionId: "continuation",
+        sessionKey: "agent:main:continuation",
+        runId: "parent",
+      };
+      const result = await withLocalSessionPlacementTurnSettlement(claim, async () => ({
+        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+        meta: { durationMs: 1, yielded: true },
+      }));
+      expect(result.requesterContinuationSettled).toBe(settled ? true : undefined);
+      const replay = await withLocalSessionPlacementTurnSettlement(claim, async () => result);
+      expect(replay.requesterContinuationSettled).toBe(settled ? true : undefined);
+    },
+  );
+
   it("settles CLI child ownership only after local placement releases", async () => {
     const events: string[] = [];
     settleRequesterAfterSessionSpawns.mockImplementation(() => {

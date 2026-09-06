@@ -180,8 +180,8 @@ export function unregisterNativeHookRelayBridge(
   if (relayBridges.get(relayId) === bridge) {
     relayBridges.delete(relayId);
   }
-  bridge.server.close();
   const removeRecord = () => {
+    bridge.server.close();
     try {
       deleteNativeHookRelayBridgeRecordIfOwned({ ...bridge, pid: process.pid });
     } catch (error) {
@@ -193,8 +193,9 @@ export function unregisterNativeHookRelayBridge(
     0,
   );
   if (deferBridgeRecordRemovalMs > 0) {
-    // During stable-id replacement, retain the old locator until the successor
-    // upserts. The token-scoped timer cannot delete that successor.
+    // Keep the retired listener with its locator during replacement: it rejects
+    // stale requests and reserves the port until the successor publishes. The
+    // token-scoped cleanup cannot delete that successor's record.
     const timeout = setTimeout(removeRecord, deferBridgeRecordRemovalMs);
     timeout.unref();
     return;

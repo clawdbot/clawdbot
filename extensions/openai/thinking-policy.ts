@@ -105,7 +105,10 @@ function buildOpenAIThinkingProfile(params: {
     // Preserve narrower account capabilities while exposing the supported runtime mode.
     const supportsUltra =
       ["openclaw", "codex", "auto"].includes(agentRuntime) && efforts.includes("max");
-    return { levels: buildCodexLevels(supportsUltra ? [...efforts, "ultra"] : efforts) };
+    return {
+      levels: buildCodexLevels(supportsUltra ? [...efforts, "ultra"] : efforts),
+      ...(efforts.includes("low") ? { defaultLevel: "low" as const } : {}),
+    };
   }
   const resolvedCodexEfforts =
     params.api === undefined || params.api === "openai-chatgpt-responses"

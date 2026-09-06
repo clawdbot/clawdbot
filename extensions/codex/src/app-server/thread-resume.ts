@@ -6,6 +6,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import { forgetCodexWorkspaceReferences } from "./client-runtime.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
@@ -53,6 +54,7 @@ export async function resumeCodexAppServerThread(params: {
           })),
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
+    forgetCodexWorkspaceReferences(params.client, threadId);
   } catch (error) {
     if (
       ownershipRejected ||

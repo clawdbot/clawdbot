@@ -676,7 +676,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("does not restore over plugin metadata published while status is running", async () => {
+  it("keeps status metadata scoped while another operation publishes metadata", async () => {
     const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
     const config = mocks.loadConfig();
     const workspaceDir = "/tmp/openclaw-agent/workspace";
@@ -699,6 +699,9 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await catalogStarted.promise;
       expect(replacement).toBeDefined();
+      expect(
+        getCurrentPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
+      ).toBeUndefined();
       clearPluginMetadataLifecycleCaches();
       setCurrentPluginMetadataSnapshot(replacement!, {
         config,

@@ -294,10 +294,14 @@ function createHostCancelRequestHandler(params: {
 
 async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Promise<VmRun> {
   const startedAt = performance.now();
+  const timeoutMs = input.config.timeoutMs;
   let timedOut = false;
-  const deadlineReached = () => performance.now() - startedAt >= input.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= timeoutMs;
   const options = {
     wasm: input.wasmModule,
+    // Pinned pure-data extensions share the sandbox heap and must be supplied
+    // on restore so retained encoder/decoder instances keep their native methods.
+    extensions: input.wasmExtensions,
     memoryLimit: input.config.memoryLimitBytes,
     timezoneOffset: 0,
     onUnhandledRejection: trackPromiseRejection,
@@ -311,6 +315,10 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
       ? await QuickJS.restore(input.snapshot, options)
       : await QuickJS.create(options);
   try {
+    if (input.kind === "resume") {
+      // Restore owns an independent WASM heap; all incoming aliases share this snapshot.
+      input.snapshot.memory = new Uint8Array();
+    }
     const callbacks = [
       ["__openclawHostRequest", createHostRequestHandler({ vm, bridge, config: input.config })],
       ["__openclawHostCancelRequest", createHostCancelRequestHandler({ vm, bridge })],
@@ -493,6 +501,16 @@ async function runVmExecution(params: {
     if (params.bridge.admissionFailure) {
       throw params.bridge.admissionFailure;
     }
+    const admissionError = params.vm.global
+      .getProp("__openclawAdmissionError")
+      .consume((read) =>
+        params.vm
+          .callFunction(read, params.vm.undefined)
+          .consume((error) => (error.isString ? error.toString() : undefined)),
+      );
+    if (admissionError) {
+      throw new CodeModeWorkerFailure("invalid_input", admissionError);
+    }
     params.vm.global
       .getProp("__openclawDrainQueuedRequests")
       .consume((drain) => params.vm.callFunction(drain, params.vm.undefined).dispose());
@@ -577,24 +595,33 @@ async function run(input: CodeModeWorkerPayload): Promise<CodeModeWorkerResult> 
         vm.evalCode(program.source, USER_SOURCE_FILE, EvalFlags.ASYNC).dispose();
         return;
       }
-      vm.global.getProp("__openclawSettleBridge").consume((settle) => {
-        for (const request of input.settledRequests) {
-          const id = vm.newString(request.id);
-          const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
-          try {
-            vm.callFunction(
-              settle,
-              vm.undefined,
-              id,
-              request.ok ? vm.true : vm.false,
-              payload,
-            ).dispose();
-          } finally {
-            id.dispose();
-            payload.dispose();
+      try {
+        vm.global.getProp("__openclawSettleBridge").consume((settle) => {
+          for (const request of input.settledRequests) {
+            const id = vm.newString(request.id);
+            const payload = vm.newString(request.json);
+            try {
+              vm.callFunction(
+                settle,
+                vm.undefined,
+                id,
+                request.ok ? vm.true : vm.false,
+                payload,
+              ).dispose();
+            } finally {
+              id.dispose();
+              payload.dispose();
+            }
           }
+        });
+        // Guest promises now own the replayed JSON values; release every input-frame alias.
+      } finally {
+        // Drop every alias even if QuickJS rejects an allocation or settlement.
+        for (const request of input.settledRequests) {
+          request.json = "";
         }
-      });
+        input.settledRequests.length = 0;
+      }
     },
   });
 }
@@ -603,8 +630,25 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
   return Object.prototype.toString.call(value) === "[object WebAssembly.Module]";
 }
 
+function isQuickJsWasmExtensions(value: unknown): value is CodeModeWorkerPayload["wasmExtensions"] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (extension) =>
+        isRecord(extension) &&
+        typeof extension.name === "string" &&
+        isQuickJsWasmModule(extension.wasm),
+    )
+  );
+}
+
 async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
-  if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
+  if (
+    !isRecord(input) ||
+    !isRecord(input.config) ||
+    !isQuickJsWasmModule(input.wasmModule) ||
+    !isQuickJsWasmExtensions(input.wasmExtensions)
+  ) {
     return {
       ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
       output: EMPTY_CODE_MODE_OUTPUT,
@@ -620,6 +664,7 @@ async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
         await run({
           kind: "exec",
           wasmModule: input.wasmModule,
+          wasmExtensions: input.wasmExtensions,
           source: input.source,
           language: input.language as CodeModeLanguage | undefined,
           prelude: typeof input.prelude === "string" ? input.prelude : undefined,
@@ -645,6 +690,7 @@ async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
         await run({
           kind: "resume",
           wasmModule: input.wasmModule,
+          wasmExtensions: input.wasmExtensions,
           snapshot,
           config,
           settledRequests: Array.isArray(input.settledRequests)

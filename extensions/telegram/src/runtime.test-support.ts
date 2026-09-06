@@ -5,7 +5,6 @@ import type { TelegramRuntime } from "./runtime.types.js";
 const TELEGRAM_ACCOUNT_THROTTLERS_KEY = Symbol.for("openclaw.telegram.accountThrottlers");
 const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.messageCacheBuckets");
 const TELEGRAM_POLLING_LEASES_KEY = Symbol.for("openclaw.telegram.pollingLeases");
-const TELEGRAM_POLLING_SESSION_STATE_KEY = Symbol.for("openclaw.telegram.pollingSessionState");
 const TELEGRAM_REPLY_FENCE_STATE_KEY = Symbol.for("openclaw.telegram.replyFenceState");
 const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
 const TELEGRAM_TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
@@ -40,15 +39,6 @@ export function resetTelegramPollingLeasesForTest(): void {
     [TELEGRAM_POLLING_LEASES_KEY]?: Map<unknown, unknown>;
   };
   proc[TELEGRAM_POLLING_LEASES_KEY]?.clear();
-}
-
-export function resetTelegramPollingSessionStateForTest(): void {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const state = globalRecord[TELEGRAM_POLLING_SESSION_STATE_KEY] as
-    | { activeHandlersByLane?: Map<unknown, unknown>; drainHealthBySpool?: Map<unknown, unknown> }
-    | undefined;
-  state?.activeHandlersByLane?.clear();
-  state?.drainHealthBySpool?.clear();
 }
 
 export function resetTelegramReplyFenceForTest(): void {

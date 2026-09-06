@@ -3,6 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildProviderStatusIndex,
+  buildProviderSummaryMetadataIndex,
+  listProvidersForAgent,
+} from "../../commands/agents.providers.js";
+import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
   makePluginLoaderTempDir,
@@ -425,6 +430,114 @@ afterAll(() => {
 });
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
+  it.each([
+    {
+      label: "named",
+      name: " Operations desk ",
+      expectedName: "Operations desk",
+      expected: "ops (Operations desk)",
+    },
+    { label: "unnamed", name: undefined, expectedName: undefined, expected: "ops" },
+    { label: "blank", name: "   ", expectedName: undefined, expected: "ops" },
+  ])(
+    "keeps $label concrete account labels on the real cold adapter",
+    async ({ name, expectedName, expected }) => {
+      const { bundledRoot, channelId, pluginId, setupMarker, fullMarker } =
+        writeBundledSetupChannelPlugin();
+      const cfg = {
+        agents: { entries: { main: { workspace: bundledRoot } } },
+        channels: {
+          [channelId]: {
+            enabled: true,
+            name: "Root name is not an account fallback",
+            accounts: {
+              ops: { name },
+              plain: {},
+              unbound: { name: "Unbound account" },
+            },
+          },
+        },
+        plugins: { allow: [pluginId] },
+        bindings: [
+          { type: "route", agentId: "main", match: { channel: channelId, accountId: "ops" } },
+          { type: "route", agentId: "main", match: { channel: channelId, accountId: "plain" } },
+        ],
+      } satisfies Parameters<typeof buildProviderStatusIndex>[0];
+      const originalConfig = JSON.stringify(cfg);
+
+      const providerStatus = await buildProviderStatusIndex(cfg);
+      const lines = listProvidersForAgent({
+        summaryIsDefault: true,
+        cfg,
+        bindings: cfg.bindings,
+        providerStatus,
+        providerMetadata: buildProviderSummaryMetadataIndex(cfg),
+      });
+
+      expect(lines).toEqual([
+        `Bundled Chat ${expected}: configured`,
+        "Bundled Chat plain: configured",
+      ]);
+      expect(providerStatus.has(`${channelId}:unbound`)).toBe(true);
+      const adapter = listReadOnlyChannelPluginsForConfig(cfg).find(
+        (entry) => entry.id === channelId,
+      );
+      const account = expectRecordFields(adapter?.config.resolveAccount(cfg, "ops"), {
+        accountId: "ops",
+        name: expectedName,
+      });
+      expect(account.config).toBe(cfg.channels[channelId]?.accounts.ops);
+      expect(JSON.stringify(cfg)).toBe(originalConfig);
+      expect(fs.existsSync(setupMarker)).toBe(false);
+      expect(fs.existsSync(fullMarker)).toBe(false);
+    },
+  );
+
+  it("keeps loaded inspector names ahead of manifest config names", async () => {
+    const { bundledRoot, channelId, pluginId, setupMarker, fullMarker } =
+      writeBundledSetupChannelPlugin();
+    const cfg = {
+      agents: { entries: { main: { workspace: bundledRoot } } },
+      channels: { [channelId]: { enabled: true, accounts: { ops: { name: "Cold config name" } } } },
+      plugins: { allow: [pluginId] },
+      bindings: [
+        { type: "route", agentId: "main", match: { channel: channelId, accountId: "ops" } },
+      ],
+    } satisfies Parameters<typeof buildProviderStatusIndex>[0];
+    const resolveAccount = vi.fn(() => {
+      throw new Error("loaded inspector must own account metadata");
+    });
+    const plugin = createChannelTestPluginBase({
+      id: channelId,
+      label: "Loaded Chat",
+      config: {
+        listAccountIds: () => ["ops"],
+        resolveAccount,
+        inspectAccount: (_cfg, accountId) => ({
+          accountId,
+          name: "Inspector name",
+          enabled: true,
+          configured: true,
+        }),
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId, plugin, source: "test" }]));
+
+    const providerStatus = await buildProviderStatusIndex(cfg);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: true,
+        cfg,
+        bindings: cfg.bindings,
+        providerStatus,
+        providerMetadata: buildProviderSummaryMetadataIndex(cfg),
+      }),
+    ).toEqual(["Loaded Chat ops (Inspector name): configured"]);
+    expect(resolveAccount).not.toHaveBeenCalled();
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
   it("keeps explicitly supplied metadata inventories separate for the same config", () => {
     const { pluginDir } = writeExternalSetupChannelPlugin({
       setupEntry: false,

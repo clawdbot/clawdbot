@@ -14,6 +14,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
@@ -333,7 +334,11 @@ describe("resetReplyRunSession", () => {
       storePath,
     });
     // The prior row's own workspace wins over the run's configured workspace.
-    expect(events[0]).toMatchObject({ type: "session", version: 3, cwd: customWorkspace });
+    expect(events[0]).toMatchObject({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      cwd: customWorkspace,
+    });
     expect(events[1]).toMatchObject({ type: "reset", reason: "reset" });
   });
 
@@ -374,7 +379,11 @@ describe("resetReplyRunSession", () => {
     });
     // The header must take seq 0 (never the reset boundary) and must record the
     // runner's effective workspace, not the service process cwd.
-    expect(events[0]).toMatchObject({ type: "session", version: 3, cwd: workspace });
+    expect(events[0]).toMatchObject({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      cwd: workspace,
+    });
     expect(events[0]).not.toMatchObject({ cwd: process.cwd() });
     expect(events[1]).toMatchObject({ type: "reset", reason: "reset" });
     expect(events.filter((event) => (event as { type?: unknown }).type === "session")).toHaveLength(

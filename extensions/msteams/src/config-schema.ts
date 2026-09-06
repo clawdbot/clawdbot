@@ -5,8 +5,7 @@ import {
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
   MSTeamsReplyStyleSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import {
@@ -143,22 +142,7 @@ export const MSTeamsConfigSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.msteams.dmPolicy="allowlist" requires channels.msteams.allowFrom to contain at least one sender ID',
-    });
+    refineChannelDmPolicy({ channelId: "msteams", value, ctx });
     if (value.sso?.enabled === true && !value.sso.connectionName?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

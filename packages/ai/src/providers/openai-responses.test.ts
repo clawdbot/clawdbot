@@ -159,9 +159,9 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
-    { id: "gpt-6-astra", cacheRetention: "short", ttl: "30m", retention: undefined },
-    { id: "gpt-6-astra", cacheRetention: "long", ttl: "30m", retention: undefined },
-    { id: "gpt-6-astra", cacheRetention: "none", ttl: undefined, retention: undefined },
+    { id: "gpt-5.6-sol", cacheRetention: "short", ttl: undefined, retention: undefined },
+    { id: "gpt-5.6-sol", cacheRetention: "long", ttl: "30m", retention: undefined },
+    { id: "gpt-5.6-sol", cacheRetention: "none", ttl: undefined, retention: undefined },
     { id: "gpt-5.5", cacheRetention: "long", ttl: undefined, retention: "24h" },
     { id: "gpt-5.5", cacheRetention: "short", ttl: undefined, retention: undefined },
   ] as const)(
@@ -190,14 +190,14 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it("keeps Astra cache fields unchanged for custom endpoints", async () => {
-    const requestModel = model({ id: "gpt-6-astra", baseUrl: "https://proxy.example/v1" });
+  it("omits cache fields for custom endpoints without cache-key opt-in", async () => {
+    const requestModel = model({ id: "gpt-5.6-sol", baseUrl: "https://proxy.example/v1" });
     const options = { apiKey: "sentinel-key", cacheRetention: "long" as const };
     const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
     await streamOpenAIResponses(requestModel, context, options).result();
 
     expect(transportParams.prompt_cache_retention).toBeUndefined();
-    expect(openAiMockState.params[0]).toHaveProperty("prompt_cache_retention", "24h");
+    expect(openAiMockState.params[0]).not.toHaveProperty("prompt_cache_retention");
     for (const params of [transportParams, openAiMockState.params[0]]) {
       expect(params).not.toHaveProperty("prompt_cache_options");
     }

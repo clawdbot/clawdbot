@@ -67,32 +67,39 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
-  it("bounds draining from a continuously writing descendant", async () => {
-    vi.useFakeTimers();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const fakeChild = Object.assign(new EventEmitter(), {
-      stdout,
-      stderr,
-    }) as unknown as ChildProcess;
-    const cleanup = releaseChildProcessOutputAfterExit(fakeChild);
-    fakeChild.emit("exit", 0);
-    const writer = setInterval(() => stdout.write("TICK\n"), 30);
+  it.each([false, true])(
+    "bounds continuously writing descendants when drain starts after exit=%s",
+    async (alreadyExited) => {
+      vi.useFakeTimers();
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const fakeChild = Object.assign(new EventEmitter(), {
+        stdout,
+        stderr,
+        exitCode: alreadyExited ? 0 : null,
+        signalCode: null,
+      }) as unknown as ChildProcess;
+      const cleanup = releaseChildProcessOutputAfterExit(fakeChild);
+      if (!alreadyExited) {
+        fakeChild.emit("exit", 0);
+      }
+      const writer = setInterval(() => stdout.write("TICK\n"), 30);
 
-    try {
-      await vi.advanceTimersByTimeAsync(999);
-      expect(stdout.destroyed).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(stdout.destroyed).toBe(false);
-      stdout.write("AFTER DEADLINE\n");
-      await vi.advanceTimersByTimeAsync(1);
-      expect(stdout.destroyed).toBe(true);
-      expect(stderr.destroyed).toBe(true);
-    } finally {
-      clearInterval(writer);
-      cleanup();
-    }
-  });
+      try {
+        await vi.advanceTimersByTimeAsync(999);
+        expect(stdout.destroyed).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(stdout.destroyed).toBe(false);
+        stdout.write("AFTER DEADLINE\n");
+        await vi.advanceTimersByTimeAsync(1);
+        expect(stdout.destroyed).toBe(true);
+        expect(stderr.destroyed).toBe(true);
+      } finally {
+        clearInterval(writer);
+        cleanup();
+      }
+    },
+  );
 
   it.each(["idle", "hard"])("cancels pending %s release when cleaned up", async (deadline) => {
     vi.useFakeTimers();

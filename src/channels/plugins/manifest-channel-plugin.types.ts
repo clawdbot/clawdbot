@@ -3,6 +3,7 @@ import type { ChannelConfigSchema } from "./types.config.js";
 
 type ManifestChannelAccount = {
   accountId: string;
+  name?: string;
   config: Record<string, unknown>;
 };
 

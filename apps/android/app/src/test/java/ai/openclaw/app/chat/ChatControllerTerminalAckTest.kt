@@ -330,7 +330,7 @@ class ChatControllerTerminalAckTest {
         assertTrue(accepted)
         assertEquals(0, controller.pendingRunCount.value)
         assertEquals(
-          if (index == 2) "INVALID_REQUEST: message rejected" else "Chat failed before the run started; try again.",
+          if (index == 2) "INVALID_REQUEST: message rejected" else "OpenClaw request failed.",
           controller.errorText.value,
         )
         assertFalse(controller.messages.value.hasUserText("retained input"))

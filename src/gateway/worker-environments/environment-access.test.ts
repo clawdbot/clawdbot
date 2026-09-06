@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import * as observeBridge from "../desktop/observe-bridge.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
@@ -16,6 +17,7 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  afterEach(() => vi.restoreAllMocks());
 
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");
@@ -537,6 +539,12 @@ describe("worker environment service", () => {
   });
 
   it("acquires a desktop tunnel and mints a one-shot websocket path", async () => {
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const client = { invalidated: false };
+    const requester = {
+      signal: new AbortController().signal,
+      isCurrent: () => !client.invalidated,
+    };
     const record = support.seedReadyDesktop("worker-desktop-observe");
     const desktopPassword = ["desktop", String.fromCharCode(45), "secret"].join("");
     const acquire = vi.fn(async () => ({
@@ -558,7 +566,11 @@ describe("worker environment service", () => {
     const workerService = support.createService(support.createProvider(), { tunnelManager });
 
     await expect(
-      workerService.observeDesktop({ environmentId: record.environmentId, control: true }),
+      workerService.observeDesktop({
+        environmentId: record.environmentId,
+        control: true,
+        requester,
+      }),
     ).resolves.toMatchObject({
       transport: "rfb",
       wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
@@ -575,9 +587,16 @@ describe("worker environment service", () => {
         resolveIdentity: expect.any(Function),
       }),
     );
+    const mintedRequester = mint.mock.calls[0]?.[0].requester;
+    expect(mintedRequester).toBe(requester);
+    expect(mintedRequester?.isCurrent()).toBe(true);
+    client.invalidated = true;
+    expect(mintedRequester?.isCurrent()).toBe(false);
+    expect(requester.signal.aborted).toBe(false);
   });
 
   it("routes a node-backed desktop through its durable node carrier without SSH", async () => {
+    const requester = { signal: new AbortController().signal, isCurrent: () => true };
     const record = support.seedReadyNodeDesktop("worker-node-desktop-access");
     const order: string[] = [];
     const observe = vi.fn(async () => ({
@@ -611,7 +630,11 @@ describe("worker environment service", () => {
     });
 
     await expect(
-      workerService.observeDesktop({ environmentId: record.environmentId, control: true }),
+      workerService.observeDesktop({
+        environmentId: record.environmentId,
+        control: true,
+        requester,
+      }),
     ).resolves.toEqual({
       transport: "rfb",
       wsPath: "/desktop/observe?token=node-carrier",
@@ -626,6 +649,7 @@ describe("worker environment service", () => {
         desktop: support.DESKTOP,
       }),
       control: true,
+      requester,
     });
 
     await expect(

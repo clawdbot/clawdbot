@@ -66,7 +66,7 @@ const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDocto
   },
 };
 
-const { mocks } = await import("./doctor-health.test-support.js");
+const { mocks, registerDoctorConfigReceiptTests } = await import("./doctor-health.test-support.js");
 
 describe("runDoctorHealthFlow", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -643,6 +643,8 @@ describe("runDoctorHealthFlow", () => {
     },
   );
 
+  registerDoctorConfigReceiptTests(runDoctorHealthFlow, postInstallAdvisory);
+
   it("reports a cron ownership refusal instead of a recoverable post-install advisory", async () => {
     mocks.runContributions.mockImplementation(async (ctx) => {
       ctx.configWriteRefusal = "cron-owner-safety";
@@ -668,7 +670,10 @@ describe("runDoctorHealthFlow", () => {
     expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(86);
-    expect(mocks.writeUpdatePostInstallDoctorResult).not.toHaveBeenCalled();
+    expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+      resultPath: "/tmp/openclaw-update-doctor-result.json",
+      result: { status: "error", configHash: "unchanged" },
+    });
   });
 
   it.each([{ repair: true }, { yes: true }])(
@@ -710,7 +715,10 @@ describe("runDoctorHealthFlow", () => {
           expect(runtime.error).toHaveBeenCalledWith(
             expect.stringMatching(/Doctor.*database readiness.*schema version 17/),
           );
-          expect(mocks.writeUpdatePostInstallDoctorResult).not.toHaveBeenCalled();
+          expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+            resultPath: state.path("advisory.json"),
+            result: { status: "error", configHash: "unchanged" },
+          });
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
           expect(runtime.log).toHaveBeenCalledWith(
             expect.stringContaining("still open in another process"),

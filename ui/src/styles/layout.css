@@ -1272,14 +1272,8 @@ openclaw-settings-save-indicator:empty {
   overflow-wrap: anywhere;
 }
 
-.sidebar-session-error.sidebar-session-catalog-error .callout__content {
-  max-height: none;
-  flex-basis: 100%;
-  overflow: visible;
-}
-
-.sidebar-session-catalog-error .btn {
-  margin-inline-start: auto;
+.sidebar-session-catalog-error {
+  overflow-wrap: anywhere;
 }
 
 .sidebar-session-error .callout__dismiss {
@@ -2256,13 +2250,10 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--session-row-actions-reserve);
 }
 
-/* Trade unread/PR tracks for action space, keeping active state and second-line
-   metadata visible. Collapse empty containers too so their gaps cannot squeeze the title. */
+/* Hover actions replace trailing PR badges; leading state and second-line metadata stay visible. */
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   :is(
-    .session-unread-dot,
     .session-row-badge--pull-request,
-    .session-row-aside:has(> .session-row-state > .session-unread-dot:only-child),
     .session-row-badges:has(> openclaw-tooltip:only-child > .session-row-badge--pull-request)
   ) {
   display: none;
@@ -2549,6 +2540,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
 }
 
 .sidebar-customize-menu__text {
+  display: block;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -3921,12 +3913,6 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   gap: 3px;
 }
 
-/* Help destinations are real hyperlinks; keep them looking like menu rows. */
-.sidebar-identity-menu a.sidebar-customize-menu__item {
-  color: inherit;
-  text-decoration: none;
-}
-
 /* The help flyout must escape the menu box, so the root stays
    overflow-visible; the viewport bound moves to a flex column where only
    the switcher list shrinks and scrolls (the action rows always fit). */
@@ -4598,10 +4584,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;
-}
-
-.sidebar-recent-session__details-endcap .session-row-state {
-  min-height: 18px;
 }
 
 .sidebar-session-attention__icon {

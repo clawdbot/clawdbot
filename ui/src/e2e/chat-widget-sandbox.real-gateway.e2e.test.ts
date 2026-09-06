@@ -5,6 +5,8 @@ import { expect, it } from "vitest";
 import { createCanvasDocument } from "../../../src/canvas/documents.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
+import { encodePngRgba } from "../../../src/media/png-encode.js";
+import { ensureGatewayOwnerProfile, setAvatar } from "../../../src/state/user-profiles.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -30,6 +32,13 @@ const suite = createControlUiE2eSuite({
     });
     instance = owner;
     try {
+      const profileOptions = { env: owner.env };
+      const profile = ensureGatewayOwnerProfile("Synthetic Viewer", profileOptions);
+      const avatar = Buffer.from([70, 130, 190, 255]);
+      const saved = setAvatar(profile.id, encodePngRgba(avatar, 1, 1), "image/png", profileOptions);
+      if (!saved.ok) {
+        throw new Error(`Synthetic avatar setup failed: ${saved.error.code}`);
+      }
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
@@ -44,6 +53,16 @@ const suite = createControlUiE2eSuite({
   },
 });
 
+async function cliJson(
+  owner: OpenClawTestInstance,
+  args: string[],
+): Promise<Record<string, unknown>> {
+  const result = await owner.cli(["--no-color", ...args]);
+  expect(result.code, args.slice(0, 3).join(" ")).toBe(0);
+  expect(result.signal).toBeNull();
+  return JSON.parse(result.stdout) as Record<string, unknown>;
+}
+
 suite.define(() => {
   it("reads persisted Canvas bytes through an authenticated browser connection", async () => {
     if (!instance) {
@@ -52,13 +71,7 @@ suite.define(() => {
     const owner = instance;
     const sessionKey = "agent:main:widget-live-proof";
     const docId = "widget-live-proof";
-    const cliJson = async (args: string[]): Promise<Record<string, unknown>> => {
-      const result = await owner.cli(["--no-color", ...args]);
-      expect(result.code, args.join(" ")).toBe(0);
-      expect(result.signal).toBeNull();
-      return JSON.parse(result.stdout) as Record<string, unknown>;
-    };
-    const session = await cliJson([
+    const session = await cliJson(owner, [
       "gateway",
       "call",
       "sessions.create",
@@ -151,7 +164,7 @@ suite.define(() => {
         },
       },
     );
-    const history = await cliJson([
+    const history = await cliJson(owner, [
       "gateway",
       "call",
       "chat.history",
@@ -162,7 +175,7 @@ suite.define(() => {
     expect(history.messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ content })]),
     );
-    const handoff = await cliJson(["dashboard", "--json"]);
+    const handoff = await cliJson(owner, ["dashboard", "--json"]);
     expect(typeof handoff.browserUrl).toBe("string");
     const issued = new URL(String(handoff.browserUrl));
     const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
@@ -225,6 +238,173 @@ suite.define(() => {
             ),
           );
         }
+      },
+    );
+  });
+
+  it("retains a real dashboard, article position, and chat draft across navigation and Settings", async () => {
+    if (!instance) {
+      throw new Error("Gateway fixture is not running");
+    }
+    const owner = instance;
+    const dashboardKey = "agent:main:daily-claw-retention";
+    const chatKey = "agent:main:chat-navigation-retention";
+    const widgetName = "daily-claw";
+    const note = "Read the navigation story after lunch.";
+    const draft = "Explain how retaining this dashboard preserves my reading position.";
+    const rpc = (method: string, params: Record<string, unknown>) =>
+      cliJson(owner, ["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
+    const articleHtml = (edition: string) =>
+      buildWidgetDocument(
+        "The Daily Claw",
+        `<style>
+          body{padding:24px;font:16px system-ui;background:var(--surface);color:var(--text)}
+          input{display:block;width:100%;box-sizing:border-box;padding:12px;margin:8px 0 20px}
+          article{height:280px;overflow:auto;border:1px solid var(--border);padding:16px}
+          article p{margin:0 0 24px;min-height:48px}
+        </style>
+        <h1>The Daily Claw</h1><p id="edition">${edition}</p>
+        <label>Reading note <input aria-label="Reading note"></label>
+        <article aria-label="Daily Claw article" tabindex="0">
+          ${Array.from({ length: 30 }, (_, index) => `<p>Story ${index + 1}: Synthetic engineering news for the navigation retention proof.</p>`).join("")}
+        </article>`,
+      );
+    await rpc("sessions.create", {
+      key: dashboardKey,
+      agentId: "main",
+      label: "The Daily Claw",
+    });
+    await rpc("sessions.patch", { key: dashboardKey, boardFace: "dashboard" });
+    const widgetParams = {
+      sessionKey: dashboardKey,
+      name: widgetName,
+      title: "The Daily Claw",
+      placement: { size: "full" },
+    };
+    await rpc("board.widget.put", {
+      ...widgetParams,
+      content: { kind: "html", html: articleHtml("Morning edition") },
+    });
+    const chat = await rpc("sessions.create", {
+      key: chatKey,
+      agentId: "main",
+      label: "Navigation proof chat",
+    });
+    expect(typeof chat.sessionId).toBe("string");
+    await appendTranscriptMessage(
+      { agentId: "main", sessionKey: chatKey, sessionId: String(chat.sessionId), env: owner.env },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Synthetic session ready for navigation." }],
+          timestamp: Date.now(),
+        },
+      },
+    );
+    const handoff = await cliJson(owner, ["dashboard", "--json"]);
+    const url = new URL(controlUiSessionUrl(suite.server.baseUrl, dashboardKey, "dashboard"));
+    url.hash = new URL(String(handoff.browserUrl)).hash;
+    await suite.withPage(
+      {
+        viewport: { width: 1440, height: 900 },
+        serviceWorkers: "block",
+        permissions: ["local-network-access"],
+        ...(captureEnabled
+          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const capture = async (filename: string) => {
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, filename) });
+          }
+        };
+        const sessionLink = (key: string) =>
+          page.locator(
+            `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,
+          );
+        const response = await page.goto(url.toString());
+        expect(response?.status()).toBe(200);
+        await waitForControlUiGatewayReady(page);
+        const board = page.locator("openclaw-board-view").first();
+        const outer = board.locator(
+          `.board-widget[data-widget-name="${widgetName}"] .board-widget__frame`,
+        );
+        const inner = outer.contentFrame().frameLocator("iframe");
+        const readingNote = inner.getByRole("textbox", { name: "Reading note" });
+        const article = inner.getByRole("article", { name: "Daily Claw article" });
+        await readingNote.fill(note);
+        await article.evaluate((element) => {
+          element.scrollTop = 480;
+        });
+        const articleScrollTop = await article.evaluate((element) => element.scrollTop);
+        expect(articleScrollTop).toBeGreaterThan(0);
+        const originalFrame = await outer.elementHandle();
+        const originalBoard = await board.elementHandle();
+        if (!originalFrame || !originalBoard) {
+          throw new Error("Daily Claw frame and board were not mounted");
+        }
+        const composer = page.locator(
+          "openclaw-chat-pane.chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea",
+        );
+        await capture("01-daily-claw-warmed.png");
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await sessionLink(chatKey).click();
+          await composer.waitFor();
+          await expect.poll(() => sessionLink(chatKey).getAttribute("aria-current")).toBe("page");
+          if (attempt === 0) {
+            await composer.fill(draft);
+            await capture("02-chat-with-draft.png");
+          } else {
+            expect(await composer.inputValue()).toBe(draft);
+          }
+          expect(await originalFrame.evaluate((element) => element.isConnected)).toBe(true);
+          await expect
+            .poll(() => originalBoard.evaluate((element) => Reflect.get(element, "active")))
+            .toBe(false);
+          await sessionLink(dashboardKey).click();
+          await readingNote.waitFor();
+          expect(
+            await outer.evaluate((element, previous) => element === previous, originalFrame),
+          ).toBe(true);
+          expect(await readingNote.inputValue()).toBe(note);
+          expect(await article.evaluate((element) => element.scrollTop)).toBe(articleScrollTop);
+        }
+        await page.locator("openclaw-app-sidebar .sidebar-identity-card").click();
+        await page
+          .locator('openclaw-app-sidebar wa-dropdown-item[value="command:settings"]')
+          .click();
+        await page.locator(".settings-sidebar__back").waitFor();
+        const parked = {
+          frameConnected: await originalFrame.evaluate((element) => element.isConnected),
+          boardActive: await originalBoard.evaluate((element) => Reflect.get(element, "active")),
+        };
+        await page.locator(".settings-sidebar__back").click();
+        await readingNote.waitFor();
+        // Retain the pre-fix failure's returned dashboard before checking its lost frame.
+        await capture("03-daily-claw-after-settings.png");
+        expect(
+          await outer.evaluate((element, previous) => element === previous, originalFrame),
+        ).toBe(true);
+        expect(parked).toEqual({ frameConnected: true, boardActive: false });
+        expect(await readingNote.inputValue()).toBe(note);
+        expect(await article.evaluate((element) => element.scrollTop)).toBe(articleScrollTop);
+        await sessionLink(chatKey).click();
+        await composer.waitFor();
+        expect(await composer.inputValue()).toBe(draft);
+        await sessionLink(dashboardKey).click();
+        await readingNote.waitFor();
+        await rpc("board.widget.put", {
+          ...widgetParams,
+          content: {
+            kind: "html",
+            html: articleHtml("Afternoon edition: refreshed from the Gateway"),
+          },
+        });
+        await inner
+          .getByText("Afternoon edition: refreshed from the Gateway", { exact: true })
+          .waitFor();
+        await capture("04-daily-claw-refreshed.png");
       },
     );
   });

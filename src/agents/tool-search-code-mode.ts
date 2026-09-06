@@ -40,7 +40,8 @@ export async function runCodeMode(params: {
   });
   return {
     ok: true,
-    value: toToolSearchJsonSafe(value),
+    // JSON IPC already detached and normalized the child's result.
+    value: value ?? null,
     logs,
     telemetry: runtime.telemetry(),
   };

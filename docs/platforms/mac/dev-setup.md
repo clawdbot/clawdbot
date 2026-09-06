@@ -9,12 +9,14 @@ title: "macOS dev setup"
 
 Build and run the OpenClaw macOS application from source.
 
+The packaged app requires macOS 15.0 or later. The build host must also meet
+the Xcode requirements below.
+
 ## Prerequisites
 
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24.15+ & pnpm** for the gateway, CLI, and packaging scripts. Node
-  22.22.3+ also works.
+- **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
 
 ## 1. Install dependencies
 
@@ -40,6 +42,12 @@ capabilities and worker readiness in temporary state before and after signing,
 then replaces the previous app. `scripts/restart-mac.sh` uses
 the same path; `SKIP_TSC=1` no longer bypasses the runtime build. Existing
 content-checked build caches still avoid unnecessary declaration work.
+
+Each worker keeps native binaries that support its architecture and omits
+incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
+dependencies from triggering macOS compatibility warnings in Apple silicon
+builds. Compatible universal binaries, JavaScript, WASM, and other resources
+remain intact.
 
 Universal builds require both arm64 and x86_64 runtimes to execute during
 validation. Building x86_64 on Apple Silicon requires Rosetta; a missing

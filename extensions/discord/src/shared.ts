@@ -27,6 +27,7 @@ import {
 import { DiscordChannelConfigSchema } from "./config-schema.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
+import { selectDiscordLivePolicyConfig } from "./live-policy-config.js";
 import {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,
@@ -39,6 +40,10 @@ import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
 
 const DISCORD_CHANNEL = "discord" as const;
+const livePolicyConfigPrefixes = Object.keys(selectDiscordLivePolicyConfig({})).flatMap((key) => [
+  `channels.discord.${key}`,
+  `channels.discord.accounts.*.${key}`,
+]);
 type DiscordConfigAccessorAccount = {
   allowFrom: string[] | undefined;
   defaultTo: string | undefined;
@@ -90,7 +95,10 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
   resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(discord|user|pk):/i }).map((entry) =>
+      entry.replace(/^<@!?(\d+)>$/, "$1"),
+    ),
   resolveDefaultTo: (account) => account.defaultTo,
 });
 
@@ -144,7 +152,7 @@ export function createDiscordPluginBase(params: {
     },
     reload: {
       configPrefixes: ["channels.discord"],
-      noopPrefixes: ["messages.inbound", "messages.ackReactionScope"],
+      noopPrefixes: [...livePolicyConfigPrefixes, "messages.inbound", "messages.ackReactionScope"],
     },
     configSchema: DiscordChannelConfigSchema,
     config: {

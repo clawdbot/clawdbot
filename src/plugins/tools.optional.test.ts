@@ -3698,6 +3698,14 @@ describe("resolvePluginTools optional tools", () => {
   it.each([
     ["unlogged invalid-config", createInvalidConfigError("/tmp/openclaw.json", "invalid property")],
     ["ordinary factory", new Error("factory unavailable")],
+    [
+      "unreadable-message factory",
+      Object.defineProperty(new Error("unreadable message"), "message", {
+        get() {
+          throw new Error("message getter failed");
+        },
+      }),
+    ],
   ])("still logs %s errors from plugin factories (#137694)", (_kind, error) => {
     setRegistry([
       createNamedToolEntry("memory-wiki", "memory_wiki_tool", {
@@ -3705,6 +3713,7 @@ describe("resolvePluginTools optional tools", () => {
           throw error;
         },
       }),
+      createNamedToolEntry("healthy-plugin", "healthy_tool"),
     ]);
     const errorSpy = vi.fn();
     loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: errorSpy };
@@ -3712,7 +3721,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(
       resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] })),
-      [],
+      ["healthy_tool"],
     );
     expect(errorSpy).toHaveBeenCalledOnce();
     expect(errorSpy).toHaveBeenCalledWith(

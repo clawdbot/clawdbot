@@ -64,7 +64,7 @@ Codex id list.
 That makes the Codex debugging loop short: notice bad behavior in a channel,
 run `/diagnostics`, approve once, share the report, then run the printed
 `codex resume <thread-id>` command locally if you want to inspect the thread
-yourself. See [Codex harness](/plugins/codex-harness#inspect-codex-threads-locally).
+yourself. See [Codex harness](/plugins/codex-harness/commands#inspect-codex-threads-locally).
 
 ## What the export contains
 
@@ -95,6 +95,25 @@ hostnames, and local usernames.
 
 When a log message looks like user, chat, prompt, or tool payload text, the
 export keeps only that a message was omitted plus its byte count.
+
+## WebSocket disconnect logs
+
+Connected webchat and authenticated-user disconnects include `durationMs`
+(connection lifetime in milliseconds) in default info-level file logs. The
+`cause` field contains the Gateway's recorded close cause, when known; otherwise
+it is omitted. `heartbeat-timeout` records the Gateway's missed-pong decision.
+It does not prove that a ping reached the remote peer or that the peer caused
+the transport failure.
+
+Heartbeat-timeout records also capture these facts before termination:
+
+- `pingWriteState`: `pending` when no write callback has been observed,
+  `completed` after local write completion, or `failed` after a write error.
+  Pending does not prove the ping was unsent; completed does not prove peer receipt.
+- `lastPongAgeMs`: monotonic elapsed milliseconds since the last observed pong,
+  omitted when no pong has been observed.
+- `bufferedBytes`: aggregate local WebSocket buffering at the timeout decision,
+  not the delivery status of an individual ping.
 
 ## Stability recorder
 
@@ -136,6 +155,14 @@ Writer execution is not SQLite transaction-lock hold time; native transaction
 lock-wait and hold warnings remain separate. Writes rejected before entering the
 writer omit these three fields. This breakdown is in
 file logs, not the aggregate Gateway RPC Prometheus histograms.
+
+These warnings include the writer's `pid`, Node `threadId`, and `isMainThread`.
+Reclamation callbacks also record their `reclamationKind` and, when a Worker was
+created, its captured `workerThreadId`. Within the same process lifetime, match
+the warning's `pid` and `workerThreadId` to an agent-database-open warning's
+`pid` and `threadId` to identify the awaited Worker. This establishes association,
+not CPU attribution or a breakdown of the Worker's lifetime. A missing Worker
+ID does not establish that work ran on the main thread.
 
 Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
@@ -210,6 +237,6 @@ file-system scan or writing a pre-OOM snapshot.
 
 - [Health checks](/gateway/health)
 - [Gateway CLI](/cli/gateway#gateway-diagnostics-export)
-- [Gateway protocol](/gateway/protocol#rpc-method-families)
+- [Gateway protocol](/gateway/protocol/rpc-methods#rpc-method-families)
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector

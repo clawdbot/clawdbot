@@ -8,7 +8,10 @@ import type {
   ModelCatalogEntry,
 } from "../../api/types.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
-import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import {
+  renderPanelRefreshStatus,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -51,7 +54,7 @@ export function renderAgentOverview(params: {
   configSaving: boolean;
   configDirty: boolean;
   modelCatalog: ModelCatalogEntry[];
-  modelCatalogError: string | null;
+  modelCatalogStatus: PanelRefreshStatus;
   onConfigReload: () => void;
   onConfigSave: () => void;
   onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
@@ -59,7 +62,7 @@ export function renderAgentOverview(params: {
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
-  onModelCatalogRetry: () => void;
+  onModelCatalogOpen: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const {
@@ -279,12 +282,7 @@ export function renderAgentOverview(params: {
       },
       html`
         ${renderPanelRefreshStatus({
-          status: {
-            error: params.modelCatalogError,
-            hasLoaded: params.modelCatalog.length > 0,
-            stale: Boolean(params.modelCatalogError && params.modelCatalog.length > 0),
-          },
-          onRetry: params.onModelCatalogRetry,
+          status: params.modelCatalogStatus,
         })}
         ${renderSettingsRow({
           title: isDefault
@@ -313,7 +311,7 @@ export function renderAgentOverview(params: {
             ],
             disabled,
             onChange: (value) => onModelChange(agent.id, value || null),
-            onOpen: params.onModelCatalogRetry,
+            onOpen: params.onModelCatalogOpen,
           }),
         })}
         ${renderSettingsRow({

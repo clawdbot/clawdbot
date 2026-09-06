@@ -1005,6 +1005,12 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     `num_predict`, `top_k`, `top_p`, `min_p`, `typical_p`, `repeat_last_n`,
     `temperature`, `repeat_penalty`, `presence_penalty`, `frequency_penalty`,
     `stop`, `num_batch`, `num_gpu`, `main_gpu`, `use_mmap`, and `num_thread`.
+    Runtime sampling controls (`temperature`, `topP`, `frequencyPenalty`,
+    `presencePenalty`, and `seed`) override the matching model defaults,
+    including explicit zero values. The Gateway's Chat Completions API maps
+    `top_p`, `frequency_penalty`, and `presence_penalty` to these controls.
+    With `temperature: 0`, OpenClaw still normalizes `top_p` to `1` for greedy
+    sampling after applying overrides.
     A few keys (`format`, `keep_alive`, `truncate`, `shift`) are forwarded as
     top-level request fields instead of nested `options`. Local native chat
     requests default to `truncate: false` and `shift: false`, so supporting
@@ -1062,6 +1068,11 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,
     and `/think max`; non-thinking models expose only `/think off`.
+
+    When replaying an assistant message, native requests retain its available
+    reasoning in Ollama's separate `thinking` field alongside text and tool
+    calls. This lets tool follow-ups reuse reasoning retained by the session's
+    history policy without mixing it into visible answer text.
 
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off

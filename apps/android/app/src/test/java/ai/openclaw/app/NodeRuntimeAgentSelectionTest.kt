@@ -43,6 +43,92 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
   @Test
+  fun publicationsRereadSelectedAgentModelsWithoutDiscovery() =
+    runBlocking {
+      for (event in listOf("config.changed", "chat.metadata.changed")) {
+        val runtime = createConnectedRuntime()
+        val catalogRequests = Channel<Pair<JsonObject, Job>>(Channel.UNLIMITED)
+        val revision = AtomicInteger(0)
+        try {
+          runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+            when (method) {
+              "models.list" -> {
+                catalogRequests.send(Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject to currentCoroutineContext().job)
+                """{"models":[{"id":"model-${revision.get()}","provider":"fixture","name":"Published"}]}"""
+              }
+
+              "models.authStatus" -> {
+                assertEquals(
+                  "beta",
+                  Json
+                    .parseToJsonElement(paramsJson.orEmpty())
+                    .jsonObject["agentId"]
+                    ?.jsonPrimitive
+                    ?.content,
+                )
+                """{"providers":[{"provider":"credential-${revision.get()}","status":"ok","profiles":[]}]}"""
+              }
+
+              "config.get" -> {
+                """{"config":{}}"""
+              }
+
+              else -> {
+                error("Unexpected publication request: $method")
+              }
+            }
+          }
+          runtime.selectChatAgent("beta")
+          runtime.refreshModelCatalog()
+          runtime.refreshProviderModels()
+          withTimeout(2_000) {
+            repeat(2) { catalogRequests.receive().second.join() }
+          }
+          assertEquals(
+            "model-0",
+            runtime.modelCatalog.value
+              .single()
+              .id,
+          )
+          assertEquals(
+            "model-0",
+            runtime.providerModelCatalog.value
+              .single()
+              .id,
+          )
+          assertEquals(
+            "credential-0",
+            runtime.modelAuthProviders.value
+              .single()
+              .id,
+          )
+          revision.set(1)
+          ReflectionHelpers.callInstanceMethod<Unit>(
+            runtime,
+            "handleGatewayEvent",
+            ReflectionHelpers.ClassParameter.from(String::class.java, event),
+            ReflectionHelpers.ClassParameter.from(String::class.java, "{}"),
+          )
+
+          withTimeout(2_000) {
+            runtime.modelCatalog.first { it.singleOrNull()?.id == "model-1" }
+            runtime.providerModelCatalog.first { it.singleOrNull()?.id == "model-1" }
+            runtime.modelAuthProviders.first { it.singleOrNull()?.id == "credential-1" }
+            repeat(2) {
+              val (params, job) = catalogRequests.receive()
+              job.join()
+              assertEquals("beta", params["agentId"]?.jsonPrimitive?.content)
+              assertFalse(params.containsKey("refresh"))
+            }
+          }
+        } finally {
+          closeNodeRuntimeTestFixture(runtime)
+          catalogRequests.close()
+        }
+      }
+    }
+
+  @Test
   fun defaultModelReadsKeepTheLegacyGatewayContract() =
     runBlocking {
       val runtime = createConnectedRuntime()
