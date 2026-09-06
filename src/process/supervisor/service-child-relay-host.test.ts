@@ -37,6 +37,9 @@ afterEach(async () => {
 
 async function createRelay(platform: "linux" | "win32") {
   platformMock = mockProcessPlatform(platform);
+  const groupProbe = vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
+  });
   const stub = createStubChild();
   stub.child.unref = vi.fn();
   const cancellations: Array<(error: Error) => void> = [];
@@ -92,8 +95,7 @@ async function createRelay(platform: "linux" | "win32") {
       return true;
     });
   }
-  const completeRoot = () => {
-    emit({ type: "root-result", code: 0, signal: null });
+  const endOutput = () => {
     if (platform === "win32") {
       emit({ type: "output-end", stream: "stdout" });
       emit({ type: "output-end", stream: "stderr" });
@@ -101,6 +103,10 @@ async function createRelay(platform: "linux" | "win32") {
       stub.child.stdout?.emit("end");
       stub.child.stderr?.emit("end");
     }
+  };
+  const completeRoot = () => {
+    emit({ type: "root-result", code: 0, signal: null });
+    endOutput();
   };
   const close = () => {
     control.destroy();
@@ -118,10 +124,12 @@ async function createRelay(platform: "linux" | "win32") {
     cancellations,
     emit,
     completeRoot,
+    endOutput,
     close,
     floodControl,
     controlEncoding,
     killSpy,
+    groupProbe,
   };
 }
 
@@ -227,6 +235,7 @@ it.each(["linux", "win32"] as const)(
     mocks.spawn.mockReturnValue(stub.child);
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:rejected-construction";
+    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
     const pending = supervisor.spawn({
       runId: "rejected-construction",
       mode: "anchored-shell",
@@ -239,7 +248,7 @@ it.each(["linux", "win32"] as const)(
     supervisor.cancel("rejected-construction");
     const run = await pending;
     await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-    const outcomes = Promise.allSettled([supervisor.waitForScope(scopeKey), supervisor.shutdown()]);
+    const outcomes = Promise.allSettled([cleanupScope(), supervisor.shutdown()]);
     control.destroy();
     stub.disconnectMock();
     stub.emitExit(null, "SIGKILL");
@@ -252,7 +261,7 @@ it.each(["linux", "win32"] as const)(
         }),
       });
     }
-    await expect(supervisor.waitForScope(scopeKey)).rejects.toThrow("cleanup identity lost");
+    await expect(cleanupScope()).rejects.toThrow("cleanup identity lost");
     await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
   },
 );
@@ -346,6 +355,46 @@ it("bounds the newline search before inspecting an oversized control frame", asy
 });
 
 describe.each(["linux", "win32"] as const)("service closing authority (%s)", (platform) => {
+  it.each([false, true])(
+    "keeps root knowledge independent of failed extinction (root observed=%s)",
+    async (rootObserved) => {
+      const { adapter, completeRoot, close } = await createRelay(platform);
+      adapter.kill("SIGTERM");
+      if (rootObserved) {
+        completeRoot();
+      }
+      await nextTurn();
+      close();
+      await expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
+      if (rootObserved) {
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+      } else {
+        await expect(adapter.wait()).rejects.toThrow("cleanup identity lost");
+      }
+    },
+  );
+
+  it("publishes root exit before output drain and replays it to late observers", async () => {
+    const { adapter, emit, completeRoot, close } = await createRelay(platform);
+    const onExit = vi.fn();
+    adapter.onExit(onExit);
+    emit({ type: "root-result", code: 0, signal: null });
+    // POSIX stream delivery is asynchronous; the observer itself runs within
+    // the root-result handler, independently of output completion.
+    if (platform === "linux") {
+      await nextTurn();
+    }
+    expect(onExit).toHaveBeenCalledExactlyOnceWith(0, null);
+    const lateExit = vi.fn();
+    adapter.onExit(lateExit);
+    expect(lateExit).toHaveBeenCalledExactlyOnceWith(0, null);
+    completeRoot();
+    await adapter.wait();
+    emit({ type: "closing", reason: "lineage-closed" });
+    close();
+    await adapter.waitForExtinction();
+  });
+
   it.each(["after receipt", "before receipt"])(
     "preserves confirmed extinction when cancellation starts %s",
     async (order) => {
@@ -377,6 +426,8 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
     "rejects %s without an authoritative closing receipt",
     async (fault) => {
       const { adapter, cancellations, completeRoot, close } = await createRelay(platform);
+      const onError = vi.fn();
+      adapter.onError(onError);
       completeRoot();
       const rejected = expect(adapter.waitForExtinction()).rejects.toThrow(
         "service child cleanup identity lost",
@@ -388,6 +439,69 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
         close();
       }
       await rejected;
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("cleanup identity lost") }),
+        "process",
+      );
     },
   );
+});
+
+it("drains output after losing cleanup authority without erasing the observed root", async () => {
+  const { adapter, emit, endOutput, close } = await createRelay("linux");
+  adapter.kill("SIGTERM");
+  emit({ type: "root-result", code: 23, signal: null });
+  await nextTurn();
+  const root = adapter.wait();
+  const settled = vi.fn();
+  void root.then(settled, settled);
+  close();
+  await expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
+  expect(settled).not.toHaveBeenCalled();
+  endOutput();
+  await expect(root).resolves.toEqual({ code: 23, signal: null });
+});
+
+it.each(["EPERM", "EIO", "still present"])(
+  "keeps graceful cleanup uncertain when the kernel group is %s",
+  async (failure) => {
+    const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+    groupProbe.mockImplementation(() => {
+      if (failure === "still present") {
+        return true;
+      }
+      throw Object.assign(new Error(`synthetic ${failure}`), { code: failure });
+    });
+    completeRoot();
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    emit({ type: "closing", reason: "lineage-closed" });
+    await nextTurn();
+    // Exhaust the bounded observation window without waiting on real process time.
+    vi.spyOn(Date, "now").mockReturnValueOnce(10_000).mockReturnValue(15_000);
+    close();
+    await expect(adapter.waitForExtinction()).rejects.toThrow("owned process group");
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    expect(groupProbe).toHaveBeenCalledWith(-1235, 0);
+    expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+  },
+);
+
+it("retains extinction ownership until the kernel group disappears", async () => {
+  const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+  groupProbe.mockReturnValueOnce(true);
+  completeRoot();
+  await adapter.wait();
+  const settled = vi.fn();
+  const extinction = adapter.waitForExtinction().then(settled);
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  expect(groupProbe).not.toHaveBeenCalled();
+  close();
+  await nextTurn();
+  expect(settled).not.toHaveBeenCalled();
+  await extinction;
+  expect(groupProbe.mock.calls).toEqual([
+    [-1235, 0],
+    [-1235, 0],
+  ]);
 });

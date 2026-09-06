@@ -403,25 +403,6 @@ function isTurnStartEntry(entry: SessionTreeEntry): boolean {
   return message ? isTurnStartMessage(message) : false;
 }
 
-function findValidCutPoints(
-  entries: SessionTreeEntry[],
-  startIndex: number,
-  endIndex: number,
-): number[] {
-  const cutPoints: number[] = [];
-  for (let i = startIndex; i < endIndex; i++) {
-    const entry = entries[i];
-    if (!entry) {
-      continue;
-    }
-    const message = getMessageFromEntryForCompaction(entry);
-    if (message && isCutPointMessage(message)) {
-      cutPoints.push(i);
-    }
-  }
-  return cutPoints;
-}
-
 /** Find the user-visible message that starts the turn containing an entry. */
 export function findTurnStartIndex(
   entries: SessionTreeEntry[],
@@ -457,18 +438,23 @@ export function findCutPoint(
   endIndex: number,
   keepRecentTokens: number,
 ): CutPointResult {
-  const cutPoints = findValidCutPoints(entries, startIndex, endIndex);
-
-  if (cutPoints.length === 0) {
+  // Projection validates persisted custom/branch timestamps even outside the
+  // retained tail. Keep that eager validation without storing every cut point.
+  let cutIndex: number | undefined;
+  for (let i = startIndex; i < endIndex; i++) {
+    const entry = entries[i];
+    const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+    if (message && isCutPointMessage(message)) {
+      cutIndex = i;
+    }
+  }
+  if (cutIndex === undefined) {
     return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
   }
   let accumulatedTokens = 0;
-  const firstCutIndex = cutPoints.at(0);
-  if (firstCutIndex === undefined) {
-    return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
-  }
-  let cutIndex = firstCutIndex;
 
+  // The latest valid cut also handles an oversized trailing tool result that
+  // exhausts the budget before the reverse walk reaches its preceding boundary.
   for (let i = endIndex - 1; i >= startIndex; i--) {
     const entry = entries[i];
     if (!entry) {
@@ -478,20 +464,11 @@ export function findCutPoint(
     if (!message) {
       continue;
     }
-    const messageTokens = estimateTokens(message);
-    accumulatedTokens += messageTokens;
+    if (isCutPointMessage(message)) {
+      cutIndex = i;
+    }
+    accumulatedTokens += estimateTokens(message);
     if (accumulatedTokens >= keepRecentTokens) {
-      const lastCutIndex = cutPoints.at(-1);
-      if (lastCutIndex === undefined) {
-        throw new Error("compaction cut-point list became empty during selection");
-      }
-      cutIndex = lastCutIndex;
-      for (const cutPoint of cutPoints) {
-        if (cutPoint >= i) {
-          cutIndex = cutPoint;
-          break;
-        }
-      }
       break;
     }
   }

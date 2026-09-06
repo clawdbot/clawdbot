@@ -16,6 +16,7 @@ import type { TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
 export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime) {
   const {
+    gcDurationHistogram,
     gatewayEventLoopDelayMaxHistogram,
     gatewayEventLoopObservedCounter,
     queueDepthHistogram,
@@ -272,6 +273,16 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     span.end(evt.ts);
   };
 
+  const recordGcDuration = (
+    evt: Extract<DiagnosticEventPayload, { type: "diagnostic.gc" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
+      return;
+    }
+    gcDurationHistogram.record(evt.durationMs, undefined, ROOT_CONTEXT);
+  };
+
   const recordGatewayEventLoopSample = (
     evt: Extract<DiagnosticEventPayload, { type: "gateway.event_loop.sample" }>,
     metadata: DiagnosticEventMetadata,
@@ -392,6 +403,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
   };
 
   return {
+    recordGcDuration,
     recordGatewayEventLoopSample,
     recordSkillUsed,
     recordToolExecutionStarted,

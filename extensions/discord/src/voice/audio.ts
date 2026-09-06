@@ -1,6 +1,5 @@
 // Discord plugin module implements audio behavior.
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -333,24 +332,20 @@ function estimateDurationSeconds(pcm: Buffer): number {
 
 export async function writeVoiceWavFile(
   pcm: Buffer,
-): Promise<{ path: string; durationSeconds: number }> {
+): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });
-  scheduleTempCleanup(workspace.dir);
-  const wav = buildWavBuffer(pcm);
-  const filePath = await workspace.write("segment.wav", wav);
-  return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
-}
-
-function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
-  const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err: unknown) => {
-      if (shouldLogVerbose()) {
-        logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
-      }
-    });
-  }, delayMs);
-  timer.unref();
+  try {
+    const filePath = await workspace.write("segment.wav", buildWavBuffer(pcm));
+    return {
+      path: filePath,
+      durationSeconds: estimateDurationSeconds(pcm),
+      cleanup: () => workspace[Symbol.asyncDispose](),
+    };
+  } catch (error) {
+    await workspace.cleanup();
+    throw error;
+  }
 }

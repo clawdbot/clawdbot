@@ -27,7 +27,8 @@ function mutableGatewaySnapshot(snapshot: ApplicationGateway["snapshot"]) {
 }
 
 export function createFirstRunContext(refreshError?: string, beforeRefresh?: () => Promise<void>) {
-  const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>();
+  const request =
+    vi.fn<(...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown>>();
   const client = createTestGatewayClient(request);
   const listeners = new Set<(snapshot: ApplicationGateway["snapshot"]) => void>();
   const snapshot = {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -199,7 +200,7 @@ export async function processCompletionsStream(
       contentBlockIndices.set(currentBlock, output.content.length - 1);
       pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
     }
-    currentBlock.thinking += reasoningDelta.text;
+    appendAssistantThinking(currentBlock, reasoningDelta.text);
     pushStreamEvent({
       type: "thinking_delta",
       contentIndex: blockIndex(),

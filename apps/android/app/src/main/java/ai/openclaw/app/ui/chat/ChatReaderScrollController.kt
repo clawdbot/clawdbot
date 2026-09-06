@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatReaderPosition
 import ai.openclaw.app.chat.ChatReaderPositionBinding
 import ai.openclaw.app.chat.ChatReaderPositionScope
+import ai.openclaw.app.chat.MAX_READER_POSITION_MESSAGE_VERSION_CHARS
 import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
 
 internal enum class ChatScrollFollowTarget {
   ReadAnchor,
@@ -341,12 +343,14 @@ internal fun restoredChatReaderTransition(
   position: ChatReaderPosition,
   ownerSessionKey: String? = null,
 ): ChatReaderTransition? {
-  // Gateway reloads can regenerate display IDs. The stable message version rebinds
-  // the same transcript row; removed anchors fall through to the current live-edge policy.
+  // A canonical entry is authoritative: equal text or a reused display ID cannot replace it.
+  // Older bookmarks without that identity may still rebind regenerated display IDs.
   val restoredIndex =
-    timeline.indexOfMessage(position.messageId)
-      ?: position.messageVersion?.let(timeline::indexOfMessageVersion)
-      ?: return null
+    if (position.entryId != null) {
+      timeline.indexOfEntryId(position.entryId)
+    } else {
+      timeline.indexOfMessage(position.messageId) ?: position.messageVersion?.let(timeline::indexOfMessageVersion)
+    } ?: return null
   val followsLatest = restoredIndex == timeline.latestContentIndex && position.itemOffset == 0
   return ChatReaderTransition(
     state =
@@ -482,10 +486,15 @@ internal fun ChatTimeline.readerPosition(
   offset: Int,
 ): ChatReaderPosition? {
   val message = (items.getOrNull(index) as? ChatTimelineItem.Message)?.message ?: return null
+  // Display mirrors borrow canonical IDs but are not durable transcript anchors.
+  if (message.isSyntheticDisplay) return null
+  // Canonical entries need no content-derived fallback: an oversized version must not
+  // invalidate their otherwise bounded bookmark.
   return ChatReaderPosition(
     messageId = message.id,
     itemOffset = offset,
-    messageVersion = stableMessageVersion(message),
+    messageVersion = if (message.entryId == null) readerMessageVersion(message) else null,
+    entryId = message.entryId,
   )
 }
 
@@ -499,12 +508,26 @@ internal fun ChatTimeline.readerPositionWrite(
 
 private fun ChatTimeline.indexOfMessage(id: String): Int? =
   items
-    .indexOfFirst { item -> item is ChatTimelineItem.Message && item.message.id == id }
+    .indexOfFirst { item -> item is ChatTimelineItem.Message && !item.message.isSyntheticDisplay && item.message.id == id }
     .takeIf { it >= 0 }
+
+private fun ChatTimeline.indexOfEntryId(entryId: String): Int? =
+  items
+    .indexOfFirst { item -> item is ChatTimelineItem.Message && !item.message.isSyntheticDisplay && item.message.entryId == entryId }
+    .takeIf { it >= 0 }
+
+private fun readerMessageVersion(message: ai.openclaw.app.chat.ChatMessage): String {
+  val version = stableMessageVersion(message)
+  // Keep already-persistable legacy fingerprints unchanged. Only versions that the store
+  // could never retain need a bounded digest; truncation could match a different message.
+  if (version.length <= MAX_READER_POSITION_MESSAGE_VERSION_CHARS) return version
+  val digest = MessageDigest.getInstance("SHA-256").digest(version.toByteArray(Charsets.UTF_8))
+  return "sha256:" + digest.joinToString("") { "%02x".format(it) }
+}
 
 private fun ChatTimeline.indexOfMessageVersion(version: String): Int? =
   items
-    .indexOfFirst { item -> item is ChatTimelineItem.Message && stableMessageVersion(item.message) == version }
+    .indexOfFirst { item -> item is ChatTimelineItem.Message && !item.message.isSyntheticDisplay && readerMessageVersion(item.message) == version }
     .takeIf { it >= 0 }
 
 private fun isAtTarget(

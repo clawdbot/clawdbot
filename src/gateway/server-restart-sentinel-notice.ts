@@ -42,6 +42,7 @@ import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
@@ -103,7 +104,7 @@ export function resolveGatewayLifecycleNoticeRoute(params: {
   };
 }
 
-/** Await one durable attempt; recovery retains failed custody without delaying shutdown. */
+/** Return bounded delivery status while managed scopes retain the complete attempt. */
 export async function sendGatewayLifecycleNotice(
   params: GatewayLifecycleNotice & {
     deps: CliDeps;
@@ -113,7 +114,8 @@ export async function sendGatewayLifecycleNotice(
   let delivered = false;
   try {
     await withTimeout(
-      (async () => {
+      // The response deadline does not end transport or commit-hook ownership.
+      trackAsyncWork(async () => {
         const queued = await enqueueGatewayLifecycleNotice(params, params.deliveryIntentId);
         if (!queued.created) {
           return;
@@ -128,7 +130,7 @@ export async function sendGatewayLifecycleNotice(
             delivered = true;
           },
         );
-      })(),
+      }),
       10_000,
       "update.run notice",
     );

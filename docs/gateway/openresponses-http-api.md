@@ -233,6 +233,8 @@ Security note: URL allowlists are enforced before fetch and on redirect hops. Al
 
 ## Streaming (SSE)
 
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream emits `response.failed` rather than completing with inconsistent content.
+
 Set `stream: true` to receive Server-Sent Events:
 
 - `Content-Type: text/event-stream`

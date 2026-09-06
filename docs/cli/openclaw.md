@@ -184,6 +184,11 @@ Discovery and read-only operations are not included. Secrets never appear in
 change history; config journal records contain changed paths rather than config
 values, and value comparison uses protected fingerprints.
 
+Config-write records retain the writer's origin label when supplied. Automatic
+startup config repairs record `origin: "doctor"` even when console output and
+runtime snapshot refresh are suppressed. Existing unlabeled records are not
+backfilled.
+
 Channel, web-search, and local Gateway setup can run as hosted conversations
 until they reach a secret. The local OpenClaw TUI does not accept sensitive wizard answers
 because terminal chat input is visible. It offers `open channel wizard`

@@ -4,6 +4,8 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReaderPosition
+import ai.openclaw.app.chat.ChatTranscriptAnchorState
+import ai.openclaw.app.chat.resolvesReaderHistory
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
@@ -22,6 +24,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatReaderScrollControllerTest {
+  @Test
+  fun authoritativeHistoryRequiresTheExactReaderScope() {
+    val anchor =
+      ChatTranscriptAnchorState(
+        gatewayId = "gateway-a",
+        ownerAgentId = "owner-a",
+        sessionKey = "main",
+        sessionId = "session-a",
+        newestItemId = "entry-a",
+        completedEndedAt = null,
+        completedNewestItemId = null,
+      )
+
+    assertTrue(anchor.resolvesReaderHistory("gateway-a", "owner-a", "main", "session-a"))
+    assertFalse(anchor.resolvesReaderHistory("gateway-b", "owner-a", "main", "session-a"))
+    assertFalse(anchor.resolvesReaderHistory("gateway-a", "owner-b", "main", "session-a"))
+    assertFalse(anchor.resolvesReaderHistory("gateway-a", "owner-a", "main", "session-b"))
+  }
+
   @Test
   fun cancellingViewportDebounceFlushesLatestPosition() =
     runTest {
@@ -159,6 +180,44 @@ class ChatReaderScrollControllerTest {
     assertEquals(3, restored.scrollIndex)
     assertEquals(29, restored.scrollOffset)
     assertTrue(restored.state.hasNewerContent)
+  }
+
+  @Test
+  fun persistedAssistantViewportRebindsCanonicalEntryIdBeforeContentFingerprint() {
+    val before =
+      timeline(
+        assistant("assistant-old-before", text = "same reply", entryId = "entry-old"),
+        assistant("assistant-new-before", text = "same reply", entryId = "entry-new"),
+      )
+    val saved = requireNotNull(before.readerPosition(index = 1, offset = 29))
+    val after =
+      timeline(
+        assistant("assistant-target-after", text = "same reply", entryId = "entry-old"),
+        assistant("assistant-old-before", text = "same reply", entryId = "entry-new"),
+      )
+
+    val restored = requireNotNull(restoredChatReaderTransition(after, saved))
+
+    assertEquals(1, restored.scrollIndex)
+    assertEquals(29, restored.scrollOffset)
+
+    // Neither a reused display ID nor an equal fingerprint can replace a missing canonical entry.
+    for (displayId in listOf("assistant-old-before", "regenerated-id")) {
+      val removed = timeline(assistant(displayId, text = "same reply", entryId = "entry-new"))
+      assertNull(restoredChatReaderTransition(removed, saved))
+    }
+  }
+
+  @Test
+  fun syntheticMirrorsCannotOwnCanonicalReaderPositions() {
+    val canonical = assistant("canonical", text = "reply", entryId = "entry-1")
+    val mirror = canonical.copy(id = "mirror", isSyntheticDisplay = true)
+    val saved = requireNotNull(timeline(canonical).readerPosition(0, 31))
+    val withMirror = timeline(canonical, mirror)
+
+    assertEquals(1, requireNotNull(restoredChatReaderTransition(withMirror, saved)).scrollIndex)
+    assertNull(withMirror.readerPosition(0, 31))
+    assertNull(restoredChatReaderTransition(timeline(mirror), saved))
   }
 
   @Test
@@ -542,7 +601,8 @@ class ChatReaderScrollControllerTest {
   private fun assistant(
     id: String,
     text: String = id,
-  ) = message(id, "assistant", text, timestampMs = null, idempotencyKey = null)
+    entryId: String? = null,
+  ) = message(id, "assistant", text, timestampMs = null, idempotencyKey = null, entryId = entryId)
 
   private fun message(
     id: String,
@@ -550,11 +610,13 @@ class ChatReaderScrollControllerTest {
     text: String,
     timestampMs: Long?,
     idempotencyKey: String?,
+    entryId: String? = null,
   ) = ChatMessage(
     id = id,
     role = role,
     content = listOf(ChatMessageContent(type = "text", text = text)),
     timestampMs = timestampMs,
     idempotencyKey = idempotencyKey,
+    entryId = entryId,
   )
 }

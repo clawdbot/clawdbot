@@ -847,7 +847,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
       role: "user",
       content: [
-        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
         { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
       ],
     });

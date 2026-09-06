@@ -1,9 +1,10 @@
 ---
-summary: "Show self-contained HTML widgets on supported chat surfaces"
+summary: "Show HTML widgets on supported chat surfaces or pin native data reports to dashboards"
 title: "Show widget"
 sidebarTitle: "Show widget"
 read_when:
   - You want an agent to render an interactive result in web chat, a native app, or Discord
+  - You want to pin a report with metrics, tables, charts, or links to a dashboard
   - You want widget buttons to send follow-up prompts into the chat
   - You want to theme widgets with the shared design tokens
   - You need the show_widget input, security, or retention contract
@@ -11,9 +12,11 @@ read_when:
 
 `show_widget` is a core tool that shows a self-contained HTML widget on the user's current surface. OpenClaw renders it inline in the Control UI and in iOS, Android, macOS, and Linux Quick Chat transcripts; the Linux dashboard uses the browser Control UI. In a Discord session with [Activities](/channels/discord-activities) enabled, the Discord plugin posts an **Open widget** button that launches it as an Activity.
 
+For a pinned data report, provide a structured `report` with `pin: true`. Reports render directly in the Control UI dashboard using its native typography and layout, without a document frame. Use HTML for arbitrary interactive content or an inline preview. See [Native dashboard reports](#native-dashboard-reports).
+
 ## How widgets work
 
-When the agent calls `show_widget`, OpenClaw core validates `widget_code` and wraps it once in the canonical HTML document. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
+For HTML widgets, OpenClaw core validates `widget_code` and wraps it once in the canonical HTML document. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
 
 Channel plugins can register a contextual presenter behind the same core tool. In a configured Discord session, core hands the composed document to the Discord presenter, which stores it and posts the Activity button in the current channel. The model still makes one `show_widget` call; there is no transport-specific widget tool or content kind.
 
@@ -83,21 +86,26 @@ Author widgets with four rules:
 
 ## Use the tool
 
-The core tool uses these required fields on every destination:
+The core tool requires `title` and one content input: `widget_code` for HTML or registered source, or `report` for a native dashboard report.
 
 <ParamField path="title" type="string" required>
-  Short title shown with the inline preview and in the hosted document title. Discord accepts up to 80 characters.
+  Short widget title shown by the destination surface. HTML documents also use it as the document title. Discord accepts up to 80 characters.
 </ParamField>
 
-<ParamField path="widget_code" type="string" required>
-  Self-contained HTML or SVG. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. The Discord presenter accepts HTML source up to 48 KiB. A Discord-only route does not advertise or accept registered non-HTML content kinds.
+<ParamField path="widget_code" type="string">
+  Required for HTML, SVG, or registered source; omit when providing `report`. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. The Discord presenter accepts HTML source up to 48 KiB. A Discord-only route does not advertise or accept registered non-HTML content kinds.
+</ParamField>
+
+<ParamField path="report" type="object">
+  Structured native report with a `blocks` array. Requires `pin: true`; omit `widget_code`, `kind`, and `capabilities`. Device presentation is unavailable. Maximum 8KB of UTF-8 JSON. See [Native dashboard reports](#native-dashboard-reports).
 </ParamField>
 
 Discord also accepts optional `button_label` text for the Activity launch button. The Canvas schema intentionally omits this Discord-only field.
 
 The core `show_widget` tool also accepts these optional dashboard placement fields, including when Discord is the presentation destination:
 
-- `pin`: also place the widget on the session dashboard. Required on the pinned-only scheduled surface.
+- `kind`: `html` by default, plus active registered source kinds when available. Applies to `widget_code`; omit with `report`.
+- `pin`: also place an HTML or registered widget on the session dashboard. Required for reports and on the pinned-only scheduled surface.
 - `name`: stable widget name; defaults to a slug of `title`.
 - `tab`: destination tab slug.
 - `size`: one of `sm`, `md`, `lg`, `xl`, or `full`.
@@ -114,6 +122,51 @@ Pinned results also report `capabilityState`: `none`, `pending`, `rejected`, or
 operator before retrying. The inline preview does not inherit dashboard grants.
 
 If current-channel presentation fails, core falls back inline only when the originating client actually supports inline widgets. Otherwise the tool fails visibly. When `pin: true` succeeded before presentation failed, the result is explicitly partial and names the durable board widget; presentation failure never rolls back that unrelated board state.
+
+## Native dashboard reports
+
+Use a report for a pinned summary made of text, metrics, tables, simple charts, and links. Provide the report object directly in `report`:
+
+```json
+{
+  "title": "Weekly delivery report",
+  "name": "weekly-delivery",
+  "pin": true,
+  "size": "lg",
+  "report": {
+    "blocks": [
+      {
+        "type": "metrics",
+        "items": [{ "label": "Completed", "value": "24", "detail": "This week" }]
+      },
+      {
+        "type": "table",
+        "columns": ["Team", "Completed"],
+        "rows": [
+          ["Platform", "14"],
+          ["Product", "10"]
+        ]
+      }
+    ]
+  }
+}
+```
+
+The result names the pinned board widget; it creates no inline preview, native device panel, or Discord Activity. Do not combine `report` with `widget_code`, `kind`, `capabilities`, or device presentation. The report field does not change the registered source-kind namespace.
+
+Each block has a required `type`:
+
+| Type      | Fields and limits                                                                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `text`    | `text` (1–4,000 characters), optional `title`. Text is plain text.                                                                                          |
+| `metrics` | `items`: 1–8 objects with `label`, string `value` (1–80 characters), and optional `detail`.                                                                 |
+| `table`   | `columns`: 1–8 labels; `rows`: up to 40 arrays of string cells. Every row must match the column count; cells have at most 500 characters. Optional `title`. |
+| `chart`   | `points`: 1–40 objects with `label` and finite numeric `value`; optional `style` (`bar`, the default, or `line`) and `title`.                               |
+| `links`   | `items`: 1–20 objects with `label`, HTTP(S) `url`, and optional `detail`. Optional `title`.                                                                 |
+
+A report contains 1–24 blocks and at most 8KB of encoded JSON. Titles have 1–120 characters, labels 1–160, details at most 240, and URLs at most 2,048. Chart values stay between `-Number.MAX_SAFE_INTEGER` and `Number.MAX_SAFE_INTEGER`. Unknown fields are rejected. Reports accept no HTML, CSS, scripts, media, executable actions, network reads, or Gateway RPCs; links are ordinary navigation.
+
+Reuse the same `name` and `pin: true` with a new `report` object to replace a report's data. The `dashboard` tool can also create or update it with `action: "widget_put"`, `pluginKind: "session:report"`, and `props: report`. To convert an existing HTML widget, first remove it with `dashboard` action `widget_remove`, then create the report. A same-name update cannot change the widget's content owner.
 
 ## Show on a device
 
@@ -142,7 +195,7 @@ Accepted prompts appear in the transcript as regular user messages and start a n
 
 ## Dashboard capabilities
 
-Pinned widgets expose one ticket-bound host API. An explicit [session permission mode](/gateway/permission-modes) determines how declared capabilities are approved: **Full access** grants them immediately; **Workspace** uses an AI reviewer and rejects anything it does not allow; **Guarded** shows an **Allow** / **Reject** card; **Read only** rejects them. Without an explicit session mode, the equivalent configured exec approval policy applies.
+Pinned HTML and registered-source widgets expose one ticket-bound host API. An explicit [session permission mode](/gateway/permission-modes) determines how declared capabilities are approved: **Full access** grants them immediately; **Workspace** uses an AI reviewer and rejects anything it does not allow; **Guarded** shows an **Allow** / **Reject** card; **Read only** rejects them. Without an explicit session mode, the equivalent configured exec approval policy applies.
 
 - `openclaw.host.controlUiBaseUrl` exposes the Control UI origin plus its configured base path after the dashboard host initializes. It is `null` before initialization and outside the dashboard, so read it in the link's click handler rather than when the widget script first runs.
 - `openclaw.prompt.send(text)` requires transient user activation and posts a visible composer message. Declaring and receiving the `prompt` tool grant skips the extra per-click confirmation; validation, focus checks, and rate limits still apply.

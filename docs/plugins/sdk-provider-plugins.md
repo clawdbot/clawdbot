@@ -794,6 +794,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `prepareExtraParams` | Default request params |
       | `createStreamFn` | Fully custom StreamFn transport |
       | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | `reconcileLocalService` | Cheap, idempotent managed-service repair after health and before every request |
       | `resolveTransportTurnState` | Native per-turn headers/metadata and WebSocket headers/cool-down |
       | `resolveWebSocketSessionPolicy` | Deprecated WebSocket compatibility hook; use `resolveTransportTurnState` |
       | `formatApiKey` | Custom runtime token shape |
@@ -818,6 +819,11 @@ catalog, API-key auth, and dynamic model resolution.
       | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
       | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
       | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+
+      `reconcileLocalService` is called only for a configured local service,
+      including a healthy process reused by a restarted Gateway. Honor its
+      abort signal and reject when reconciliation fails; OpenClaw blocks the
+      provider request and releases the request lease.
 
       Runtime fallback notes:
 

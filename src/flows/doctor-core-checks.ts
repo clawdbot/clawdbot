@@ -1133,9 +1133,11 @@ const browserCheck: HealthCheck = {
     }
     const result = await maybeRepairOwnedChromeExtensionNativeHosts();
     return {
-      ...(result.changes.length === 0 && result.warnings.length > 0
-        ? { status: "failed" as const, reason: result.warnings.join("; ") }
-        : {}),
+      ...(result.status
+        ? { status: result.status, reason: result.reason }
+        : result.changes.length === 0 && result.warnings.length > 0
+          ? { status: "failed" as const, reason: result.warnings.join("; ") }
+          : {}),
       changes: result.changes,
       warnings: result.warnings,
     };

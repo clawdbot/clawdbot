@@ -143,6 +143,7 @@ export class DiscordVoiceReceive {
     let streamAborted = false;
     let receiveFailureHandled = false;
     let receiveStreamEndHandled = false;
+    let pendingWavCleanup: (() => Promise<void>) | undefined;
     const handleStreamError = (err: unknown) => {
       const analysis = analyzeVoiceReceiveError(err);
       if (analysis.isAbortLike && !analysis.countsAsDecryptFailure) {
@@ -238,7 +239,8 @@ export class DiscordVoiceReceive {
         return;
       }
       this.resetDecryptFailureState(entry);
-      const { path: wavPath, durationSeconds } = await writeVoiceWavFile(pcm);
+      const { path: wavPath, durationSeconds, cleanup } = await writeVoiceWavFile(pcm);
+      pendingWavCleanup = cleanup;
       if (!this.params.isEntryCurrent(entry)) {
         return;
       }
@@ -252,8 +254,10 @@ export class DiscordVoiceReceive {
       logVoiceVerbose(
         `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
-      entry.processingQueue = entry.processingQueue
-        .then(async () => {
+      const previousProcessing = entry.processingQueue;
+      entry.processingQueue = (async () => {
+        try {
+          await previousProcessing;
           if (!this.params.isEntryCurrent(entry)) {
             return;
           }
@@ -261,10 +265,14 @@ export class DiscordVoiceReceive {
             return;
           }
           await this.processSegment({ entry, wavPath, userId, durationSeconds });
-        })
-        .catch((err: unknown) =>
-          logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`),
-        );
+        } finally {
+          await cleanup();
+        }
+      })().catch((err: unknown) =>
+        logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`),
+      );
+      // Processing owns the WAV until its queue work settles, even after this receive stream ends.
+      pendingWavCleanup = undefined;
     } catch (err) {
       if (!receiveFailureHandled) {
         this.handleReceiveError(entry, err);
@@ -277,6 +285,7 @@ export class DiscordVoiceReceive {
       if (finishedActiveCapture && stream && !stream.destroyed) {
         stream.destroy();
       }
+      await pendingWavCleanup?.();
     }
   }
 

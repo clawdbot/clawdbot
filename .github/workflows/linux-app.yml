@@ -88,6 +88,11 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Test packaged runtime ABI scanner
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s apps/linux/tests -p 'test_packaged_runtime_smoke.py'
+
       - name: Check Rust formatting
         working-directory: apps/linux/src-tauri
         run: cargo +stable fmt --check

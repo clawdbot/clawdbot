@@ -794,11 +794,11 @@ create_or_update_github_release() {
         return 0
       fi
     fi
+    # Latest promotion is invalid while this existing release remains a draft.
     gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --title "${title}" \
       --notes-file "${prepared_release_notes_file}" \
-      "${prerelease_arg}" \
-      "${latest_arg}"
+      "${prerelease_arg}"
   else
     gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --verify-tag \

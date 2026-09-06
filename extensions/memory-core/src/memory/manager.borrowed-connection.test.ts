@@ -17,8 +17,7 @@ describe("memory manager shared agent connection", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
-  const createConfig = () =>
-    fixture.createConfig({ provider: "none", vectorEnabled: false, onSearch: false });
+  const createConfig = () => fixture.createConfig({ provider: "none", vectorEnabled: false });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -77,7 +76,6 @@ describe("memory manager shared agent connection", () => {
         provider: "none",
         vectorEnabled: false,
         minScore: 0.1,
-        onSearch: false,
       }),
     );
 

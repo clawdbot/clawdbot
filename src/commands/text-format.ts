@@ -8,7 +8,11 @@ export const shortenText = (value: string, maxLen: number) => {
   if (maxLen <= 0) {
     return "";
   }
-  const chars = Array.from(value);
+  if (value.length <= maxLen) {
+    return value;
+  }
+  // Include an overflow code point; each point occupies at most two UTF-16 units.
+  const chars = Array.from(value.slice(0, (maxLen + 1) * 2));
   return chars.length <= maxLen ? value : `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
 };
 

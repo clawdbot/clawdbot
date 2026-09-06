@@ -1407,6 +1407,54 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ).not.toContain("gpt-5.6-sol/medium");
   });
 
+  it.each([
+    { thinking: "off", expectedEffort: undefined },
+    { thinking: "low", expectedEffort: "low" },
+    { thinking: undefined, expectedEffort: "high" },
+  ])(
+    "honors explicit thinking=$thinking over Codex ACP model suffixes",
+    async ({ thinking, expectedEffort }) => {
+      const save = vi.fn<TestSessionStore["save"]>(async () => {});
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => undefined),
+        save,
+      };
+      const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: makeLeaseStore().store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+        agentRegistry: {
+          resolve: () => CODEX_ACP_WRAPPER_COMMAND,
+          list: () => ["codex"],
+        },
+      });
+      vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+        await wrappedStore.save({ name: input.sessionKey, cwd: "/tmp", pid: 777 });
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: input.sessionKey,
+        };
+      });
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:test",
+        agent: "codex",
+        mode: "persistent",
+        model: "openai/gpt-5.6-luna/high",
+        thinking,
+      });
+
+      const [record] = save.mock.calls[0]!;
+      expect(record.agentCommand).toContain('"model":"gpt-5.6-luna"');
+      if (expectedEffort) {
+        expect(record.agentCommand).toContain(`"model_reasoning_effort":"${expectedEffort}"`);
+      } else {
+        expect(record.agentCommand).not.toContain("model_reasoning_effort");
+      }
+    },
+  );
+
   it("starts Codex ACP without injecting a leaked non-openai default model", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

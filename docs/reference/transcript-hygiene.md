@@ -50,7 +50,7 @@ TUI, REST, or SSE clients.
 
 ## Where this runs
 
-All transcript hygiene is centralized in the embedded runner:
+The embedded runner selects and applies transcript policy:
 
 - Policy selection: `src/agents/transcript-policy.ts`
   (`resolveTranscriptPolicy`, keyed on `provider`, `modelApi`, and `modelId`)
@@ -107,6 +107,12 @@ extras are dropped and missing occurrences receive synthetic error results.
 
 Implementation: `sanitizeToolUseResultPairing` in
 `src/agents/session-transcript-repair.ts`
+
+When switching models, provider replay moves delayed asynchronous tool results
+next to their originating call before removing the source model's async metadata.
+Call and result IDs are trimmed before matching, so surrounding whitespace does
+not turn a real result into a synthetic missing-result error. This projection
+runs in `packages/ai/src/transcript-transform.ts` and leaves stored history intact.
 
 ---
 

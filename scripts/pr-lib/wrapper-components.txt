@@ -16,7 +16,6 @@ scripts/lib/merge-head-diff-base.mjs
 scripts/lib/numeric-options.mjs
 scripts/lib/record-shared.mjs
 scripts/lib/repo-root.mjs
-scripts/lib/test-projects-delegation.mts
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/vitest-build-prerequisites.mts
 scripts/lib/vitest-cli-mode.mts

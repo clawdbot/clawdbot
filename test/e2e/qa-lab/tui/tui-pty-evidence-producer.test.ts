@@ -22,7 +22,9 @@ const HARNESS_FILE = "src/tui/tui-pty-harness.e2e.test.ts";
 const LOCAL_FILE = "src/tui/tui-pty-local.e2e.test.ts";
 const RESET_FILE = "src/tui/tui-reset-transition-pty.e2e.test.ts";
 const COVERAGE_ID = "tui.message-composition";
-const TEST_NAME = "TUI PTY harness drives the real TUI terminal loop";
+const TEST_SUITE = "TUI PTY harness";
+const TEST_TITLE = "drives the real TUI terminal loop";
+const TEST_NAME = `${TEST_SUITE} > ${TEST_TITLE}`;
 const TEST_PATTERN = `^${TEST_NAME}$`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
@@ -96,13 +98,11 @@ async function writeBuiltCliArtifacts(repoRoot: string, entry: "entry.js" | "ent
 async function writeReport(
   reportPath: string,
   params: {
-    assertionName?: string;
     failed?: number;
     passed?: number;
     testFile?: string;
   } = {},
 ) {
-  const assertionName = params.assertionName ?? TEST_NAME;
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   await fs.writeFile(
     reportPath,
@@ -115,7 +115,14 @@ async function writeReport(
           name: params.testFile ?? HARNESS_FILE,
           assertionResults:
             (params.passed ?? 1) > 0
-              ? [{ fullName: assertionName, status: "passed", title: assertionName }]
+              ? [
+                  {
+                    ancestorTitles: [TEST_SUITE],
+                    fullName: `${TEST_SUITE} ${TEST_TITLE}`,
+                    status: "passed",
+                    title: TEST_TITLE,
+                  },
+                ]
               : [],
         },
       ],
@@ -295,7 +302,9 @@ describe("TUI PTY evidence producer", () => {
           testResults: [
             {
               name: RESET_FILE,
-              assertionResults: [{ fullName: TEST_NAME, status: "passed" }],
+              assertionResults: [
+                { ancestorTitles: [TEST_SUITE], title: TEST_TITLE, status: "passed" },
+              ],
             },
           ],
         },
@@ -312,7 +321,9 @@ describe("TUI PTY evidence producer", () => {
           testResults: [
             {
               name: HARNESS_FILE,
-              assertionResults: [{ fullName: "another assertion", status: "passed" }],
+              assertionResults: [
+                { ancestorTitles: [], title: "another assertion", status: "passed" },
+              ],
             },
           ],
         },

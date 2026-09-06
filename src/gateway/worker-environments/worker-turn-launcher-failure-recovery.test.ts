@@ -12,7 +12,6 @@ import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-se
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
-import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
 import {
@@ -411,8 +410,12 @@ describe("worker turn launcher failure recovery", () => {
         error: STALE_WORKER_BUILD_REASON,
       };
     });
-    const environments: WorkerTurnEnvironmentService & WorkerDispatchEnvironmentService = {
+    const environments: WorkerTurnEnvironmentService &
+      Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
       ...unusedEnvironments(),
+      recordError: vi.fn(() => {
+        throw new Error("unexpected provisioning interruption");
+      }),
       supportsProviderExecutionMode: vi.fn(() => true),
       get: vi.fn(() => environment),
       acquireTurnCredential: vi.fn(async () => credential()),

@@ -1057,7 +1057,15 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
   const { storePath } = await createSessionStoreDir();
   try {
     const durableParentKey = "main";
-    await writeSessionStore({ entries: { main: sessionStoreEntry("durable-parent") } });
+    const savedPrompt = "unrelated durable prompt for incognito existence checks";
+    await writeSessionStore({
+      entries: {
+        main: {
+          ...sessionStoreEntry("durable-parent"),
+          skillsSnapshot: { prompt: savedPrompt, skills: [] },
+        },
+      },
+    });
     const created = await directSessionReq<{
       key: string;
       entry: {
@@ -1268,18 +1276,24 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
         "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('durable-collision', ?, 'conversation', ?, ?)",
       )
       .run(durableCollisionKey, durableCollisionUpdatedAt, durableCollisionUpdatedAt);
-    const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
-      agentId: "main",
-      key: durableCollisionKey,
-      incognito: true,
-    });
-    expect(rejectedExplicitDashboard).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "incognito is immutable and requires a new session key",
-      },
-    });
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
+        agentId: "main",
+        key: durableCollisionKey,
+        incognito: true,
+      });
+      expect(parse.mock.calls.some(([json]) => json.includes(savedPrompt))).toBe(false);
+      expect(rejectedExplicitDashboard).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "incognito is immutable and requires a new session key",
+        },
+      });
+    } finally {
+      parse.mockRestore();
+    }
   } finally {
     closeOpenClawAgentDatabasesForTest();
   }

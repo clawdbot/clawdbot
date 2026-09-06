@@ -105,11 +105,26 @@ data class SessionEditorAttachment(
 )
 
 data class ChatTranscriptAnchorState(
+  val gatewayId: String?,
+  val ownerAgentId: String,
   val sessionKey: String,
+  val sessionId: String?,
   val newestItemId: String?,
   val completedEndedAt: Long?,
   val completedNewestItemId: String?,
 )
+
+internal fun ChatTranscriptAnchorState?.resolvesReaderHistory(
+  gatewayId: String?,
+  ownerAgentId: String,
+  sessionKey: String,
+  sessionId: String?,
+): Boolean =
+  this != null &&
+    this.gatewayId == gatewayId &&
+    this.ownerAgentId == ownerAgentId &&
+    this.sessionKey == sessionKey &&
+    this.sessionId == sessionId
 
 /**
  * One content part in a chat message; media carries either bounded base64 or a managed artifact reference.

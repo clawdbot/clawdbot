@@ -150,6 +150,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           replyOptions: {
             skillFilter: context.skillFilter,
             disableBlockStreaming: turn.disableBlockStreaming,
+            preserveProgressCallbackStartOrder: true,
             abortSignal: turn.turnAdoptionLifecycle?.abortSignal,
             turnAdoptionLifecycle: turn.turnAdoptionLifecycle
               ? {

@@ -765,6 +765,12 @@ truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
 
+For small context windows, the OpenClaw embedded runtime further shortens the
+descriptions in the already-admitted catalog. It retains every admitted name,
+location, and loading note, even when these exceed the description budget.
+Full skill instructions and saved snapshots are unchanged; Code Mode can still
+read every admitted skill. Native harnesses retain their own prompt policy.
+
 ## Related
 
 <CardGroup cols={2}>

@@ -799,47 +799,84 @@ describe("config io write", () => {
     },
   );
 
-  itWithHome("rejects destructive internal writes before replacing the config", async (home) => {
-    const configPath = configPathForHome(home);
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    const original = {
-      gateway: { mode: "local" },
-      channels: { telegram: { enabled: true, dmPolicy: "pairing" } },
-      agents: { entries: { main: { default: true, workspace: "/tmp/openclaw-main" } } },
-      tools: { profile: "messaging" },
-      commands: { restart: false },
-    } satisfies ConfigFileSnapshot["config"];
-    const originalRaw = formatConfig(original);
-    await fs.writeFile(configPath, originalRaw, "utf-8");
-    const warn = vi.fn();
-    const io = createHomeConfigIO(home, {
-      env: { VITEST: "true" } as NodeJS.ProcessEnv,
-      logger: { warn, error: vi.fn() },
-    });
-    const baseSnapshot = createExistingConfigSnapshot(configPath, original, originalRaw);
-
-    await expectConfigWriteRejected(
-      io.writeConfigFile(
-        { update: { channel: "beta" } },
-        {
-          baseSnapshot,
-        },
-      ),
-    );
-
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
-    const entries = await fs.readdir(path.dirname(configPath));
-    const rejectedEntries = entries.filter((entry) => entry.includes(".rejected."));
-    expect(rejectedEntries).toHaveLength(1);
-    expect(warn.mock.calls).toEqual([
-      [
-        `Config write rejected: ${configPath} (gateway-mode-removed). Rejected payload saved to ${path.join(
-          path.dirname(configPath),
-          rejectedEntries[0] ?? "",
-        )}.`,
-      ],
-    ]);
-  });
+  it.each(["success", "EACCES", "EEXIST"] as const)(
+    "reports the rejected payload save outcome accurately: %s",
+    async (outcome) => {
+      await withSuiteHome(async (home) => {
+        const original = { gateway: { mode: "local" } } satisfies OpenClawConfig;
+        const { configPath, raw: originalRaw } = await writeConfigFixture(home, original);
+        const previousPayload = "previous rejected payload\n";
+        const warn = vi.fn();
+        const io = createHomeConfigIO(home, {
+          env: { VITEST: "true" } as NodeJS.ProcessEnv,
+          logger: { warn, error: vi.fn() },
+          fs: {
+            ...fsNode,
+            promises: {
+              ...fsNode.promises,
+              writeFile: async (target, data, options) => {
+                if (typeof target === "string" && target.includes(".rejected.")) {
+                  if (outcome === "EACCES") {
+                    throw Object.assign(new Error("EACCES: permission denied"), { code: outcome });
+                  }
+                  if (outcome === "EEXIST") {
+                    await fs.writeFile(target, previousPayload);
+                  }
+                }
+                return fsNode.promises.writeFile(target, data, options);
+              },
+            },
+          },
+        });
+        const baseSnapshot = createExistingConfigSnapshot(configPath, original, originalRaw);
+        let rejection: Record<string, unknown> | undefined;
+        try {
+          await io.writeConfigFile({ update: { channel: "beta" } }, { baseSnapshot });
+        } catch (error) {
+          rejection = requireRecord(error, "config write rejection");
+        }
+        expect(rejection).toMatchObject({
+          code: "CONFIG_WRITE_REJECTED",
+          reasons: ["gateway-mode-removed"],
+        });
+        expect(warnMessages(warn)).toEqual([rejection?.message]);
+        const audit = listConfigAuditRecordsForTests({ env: io.env, homedir: () => home }).find(
+          (record) => record.event === "config.write" && record.configPath === configPath,
+        );
+        expect(audit).toMatchObject({
+          result: "rejected",
+          errorCode: "CONFIG_WRITE_REJECTED",
+          errorMessage: rejection?.message,
+          nextHash: null,
+          nextBytes: null,
+        });
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(originalRaw);
+        const artifacts = (await fs.readdir(path.dirname(configPath))).filter((entry) =>
+          entry.includes(".rejected."),
+        );
+        if (outcome === "success") {
+          expect(artifacts).toHaveLength(1);
+          const savedPath = path.join(path.dirname(configPath), artifacts[0]!);
+          expect(rejection).toHaveProperty("rejectedPath", savedPath);
+          expect(rejection?.message).toContain(`Rejected payload saved to ${savedPath}.`);
+          expect(JSON.parse(await fs.readFile(savedPath, "utf8"))).toMatchObject({
+            update: { channel: "beta" },
+          });
+        } else {
+          expect(rejection).not.toHaveProperty("rejectedPath");
+          expect(rejection?.message).toContain("Rejected payload could not be saved to");
+          expect(rejection?.message).toContain(outcome);
+          expect(rejection?.message).not.toContain("Rejected payload saved to");
+          expect(artifacts).toHaveLength(outcome === "EEXIST" ? 1 : 0);
+          if (outcome === "EEXIST") {
+            await expect(
+              fs.readFile(path.join(path.dirname(configPath), artifacts[0]!), "utf8"),
+            ).resolves.toBe(previousPayload);
+          }
+        }
+      });
+    },
+  );
 
   itWithHome(
     "does not preflight runtime secrets before rejecting blocked root writes",
@@ -3398,72 +3435,99 @@ gateway: { mode: "local", port: 18789 }
     await expect(fs.readFile(configPath, "utf-8")).resolves.not.toContain("operator note");
   });
 
-  itWithHome(
-    "records capped changed paths, origin, and the latest redacted source snapshot",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      const originalVars = Object.fromEntries(
-        Array.from({ length: 70 }, (_, index) => [
-          `SETTING_${index.toString().padStart(2, "0")}`,
-          "before",
-        ]),
-      );
-      const nextVars = Object.fromEntries(Object.keys(originalVars).map((key) => [key, "after"]));
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        formatConfig({ env: { vars: originalVars }, gateway: { port: 18789 } }),
-      );
-      const io = createFastConfigIO(home);
-      const snapshot = await io.readConfigFileSnapshot();
-      const nextConfig = structuredClone(snapshot.config);
-      nextConfig.env = { ...nextConfig.env, vars: nextVars };
+  for (const auditOrigin of ["doctor", "config-rpc", undefined] as const) {
+    itWithHome(
+      `records runtime write audit origin ${auditOrigin ?? "omitted"} with changed paths and snapshot hashes`,
+      async (home) => {
+        const configPath = configPathForHome(home);
+        const originalVars = Object.fromEntries(
+          Array.from({ length: 70 }, (_, index) => [
+            `SETTING_${index.toString().padStart(2, "0")}`,
+            "before",
+          ]),
+        );
+        const nextVars = Object.fromEntries(Object.keys(originalVars).map((key) => [key, "after"]));
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(
+          configPath,
+          formatConfig({ env: { vars: originalVars }, gateway: { port: 18789 } }),
+        );
+        const io = createFastConfigIO(home);
+        const snapshot = await io.readConfigFileSnapshot();
+        const nextConfig = structuredClone(snapshot.config);
+        nextConfig.env = { ...nextConfig.env, vars: nextVars };
 
-      const result = await io.writeConfigFile(nextConfig, { auditOrigin: "doctor" });
+        const result = await withEnvAsync(
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+            OPENCLAW_TEST_FAST: "1",
+          },
+          () =>
+            writeConfigFile(nextConfig, {
+              baseSnapshot: snapshot,
+              expectedConfigPath: configPath,
+              auditOrigin,
+              afterWrite: { mode: "none", reason: "automatic migration" },
+              skipOutputLogs: true,
+              skipRuntimeSnapshotRefresh: true,
+            }),
+        );
 
-      const record = listConfigAuditRecordsForTests({
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-      })
-        .filter((candidate) => candidate.event === "config.write")
-        .findLast((candidate) => candidate.configPath === configPath);
-      expect(record).toMatchObject({
-        event: "config.write",
-        origin: "doctor",
-        changedPathCount: 70,
-      });
-      if (!record || record.event !== "config.write") {
-        throw new Error("expected config write audit record");
-      }
-      expect(record.changedPaths).toHaveLength(64);
-      expect(record.changedPaths?.at(-1)).toBe("…+7 more");
-      expect(record.changedPaths?.slice(0, 2)).toEqual([
-        "env.vars.SETTING_00",
-        "env.vars.SETTING_01",
-      ]);
+        const record = listConfigAuditRecordsForTests({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+        })
+          .filter((candidate) => candidate.event === "config.write")
+          .findLast((candidate) => candidate.configPath === configPath);
+        expect(record).toMatchObject({
+          event: "config.write",
+          configPath,
+          result: "rename",
+          previousHash: snapshot.hash,
+          nextHash: result.persistedHash,
+          // The runtime writer also records its managed plugins.installs removal.
+          changedPathCount: 71,
+        });
+        if (!record || record.event !== "config.write") {
+          throw new Error("expected config write audit record");
+        }
+        if (auditOrigin) {
+          expect(record.origin).toBe(auditOrigin);
+        } else {
+          expect(record).not.toHaveProperty("origin");
+        }
+        expect((await io.readConfigFileSnapshot()).hash).toBe(result.persistedHash);
+        expect(record.changedPaths).toHaveLength(64);
+        expect(record.changedPaths?.at(-1)).toBe("…+8 more");
+        expect(record.changedPaths?.slice(0, 2)).toEqual([
+          "env.vars.SETTING_00",
+          "env.vars.SETTING_01",
+        ]);
 
-      const slot = readConfigSnapshotAuditRecord({
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        configPath,
-      });
-      expect(slot).toMatchObject({ configPath, rawHash: result.persistedHash });
-      if (!slot) {
-        throw new Error("expected snapshot slot");
-      }
-      // The slot is diff-only, so every leaf is fingerprinted.
-      const slotVars =
-        (slot.fingerprintedAuthoredConfig as { env?: { vars?: Record<string, string> } }).env
-          ?.vars ?? {};
-      expect(Object.keys(slotVars)).toHaveLength(70);
-      for (const [name, value] of Object.entries(slotVars)) {
-        expect(value, name).toMatch(/^fp:[0-9a-f]{12}$/);
-      }
-      expect(
-        (slot.fingerprintedAuthoredConfig as { gateway?: { port?: string } }).gateway?.port,
-      ).toMatch(/^fp:[0-9a-f]{12}$/);
-    },
-  );
+        const slot = readConfigSnapshotAuditRecord({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          configPath,
+        });
+        expect(slot).toMatchObject({ configPath, rawHash: result.persistedHash });
+        if (!slot) {
+          throw new Error("expected snapshot slot");
+        }
+        // The slot is diff-only, so every leaf is fingerprinted.
+        const slotVars =
+          (slot.fingerprintedAuthoredConfig as { env?: { vars?: Record<string, string> } }).env
+            ?.vars ?? {};
+        expect(Object.keys(slotVars)).toHaveLength(70);
+        for (const [name, value] of Object.entries(slotVars)) {
+          expect(value, name).toMatch(/^fp:[0-9a-f]{12}$/);
+        }
+        expect(
+          (slot.fingerprintedAuthoredConfig as { gateway?: { port?: string } }).gateway?.port,
+        ).toMatch(/^fp:[0-9a-f]{12}$/);
+      },
+    );
+  }
 
   itWithHome(
     "journals an offline edit before a later config write replaces the snapshot slot",

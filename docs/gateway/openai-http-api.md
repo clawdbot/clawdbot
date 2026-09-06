@@ -228,6 +228,8 @@ After receiving `tool_calls`, execute the requested function(s) and send a follo
 
 ## Streaming (SSE)
 
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream reports an error rather than completing with inconsistent content.
+
 Set `stream: true` to receive Server-Sent Events:
 
 - `Content-Type: text/event-stream`

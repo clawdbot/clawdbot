@@ -44,7 +44,7 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
-  /** The root result may settle before its independently owned descendants exit. */
+  /** Join the adapter's native ownership boundary; deliberately detached outsiders are excluded. */
   waitForExtinction?: () => Promise<void>;
   cancel: (reason?: TerminationReason) => void;
   /** Stop every decoded, raw, captured, and output-clock update for this run. */
@@ -81,6 +81,10 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   supportsRawOutput: boolean;
   onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
+  onExit?: (listener: (code: number | null, signal: WaitSignal) => void) => void;
+  onError?: (
+    listener: (error: Error, source: "process" | "stdin" | "stdout" | "stderr") => void,
+  ) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
   waitForExtinction?: () => Promise<void>;
   kill: (signal?: NodeJS.Signals) => void;
@@ -88,6 +92,8 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
 };
 
 type SpawnBaseInput = {
+  /** The local subprocess transports execution owned outside its local process tree. */
+  cleanupOwnership?: "external";
   /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
   assertCurrent?: () => void;
   runId?: string;
@@ -140,6 +146,11 @@ type SpawnAnchoredShellInput = SpawnBaseInput & {
 export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
 
 export interface ProcessSupervisor {
+  /** Register before spawning; close caller admission before joining this exact cleanup owner. */
+  acquireScopeCleanup(
+    scopeKey: string,
+    options: { requireProcessTree: boolean },
+  ): () => Promise<void>;
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;

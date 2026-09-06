@@ -28,7 +28,7 @@ suite.define(() => {
       kind: "image",
       source: "/projects/chat-worktree/.openclaw/tmp/review/preview.png",
       ticket: "ticket-project-image",
-      roots: ["/tmp/openclaw"],
+      revalidatePolicy: true,
     },
     {
       kind: "image",
@@ -47,7 +47,7 @@ suite.define(() => {
       structured: true,
     },
   ] as const)(
-    "renders local assistant $kind through server metadata before preview roots load",
+    "renders local assistant $kind through server metadata",
     async ({ kind, source: fixtureSource, ticket, ...options }) => {
       const source =
         "structured" in options
@@ -109,9 +109,6 @@ suite.define(() => {
       });
 
       const gateway = await installMockGateway(page, {
-        ...("roots" in options && options.roots
-          ? { localMediaPreviewRoots: [...options.roots] }
-          : {}),
         historyMessages: [
           kind === "image"
             ? {
@@ -173,7 +170,7 @@ suite.define(() => {
             .toBe(180);
         }
 
-        if ("roots" in options) {
+        if ("revalidatePolicy" in options) {
           mediaAllowed = false;
           await gateway.emitGatewayEvent("config.changed", { hash: "workspace-protected" });
           await page.getByRole("button", { name: "Allow image", exact: true }).waitFor();
@@ -233,71 +230,68 @@ suite.define(() => {
       reason: "File not found",
       source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
     },
-  ] as const)(
-    "keeps server-rejected $code media blocked before preview roots load",
-    async ({ code, reason, source }) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
-      const page = await context.newPage();
-      const requestedMediaUrls: URL[] = [];
+  ] as const)("keeps server-rejected $code media blocked", async ({ code, reason, source }) => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const requestedMediaUrls: URL[] = [];
 
-      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-        const request = route.request();
-        const url = new URL(request.url());
-        requestedMediaUrls.push(url);
-        expect(url.searchParams.get("source")).toBe(source);
-        expect(url.searchParams.get("meta")).toBe("1");
-        expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-        await route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({ available: false, code, reason }),
+    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      requestedMediaUrls.push(url);
+      expect(url.searchParams.get("source")).toBe(source);
+      expect(url.searchParams.get("meta")).toBe("1");
+      expect(request.headers().authorization).toBe("Bearer e2e-device-token");
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ available: false, code, reason }),
+      });
+    });
+
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          id: `assistant-bootstrap-blocked-${code}`,
+          role: "assistant",
+          content: [{ type: "text", text: `Unavailable recording\nMEDIA:${source}` }],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const status = page.locator(".chat-assistant-attachment-card__status-meta");
+      await status.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => status.textContent()).toContain(reason);
+      expect(requestedMediaUrls).toHaveLength(1);
+      expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
+      expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
+
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(suite.artifactDir, `bootstrap-blocked-${code}.png`),
         });
-      });
-
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            id: `assistant-bootstrap-blocked-${code}`,
-            role: "assistant",
-            content: [{ type: "text", text: `Unavailable recording\nMEDIA:${source}` }],
-            timestamp: Date.now(),
-          },
-        ],
-      });
-
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const status = page.locator(".chat-assistant-attachment-card__status-meta");
-        await status.waitFor({ state: "visible", timeout: 10_000 });
-        await expect.poll(() => status.textContent()).toContain(reason);
-        expect(requestedMediaUrls).toHaveLength(1);
-        expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
-        expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
-
-        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(suite.artifactDir, `bootstrap-blocked-${code}.png`),
-          });
-        }
-        if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
-          process.stdout.write(
-            `${JSON.stringify({
-              proof: "control-ui-local-media-bootstrap",
-              code,
-              source,
-              metadataAuthenticated: true,
-              rawMediaRequested: false,
-              visibleReason: reason,
-            })}\n`,
-          );
-        }
-      } finally {
-        await suite.closeBrowserContext(context);
       }
-    },
-  );
+      if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
+        process.stdout.write(
+          `${JSON.stringify({
+            proof: "control-ui-local-media-bootstrap",
+            code,
+            source,
+            metadataAuthenticated: true,
+            rawMediaRequested: false,
+            visibleReason: reason,
+          })}\n`,
+        );
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 });

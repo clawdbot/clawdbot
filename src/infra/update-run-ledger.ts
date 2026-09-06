@@ -7,7 +7,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB, UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -453,7 +453,7 @@ export function getUpdateRun(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
     ({ db }) => (tableExists(db, "update_runs") ? readRun(db, runId) : undefined),
     options,
   );
@@ -464,7 +464,7 @@ export function listUpdateRuns(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord[] {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
       if (!tableExists(db, "update_runs")) {
         return [];
       }

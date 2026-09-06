@@ -1996,64 +1996,72 @@ openclaw-chat-video-player {
   font-variant-numeric: tabular-nums;
 }
 
-.chat-swarm__progress {
+.chat-swarm__summary {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.chat-swarm__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-swarm__markers {
   display: flex;
-  gap: 2px;
-  height: 2px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
-.chat-swarm__progress-segment {
-  position: relative;
-  flex: 1 1 0;
-  overflow: hidden;
+.chat-swarm__marker {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--muted);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 24%, transparent);
 }
 
-.chat-swarm__progress-segment > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
+.chat-swarm__marker--running {
+  border-color: var(--info);
+  background: var(--info);
 }
-
-.chat-swarm__progress-segment > .chat-swarm__progress-fill--failed {
+.chat-swarm__marker--done {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+.chat-swarm__marker--failed {
+  border-color: var(--danger);
   background: var(--danger);
 }
 
-.chat-swarm__tasks {
-  position: absolute;
-  z-index: 20;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 8px);
-  display: grid;
-  gap: 2px;
-  max-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
-  background: var(--chat-composer-surface, var(--popover));
-  box-shadow: var(--shadow-md);
-  opacity: 0;
-  transform: translateY(8px) scale(0.95);
-  transform-origin: center bottom;
-  visibility: hidden;
-  transition:
-    opacity 100ms ease 300ms,
-    transform 100ms ease 300ms,
-    visibility 0ms linear 400ms;
+.chat-swarm__counts,
+.chat-swarm__outcome,
+.chat-swarm__disclosure {
+  color: var(--muted);
+  font-size: 12px;
 }
 
-.chat-swarm__group:is(:hover, :focus-within) .chat-swarm__tasks,
-.chat-swarm__tasks:hover {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  visibility: visible;
-  transition-delay: 600ms, 600ms, 0ms;
+.chat-swarm__disclosure {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.chat-swarm__disclosure svg {
+  width: 12px;
+  height: 12px;
+}
+.chat-swarm__group[open] .chat-swarm__disclosure svg {
+  transform: rotate(180deg);
+}
+
+.chat-swarm__tasks {
+  display: grid;
+  gap: 2px;
+  max-height: min(240px, 30dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 8px;
 }
 
 .chat-swarm__task {

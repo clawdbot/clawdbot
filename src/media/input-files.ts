@@ -318,9 +318,10 @@ export async function extractImageContentFromSource(
 ): Promise<InputImageContent> {
   let buffer: Buffer;
   let mimeType: string | undefined;
+  let canonicalData: string | undefined;
   if (source.type === "base64") {
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
-    const canonicalData = canonicalizeBase64(source.data);
+    canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_image base64 source has invalid 'data' field");
     }
@@ -347,7 +348,10 @@ export async function extractImageContentFromSource(
     throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
   }
   const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
-  return { type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType };
+  // Conversions replace the buffer; unchanged bytes already have validated base64.
+  const data =
+    image.buffer === buffer && canonicalData ? canonicalData : image.buffer.toString("base64");
+  return { type: "image", data, mimeType: image.mimeType };
 }
 
 /** Extracts model-visible text and images from an input_file source after MIME validation. */

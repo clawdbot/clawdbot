@@ -198,6 +198,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     );
     try {
       return await Promise.race([operation, expired.promise]);
+    } catch (error) {
+      throw retireFork(error, retainedState);
     } finally {
       clearTimeout(deadline);
     }
@@ -442,9 +444,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             throwControlUiCleanupErrors(errors);
             assertControlUiForkActive();
             await resources?.release?.();
-          })().catch((error: unknown) => {
-            throw retireFork(error, resources?.retainedState);
-          });
+          })();
           return joinCleanup(
             teardown,
             "suite teardown",

@@ -7,6 +7,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import * as channelRegistry from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -28,7 +30,8 @@ import type {
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { proposeCreateSkill } from "../skills/workshop/service.js";
-import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -790,6 +793,39 @@ afterAll(async () => {
 });
 
 describe("state migrations", () => {
+  it("migrates workspace setup during Doctor preflight before runtime consumers", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const workspaceDir = path.join(root, "workspace");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { default: true, workspace: workspaceDir } } },
+    };
+    const sourcePath = path.join(workspaceDir, ".openclaw", "workspace-state.json");
+    const completedAt = "2026-07-15T10:01:00.000Z";
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, JSON.stringify({ version: 1, setupCompletedAt: completedAt }));
+    const assertReady = () =>
+      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+
+    await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    expect(assertReady).toThrow("Legacy workspace setup state requires migration");
+
+    const repaired = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(repaired.warnings).toEqual([]);
+    expect(assertReady).not.toThrow();
+    expect(fsSync.existsSync(sourcePath)).toBe(false);
+    expect(readWorkspaceStateSnapshot(workspaceDir, { env }).setup.setupCompletedAt).toBe(
+      completedAt,
+    );
+  });
+
   let detectionCase: Awaited<ReturnType<typeof detectLegacyStateMigrations>> & {
     stateDir: string;
     env: NodeJS.ProcessEnv;

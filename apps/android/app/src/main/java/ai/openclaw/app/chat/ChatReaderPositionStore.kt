@@ -19,8 +19,10 @@ private const val MAX_READER_POSITION_OWNER_AGENT_ID_CHARS = 256
 private const val MAX_READER_POSITION_SESSION_KEY_CHARS = 512
 private const val MAX_READER_POSITION_SESSION_ID_CHARS = 512
 private const val MAX_READER_POSITION_MESSAGE_ID_CHARS = 512
-private const val MAX_READER_POSITION_MESSAGE_VERSION_CHARS = 4_096
+private const val MAX_READER_POSITION_ENTRY_ID_CHARS = 512
+internal const val MAX_READER_POSITION_MESSAGE_VERSION_CHARS = 4_096
 private const val MAX_READER_POSITION_METADATA_CHARS = 256 * 1_024
+private const val RETIRED_READER_POSITION_GENERATION = 0L
 
 // The persisted LRU follows the same recent-session bound as the offline transcript cache.
 // This keeps one gateway metadata row bounded while retaining every locally cached chat.
@@ -32,6 +34,7 @@ internal data class ChatReaderPosition(
   val messageId: String,
   val itemOffset: Int,
   val messageVersion: String? = null,
+  val entryId: String? = null,
 )
 
 internal data class ChatReaderPositionScope(
@@ -86,11 +89,13 @@ private fun decodeReaderPositions(raw: String?): LinkedHashMap<StoredReaderPosit
     val messageId = (value["messageId"] as? JsonPrimitive)?.contentOrNull ?: continue
     val itemOffset = (value["itemOffset"] as? JsonPrimitive)?.intOrNull ?: continue
     val messageVersion = (value["messageVersion"] as? JsonPrimitive)?.contentOrNull
+    val entryId = (value["entryId"] as? JsonPrimitive)?.contentOrNull
     if (
       ownerAgentId.isEmpty() || ownerAgentId.length > MAX_READER_POSITION_OWNER_AGENT_ID_CHARS ||
       sessionKey.isEmpty() || sessionKey.length > MAX_READER_POSITION_SESSION_KEY_CHARS ||
       sessionId.isEmpty() || sessionId.length > MAX_READER_POSITION_SESSION_ID_CHARS ||
       messageId.isEmpty() || messageId.length > MAX_READER_POSITION_MESSAGE_ID_CHARS ||
+      (entryId?.length ?: 0) > MAX_READER_POSITION_ENTRY_ID_CHARS ||
       itemOffset < 0 ||
       (messageVersion?.length ?: 0) > MAX_READER_POSITION_MESSAGE_VERSION_CHARS
     ) {
@@ -98,7 +103,7 @@ private fun decodeReaderPositions(raw: String?): LinkedHashMap<StoredReaderPosit
     }
     val key = StoredReaderPositionKey(ownerAgentId, sessionKey)
     positions.remove(key)
-    positions[key] = StoredReaderPosition(sessionId, ChatReaderPosition(messageId, itemOffset, messageVersion))
+    positions[key] = StoredReaderPosition(sessionId, ChatReaderPosition(messageId, itemOffset, messageVersion, entryId))
   }
   return positions
 }
@@ -119,6 +124,7 @@ private fun encodeReaderPositions(positions: Map<StoredReaderPositionKey, Stored
               put("messageId", JsonPrimitive(position.messageId))
               put("itemOffset", JsonPrimitive(position.itemOffset))
               position.messageVersion?.let { put("messageVersion", JsonPrimitive(it)) }
+              position.entryId?.let { put("entryId", JsonPrimitive(it)) }
             },
           )
         }
@@ -135,6 +141,7 @@ private fun ChatReaderPosition.isPersistable(scope: ChatReaderPositionScope): Bo
     scope.sessionId.length <= MAX_READER_POSITION_SESSION_ID_CHARS &&
     messageId.isNotEmpty() &&
     messageId.length <= MAX_READER_POSITION_MESSAGE_ID_CHARS &&
+    (entryId?.length ?: 0) <= MAX_READER_POSITION_ENTRY_ID_CHARS &&
     itemOffset >= 0 &&
     (messageVersion?.length ?: 0) <= MAX_READER_POSITION_MESSAGE_VERSION_CHARS
 
@@ -154,6 +161,7 @@ internal class ChatReaderPositionFence {
   private val mutex = Mutex()
   private val generations = mutableMapOf<LogicalKey, ActiveGeneration>()
   private val retirements = mutableMapOf<ChatReaderPositionScope, CompletableDeferred<Unit>>()
+  private val retiredGateways = mutableSetOf<String>()
   private var nextGeneration = 0L
 
   private sealed interface BindResult {
@@ -164,7 +172,19 @@ internal class ChatReaderPositionFence {
     data class Waiting(
       val retirement: CompletableDeferred<Unit>,
     ) : BindResult
+
+    data object Retired : BindResult
   }
+
+  suspend fun activateGateway(
+    gatewayId: String,
+    isCurrent: () -> Boolean = { true },
+  ): Boolean =
+    mutex.withLock {
+      if (!isCurrent()) return@withLock false
+      retiredGateways.remove(gatewayId)
+      true
+    }
 
   suspend fun bind(
     scope: ChatReaderPositionScope,
@@ -174,13 +194,18 @@ internal class ChatReaderPositionFence {
         val result =
           mutex.withLock {
             retirements[scope]?.let { BindResult.Waiting(it) }
-              ?: BindResult.Ready(++nextGeneration).also {
-                generations[scope.logicalKey()] = ActiveGeneration(scope.sessionId, it.generation)
+              ?: if (scope.gatewayId in retiredGateways) {
+                BindResult.Retired
+              } else {
+                BindResult.Ready(++nextGeneration).also {
+                  generations[scope.logicalKey()] = ActiveGeneration(scope.sessionId, it.generation)
+                }
               }
           }
       ) {
         is BindResult.Ready -> return result.generation
         is BindResult.Waiting -> result.retirement.await()
+        BindResult.Retired -> return RETIRED_READER_POSITION_GENERATION
       }
     }
   }
@@ -244,6 +269,8 @@ internal class ChatReaderPositionFence {
     clear: suspend () -> T,
   ): T =
     mutex.withLock {
+      // Activation, retirement, and binding share one order; no concurrent marker can be lost.
+      retiredGateways.add(gatewayId)
       generations.keys.removeAll { it.gatewayId == gatewayId }
       clear()
     }
@@ -255,6 +282,15 @@ internal class ChatReaderPositionStore(
   private val database: suspend () -> ClientStateDatabase,
   private val fence: ChatReaderPositionFence = ChatReaderPositionFence(),
 ) {
+  suspend fun activateGateway(
+    gatewayId: String,
+    isCurrent: () -> Boolean = { true },
+  ): Boolean {
+    // Startup recovery uses this fence too. Await it without the lock, then revalidate intent.
+    database()
+    return fence.activateGateway(gatewayId, isCurrent)
+  }
+
   suspend fun bind(
     scope: ChatReaderPositionScope,
   ): ChatReaderPositionBinding {

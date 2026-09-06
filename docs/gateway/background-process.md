@@ -91,6 +91,12 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
+For owned POSIX process groups, cleanup also waits for the operating system to
+confirm that the group has disappeared after graceful shutdown. A completed
+command or closed output pipe alone does not establish that its descendants have
+stopped. Forced termination without confirmed cleanup remains uncertain. Local
+TUI shell shutdown uses the same cleanup owner for its own commands.
+
 ## process tool
 
 Actions:

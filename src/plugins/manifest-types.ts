@@ -33,6 +33,7 @@ export type PluginDiagnosticCode =
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification"
+  | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
@@ -42,6 +43,12 @@ export type PluginDiagnostic = {
   pluginId?: string;
   source?: string;
   code?: PluginDiagnosticCode;
+  sdkCompatibility?: {
+    seam: string;
+    coreVersion: string;
+    builtWithOpenClawVersion?: string;
+    nestedSdk: boolean;
+  };
 };
 
 export type PluginManifestChannelConfig = {

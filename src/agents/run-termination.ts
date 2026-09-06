@@ -1,14 +1,16 @@
 import {
+  AGENT_RUN_ABORTED_STOP_REASON,
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import {
   type FailoverError,
   findErrorProperty,
   isFailoverError,
   isSignalTimeoutReason,
 } from "./failover/error.js";
-import {
-  normalizeAgentRunTimeoutPhase,
-  normalizeProviderStarted,
-  type AgentRunTimeoutPhase,
-} from "./run-timeout-attribution.js";
 
 /**
  * Shared agent run termination constants.
@@ -16,12 +18,13 @@ import {
  * Runtime and stream consumers use these stable literals to recognize user or
  * controller aborts without matching free-form error text.
  */
-/** Stop reason emitted when an agent run is aborted. */
-const AGENT_RUN_ABORTED_STOP_REASON = "aborted" as const;
 /** Error text used for aborted agent runs. */
 export const AGENT_RUN_ABORTED_ERROR = "agent run aborted" as const;
-export const AGENT_RUN_RESTART_ABORT_STOP_REASON = "restart" as const;
-export const AGENT_RUN_SUPERSEDED_STOP_REASON = "superseded" as const;
+export {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
+  isAbortedAgentStopReason,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
 /** Error text used for agent runs aborted by a gateway restart. */
 export const AGENT_RUN_RESTART_ABORT_ERROR = "agent run aborted for restart" as const;
 export const AGENT_RUN_SUPERSEDED_ERROR = "agent run superseded by a newer session writer" as const;
@@ -153,13 +156,6 @@ export function resolveAgentRunErrorLifecycleFields(
   }
   const timeout = resolveRunErrorTimeout(error);
   return timeout ? { stopReason: "timeout", ...timeout } : {};
-}
-
-/** Returns whether a stop reason is the stable aborted-run reason. */
-export function isAbortedAgentStopReason(
-  value: unknown,
-): value is typeof AGENT_RUN_ABORTED_STOP_REASON | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON {
-  return value === AGENT_RUN_ABORTED_STOP_REASON || value === AGENT_RUN_RESTART_ABORT_STOP_REASON;
 }
 
 /**

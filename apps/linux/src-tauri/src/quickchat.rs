@@ -580,7 +580,7 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
 
 // Commands take the calling WebView, not WebviewWindow: once widgets are attached the
 // host becomes multi-WebView and Tauri intentionally rejects WebviewWindow command args.
-fn require_quickchat_webview(webview: &Webview) -> Result<(), String> {
+pub(crate) fn require_quickchat_webview(webview: &Webview) -> Result<(), String> {
     if webview.label() == QUICKCHAT_LABEL && webview.window().label() == QUICKCHAT_LABEL {
         Ok(())
     } else {

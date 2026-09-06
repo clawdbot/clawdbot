@@ -817,6 +817,14 @@ the channel root and under `accounts.<id>`. A channel that declares its own
 wording is wrong for your provider. Provider-specific keys such as credentials,
 hosts, and webhooks still need their own hints.
 
+When multiple plugins declare the same channel, the selected plugin owns its
+schema and presentation hints. Redaction preserves `sensitive: true` and
+`tags: ["url-secret"]` declarations from every discovered owner, so credentials
+left in config stay protected after switching plugins. The `url-secret` tag
+protects credentials embedded in URLs while leaving public URLs visible.
+Setting `sensitive: false` disables name-based secret detection, but does not
+override another owner's positive declaration or URL credential protection.
+
 ## contracts reference
 
 Use `contracts` only for static capability ownership metadata that OpenClaw can read without importing the plugin runtime.
@@ -942,6 +950,8 @@ Each `dangerousFlags` entry supports:
 | `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional `ownerKind` (`"capability"` or `"route"`). A declared owner isolates only that exact matched path when resolution fails; its owner id is the full config path. |
 
 Capability owners fail cold when their provider is unavailable, so a stale credential never remains active. Route owners may retain the last-known-good value while their full plugin config and provider definition stay unchanged.
+
+Declared paths also control Settings redaction, including wildcards and fields behind local schema references. Structured SecretRefs retain `source` and `provider` while `id` is concealed; plaintext secrets are fully concealed. Unrelated Settings saves preserve the original reference. Changing its source or provider requires an explicit identifier.
 
 For plugins declaring `secretInputs`, `configSchema` validates the pre-resolution source config paired with the runtime config. A valid SecretRef is not rejected because its resolved credential is a string with a different shape. Invalid plaintext source values still fail validation. Runtime loading, CLI registration, and root command discovery use the same rule; plugins receive resolved values with defaults selected from the source config, without changing either input.
 
@@ -1213,13 +1223,17 @@ Model fields:
 
 Suppression fields:
 
-| Field                      | Type       | What it means                                                                                             |
-| -------------------------- | ---------- | --------------------------------------------------------------------------------------------------------- |
-| `provider`                 | `string`   | Provider id for the upstream row to suppress. Must be owned by this plugin or declared as an owned alias. |
-| `model`                    | `string`   | Provider-local model id to suppress.                                                                      |
-| `reason`                   | `string`   | Optional message shown when the suppressed row is requested directly.                                     |
-| `when.baseUrlHosts`        | `string[]` | Optional list of effective provider base URL hosts required before the suppression applies.               |
-| `when.providerConfigApiIn` | `string[]` | Optional list of exact provider-config `api` values required before the suppression applies.              |
+| Field                      | Type       | What it means                                                                                                                                              |
+| -------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`                 | `string`   | Provider id for the upstream row to suppress. Must be owned by this plugin or declared as an owned alias.                                                  |
+| `model`                    | `string`   | Provider-local model id to suppress.                                                                                                                       |
+| `reason`                   | `string`   | Optional message shown when the suppressed row is requested directly.                                                                                      |
+| `retirement`               | `object`   | Explicit permanent retirement metadata. Enables doctor repair; an empty object means no successor is declared.                                             |
+| `retirement.replacedBy`    | `string`   | Documented provider-local successor model id, including any slashes in that id. Doctor preserves applicable account pins and repairs persisted references. |
+| `when.baseUrlHosts`        | `string[]` | Optional list of effective provider base URL hosts required before the suppression applies.                                                                |
+| `when.providerConfigApiIn` | `string[]` | Optional list of exact provider-config `api` values required before the suppression applies.                                                               |
+
+Declare retirement only from affirmative provider evidence, never from a failed or empty discovery request. Scope account-route retirements with `when.baseUrlHosts`; matching those rules requires a concrete selected endpoint and leaves sibling endpoints untouched. Unconditional retirement rules do not require credentials. Malformed or empty retirement scopes are ignored rather than becoming global rules. Runtime blocks that retired route, while `openclaw doctor --fix` owns persistent replacement or override removal. Ordinary suppression and a model row's `deprecated` listing status do not authorize retirement repair. Manifest changes take effect after Gateway restart or the owning metadata reload.
 
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode#models-shipped-by-more-than-one-provider).
 

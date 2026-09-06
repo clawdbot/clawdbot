@@ -469,62 +469,68 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(replyOptions?.narrationHideCommandText).toBe(true);
   });
 
-  it("declines failed item progress without updating the Discord draft", async () => {
-    const draftStream = createMockDraftStreamForTest();
-    let callbackResult: boolean | void = undefined;
+  it.each([false, true])(
+    "shows failed item progress with toolProgress=%s",
+    async (toolProgress) => {
+      const draftStream = createMockDraftStreamForTest();
+      let callbackResult: boolean | void = undefined;
 
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      callbackResult = await params?.replyOptions?.onItemEvent?.({
-        itemId: "tool-1",
-        kind: "tool",
-        name: "exec",
-        phase: "end",
-        status: "failed",
-        progressText: "exec failed",
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        callbackResult = await params?.replyOptions?.onItemEvent?.({
+          itemId: "tool-1",
+          kind: "tool",
+          name: "exec",
+          phase: "end",
+          status: "failed",
+          progressText: "exec failed",
+        });
+        return createNoQueuedDispatchResult();
       });
-      return createNoQueuedDispatchResult();
-    });
 
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: {
-        streaming: { mode: "progress", progress: { toolProgress: true } },
-        maxLinesPerMessage: 5,
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(callbackResult).toBe(false);
-    expect(draftStream.update).not.toHaveBeenCalled();
-  });
-
-  it("declines failed command output without updating the Discord draft", async () => {
-    const draftStream = createMockDraftStreamForTest();
-    let callbackResult: false | void = undefined;
-
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      callbackResult = await params?.replyOptions?.onCommandOutput?.({
-        phase: "error",
-        title: "Exec",
-        name: "exec",
-        status: "error",
-        exitCode: 1,
+      const ctx = await createAutomaticDraftContext({
+        discordConfig: {
+          streaming: { mode: "progress", progress: { toolProgress } },
+          maxLinesPerMessage: 5,
+        },
       });
-      return createNoQueuedDispatchResult();
-    });
 
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: {
-        streaming: { mode: "progress", progress: { toolProgress: true } },
-        maxLinesPerMessage: 5,
-      },
-    });
+      await runProcessDiscordMessage(ctx);
 
-    await runProcessDiscordMessage(ctx);
+      expect(callbackResult).toBe(true);
+      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("failed"));
+    },
+  );
 
-    expect(callbackResult).toBe(false);
-    expect(draftStream.update).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "shows failed command output with toolProgress=%s",
+    async (toolProgress) => {
+      const draftStream = createMockDraftStreamForTest();
+      let callbackResult: boolean | void = undefined;
+
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        callbackResult = await params?.replyOptions?.onCommandOutput?.({
+          phase: "end",
+          title: "Exec",
+          name: "exec",
+          status: "error",
+          exitCode: 1,
+        });
+        return createNoQueuedDispatchResult();
+      });
+
+      const ctx = await createAutomaticDraftContext({
+        discordConfig: {
+          streaming: { mode: "progress", progress: { toolProgress } },
+          maxLinesPerMessage: 5,
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(callbackResult).toBe(true);
+      expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("exit 1"));
+    },
+  );
 
   it("suppresses terminal progress callbacks without their terminal phase", async () => {
     const draftStream = createMockDraftStreamForTest();

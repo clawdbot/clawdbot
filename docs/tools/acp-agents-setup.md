@@ -181,8 +181,10 @@ Then verify backend health:
 
 The `acpx` plugin embeds the ACP runtime directly (no separate `acpx` binary or
 version to configure). By default it registers the embedded backend during
-Gateway startup and waits for a startup probe before the gateway `ready`
-signal. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
+Gateway startup and waits for one health probe before the gateway `ready`
+signal. That probe also supplies failure diagnostics and is bounded by
+`plugins.entries.acpx.config.timeoutSeconds`; an unhealthy result does not
+launch a second probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
 intentionally keep the startup probe disabled. Run `/acp doctor` for an explicit
 on-demand probe.

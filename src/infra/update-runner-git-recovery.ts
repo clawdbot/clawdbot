@@ -61,7 +61,6 @@ export async function rebuildRolledBackGitRuntime(params: {
     params.gitRoot,
     params.timeoutMs,
     params.defaultCommandEnv,
-    "require-preferred",
   );
   if (manager.kind === "missing-required") {
     return appendFailure("manager-unavailable", manager.reason);
@@ -82,10 +81,11 @@ export async function rebuildRolledBackGitRuntime(params: {
       installEnv,
     );
     if (!installed && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
-      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-      installed = retryArgv
-        ? await appendStep("git rollback deps install (ignore scripts)", retryArgv, installEnv)
-        : false;
+      installed = await appendStep(
+        "git rollback deps install (ignore scripts)",
+        managerInstallIgnoreScriptsArgs(manager.manager),
+        installEnv,
+      );
     }
     if (!installed) {
       return appendFailure("deps-install-failed", "failed to restore dependencies");

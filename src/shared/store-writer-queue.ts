@@ -76,11 +76,7 @@ function getOrCreateStoreWriterQueue(
 
 async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: string): Promise<void> {
   const queue = queues.get(storePath);
-  if (!queue) {
-    return;
-  }
-  if (queue.drainPromise) {
-    await queue.drainPromise;
+  if (!queue || queue.drainPromise) {
     return;
   }
   const drain = createDeferredCore();

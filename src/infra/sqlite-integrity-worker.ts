@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
-import { resolveRuntimeProcessEntrypointUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 
 export type SqliteIntegrityWorkerInput = {
   pathname: string;

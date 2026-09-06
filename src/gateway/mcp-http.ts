@@ -58,13 +58,8 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
 // is registered per process.
 
-type McpLoopbackServer = {
-  port: number;
-  close: () => Promise<void>;
-};
-
-let activeMcpLoopbackServer: McpLoopbackServer | undefined;
-let activeMcpLoopbackServerPromise: Promise<McpLoopbackServer> | null = null;
+let closeActiveMcpLoopbackServer: (() => Promise<void>) | undefined;
+let activeMcpLoopbackServerPromise: Promise<void> | null = null;
 
 function createMcpJsonParseError(error: unknown): Error & { code: "mcp_json_parse_error" } {
   return Object.assign(new Error("MCP JSON parse error"), {
@@ -168,10 +163,7 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
-async function startMcpLoopbackServer(port = 0): Promise<{
-  port: number;
-  close: () => Promise<void>;
-}> {
+async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
@@ -520,45 +512,29 @@ async function startMcpLoopbackServer(port = 0): Promise<{
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
-  const server: McpLoopbackServer = {
-    port: address.port,
-    close: () => {
-      // Stop admitting this runtime's child grants before draining accepted
-      // requests. A delayed old-server close cannot revoke a successor runtime.
-      clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
-      revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
-      unregisterGrantRevocation();
-      toolCache.clear();
-      return new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => {
-          if (!error) {
-            if (activeMcpLoopbackServer === server) {
-              activeMcpLoopbackServer = undefined;
-            }
-          }
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-        closeActiveSseResponses();
-      });
-    },
+  return () => {
+    // Stop admitting this runtime's child grants before draining accepted
+    // requests. A delayed old-server close cannot revoke a successor runtime.
+    clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
+    revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
+    unregisterGrantRevocation();
+    toolCache.clear();
+    return new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => (error ? reject(error) : resolve()));
+      closeActiveSseResponses();
+    });
   };
-  return server;
 }
 
-/** Returns the active MCP loopback server or starts one if none exists. */
-export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
-  if (activeMcpLoopbackServer) {
-    return activeMcpLoopbackServer;
+/** Waits for the process-owned MCP loopback server, starting one if needed. */
+export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
+  if (closeActiveMcpLoopbackServer) {
+    return;
   }
   if (!activeMcpLoopbackServerPromise) {
     activeMcpLoopbackServerPromise = startMcpLoopbackServer(port)
-      .then((server) => {
-        activeMcpLoopbackServer = server;
-        return server;
+      .then((close) => {
+        closeActiveMcpLoopbackServer = close;
       })
       .finally(() => {
         activeMcpLoopbackServerPromise = null;
@@ -569,12 +545,12 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServ
 
 /** Closes the active MCP loopback server if one has been started. */
 export async function closeMcpLoopbackServer(): Promise<void> {
-  const server =
-    activeMcpLoopbackServer ??
-    (activeMcpLoopbackServerPromise ? await activeMcpLoopbackServerPromise : undefined);
-  if (!server) {
-    return;
+  if (activeMcpLoopbackServerPromise) {
+    await activeMcpLoopbackServerPromise;
   }
-  activeMcpLoopbackServer = undefined;
-  await server.close();
+  // Claim after startup so concurrent shutdown waiters cannot close the same
+  // listener twice. A later call owns only the then-current server, not drains.
+  const close = closeActiveMcpLoopbackServer;
+  closeActiveMcpLoopbackServer = undefined;
+  await close?.();
 }

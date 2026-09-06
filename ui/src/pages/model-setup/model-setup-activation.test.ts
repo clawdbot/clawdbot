@@ -17,6 +17,7 @@ import {
   detection,
   mountPage,
 } from "./model-setup-first-run.test-support.ts";
+import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
 
 describe("ModelSetupPage first-run activation ownership", () => {
   beforeEach(async () => {
@@ -345,14 +346,19 @@ describe("ModelSetupPage first-run activation ownership", () => {
       await waitForFast(() =>
         expect(original.request).toHaveBeenCalledWith(
           "openclaw.setup.auth.start",
-          expect.anything(),
+          { sessionId: expect.any(String), agentId: "main", authChoice: "provider-login" },
+          { timeoutMs: null },
         ),
       );
       [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
         .find((button) => button.textContent?.trim() === "Cancel")!
         .click();
       await waitForFast(() =>
-        expect(original.request).toHaveBeenCalledWith("wizard.cancel", expect.anything()),
+        expect(original.request).toHaveBeenCalledWith(
+          "wizard.cancel",
+          { sessionId: expect.any(String) },
+          { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+        ),
       );
       // Explicitly leaving first-run setup releases its intent. Re-entering is
       // a distinct attempt; the old cancellation acknowledgement is still pending.
@@ -760,14 +766,22 @@ describe("ModelSetupPage first-run activation ownership", () => {
       });
       page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!.click();
       await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("openclaw.setup.auth.start", expect.anything()),
+        expect(request).toHaveBeenCalledWith(
+          "openclaw.setup.auth.start",
+          { sessionId: expect.any(String), agentId: "main", authChoice: "provider-login" },
+          { timeoutMs: null },
+        ),
       );
       const cancel = [
         ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
       ].find((button) => button.textContent?.trim() === "Cancel")!;
       cancel.click();
       await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("wizard.cancel", expect.anything()),
+        expect(request).toHaveBeenCalledWith(
+          "wizard.cancel",
+          { sessionId: expect.any(String) },
+          { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+        ),
       );
       await page.updateComplete;
       expect(page.querySelector("openclaw-modal-dialog")).toBeNull();

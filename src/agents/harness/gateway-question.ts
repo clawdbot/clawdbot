@@ -7,7 +7,10 @@ import type {
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-import type { GatewayQuestionCall } from "../tools/gateway-question-lifecycle.js";
+import {
+  createQuestionPromptLifetime,
+  type GatewayQuestionCall,
+} from "../tools/gateway-question-lifecycle.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -529,11 +532,13 @@ async function runScopedAgentHarnessQuestion(
   }));
   let aborted = false;
   params.signal?.throwIfAborted();
+  using prompt = createQuestionPromptLifetime(params.signal);
   const claim = registerPendingAgentQuestion({
     questionId,
     sessionKey: params.sessionKey,
     questions: params.questions,
     gatewayCall: params.gatewayCall,
+    onCancel: prompt.close,
   });
   const registration = Promise.resolve().then(
     () =>
@@ -553,6 +558,7 @@ async function runScopedAgentHarnessQuestion(
   );
   claim.attachRegistration(registration);
   const cancel = async (resolvedBy: string): Promise<QuestionWaitAnswerResult | undefined> => {
+    prompt.close();
     try {
       return (await gatewayCall(
         "question.resolve",
@@ -577,6 +583,7 @@ async function runScopedAgentHarnessQuestion(
   };
   const onAbort = () => {
     aborted = true;
+    prompt.close();
     // Release the session slot synchronously so a replacement request can register
     // while the best-effort gateway cancellation finishes.
     claim.dispose();
@@ -609,7 +616,7 @@ async function runScopedAgentHarnessQuestion(
       { timeoutMs: params.timeoutMs + QUESTION_RPC_GRACE_MS },
       { id: questionId, timeoutMs: params.timeoutMs, includeResolutionId: true },
       params.signal ? { signal: params.signal } : undefined,
-    ) as Promise<QuestionWaitAnswerResult>;
+    ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
     claim.setAnswer(answer);
     const answerOutcome = answer.then(
       (result) => ({ kind: "answer" as const, result }),
@@ -649,13 +656,12 @@ async function runScopedAgentHarnessQuestion(
       }
       return await finishAnswer(outcome.result);
     }
-    const deliveryAbort = new AbortController();
     const delivery = deliverAgentHarnessQuestionPrompt(
       params.delivery,
       questionId,
       params.questions,
       params.promptOptions,
-      deliveryAbort.signal,
+      prompt.signal,
     );
     const deliveryOutcome = delivery.then(
       () => ({ kind: "delivery" as const }),
@@ -663,11 +669,9 @@ async function runScopedAgentHarnessQuestion(
     );
     const first = await Promise.race([answerOutcome, deliveryOutcome]);
     if (first.kind === "answer") {
-      deliveryAbort.abort(new Error("gateway question resolved before prompt delivery"));
       return await finishAnswer(first.result);
     }
     if (first.kind === "answer-error") {
-      deliveryAbort.abort(first.error);
       throw first.error;
     }
     if (first.kind === "delivery-error") {

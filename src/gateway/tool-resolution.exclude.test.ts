@@ -17,6 +17,7 @@ type CreateOpenClawToolsArg = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
+  questionPrompt?: { send: (payload: unknown) => unknown; messageChannel?: string };
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
   gatewayCallerAccountId?: string;
@@ -138,6 +139,34 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     });
 
     expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
+  it("hands loopback ask_user the originating-channel prompt sender", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:telegram:direct:1",
+      messageProvider: "telegram",
+      currentChannelId: "1",
+      accountId: "default",
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().questionPrompt).toEqual(
+      expect.objectContaining({
+        messageChannel: "telegram",
+        send: expect.any(Function),
+      }),
+    );
+  });
+
+  it("does not invent a prompt sender without a deliverable channel", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().questionPrompt).toBeUndefined();
   });
 
   it("passes immutable source-reply authority into message-tool construction", () => {

@@ -1,9 +1,13 @@
 /** Cleans up embedded attempt subscription resources. */
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { isFastTestRuntimeEnv } from "../../../infra/test-runtime-env.js";
 import { log } from "../logger.js";
-import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
-/** Shared timeout for waiting on aborted model/prompt cleanup before releasing resources. */
-const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
+// Invalid overrides retain the normal/test defaults; partial numeric parsing
+// must not silently widen cleanup waits.
+const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS =
+  parseStrictPositiveInteger(process.env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS) ??
+  (isFastTestRuntimeEnv() ? 250 : 2_000);
 
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;

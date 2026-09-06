@@ -385,6 +385,9 @@ function activityAlignmentHtml() {
   return `
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
+        <div class="chat-group tool">
+          <div class="chat-group-messages" data-tool-column-reference>Inspecting the available tools.</div>
+        </div>
         <div class="chat-group tool chat-group--activity chat-group--with-footer">
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
@@ -1579,10 +1582,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const activityGroup = await getRect(page, ".chat-activity-group");
       const activitySummary = await getRect(page, ".chat-activity-group__summary");
       const failedSummary = await getRect(page, "[data-failed-call-row]");
-      const thread = await getRect(page, ".chat-thread-inner");
+      const toolColumn = await getRect(page, "[data-tool-column-reference]");
       expect(activitySummary.width).toBeLessThan(activityGroup.width);
       expect(failedSummary.width).toBeLessThan(activityGroup.width);
-      expect(activityGroup.left - thread.left).toBeCloseTo(51, 0);
+      expect(activityGroup.left).toBeCloseTo(toolColumn.left, 0);
       const styles = await page.evaluate(() => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;

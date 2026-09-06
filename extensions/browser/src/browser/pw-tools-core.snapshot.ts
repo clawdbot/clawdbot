@@ -80,7 +80,7 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
     .evaluate(() => {
       const seen = new Set<string>();
       const out: SnapshotUrlEntry[] = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+      for (const anchor of document.querySelectorAll("a[href]")) {
         const href = anchor instanceof HTMLAnchorElement ? anchor.href : "";
         if (!href || seen.has(href)) {
           continue;

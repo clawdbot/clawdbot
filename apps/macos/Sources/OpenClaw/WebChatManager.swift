@@ -251,7 +251,7 @@ final class WebChatManager {
                 let profiles = try await MacGatewayProfileStore.shared.profiles()
                 guard generation == self.windowGeneration else { return }
                 guard !profiles.isEmpty else {
-                    AppNavigationActions.openSettings(tab: .gateways)
+                    AppNavigationActions.openConnection(tab: .gateways)
                     return
                 }
                 let preferredID = self.selection.profileID
@@ -260,7 +260,7 @@ final class WebChatManager {
                     guard generation == self.windowGeneration else { return }
                     try await self.show(profile: profile)
                 case .manage:
-                    AppNavigationActions.openSettings(tab: .gateways)
+                    AppNavigationActions.openConnection(tab: .gateways)
                 case nil:
                     break
                 }

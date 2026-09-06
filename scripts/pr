@@ -302,7 +302,7 @@ Usage:
     --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
-    Empty files are valid. Existing source/server co-authors are always retained; queue merges reject it.
+    Empty files are valid. Human source/server co-authors are retained; known machine credit is excluded. Queue merges reject it.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
   scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.

@@ -43,6 +43,7 @@ import ai.openclaw.app.chat.chatOutboxQueueFailureText
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
+import ai.openclaw.app.chat.resolvesReaderHistory
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
@@ -1416,7 +1417,13 @@ private fun ChatMessageList(
       sessionId = sessionId,
       timeline = timeline,
       historyLoading = historyLoading,
-      historyResolved = transcriptAnchor?.sessionKey == sessionKey,
+      historyResolved =
+        transcriptAnchor.resolvesReaderHistory(
+          gatewayId = gatewayId,
+          ownerAgentId = fullMessageOwner.agentId,
+          sessionKey = sessionKey,
+          sessionId = sessionId,
+        ),
       loadPosition = loadReaderPosition,
       savePosition = saveReaderPosition,
       clearPosition = clearReaderPosition,

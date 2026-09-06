@@ -4364,7 +4364,7 @@ describe("handleSendChat", () => {
       try {
         expect(host.chatRunId).toBe(previousRunId);
         if (previousRunId) {
-          expect(host.chatRunStartup).toEqual({ state: "activity", runId: previousRunId });
+          expect(host.chatRunStartup).toEqual({ state: "activity", runId: previousRunId, seq: 2 });
           expect(host.waitingApprovalStatuses?.has(`approval-${previousRunId}`)).toBe(true);
         }
         emitActivity(runId);

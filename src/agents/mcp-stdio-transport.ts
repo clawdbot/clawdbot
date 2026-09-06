@@ -39,9 +39,8 @@ export class OpenClawStdioClientTransport implements Transport {
 
   private readonly readBuffer = new ReadBuffer();
   private readonly stderrStream: PassThrough | null = null;
+  private state: "ready" | "started" | "closing" | "closed" = "ready";
   private process?: ChildProcess;
-  private closingProcess?: ChildProcess;
-  private ownedProcessGroupId?: number;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
@@ -50,11 +49,12 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   async start(): Promise<void> {
-    if (this.process) {
+    if (this.state !== "ready") {
       throw new Error(
-        "OpenClawStdioClientTransport already started; Client.connect() starts transports automatically.",
+        "OpenClawStdioClientTransport already started or closed; Client.connect() starts transports automatically.",
       );
     }
+    this.state = "started";
 
     const prepareDataDir = this.serverParams.prepareDataDir?.trim();
     if (prepareDataDir) {
@@ -66,6 +66,11 @@ export class OpenClawStdioClientTransport implements Transport {
           { cause: error },
         );
       }
+    }
+    // Directory preparation yields before a child exists. Retirement must
+    // close that launch as well as any process it already created.
+    if (this.state !== "started") {
+      throw new Error("MCP stdio transport is closed");
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -84,11 +89,6 @@ export class OpenClawStdioClientTransport implements Transport {
         windowsHide: process.platform === "win32",
       });
       this.process = child;
-      if (process.platform !== "win32" && child.pid) {
-        // Detached spawn makes the leader PID the durable PGID. Keep it after
-        // the leader handle exits so descendants remain owned until disposal.
-        this.ownedProcessGroupId = child.pid;
-      }
 
       child.on("error", (error: Error) => {
         reject(error);
@@ -96,16 +96,13 @@ export class OpenClawStdioClientTransport implements Transport {
       });
       child.on("spawn", () => resolve());
       child.on("close", () => {
-        if (this.process === child) {
-          this.process = undefined;
-        }
-        if (child.pid && this.ownedProcessGroupId === child.pid) {
-          // The leader still owns this PGID at close notification time. Kill any
-          // descendants now so a retained numeric PGID can never outlive ownership.
+        // Shutdown can finish before a delayed close event. Only the live
+        // child handle still owns the detached group; its PID can be reused later.
+        if (this.process === child && process.platform !== "win32" && child.pid) {
           signalProcessTree(child.pid, "SIGKILL", { detached: true });
-          this.ownedProcessGroupId = undefined;
         }
-        this.onclose?.();
+        this.process = undefined;
+        this.finishClose();
       });
       child.stdin?.on("error", (error: Error) => this.onerror?.(error));
       child.stdout?.on("data", (chunk: Buffer) => {
@@ -130,7 +127,7 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   get pid() {
-    return this.process?.pid ?? this.closingProcess?.pid ?? null;
+    return this.process?.pid ?? null;
   }
 
   private processReadBuffer() {
@@ -148,63 +145,59 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   async close(): Promise<void> {
-    const processToClose = this.process ?? this.closingProcess;
-    const ownedProcessGroupId = this.ownedProcessGroupId;
-    this.process = undefined;
-    this.closingProcess = processToClose;
+    await this.stopProcess(false);
+  }
+
+  async forceClose(): Promise<void> {
+    await this.stopProcess(true);
+  }
+
+  private finishClose(): void {
+    if (this.state === "closed") {
+      return;
+    }
+    this.state = "closed";
+    this.readBuffer.clear();
+    this.onclose?.();
+  }
+
+  private async stopProcess(force: boolean): Promise<void> {
+    if (this.state === "closed") {
+      return;
+    }
+    this.state = "closing";
+    const processToClose = this.process;
     if (processToClose) {
+      const isRunning = () => this.process === processToClose && processToClose.exitCode === null;
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
       });
-      try {
-        processToClose.stdin?.end();
-      } catch {
-        // best-effort
-      }
-      await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
-      if (processToClose.exitCode === null && processToClose.pid) {
-        signalProcessTree(processToClose.pid, "SIGTERM", { detached: true });
+      if (!force) {
+        try {
+          processToClose.stdin?.end();
+        } catch {
+          // best-effort
+        }
         await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
-        if (processToClose.exitCode === null && processToClose.pid) {
-          signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
+        if (isRunning() && processToClose.pid) {
+          signalProcessTree(processToClose.pid, "SIGTERM", { detached: true });
+          await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
+        }
+      }
+      if (processToClose.pid && (isRunning() || (force && process.platform !== "win32"))) {
+        signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
+        if (processToClose.exitCode === null) {
           await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
         }
       }
     }
-    if (this.closingProcess === processToClose) {
-      this.closingProcess = undefined;
-    }
-    if (this.ownedProcessGroupId === ownedProcessGroupId) {
-      this.ownedProcessGroupId = undefined;
-    }
-    this.readBuffer.clear();
-  }
-
-  async forceClose(): Promise<void> {
-    const processToClose = this.process ?? this.closingProcess;
-    const ownedProcessGroupId = this.ownedProcessGroupId;
     this.process = undefined;
-    if (processToClose?.pid && processToClose.exitCode === null) {
-      const closePromise = new Promise<void>((resolve) => {
-        processToClose.once("close", () => resolve());
-      });
-      signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
-      await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
-    } else if (ownedProcessGroupId) {
-      signalProcessTree(ownedProcessGroupId, "SIGKILL", { detached: true });
-    }
-    if (this.closingProcess === processToClose) {
-      this.closingProcess = undefined;
-    }
-    if (this.ownedProcessGroupId === ownedProcessGroupId) {
-      this.ownedProcessGroupId = undefined;
-    }
-    this.readBuffer.clear();
+    this.finishClose();
   }
 
   send(message: JSONRPCMessage): Promise<void> {
     return new Promise((resolve, reject) => {
-      const stdin = this.process?.stdin;
+      const stdin = this.state === "started" ? this.process?.stdin : undefined;
       if (!stdin) {
         throw new Error("Not connected");
       }

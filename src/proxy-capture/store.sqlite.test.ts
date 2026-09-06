@@ -309,65 +309,83 @@ describe("DebugProxyCaptureStore", () => {
     expect(lease.store.isClosed).toBe(true);
   });
 
-  it.each(["deleteSessions", "purgeAll"] as const)(
-    "rolls back path-based %s when session deletion fails",
-    (operation) => {
-      const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-rollback-");
-      const dbPath = path.join(root, "capture.sqlite");
-      const blobDir = path.join(root, "blobs");
-      const lease = acquireDebugProxyCaptureStore(dbPath, blobDir);
-      const sessionId = "path-based-rollback-session";
+  it.each([
+    ["path", "deleteSessions", "capture_sessions"],
+    ["path", "purgeAll", "capture_sessions"],
+    ["shared", "deleteSessions", "capture_sessions"],
+    ["shared", "purgeAll", "capture_sessions"],
+    ["shared", "deleteSessions", "capture_blobs"],
+    ["shared", "purgeAll", "capture_blobs"],
+  ] as const)("rolls back %s %s when %s deletion fails", (kind, operation, deniedTable) => {
+    const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-rollback-");
+    const dbPath = path.join(root, "capture.sqlite");
+    const blobDir = path.join(root, "blobs");
+    const lease =
+      kind === "path"
+        ? acquireDebugProxyCaptureStore(dbPath, blobDir)
+        : acquireDebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
+    const sessionId = "rollback-session";
 
-      try {
-        lease.store.upsertSession({
-          id: sessionId,
-          startedAt: 1,
-          mode: "sdk",
-          sourceScope: "openclaw",
-          sourceProcess: "plugin",
-          dbPath,
-          blobDir,
-        });
-        const blob = lease.store.persistPayload(Buffer.from("rollback payload"), "text/plain");
-        lease.store.recordEvent({
-          sessionId,
-          ts: 2,
-          sourceScope: "openclaw",
-          sourceProcess: "plugin",
-          protocol: "https",
-          direction: "outbound",
-          kind: "request",
-          flowId: "path-based-rollback-flow",
-          dataBlobId: blob.blobId,
-          dataSha256: blob.sha256,
-        });
+    try {
+      lease.store.upsertSession({
+        id: sessionId,
+        startedAt: 1,
+        mode: "sdk",
+        sourceScope: "openclaw",
+        sourceProcess: "plugin",
+        dbPath,
+        blobDir,
+      });
+      const blob = lease.store.persistPayload(Buffer.from("rollback payload"), "text/plain");
+      const blobPath = path.join(blobDir, `${blob.blobId}.bin.gz`);
+      lease.store.recordEvent({
+        sessionId,
+        ts: 2,
+        sourceScope: "openclaw",
+        sourceProcess: "plugin",
+        protocol: "https",
+        direction: "outbound",
+        kind: "request",
+        flowId: "path-based-rollback-flow",
+        dataBlobId: blob.blobId,
+        dataSha256: blob.sha256,
+      });
 
-        const cleanup = () =>
-          operation === "deleteSessions"
-            ? lease.store.deleteSessions([sessionId])
-            : lease.store.purgeAll();
-        lease.store.db.setAuthorizer((action, table) =>
-          action === constants.SQLITE_DELETE && table === "capture_sessions"
-            ? constants.SQLITE_DENY
-            : constants.SQLITE_OK,
-        );
+      const cleanup = () =>
+        operation === "deleteSessions"
+          ? lease.store.deleteSessions([sessionId])
+          : lease.store.purgeAll();
+      lease.store.db.setAuthorizer((action, table) =>
+        action === constants.SQLITE_DELETE && table === deniedTable
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
 
-        expect(cleanup).toThrow(/not authorized/u);
-        lease.store.db.setAuthorizer(null);
-        expect(lease.store.listSessions()).toHaveLength(1);
-        expect(lease.store.getSessionEvents(sessionId)).toHaveLength(1);
-        expect(fs.existsSync(blob.path)).toBe(true);
-
-        expect(cleanup()).toEqual({ sessions: 1, events: 1, blobs: 1 });
-        expect(lease.store.listSessions()).toEqual([]);
-        expect(lease.store.getSessionEvents(sessionId)).toEqual([]);
-        expect(fs.existsSync(blob.path)).toBe(false);
-      } finally {
-        lease.store.db.setAuthorizer(null);
-        lease.release();
+      if (deniedTable === "capture_blobs" && operation === "deleteSessions") {
+        expect(() => lease.store.deleteSessions(["missing"])).toThrow(/not authorized/u);
       }
-    },
-  );
+      expect(cleanup).toThrow(/not authorized/u);
+      lease.store.db.setAuthorizer(null);
+      expect(lease.store.listSessions()).toHaveLength(1);
+      expect(lease.store.getSessionEvents(sessionId)).toHaveLength(1);
+      expect(lease.store.readBlob(blob.blobId)).toBe("rollback payload");
+      if (kind === "path") {
+        expect(fs.existsSync(blobPath)).toBe(true);
+      }
+
+      expect(cleanup()).toEqual({ sessions: 1, events: 1, blobs: 1 });
+      expect(lease.store.listSessions()).toEqual([]);
+      expect(lease.store.getSessionEvents(sessionId)).toEqual([]);
+      expect(lease.store.readBlob(blob.blobId)).toBeNull();
+      if (kind === "path") {
+        expect(fs.existsSync(blobPath)).toBe(false);
+      }
+      expect(cleanup()).toEqual({ sessions: 0, events: 0, blobs: 0 });
+    } finally {
+      lease.store.db.setAuthorizer(null);
+      lease.release();
+    }
+  });
 
   it("uses rollback journaling for captures on NFS-backed volumes", () => {
     vi.spyOn(fs, "statfsSync").mockReturnValue({
@@ -727,50 +745,66 @@ describe("DebugProxyCaptureStore", () => {
     });
   });
 
-  it("keeps shared blobs when deleting one of multiple referencing sessions", () => {
-    const store = makeStore();
-    const sharedPayload = persistEventPayload(store, {
-      data: '{"shared":true}',
-      contentType: "application/json",
-    });
+  it.each(["shared", "path"] as const)("preserves %s blob custody and cleanup counts", (kind) => {
+    const env = makeStateEnv("openclaw-proxy-capture-cleanup-");
+    const blobDir = path.join(env.OPENCLAW_STATE_DIR!, "blobs");
+    const store =
+      kind === "shared"
+        ? new DebugProxyCaptureStore({ env })
+        : new DebugProxyCaptureStore(path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"), blobDir);
+    try {
+      const sharedPayload = persistEventPayload(store, {
+        data: '{"shared":true}',
+        contentType: "application/json",
+      });
 
-    for (const sessionId of ["session-a", "session-b"]) {
-      store.upsertSession({
-        id: sessionId,
-        startedAt: Date.now(),
-        mode: "proxy-run",
-        sourceScope: "openclaw",
-        sourceProcess: "openclaw",
+      for (const sessionId of ["session-a", "session-b"]) {
+        store.upsertSession({
+          id: sessionId,
+          startedAt: Date.now(),
+          mode: "proxy-run",
+          sourceScope: "openclaw",
+          sourceProcess: "openclaw",
+        });
+        store.recordEvent({
+          sessionId,
+          ts: Date.now(),
+          sourceScope: "openclaw",
+          sourceProcess: "openclaw",
+          protocol: "https",
+          direction: "outbound",
+          kind: "request",
+          flowId: `flow-${sessionId}`,
+          method: "POST",
+          host: "api.example.com",
+          path: "/v1/shared",
+          ...sharedPayload,
+        });
+      }
+
+      const result = store.deleteSessions([" session-a ", "session-a", "", " "]);
+
+      expect(result).toEqual({ sessions: 1, events: 1, blobs: 0 });
+      expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
+      expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
+
+      expect(store.deleteSessions(["session-b"])).toEqual({
+        sessions: 1,
+        events: 1,
+        blobs: 1,
       });
-      store.recordEvent({
-        sessionId,
-        ts: Date.now(),
-        sourceScope: "openclaw",
-        sourceProcess: "openclaw",
-        protocol: "https",
-        direction: "outbound",
-        kind: "request",
-        flowId: `flow-${sessionId}`,
-        method: "POST",
-        host: "api.example.com",
-        path: "/v1/shared",
-        ...sharedPayload,
-      });
+      expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBeNull();
+      store.persistPayload(Buffer.from("unreferenced capture"));
+      if (kind === "path") {
+        fs.writeFileSync(path.join(blobDir, "extra-artifact.txt"), "capture artifact");
+      }
+      expect(store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: kind === "path" ? 2 : 1 });
+      if (kind === "path") {
+        expect(fs.readdirSync(blobDir)).toEqual([]);
+      }
+      expect(store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: 0 });
+    } finally {
+      store.close();
     }
-
-    const result = store.deleteSessions(["session-a"]);
-
-    expect(result.sessions).toBe(1);
-    expect(result.events).toBe(1);
-    expect(result.blobs).toBe(0);
-    expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
-    expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
-
-    expect(store.deleteSessions(["session-b"])).toEqual({
-      sessions: 1,
-      events: 1,
-      blobs: 1,
-    });
-    expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBeNull();
   });
 });

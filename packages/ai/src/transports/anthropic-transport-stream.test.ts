@@ -2831,9 +2831,11 @@ describe("anthropic transport stream", () => {
             parameters: {
               type: "object",
               properties: {
-                query: { type: "string" },
+                query: { $ref: "#/$defs/Query" },
               },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           },
         ],
@@ -2847,8 +2849,12 @@ describe("anthropic transport stream", () => {
     expect(tools).toHaveLength(1);
     const tool = requireRecord(tools[0], "tool");
     expect(tool.name).toBe("good_plugin_tool");
-    expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
-      query: { type: "string" },
+    expect(tool.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
+      required: ["query"],
+      additionalProperties: false,
     });
   });
 

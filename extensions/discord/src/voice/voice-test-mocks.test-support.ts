@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
 const {
@@ -156,7 +157,9 @@ const {
       (...args: unknown[]) => Promise<string | undefined>
     >(async () => undefined),
     resolveVoiceIngressWithParticipantsMock: vi.fn() as Mock,
-    transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    transcribeAudioFileMock: vi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(
+      async () => ({ text: "hello from voice" }),
+    ),
     prepareTtsRequestMock: vi.fn(async ({ cfg, text }: { cfg: unknown; text: string }) => ({
       cfg,
       directives: {

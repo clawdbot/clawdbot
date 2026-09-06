@@ -375,11 +375,20 @@ async function runProviderCatalogWithTimeout(
     `provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`,
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let active = true;
+  const catalogParams = {
+    ...params,
+    reportCatalogOutcome: (outcome: ProviderCatalogOutcome) => {
+      if (active) {
+        params.reportCatalogOutcome?.(outcome);
+      }
+    },
+  };
   try {
     if (!timeoutMs) {
-      return await runProviderCatalog(params);
+      return await runProviderCatalog(catalogParams);
     }
-    const catalogRun = runProviderCatalog(params);
+    const catalogRun = runProviderCatalog(catalogParams);
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
     return await Promise.race([
@@ -392,21 +401,20 @@ async function runProviderCatalogWithTimeout(
       }),
     ]);
   } catch (error) {
-    if (isTrustedSecretSurfaceUnavailableError(error)) {
-      params.reportCatalogOutcome?.({ provider: params.provider.id, status: "unavailable" });
-      return undefined;
+    if (!isTrustedSecretSurfaceUnavailableError(error) && error !== timeoutError) {
+      throw error;
+    }
+    for (const provider of params.providerIds ?? [params.provider.id]) {
+      params.reportCatalogOutcome?.({ provider, status: "unavailable" });
     }
     if (error === timeoutError) {
       const message = formatErrorMessage(error);
-      params.reportCatalogOutcome?.({
-        provider: params.provider.id,
-        status: "unavailable",
-      });
       log.warn(`${message}; skipping provider discovery`);
-      return undefined;
     }
-    throw error;
+    return undefined;
   } finally {
+    // A timed-out hook can still finish; its late reports no longer own this publication.
+    active = false;
     if (timer) {
       clearTimeout(timer);
     }

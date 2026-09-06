@@ -238,6 +238,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const explicitSetPaths: string[][] = [];
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
+  let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
   const applyConfigMutation = (
@@ -500,6 +501,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const staleAgentModelRepair = runWithCurrentPluginMetadata(state.candidate, () =>
       repairStaleAgentModelRefs(state.candidate, { env: process.env }),
     );
+    retiredModelRefConfig = staleAgentModelRepair.retiredModelRefConfig;
     applyConfigMutation(staleAgentModelRepair, {
       fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
       sanitize: true,
@@ -586,6 +588,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     state = repairSequence.state;
     pluginMetadataSnapshotState.current = repairSequence.pluginMetadataSnapshot;
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
+    retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
@@ -738,6 +741,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
       : {}),
     ...(openAICodexAuthProfileIdMap?.size ? { openAICodexAuthProfileIdMap } : {}),
+    ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     ...(pluginMetadataSnapshotState.current
       ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
       : {}),

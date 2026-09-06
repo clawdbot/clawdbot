@@ -556,6 +556,19 @@ The `--json` flag outputs a machine-readable report suitable for scripting and a
 Global discovery diagnostics go to stderr, including with `--json`. This explains partial inventory when workspace discovery has no selected system owner, even when no plugins are found. Plugin-specific diagnostics stay in each report. Policy fields use the same case-insensitive plugin ID matching as runtime configuration; the reported plugin ID retains its declared spelling.
 </Note>
 
+SDK import failures appear in the existing plugin error output and Doctor's
+plugin diagnostics. The diagnostic names the plugin, imported
+`openclaw/plugin-sdk/*` seam, running core version, and build version when known.
+For an official plugin, run `openclaw plugins update <id>` and restart the Gateway.
+If the error identifies a nested SDK, the plugin bundles an incompatible
+OpenClaw SDK; update the plugin or contact its author.
+
+JSON diagnostics may include `code: "sdk-incompatible"` and an optional
+`sdkCompatibility` object with `seam`, `coreVersion`, `builtWithOpenClawVersion`
+(when known), and `nestedSdk`. Existing diagnostics without these fields remain
+valid. Model errors point to runtime inspection without including raw loader
+errors.
+
 ## Doctor
 
 ```bash

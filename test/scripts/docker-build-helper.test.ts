@@ -309,13 +309,23 @@ function extractUpgradeSurvivorSupervisor(script: string): string {
   return source;
 }
 
-function extractUpgradeSurvivorSystemctlShim(script: string): string {
-  const match = script.match(/cat >"\$shim_dir\/systemctl" <<'SHIM'\n(?<source>[\s\S]*?)\nSHIM/u);
-  const source = match?.groups?.source;
-  if (!source) {
-    throw new Error("upgrade survivor systemctl shim source not found");
-  }
-  return source;
+function installUpgradeSurvivorSystemctlShim(
+  prefix: string,
+  env: NodeJS.ProcessEnv,
+  scriptPath = UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH,
+): string {
+  const installed = spawnSync(
+    "bash",
+    [
+      "-c",
+      'set -euo pipefail; source "$1"; install_update_restart_systemctl_shim',
+      "fixture",
+      scriptPath,
+    ],
+    { env: { PATH: process.env.PATH, ...env, npm_config_prefix: prefix }, encoding: "utf8" },
+  );
+  expect(installed.status, installed.stderr).toBe(0);
+  return join(prefix, "bin", "systemctl");
 }
 
 async function waitForProcessExit(child: ChildProcess, timeoutMs = 5_000): Promise<number | null> {
@@ -406,10 +416,15 @@ async function forEachUpgradeSurvivorSystemctlShim(
     }
     const pid = targetPid ?? Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
     writeFileSync(pidPath, `${pid}\n`);
-    const shimPath = join(workDir, "systemctl");
-    writeFileSync(shimPath, extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")), {
-      mode: 0o755,
-    });
+    const fixtureEnv = {
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
+    };
+    const shimPath = installUpgradeSurvivorSystemctlShim(
+      workDir,
+      { HOME: workDir, ...fixtureEnv },
+      scriptPath,
+    );
     writeExecutables(binDir, {
       awk: `#!/usr/bin/env bash
 [ "$FAKE_PROC_STAT_MODE" != "unreadable" ] || exit 1
@@ -434,8 +449,7 @@ esac
           ...process.env,
           FAKE_PROC_STAT: procStat ?? "",
           FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
-          OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
-          OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
+          ...fixtureEnv,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
         },
       }).status;
@@ -4556,25 +4570,18 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
       expect(await waitForProcessExit(supervisor)).toBe(0);
       const observation = JSON.parse(readFileSync(`${logPath}.exit.json`, "utf8"));
       expect(observation.last).toMatchObject({ code: 78, signal: null });
-      const shimPath = join(workDir, "systemctl");
-      writeFileSync(
-        shimPath,
-        extractUpgradeSurvivorSystemctlShim(
-          readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-        ),
-      );
-      writeFileSync(
-        join(workDir, "systemd-fixture.mjs"),
-        readFileSync("scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs"),
-      );
+      const managerEnv = {
+        HOME: join(workDir, "home"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(artifacts, "systemctl-shim.log"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(workDir, "missing.pid"),
+      };
+      const shimPath = installUpgradeSurvivorSystemctlShim(workDir, managerEnv);
       const shown = spawnSync("bash", [shimPath, ...SURVIVOR_SERVICE_SHOW_ARGS], {
         encoding: "utf8",
         env: {
           ...process.env,
-          HOME: join(workDir, "home"),
-          OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
-          OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(artifacts, "systemctl-shim.log"),
-          OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(workDir, "missing.pid"),
+          ...managerEnv,
         },
       });
       expect(shown.status, shown.stderr).toBe(0);
@@ -4655,15 +4662,6 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
         join(unitDir, "openclaw-gateway.service"),
         `[Service]\nExecStart="${process.execPath}" unused\n`,
       );
-      const shimPath = join(workDir, "systemctl");
-      writeFileSync(
-        shimPath,
-        extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")),
-      );
-      writeFileSync(
-        join(workDir, "systemd-fixture.mjs"),
-        readFileSync("scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs"),
-      );
       const binDir = join(workDir, "bin");
       writeExecutables(binDir, {
         node: `#!/bin/sh
@@ -4681,6 +4679,7 @@ exec ${shellQuote(process.execPath)} "$@"
         OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
         OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(workDir, "supervisor.pid"),
       };
+      const shimPath = installUpgradeSurvivorSystemctlShim(workDir, fixtureEnv, scriptPath);
       const started = spawnSync("bash", [shimPath, "--user", "start", "openclaw-gateway.service"], {
         encoding: "utf8",
         env: { ...fixtureEnv, PATH: `${binDir}:${process.env.PATH ?? ""}` },
@@ -7211,7 +7210,11 @@ done
     const serviceName = "openclaw-gateway-fixture.service";
     const unitPath = join(home, ".config/systemd/user", serviceName);
     writeExecutables(binDir, {
-      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+      // Bind fixture identity here: native manager children do not inherit OpenClaw selectors.
+      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8").replace(
+        "process.env.OPENCLAW_SYSTEMD_UNIT",
+        JSON.stringify(serviceName),
+      ),
       "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
     });
     const env = {

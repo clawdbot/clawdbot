@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -98,6 +99,37 @@ describe("OpenClawStdioClientTransport", () => {
     mkdirSpy.mockRestore();
   });
 
+  it.each(["close", "forceClose"] as const)(
+    "%s retires startup while its owned data directory is being prepared",
+    async (closeMethod) => {
+      const preparation = createDeferred<undefined>();
+      vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);
+      const child = new MockChildProcess();
+      spawnMock.mockImplementation(() => {
+        queueMicrotask(() => child.emit("spawn"));
+        return child;
+      });
+      const transport = new OpenClawStdioClientTransport({
+        command: "node",
+        prepareDataDir: "/owned-plugin-data",
+      });
+      const onclose = vi.fn();
+      Object.assign(transport, { onclose });
+      const started = transport.start();
+      await transport[closeMethod]();
+      preparation.resolve(undefined);
+
+      await expect(started).rejects.toThrow("closed");
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(onclose).toHaveBeenCalledTimes(1);
+      await transport.close();
+      await transport.forceClose();
+      expect(onclose).toHaveBeenCalledTimes(1);
+      await expect(transport.start()).rejects.toThrow();
+      expect(spawnMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("kills the process tree when graceful stdio close does not exit", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
@@ -179,6 +211,28 @@ describe("OpenClawStdioClientTransport", () => {
     expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
     await vi.advanceTimersByTimeAsync(500);
     await closing;
+  });
+
+  it("does not signal a retired group when the child close event arrives late", async () => {
+    vi.useFakeTimers();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const onclose = vi.fn();
+    Object.assign(transport, { onclose });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    child.exitCode = 0;
+    const closing = transport.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    await closing;
+    expect(transport.pid).toBeNull();
+
+    child.emit("close", 0);
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
+    expect(onclose).toHaveBeenCalledTimes(1);
   });
 
   it("sends and receives JSON-RPC messages over stdio", async () => {

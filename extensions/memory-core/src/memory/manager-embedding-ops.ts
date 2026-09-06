@@ -17,8 +17,6 @@ import {
   chunkMarkdown,
   hashText,
   MEMORY_EMBEDDING_CACHE_TABLE,
-  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   remapChunkLines,
@@ -37,6 +35,7 @@ import { hasMemorySessionTombstone } from "../memory-entry-origins.js";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
+import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
   collectMemoryCachedEmbeddings,
   loadMemoryEmbeddingCache,
@@ -98,12 +97,6 @@ function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
 }
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
-
-type IndexedMemoryChunk = MemoryChunk & {
-  importance: number | null;
-  triggers: string | null;
-  projectKey: string | null;
-};
 
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
@@ -794,68 +787,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           }
         }
         this.clearIndexedFileData(entry.path, source);
+        const writeChunk = createMemoryChunkWriter(this.db, {
+          path: entry.path,
+          source,
+          model,
+          now,
+        });
         for (const [i, chunk] of chunks.entries()) {
           const embedding = embeddings[i] ?? [];
           const id = hashText(
             `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
           );
-          this.db
-            .prepare(
-              `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 hash=excluded.hash,
-                 model=excluded.model,
-                 text=excluded.text,
-                 embedding=excluded.embedding,
-                 updated_at=excluded.updated_at`,
-            )
-            .run(
-              id,
-              entry.path,
-              source,
-              chunk.startLine,
-              chunk.endLine,
-              chunk.hash,
-              model,
-              chunk.text,
-              JSON.stringify(embedding),
-              now,
-            );
-          this.db
-            .prepare(
-              `INSERT INTO ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
-                 chunk_id, importance, triggers, project_key
-               ) VALUES (?, ?, ?, ?)
-               ON CONFLICT(chunk_id) DO UPDATE SET
-                 importance=excluded.importance,
-                 triggers=excluded.triggers,
-                 project_key=excluded.project_key`,
-            )
-            .run(id, chunk.importance, chunk.triggers, chunk.projectKey);
-          const provenance = chunk.provenance ?? {
-            originClass: "untrusted" as const,
-            sessionKind: "unknown" as const,
-            observedAt: now,
-          };
-          this.db
-            .prepare(
-              `INSERT INTO ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE} (
-                 chunk_id, origin_class, session_kind, observed_at, supersedes_key
-               ) VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(chunk_id) DO UPDATE SET
-                 origin_class=excluded.origin_class,
-                 session_kind=excluded.session_kind,
-                 observed_at=excluded.observed_at,
-                 supersedes_key=excluded.supersedes_key`,
-            )
-            .run(
-              id,
-              provenance.originClass,
-              provenance.sessionKind,
-              provenance.observedAt,
-              provenance.supersedesKey ?? null,
-            );
+          writeChunk(id, chunk, embedding);
           if (vectorReady && embedding.length > 0) {
             replaceMemoryVectorRow({
               db: this.db,

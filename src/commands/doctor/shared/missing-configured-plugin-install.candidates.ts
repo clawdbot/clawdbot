@@ -33,7 +33,7 @@ import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
-import { VERSION } from "../../../version.js";
+import { resolveCompatibilityHostVersion } from "../../../version.js";
 import {
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
@@ -103,9 +103,10 @@ export async function resolveConfiguredPluginInstallContext(params: {
     });
   const records =
     params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
+  const currentVersion = resolveCompatibilityHostVersion(params.env);
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
-    currentVersion: VERSION,
+    currentVersion,
   });
   const installedPluginIdsWithRepairablePackageDiagnostics =
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
@@ -118,6 +119,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
       snapshot,
       installRecords: records,
       configuredPluginIds: params.configuredPluginIds,
+      currentVersion,
       updateChannel,
     });
   const installedPluginIdsWithRepairablePackages = new Set([
@@ -203,14 +205,6 @@ const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[
 const OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE =
   /^(\d{4}\.[1-9]\d?\.[1-9]\d?)(?:-beta\.[1-9]\d*)?$/;
 
-function resolveCandidateClawHubSpec(install: PluginPackageInstall): string | undefined {
-  const explicit = install.clawhubSpec?.trim();
-  if (explicit) {
-    return explicit;
-  }
-  return undefined;
-}
-
 function setDownloadableInstallCandidate(params: {
   candidates: Map<string, DownloadableInstallCandidate>;
   pluginId: string;
@@ -219,7 +213,7 @@ function setDownloadableInstallCandidate(params: {
   trustedSourceLinkedOfficialInstall?: boolean;
 }): void {
   const npmSpec = params.install.npmSpec?.trim();
-  const clawhubSpec = resolveCandidateClawHubSpec(params.install);
+  const clawhubSpec = params.install.clawhubSpec?.trim();
   if (!npmSpec && !clawhubSpec) {
     return;
   }
@@ -566,10 +560,11 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
   configuredPluginIds: ReadonlySet<string>;
+  currentVersion: string;
   updateChannel: UpdateChannel;
 }): Set<string> {
   const pluginIds = new Set<string>();
-  const currentVersion = normalizeOptionalLowercaseString(VERSION);
+  const currentVersion = normalizeOptionalLowercaseString(params.currentVersion);
   if (!currentVersion) {
     return pluginIds;
   }

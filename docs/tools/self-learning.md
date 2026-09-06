@@ -75,7 +75,9 @@ one Workshop slot within the [shared background work budget](/concepts/queue#bac
 The foreground answer never waits for the model's review.
 
 OpenClaw records where the completed turn ends, then reads its full model context
-asynchronously after the quiet period. Later messages are excluded. If the saved
+asynchronously after the quiet period. The reviewer connects earlier requirements
+and corrections with observed results across that retained conversation, even
+when the latest turn is routine. Later messages are excluded. If the saved
 turn was rewritten or removed, the review records a failure instead of using
 different evidence. The review runs under a private detached session identity;
 its messages never enter the foreground transcript or session record. Reviews
@@ -175,12 +177,10 @@ Every learned skill receives these controls:
   already above the cap can only become shorter.
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
-- **Collection review:** once a week in `auto` mode, one isolated model session
-  per agent reads only that agent's Workshop-generated skills. Collection changes
-  are recorded in review history and the backup manifest, without proposal rows.
-- **Collection backup:** review validates and scans every rewrite before changing
-  the Workshop directory, keeps one recoverable collection backup, and restores it if a
-  write fails.
+- **Collection review:** a weekly automation maintains the Workshop directory
+  with normal file tools and records its result in automation history. See
+  [collection changes and recovery](/tools/skill-workshop#changes-and-recovery)
+  for its separate editing and recovery rules.
 - **Authoring standards:** learned skills use class-level names, trigger-first
   descriptions, evidence-backed steps, and token-efficient language.
 - **Bounded failure:** an automatic apply is attempted once. A normal apply
@@ -230,16 +230,10 @@ The reviewer reuses the foreground provider, model, and available auth identity,
 with model fallbacks disabled. Provider pricing and data-handling terms apply to
 the additional run.
 
-Weekly collection review runs once per agent and uses that agent's configured model. It receives the
-names, descriptions, and available usage counts and last-used recency of
-Workshop-generated skills, then reads each skill it intends to change
-before one atomic call listing only changes. Usage is supporting evidence: heavy
-use favors preserving a skill's procedure, while no recorded use alone never
-justifies dropping it. It has no message tool or general agent tools. Skill
-bodies are treated as untrusted evidence, not as instructions. Each agent has a
-persisted attempt time and review key, which prevents Gateway restarts from repeating
-a failed or successful review within 7 days. The foreground agent can restore that agent's retained collection backup
-when asked to undo the cleanup, unless an affected skill changed afterward.
+Weekly [collection review](/tools/skill-workshop#collection-review) uses the
+agent's configured model and normal cron scheduling. Skill bodies remain review
+material, not active instructions. Completed edits persist; there is no
+collection-wide transaction or automatic rollback.
 
 Manual history scan uses a separate bounded path. It reviews up to 20 substantial
 sessions with at least six model turns, redacts recognized secrets, bounds the

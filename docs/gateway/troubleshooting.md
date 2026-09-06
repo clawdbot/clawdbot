@@ -267,6 +267,21 @@ Related:
 - [Local models](/gateway/local-models)
 - [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
 
+## Agent run failed with a storage error
+
+An error naming the **Gateway state database** identifies a storage failure observed during the run. The chat banner, recorded assistant error, and `embedded_run_agent_end` log show the same diagnosis. Provider response bodies remain redacted.
+
+| SQLite message                                     | Next step                                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `database is locked` or `database table is locked` | Retry. If it repeats, check Gateway logs and concurrent storage maintenance.                                   |
+| `database or disk is full`                         | Free disk space on the Gateway host, then retry.                                                               |
+| `attempt to write a readonly database`             | Check the Gateway service user's storage permissions and filesystem mount mode.                                |
+| `disk I/O error`                                   | Check storage health and filesystem access before retrying. This message alone does not prove disk exhaustion. |
+
+A transcript writer ownership error means the run lost its session write claim. Retry in the current session and inspect Gateway logs if it recurs. Storage failures do not trigger provider credential rotation or automatic replay of the run.
+
+Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
+
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.

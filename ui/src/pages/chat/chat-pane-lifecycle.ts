@@ -4,6 +4,7 @@ import type {
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -14,14 +15,10 @@ import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annot
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
-  isTerminalPanelShortcut,
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
-import {
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "../../lib/keyboard-shortcut-catalog.ts";
+import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -43,6 +40,7 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
+import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
@@ -80,7 +78,7 @@ import {
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
-import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
@@ -206,7 +204,21 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     ) {
       return;
     }
-    const togglePanelSlot = (slot: SidebarSlotId) => {
+    const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
+      (entry) => entry && matchesShortcutCombo(entry.combo, event),
+    );
+    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    if (
+      shortcut?.available({
+        state,
+        desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
+        discussion: state.connected && state.client ? true : null,
+        discussionAvailable: discussionState === "available" || discussionState === "open",
+        dashboardAvailable: () => !this.compact && this.isBoardPanelAvailable(),
+      })
+    ) {
+      event.preventDefault();
+      const { slot } = shortcut;
       const visible = isSidebarSlotVisible(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
@@ -214,20 +226,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this.commitSidebarLayout(
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
-    };
-    if (state.terminalAvailable && isTerminalPanelShortcut(event)) {
-      event.preventDefault();
-      togglePanelSlot("terminal");
-      return;
-    }
-    const sidebarShortcutSlot = matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
-      ? "workspace"
-      : matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, event)
-        ? "companion"
-        : null;
-    if (sidebarShortcutSlot) {
-      event.preventDefault();
-      togglePanelSlot(sidebarShortcutSlot);
       return;
     }
 

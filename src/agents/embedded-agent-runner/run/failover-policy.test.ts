@@ -65,7 +65,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -82,7 +81,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -99,7 +97,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -118,7 +115,6 @@ describe("resolveRunFailoverDecision", () => {
       expect(
         resolveRunFailoverDecision({
           stage: "prompt",
-          aborted: false,
           externalAbort: false,
           fallbackConfigured: true,
           failoverCode,
@@ -137,7 +133,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -156,7 +151,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -174,7 +168,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -192,7 +185,6 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "prompt",
         allowFormatRetry: true,
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -321,7 +313,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: true,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -615,7 +606,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -633,7 +623,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -652,7 +641,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: false,
         failoverFailure: true,

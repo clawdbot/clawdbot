@@ -150,6 +150,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "color"
   | "endedAt"
   | "hasAutomation"
+  | "hasActiveRun"
   | "label"
   | "lastMessagePreview"
   | "expandedParticipants"

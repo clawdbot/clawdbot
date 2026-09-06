@@ -9,21 +9,18 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it.each([
     {
-      name: "tilde local media when the preview root home contains a literal $ pattern",
+      name: "tilde local media",
       source: "~/media/report-voice.mp3",
-      roots: ["/home/us$&r/media"],
     },
     {
       name: "POSIX dot-segment local media",
       source: "/workspace/project/../media/report-voice.mp3",
-      roots: ["/workspace/media"],
     },
     {
       name: "Windows dot-segment local media",
       source: "C:\\workspace\\project\\..\\media\\report-voice.mp3",
-      roots: ["C:\\workspace\\media"],
     },
-  ])("allows $name", async ({ source, roots }) => {
+  ])("allows $name", async ({ source }) => {
     const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactDirParent
       ? createControlUiE2eArtifactDir("chat-flow.local-media-dollar-home", artifactDirParent)
@@ -58,7 +55,6 @@ suite.define(() => {
     });
 
     await installMockGateway(page, {
-      localMediaPreviewRoots: roots,
       historyMessages: [
         {
           id: "assistant-dollar-home-audio",

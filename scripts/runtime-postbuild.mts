@@ -15,7 +15,6 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
-  listStaticExtensionAssetOutputs,
 } from "./lib/static-extension-assets.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
@@ -47,9 +46,6 @@ const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
   "}",
   "",
 ].join("\n");
-
-/** @internal Shared repository-script contract. */
-export { listStaticExtensionAssetOutputs };
 
 const ROOT = resolveRepoRoot(import.meta.url);
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;

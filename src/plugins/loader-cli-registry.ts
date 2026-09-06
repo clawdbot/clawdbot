@@ -32,7 +32,6 @@ import {
   createPluginLoaderLogger,
   isAuthorizedDreamingSidecarPlugin,
   matchesScopedPluginOrDreamingSidecar,
-  pushPluginValidationError,
   resolveAuthorizedDreamingSidecar,
   safeRealpathOrResolve,
   validatePluginConfig,
@@ -173,13 +172,12 @@ export async function loadOpenClawPluginCliRegistry(
     });
     applyPluginManifestRecordDetails(record, manifestRecord);
     const pushPluginLoadError = (message: string) =>
-      pushPluginValidationError({
+      recordPluginError({
         registry,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         record,
-        message,
+        phase: "validation",
+        error: message,
       });
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -267,8 +265,6 @@ export async function loadOpenClawPluginCliRegistry(
         registry,
         record,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         phase: "load",
         error,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
@@ -362,8 +358,6 @@ export async function loadOpenClawPluginCliRegistry(
         registry,
         record,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         phase: "register",
         error,
         logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,

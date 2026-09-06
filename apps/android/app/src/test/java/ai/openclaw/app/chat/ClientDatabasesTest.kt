@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.buildChatTimeline
+import ai.openclaw.app.ui.chat.readerPosition
+import ai.openclaw.app.ui.chat.restoredChatReaderTransition
 import android.database.sqlite.SQLiteDatabase
 import androidx.room3.RoomDatabase
 import androidx.room3.executeSQL
@@ -11,6 +14,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -18,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,7 +34,45 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 class ClientDatabasesTest {
   @Test
-  fun sessionDeleteWinsAfterStartedReaderPositionSave() =
+  fun readerPositionSurvivesLargeMessagesAcrossReopen() =
+    runTest {
+      val contents =
+        listOf(
+          listOf(ChatMessageContent(text = "x".repeat(20_000))),
+          List(256) { index -> ChatMessageContent(text = "part-$index") },
+        )
+      for ((content, entryId) in contents.flatMap { content -> listOf(content to "canonical-entry", content to null) }) {
+        val names = databaseNames()
+        val message =
+          ChatMessage(
+            id = "display-before",
+            role = "assistant",
+            content = content,
+            timestampMs = 1,
+            entryId = entryId,
+          )
+        val before = buildChatTimeline(listOf(message), 0, emptyList(), null)
+        val position = requireNotNull(before.readerPosition(index = 0, offset = 73))
+        val scope = readerScope("gateway-a", "main")
+        withDatabases(names) { databases ->
+          val store = databases.readerPositionStore()
+          store.save(store.bind(scope), position)
+        }
+
+        withCleanDatabases(names) { databases ->
+          val saved = databases.readerPositionStore().bind(scope).position
+          assertNotNull("content parts: ${content.size}, entryId: $entryId", saved)
+          assertEquals(entryId, saved?.entryId)
+          val after = buildChatTimeline(listOf(message.copy(id = "display-after")), 0, emptyList(), null)
+          val restored = requireNotNull(restoredChatReaderTransition(after, requireNotNull(saved)))
+          assertEquals(0, restored.scrollIndex)
+          assertEquals(73, restored.scrollOffset)
+        }
+      }
+    }
+
+  @Test
+  fun sessionDeleteRemovesSavedReaderPosition() =
     runTest {
       val names = databaseNames()
       withDatabases(names) { databases ->
@@ -61,7 +104,7 @@ class ClientDatabasesTest {
     }
 
   @Test
-  fun gatewayDeleteWinsAfterStartedReaderPositionSave() =
+  fun gatewayDeleteRemovesSavedReaderPosition() =
     runTest {
       val names = databaseNames()
       withDatabases(names) { databases ->
@@ -74,6 +117,136 @@ class ClientDatabasesTest {
 
         assertNull(store.bind(scope).position)
       }
+    }
+
+  @Test
+  fun sessionRetirementWaitsForInFlightSaveThenWins() =
+    runTest {
+      val fence = ChatReaderPositionFence()
+      val scope = readerScope("gateway-a", "main")
+      val binding = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
+      val saveStarted = CompletableDeferred<Unit>()
+      val releaseSave = CompletableDeferred<Unit>()
+      var stored = false
+
+      withContext(Dispatchers.IO) {
+        val save =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            fence.save(binding) {
+              saveStarted.complete(Unit)
+              releaseSave.await()
+              stored = true
+            }
+          }
+        saveStarted.await()
+        val retirement =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            fence.retireSession(scope)
+          }
+        assertFalse(retirement.isCompleted)
+
+        releaseSave.complete(Unit)
+        save.await()
+        val owner = retirement.await()
+        check(owner is ChatReaderPositionRetirement.Owner)
+        fence.deleteSession(owner) { stored = false }
+      }
+
+      assertFalse(stored)
+    }
+
+  @Test
+  fun gatewayRetirementWaitsForInFlightSaveThenWins() =
+    runTest {
+      val fence = ChatReaderPositionFence()
+      val scope = readerScope("gateway-a", "main")
+      val binding = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
+      val saveStarted = CompletableDeferred<Unit>()
+      val releaseSave = CompletableDeferred<Unit>()
+      var stored = false
+
+      withContext(Dispatchers.IO) {
+        val save =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            fence.save(binding) {
+              saveStarted.complete(Unit)
+              releaseSave.await()
+              stored = true
+            }
+          }
+        saveStarted.await()
+        val retirement =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            fence.clearGateway(scope.gatewayId) { stored = false }
+          }
+        assertFalse(retirement.isCompleted)
+        val queuedBinding = async { fence.bind(scope) }
+        assertFalse(queuedBinding.isCompleted)
+
+        releaseSave.complete(Unit)
+        save.await()
+        retirement.await()
+        val retiredBinding = ChatReaderPositionBinding(scope, position = null, generation = queuedBinding.await())
+        fence.save(retiredBinding) { stored = true }
+      }
+
+      assertFalse(stored)
+    }
+
+  @Test
+  fun gatewayRetirementQueuedDuringActivationRemainsClosed() =
+    runTest {
+      val fence = ChatReaderPositionFence()
+      val scope = readerScope("gateway-a", "main")
+      val retired = CompletableDeferred<Unit>()
+      fence.activateGateway(scope.gatewayId) {
+        // Queue removal while activation still owns the fence, before it updates the marker.
+        launch(start = CoroutineStart.UNDISPATCHED) {
+          fence.clearGateway(scope.gatewayId) { }
+          retired.complete(Unit)
+        }
+        true
+      }
+      retired.await()
+      val binding = ChatReaderPositionBinding(scope, null, fence.bind(scope))
+      var stored = false
+      fence.save(binding) { stored = true }
+      assertFalse(stored)
+    }
+
+  @Test
+  fun gatewayActivationStartsANewReaderPositionLifecycle() =
+    runTest {
+      val fence = ChatReaderPositionFence()
+      val scope = readerScope("gateway-a", "main")
+      var stored = false
+      fence.clearGateway(scope.gatewayId) { }
+
+      val retired = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
+      fence.save(retired) { stored = true }
+      assertFalse(stored)
+
+      fence.activateGateway(scope.gatewayId)
+      val replacement = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
+      fence.save(replacement) { stored = true }
+
+      assertTrue(stored)
+    }
+
+  @Test
+  fun staleGatewayActivationCannotOpenARetiredLifecycle() =
+    runTest {
+      val fence = ChatReaderPositionFence()
+      val scope = readerScope("gateway-a", "main")
+      fence.clearGateway(scope.gatewayId) { }
+
+      assertFalse(fence.activateGateway(scope.gatewayId) { false })
+      val stale = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
+      var stored = false
+      fence.save(stale) { stored = true }
+
+      assertFalse(stored)
+      assertTrue(fence.activateGateway(scope.gatewayId) { true })
     }
 
   @Test
@@ -148,6 +321,45 @@ class ClientDatabasesTest {
             binding.await()
           }
         }
+      }
+    }
+
+  @Test
+  fun gatewayActivationWaitsForStartupRecoveryBeforeOpeningCurrentLifecycle() = runTest { assertGatewayActivationAfterRecovery(keepCurrent = true) }
+
+  @Test
+  fun gatewayActivationRechecksIntentAfterStartupRecovery() = runTest { assertGatewayActivationAfterRecovery(keepCurrent = false) }
+
+  private suspend fun assertGatewayActivationAfterRecovery(keepCurrent: Boolean) =
+    coroutineScope {
+      withCleanDatabases(databaseNames()) { databases ->
+        val state = databases.clientStateDatabase()
+        val fence = ChatReaderPositionFence()
+        val ready = CompletableDeferred<Unit>()
+        val deferredStore =
+          ChatReaderPositionStore({
+            ready.await()
+            state
+          }, fence)
+        val recoveryStore = ChatReaderPositionStore({ state }, fence)
+        var current = true
+        val activation = async(start = CoroutineStart.UNDISPATCHED) { deferredStore.activateGateway("gateway-a") { current } }
+        val returnedBeforeRecovery = activation.isCompleted
+        try {
+          recoveryStore.clearGateway("gateway-a") { database ->
+            database.controlDao().deleteMetadata(chatReaderPositionMetadataKey("gateway-a"))
+          }
+          current = keepCurrent
+        } finally {
+          ready.complete(Unit)
+        }
+        assertEquals(keepCurrent, activation.await())
+        assertFalse("Activation must await initialization outside the fence", returnedBeforeRecovery)
+        val scope = readerScope("gateway-a", "main")
+        val binding = deferredStore.bind(scope)
+        val position = ChatReaderPosition("after-recovery", 23)
+        deferredStore.save(binding, position)
+        assertEquals(if (keepCurrent) position else null, deferredStore.bind(scope).position)
       }
     }
 
@@ -285,14 +497,20 @@ class ClientDatabasesTest {
       val names = databaseNames()
       withDatabases(names, setOf("gateway-a", "gateway-b")) { databases ->
         val store = databases.readerPositionStore()
-        store.save(store.bind(readerScope("gateway-a", "main")), ChatReaderPosition("message-a", 37))
+        store.save(
+          store.bind(readerScope("gateway-a", "main")),
+          ChatReaderPosition("message-a", 37, entryId = "entry-a"),
+        )
         store.save(store.bind(readerScope("gateway-a", "agent:main:side")), ChatReaderPosition("message-side", 12))
         store.save(store.bind(readerScope("gateway-b", "main")), ChatReaderPosition("message-b", 5))
       }
 
       withCleanDatabases(names, setOf("gateway-a", "gateway-b")) { reopened ->
         val store = reopened.readerPositionStore()
-        assertEquals(ChatReaderPosition("message-a", 37), store.bind(readerScope("gateway-a", "main")).position)
+        assertEquals(
+          ChatReaderPosition("message-a", 37, entryId = "entry-a"),
+          store.bind(readerScope("gateway-a", "main")).position,
+        )
         assertEquals(
           ChatReaderPosition("message-side", 12),
           store.bind(readerScope("gateway-a", "agent:main:side")).position,

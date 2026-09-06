@@ -1,12 +1,12 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { activeSessions } from "../../agents/tools/transcripts-tool-runtime.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { activeSessions } from "../../transcripts/capture.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
@@ -92,6 +92,7 @@ describe("meeting transcript RPC", () => {
     activeSessions.set(session.sessionId, {
       session,
       providerId: "manual-transcript",
+      provider: {},
       phase: "active",
     });
     const [ok, payload] = await invoke("transcripts.list", {});

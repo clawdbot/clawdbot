@@ -57,7 +57,7 @@ import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { executePreparedEmbeddedRun } from "./run-execution.js";
+import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -474,7 +474,7 @@ async function runEmbeddedAgentInternal(
             };
           }
 
-          return await executePreparedEmbeddedRun({
+          return await runPreparedEmbeddedLoop({
             runParams: params,
             sessionAdmission,
             contextEngineAgentId,

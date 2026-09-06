@@ -23,7 +23,9 @@ afterEach(async () => {
   activePids.clear();
 });
 
-async function createDescendantScope() {
+async function createDescendantScope(
+  options: { inheritLineage?: boolean; oneShot?: boolean; ignoreTerm?: boolean } = {},
+) {
   const cwd = tempDirs.make("openclaw-anchored-shell-");
   const descendantPath = path.join(cwd, "descendant.cjs");
   const descendantPidPath = path.join(cwd, "descendant.pid");
@@ -33,6 +35,7 @@ async function createDescendantScope() {
     descendantPath,
     `
       const { existsSync, writeFileSync } = require("node:fs");
+      ${options.ignoreTerm ? 'process.on("SIGTERM", () => {});' : ""}
       const releaseTimer = setInterval(() => {
         if (existsSync(process.argv[2])) {
           clearInterval(releaseTimer);
@@ -93,19 +96,29 @@ async function createDescendantScope() {
       `
         const { spawn } = require("node:child_process");
         const child = spawn(process.execPath, [${JSON.stringify(descendantPath)}, ${JSON.stringify(releasePath)}, ${JSON.stringify(descendantPidPath)}], {
-          stdio: ["ignore", "ignore", "ignore", 3],
+          stdio: ${JSON.stringify(options.inheritLineage === false ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "ignore", 3])},
         });
         child.unref();
-        ${fragmentedOutputFixture()}
+        const ready = setInterval(() => {
+          if (!require("node:fs").existsSync(${JSON.stringify(descendantPidPath)})) return;
+          clearInterval(ready);
+          ${fragmentedOutputFixture()}
+        }, 10);
       `,
       "utf8",
     );
   }
   const supervisor = createProcessSupervisor();
   const scopeKey = `anchored-shell:${cwd}`;
+  const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
   const run = await supervisor.spawn({
-    mode: "anchored-shell",
-    command: "node root.cjs",
+    ...(options.oneShot
+      ? {
+          mode: "child" as const,
+          argv: [process.execPath, rootPath],
+          stdinMode: "pipe-closed" as const,
+        }
+      : { mode: "anchored-shell" as const, command: "node root.cjs" }),
     sessionId: "anchored-shell-real",
     backendId: "anchored-shell-real",
     scopeKey,
@@ -123,6 +136,7 @@ async function createDescendantScope() {
     run,
     supervisor,
     scopeKey,
+    cleanup,
     readPid: () => waitForPidFile(descendantPidPath, 5_000),
     release: () => writeFile(releasePath, "", "utf8"),
   };
@@ -152,6 +166,38 @@ async function expectPending(promise: Promise<void>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
+  it.skipIf(process.platform === "win32").each([
+    { oneShot: false, ignoreTerm: false },
+    { oneShot: true, ignoreTerm: false },
+    { oneShot: true, ignoreTerm: true },
+  ])(
+    "observes children that closed inherited descriptors (oneShot=$oneShot, ignores TERM=$ignoreTerm)",
+    async ({ oneShot, ignoreTerm }) => {
+      const fixture = await createDescendantScope({ inheritLineage: false, oneShot, ignoreTerm });
+      const pid = await fixture.readPid();
+      activePids.add(pid);
+      try {
+        await expect(fixture.run.wait()).resolves.toMatchObject({ exitCode: 0, exitSignal: null });
+        const cleanup = fixture.cleanup();
+        if (ignoreTerm) {
+          await expect(cleanup).rejects.toThrow("cleanup identity lost");
+        } else {
+          await cleanup;
+          expect(isProcessAlive(pid)).toBe(false);
+        }
+        await waitForDead(pid, 5_000);
+      } finally {
+        await fixture.release();
+        killPidIfAlive(pid);
+        await waitForDead(pid, 5_000);
+        if (ignoreTerm) {
+          await expect(fixture.supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+        } else {
+          await fixture.supervisor.shutdown();
+        }
+      }
+    },
+  );
   it.each(["inherited", "replacement", "empty"] as const)(
     "completes an otherwise idle host with %s command environment",
     async (environment) => {
@@ -347,7 +393,7 @@ describe("supervisor anchored shell real process ownership", () => {
     { name: "cancels retained descendants idempotently", cancel: true },
     { name: "releases ownership after descendants exit naturally", cancel: false },
   ])("$name after root settlement and fragmented output flush", async ({ cancel }) => {
-    const { run, supervisor, scopeKey, readPid, release } = await createDescendantScope();
+    const { run, supervisor, scopeKey, cleanup, readPid, release } = await createDescendantScope();
     const result = await run.wait();
     const decoder = createWindowsOutputDecoder();
     const finalTail = decoder.decode(Buffer.from([0xe2, 0x82])) + decoder.flush();
@@ -372,11 +418,7 @@ describe("supervisor anchored shell real process ownership", () => {
     } else {
       await release();
     }
-    await Promise.all([
-      run.waitForExtinction!(),
-      supervisor.waitForScope(scopeKey),
-      supervisor.waitForScope(scopeKey),
-    ]);
+    await Promise.all([run.waitForExtinction!(), cleanup(), cleanup()]);
     expect(supervisor.getRecord(run.runId)).toMatchObject({
       state: "exited",
       terminationReason: "exit",

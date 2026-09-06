@@ -44,6 +44,9 @@ setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => {
     const activeRuns = new Map<string, Awaited<ReturnType<SupervisorSpawnFn>>>();
     return {
+      acquireScopeCleanup: vi.fn(() => {
+        throw new Error("CLI execution fixture does not own a cleanup scope");
+      }),
       spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
         let stdoutDelivered = false;
         let stderrDelivered = false;

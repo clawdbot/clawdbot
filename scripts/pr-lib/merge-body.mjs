@@ -55,17 +55,28 @@ function trailers(body) {
   return parsed.stdout.split("\n").filter(Boolean);
 }
 
+function isMachineCredit(line) {
+  // Claude Code documents this exact machine address. Names and provider domains
+  // can identify human contributors, so neither is a safe exclusion rule.
+  return /^Co-authored-by:\s*[^<>]+<noreply@anthropic\.com>$/i.test(line);
+}
+
 function compose({ preview, source, captured }) {
   const explicit = captured !== "";
   let body = explicit
     ? Buffer.from(JSON.parse(captured).base64, "base64").toString("utf8")
     : preview;
   const original = trailers(body);
+  if (original.some(isMachineCredit)) {
+    throw new Error(
+      "Squash message contains machine co-author credit; use --body-file with a reviewed message preserving human contributors.",
+    );
+  }
   const required = [
     ...original,
     ...(explicit ? trailers(preview).filter((line) => /^Co-authored-by:/i.test(line)) : []),
     ...source.split("\n").filter(Boolean),
-  ];
+  ].filter((line) => !isMachineCredit(line));
   const missing = [...new Set(required)].filter((line) => !original.includes(line));
   // Keep explicit bytes, including CRLF and trailing blank lines. Insert new
   // credit before that suffix so all parsed trailers remain one terminal block.

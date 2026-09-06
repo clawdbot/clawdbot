@@ -357,6 +357,10 @@ type SessionCompactionCheckpointPreview = Pick<
 >;
 
 export type GatewaySessionRow = SessionRow & {
+  /** Transient UI-owned Swarm note overlays, not persisted session fields. */
+  swarmPhase?: string;
+  swarmPhaseRank?: number;
+  swarmLog?: string;
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
   icon?: string;

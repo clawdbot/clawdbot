@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 /** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,10 +73,10 @@ let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").no
 let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
 let applyProviderResolvedTransportWithPlugin: typeof import("./provider-runtime.js").applyProviderResolvedTransportWithPlugin;
 let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js").normalizeProviderTransportWithPlugin;
-let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
+let resolvePreparedExtraParams: typeof import("../agents/embedded-agent-runner/extra-params.js").resolvePreparedExtraParams;
+let applyExtraParamsToAgent: typeof import("../agents/embedded-agent-runner/extra-params.js").applyExtraParamsToAgent;
 let resolveProviderAuthProfileId: typeof import("./provider-runtime.js").resolveProviderAuthProfileId;
 let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
-let resolveProviderExtraParamsForTransport: typeof import("./provider-runtime.js").resolveProviderExtraParamsForTransport;
 let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js").resolveProviderFollowupFallbackRoute;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
 let resolveProviderTransportTurnStateWithPlugin: typeof import("./provider-runtime.js").resolveProviderTransportTurnStateWithPlugin;
@@ -103,7 +103,6 @@ let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolve
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
 let validateProviderReplayTurnsWithPlugin: typeof import("./provider-runtime.js").validateProviderReplayTurnsWithPlugin;
 let wrapProviderSimpleCompletionStreamFn: typeof import("./provider-runtime.js").wrapProviderSimpleCompletionStreamFn;
-let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
 let createEmptyPluginRegistry: typeof import("./registry-empty.js").createEmptyPluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
@@ -331,10 +330,8 @@ describe("provider-runtime", () => {
       normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
       normalizeProviderTransportWithPlugin,
-      prepareProviderExtraParams,
       resolveProviderAuthProfileId,
       resolveProviderConfigApiKeyWithPlugin,
-      resolveProviderExtraParamsForTransport,
       resolveProviderFollowupFallbackRoute,
       resolveProviderStreamFn,
       resolveProviderTransportTurnStateWithPlugin,
@@ -361,8 +358,9 @@ describe("provider-runtime", () => {
       runProviderDynamicModel,
       validateProviderReplayTurnsWithPlugin,
       wrapProviderSimpleCompletionStreamFn,
-      wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+    ({ resolvePreparedExtraParams, applyExtraParamsToAgent } =
+      await import("../agents/embedded-agent-runner/extra-params.js"));
     ({ attachModelProviderRuntimePluginHandle, resolveProviderPluginsForHooks } =
       await import("./provider-hook-runtime.js"));
     await import("../agents/ai-transport-runtime-host.js");
@@ -632,12 +630,11 @@ describe("provider-runtime", () => {
     setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
 
     expect(
-      prepareProviderExtraParams({
+      resolvePreparedExtraParams({
+        cfg: undefined,
         provider: DEMO_PROVIDER_ID,
+        modelId: MODEL.id,
         workspaceDir: "/tmp/workspace",
-        context: createDemoRuntimeContext({
-          extraParams: {},
-        }),
       }),
     ).toEqual({
       fromActiveRegistry: true,
@@ -881,6 +878,9 @@ describe("provider-runtime", () => {
   });
 
   it("reuses the attempt-prepared provider handle at the model transport boundary", () => {
+    const streamFn = vi.fn();
+    const createStreamFn = vi.fn(() => streamFn);
+    const wrapSimpleCompletionStreamFn = vi.fn(() => streamFn);
     const resolveTransportTurnState = vi.fn(() => ({
       headers: { "x-demo-turn": "turn-1" },
     }));
@@ -889,6 +889,8 @@ describe("provider-runtime", () => {
       label: "Demo",
       auth: [],
       resolveTransportTurnState,
+      createStreamFn,
+      wrapSimpleCompletionStreamFn,
     };
     const model = attachModelProviderRuntimePluginHandle(MODEL, {
       provider: DEMO_PROVIDER_ID,
@@ -914,8 +916,43 @@ describe("provider-runtime", () => {
       }),
     ).toEqual({ headers: { "x-demo-turn": "turn-1" } });
     expect(resolveTransportTurnState).toHaveBeenCalledOnce();
+    expect(
+      getAiTransportHost().plugin.resolveProviderStream({
+        provider: DEMO_PROVIDER_ID,
+        allowRuntimePluginLoad: true,
+        context: createDemoResolvedModelContext({ model }),
+      }),
+    ).toBe(streamFn);
+    expect(
+      getAiTransportHost().plugin.wrapSimpleCompletionStream({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({ model, streamFn }),
+      }),
+    ).toBe(streamFn);
+    expect(createStreamFn).toHaveBeenCalledOnce();
+    expect(wrapSimpleCompletionStreamFn).toHaveBeenCalledOnce();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
     expect(isPluginProvidersLoadInFlightMock).not.toHaveBeenCalled();
+  });
+
+  it("honors an explicit transport fallback owner over the model's attached handle", () => {
+    const streamFn = vi.fn();
+    registerLoadedProviders([
+      { id: "fallback", label: "Fallback", auth: [], createStreamFn: () => streamFn },
+    ]);
+    const model = attachModelProviderRuntimePluginHandle(MODEL, {
+      provider: DEMO_PROVIDER_ID,
+      modelId: MODEL.id,
+      plugin: { id: DEMO_PROVIDER_ID, label: "Demo", auth: [] },
+    });
+    expect(
+      getAiTransportHost().plugin.resolveProviderStream({
+        provider: "fallback",
+        allowRuntimePluginLoad: false,
+        context: createDemoResolvedModelContext({ model }),
+      }),
+    ).toBe(streamFn);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("does not load runtime plugins for transport turn-state hooks when loading is disabled", () => {
@@ -1440,17 +1477,16 @@ describe("provider-runtime", () => {
     ]);
 
     expect(
-      resolveProviderExtraParamsForTransport({
+      resolvePreparedExtraParams({
+        cfg: undefined,
         provider: DEMO_PROVIDER_ID,
-        context: createDemoResolvedModelContext({
-          extraParams: { transport: "websocket" },
-          transport: "websocket" as const,
-        }),
+        modelId: MODEL.id,
+        model: MODEL,
+        extraParamsOverride: { transport: "websocket" },
       }),
     ).toEqual({
-      patch: {
-        providerTransportPatch: true,
-      },
+      transport: "websocket",
+      providerTransportPatch: true,
     });
     expectRecordFields(
       requireRecord(firstMockArg(extraParamsForTransport), "transport params context"),
@@ -1999,15 +2035,10 @@ describe("provider-runtime", () => {
       },
     ]);
 
-    expect(
-      wrapProviderStreamFn({
-        provider: "azure-openai-responses",
-        context: createDemoResolvedModelContext({
-          provider: "azure-openai-responses",
-          streamFn: wrappedStreamFn,
-        }),
-      }),
-    ).toBe(wrappedStreamFn);
+    const agent: { streamFn: StreamFn } = { streamFn: wrappedStreamFn };
+    applyExtraParamsToAgent(agent, undefined, "azure-openai-responses", MODEL.id);
+    void agent.streamFn(MODEL, { messages: [] });
+    expect(wrappedStreamFn).toHaveBeenCalledOnce();
   });
 
   it("resolves opt-in simple-completion stream wrappers", () => {
@@ -2083,15 +2114,12 @@ describe("provider-runtime", () => {
     });
 
     expect(
-      resolveProviderExtraParamsForTransport({
+      resolvePreparedExtraParams({
+        cfg: undefined,
         provider: "mock-openai",
-        context: createDemoRuntimeContext({
-          provider: "mock-openai",
-          modelId: "gpt-5.5",
-          extraParams: {},
-        }),
+        modelId: "gpt-5.5",
       }),
-    ).toBeUndefined();
+    ).toEqual({});
     expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
   });
 
@@ -2448,11 +2476,11 @@ describe("provider-runtime", () => {
     ).toBe("tagged");
 
     expect(
-      prepareProviderExtraParams({
+      resolvePreparedExtraParams({
+        cfg: undefined,
         provider: DEMO_PROVIDER_ID,
-        context: createDemoRuntimeContext({
-          extraParams: { temperature: 0.3 },
-        }),
+        modelId: MODEL.id,
+        extraParamsOverride: { temperature: 0.3 },
       }),
     ).toEqual({
       temperature: 0.3,
@@ -2564,14 +2592,19 @@ describe("provider-runtime", () => {
       },
     ]);
 
-    expect(
-      wrapProviderStreamFn({
-        provider: DEMO_PROVIDER_ID,
-        context: createDemoResolvedModelContext({
-          streamFn: vi.fn(),
-        }),
-      }),
-    ).toBeTypeOf("function");
+    const agent = { streamFn: vi.fn() };
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      DEMO_PROVIDER_ID,
+      MODEL.id,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      MODEL,
+    );
+    expect(agent.streamFn).toBeTypeOf("function");
 
     expect(
       normalizeProviderToolSchemasWithPlugin({
