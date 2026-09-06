@@ -457,7 +457,8 @@ export function createNodeBootstrapArtifactProvider(options: ArtifactOptions) {
       if (closed) {
         throw new Error("Node bootstrap artifact provider is closed");
       }
-      prepared ??= (async () => {
+      // Assign the shared promise before synchronous scratch-root failures can clear it.
+      prepared ??= Promise.resolve().then(async () => {
         try {
           temporaryRoot = await fs.mkdtemp(
             path.join(resolvePreferredOpenClawTmpDir(), "openclaw-node-runtime-"),
@@ -478,7 +479,7 @@ export function createNodeBootstrapArtifactProvider(options: ArtifactOptions) {
           prepared = undefined;
           throw error;
         }
-      })();
+      });
       // Cancellation releases this consumer; process shutdown still drains the shared producer.
       const artifact = await racePromiseWithAbortSignal(prepared, signal);
       signal?.throwIfAborted();
