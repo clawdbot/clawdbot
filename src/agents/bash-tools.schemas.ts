@@ -37,13 +37,20 @@ export const execSchema = Type.Object({
   ),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds before backgrounding; default 10000.",
+      description:
+        "Milliseconds before backgrounding; default 10000. Does not change timeoutSeconds.",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Background now." })),
+  background: Type.Optional(
+    Type.Boolean({
+      description:
+        "Return immediately while the command runs. timeoutSeconds still applies; use timeoutSeconds: 0 for persistent services.",
+    }),
+  ),
   timeoutSeconds: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds.",
+      description:
+        "Total command lifetime in seconds; expiry terminates the process. Omit to use the configured default; 0 disables this timeout.",
     }),
   ),
   pty: Type.Optional(

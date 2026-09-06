@@ -29,13 +29,13 @@ Auto-background the command after this delay (ms).
 </ParamField>
 
 <ParamField path="background" type="boolean" default="false">
-Background the command immediately instead of waiting for `yieldMs`.
+Background the command immediately instead of waiting for `yieldMs`. The process timeout still applies after the tool returns.
 </ParamField>
 
 <ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
-Override the configured exec timeout for this call, in **seconds**. Note the sibling `yieldMs` is in
-milliseconds, and the `process` tool's identically named `timeout` is also in milliseconds - pass
-`timeoutSeconds` so the unit is explicit at the call site. Applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call.
+Limit the command's total lifetime, in **seconds**, overriding the configured exec timeout for this call. Expiry terminates the process even after `background` or `yieldMs` returns a session ID. `yieldMs` controls how long the tool waits before backgrounding; the `process` tool's `timeout` controls how long a poll waits, also in milliseconds.
+
+Applies to gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Disabling this timeout does not make the process survive its host or worker shutting down.
 </ParamField>
 
 <ParamField path="pty" type="boolean" default="false">
