@@ -11,6 +11,8 @@ enum OpenClawSidebarPalette {
     static let textStrong = adaptive(light: 0x171717, dark: 0xEDEDED)
     static let muted = adaptive(light: 0x8F8F8F, dark: 0x8F8F8F)
     static let accent = OpenClawBrand.accent
+    /// Unread marks are attention, not destructive. Keep them off brand red.
+    static let unread = textStrong
 
     static let hairline = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark

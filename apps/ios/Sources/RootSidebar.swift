@@ -78,8 +78,8 @@ struct RootSidebar: View {
         self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
     }
 
-    /// Brand header with compact global actions. Connection and Settings live
-    /// together in the footer so the header stays focused on navigation.
+    /// Brand header with compact global actions. Settings stays a quiet
+    /// footer affordance so the header can stay focused on navigation.
     private var brandHeader: some View {
         HStack(spacing: 4) {
             HStack(spacing: 8) {
@@ -460,7 +460,7 @@ struct RootSidebar: View {
                         .tint(OpenClawSidebarPalette.accent)
                 } else if mainSession?.unread == true {
                     Circle()
-                        .fill(OpenClawSidebarPalette.accent)
+                        .fill(OpenClawSidebarPalette.unread)
                         .frame(width: 7, height: 7)
                         .accessibilityHidden(true)
                 }
@@ -481,37 +481,19 @@ struct RootSidebar: View {
         .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
     }
 
-    /// Web-parity compact footer: connection state left, Settings gear right.
+    /// Quiet Settings affordance. Gateway host identity belongs on the
+    /// Settings / gateway surface, not under the session list.
     private var footer: some View {
         VStack(spacing: 0) {
             self.separator
-            HStack(spacing: 4) {
-                Button {
-                    self.selectSidebarDestination(.gateway)
-                } label: {
-                    HStack(spacing: 9) {
-                        // The agent card owns the healthy status; like the web
-                        // footer, a dot appears here only when degraded.
-                        if !self.isGatewayConnected {
-                            Circle()
-                                .fill(self.gatewayStatusColor)
-                                .frame(width: 8, height: 8)
-                                .accessibilityHidden(true)
-                        }
-                        Text(verbatim: self.gatewayName)
-                            .font(OpenClawType.subheadSemiBold)
-                            .lineLimit(1)
-                    }
-                    .frame(minHeight: 44, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .contentShape(Rectangle())
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                if !self.isGatewayConnected {
+                    Circle()
+                        .fill(self.gatewayStatusColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(OpenClawSidebarPalette.text)
-                .accessibilityValue(self.gatewayStatusTitle)
-
-                Spacer(minLength: 4)
-
                 self.headerIconButton(
                     systemName: "gearshape",
                     label: String(localized: "Settings"))
@@ -519,6 +501,7 @@ struct RootSidebar: View {
                     self.selectSidebarDestination(.settings)
                 }
                 .accessibilityIdentifier("RootTabs.Sidebar.Destination.settings")
+                .accessibilityValue(self.gatewayStatusTitle)
             }
         }
         .padding(.horizontal, 10)
@@ -658,7 +641,7 @@ struct RootSidebar: View {
                     .lineLimit(1)
                 if session.unread == true {
                     Circle()
-                        .fill(OpenClawSidebarPalette.accent)
+                        .fill(OpenClawSidebarPalette.unread)
                         .frame(width: 7, height: 7)
                         .accessibilityHidden(true)
                 }
@@ -769,20 +752,6 @@ struct RootSidebar: View {
         Rectangle()
             .fill(OpenClawSidebarPalette.hairline)
             .frame(height: 1 / self.displayScale)
-    }
-
-    private var gatewayName: String {
-        Self.gatewayName(
-            serverName: self.appModel.gatewayServerName,
-            remoteAddress: self.appModel.gatewayRemoteAddress)
-    }
-
-    static func gatewayName(serverName: String?, remoteAddress: String?) -> String {
-        for candidate in [serverName, remoteAddress] {
-            let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return String(localized: "Connection")
     }
 
     private var gatewayStatusTitle: String {

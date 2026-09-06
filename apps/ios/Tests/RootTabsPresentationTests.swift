@@ -61,10 +61,19 @@ struct RootTabsPresentationTests {
         #expect(!appModel.consumeDashboardNavigationRequest(appModel.dashboardNavigationRequestID))
     }
 
-    @Test func `sidebar gateway label ignores empty identity values`() {
-        #expect(RootSidebar.gatewayName(serverName: "  ", remoteAddress: " gateway.example ") == "gateway.example")
-        #expect(RootSidebar.gatewayName(serverName: "Gateway", remoteAddress: "fallback") == "Gateway")
-        #expect(RootSidebar.gatewayName(serverName: nil, remoteAddress: "\n") == "Connection")
+    @Test func `session menu keeps standard actions off the destructive brand tint`() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/Design/CommandCenterSupport.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("CommandSessionMenuChrome.standardActionTint"))
+        #expect(source.contains(".tint(CommandSessionMenuChrome.standardActionTint)"))
+        #expect(source.contains("Button(role: .destructive)"))
+        #expect(source.contains("Label(\"Delete…\", systemImage: \"trash\")"))
+        #expect(!source.contains(".tint(OpenClawBrand.accent)"))
     }
 
     @Test func `new chat request is consumed once by the active chat owner`() {
