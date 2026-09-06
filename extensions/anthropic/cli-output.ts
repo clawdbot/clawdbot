@@ -181,9 +181,10 @@ function parseClaudeJsonlRecord(line: string): Record<string, unknown> | null {
 /**
  * Reads the compaction trigger off a `compact_boundary` record.
  *
- * The Agent SDK types this field as `compact_metadata`; Claude Code's on-disk
- * session transcripts carry the same payload as `compactMetadata`. Accept both
- * so the projection does not depend on which spelling reaches the stream.
+ * The streamed record spells this field `compact_metadata`; Claude Code's
+ * on-disk session transcripts carry the same payload as `compactMetadata`.
+ * Accept both so the projection does not depend on which spelling reaches the
+ * stream.
  */
 function readCompactBoundaryTrigger(parsed: Record<string, unknown>): string | undefined {
   for (const key of ["compact_metadata", "compactMetadata"]) {
