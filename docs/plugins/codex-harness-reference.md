@@ -1061,8 +1061,10 @@ Codex harness forwards the other bootstrap files as developer instructions:
   message and keeps its conversation. Compaction rebuilds a thread's initial
   context from its creation-time developer instructions and discards injected
   developer messages, so an incognito thread whose catalog was refreshed in
-  place receives the current catalog again after every compaction, including
-  compaction during a turn. A generic policy change on a live
+  place is sent the current catalog again as soon as a compaction completes,
+  including a compaction inside a turn. That turn's own continuation request
+  may already have been built, so the model reliably sees the restored catalog
+  from the following request onward. A generic policy change on a live
   incognito thread still refuses the turn. Native Codex subagents can inherit
   the catalog with the parent thread's developer instructions; this does not
   move workspace persona or memory context into that carrier.
