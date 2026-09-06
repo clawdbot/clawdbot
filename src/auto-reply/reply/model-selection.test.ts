@@ -1168,6 +1168,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe("anthropic");
     expect(state.model).toBe("claude-opus-4-6");
+    expect(sessionPersistenceMocks.persistReplySessionEntry).not.toHaveBeenCalled();
   });
 
   it("uses default provider when providerOverride is not set but modelOverride is", async () => {
@@ -1709,6 +1710,128 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.modelOverride).toBe("ollama-beelink2/qwen2.5-coder:7b");
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
+});
+
+describe("createModelSelectionState inherits primary from stale last-used", () => {
+  it("clears last-used when it differs from the current primary", async () => {
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      modelProvider: "openai",
+      model: "gpt-4o-mini",
+      contextTokens: 128_000,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      primaryProvider: "openai",
+      primaryModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o");
+    expect(sessionEntry.modelProvider).toBeUndefined();
+    expect(sessionEntry.model).toBeUndefined();
+    expect(sessionEntry.contextTokens).toBeUndefined();
+    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+    expect(sessionPersistenceMocks.persistReplySessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("persists last-used inherit when a store path is provided", async () => {
+    const storePath = "sessions.json";
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      modelProvider: "retired-provider",
+      model: "retired-model",
+    });
+    const persistedEntry = makeEntry({
+      updatedAt: sessionEntry.updatedAt + 1,
+    });
+    sessionPersistenceMocks.persistReplySessionEntry.mockResolvedValueOnce({
+      status: "current",
+      entry: persistedEntry,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4o" },
+            models: {
+              "openai/gpt-4o": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      primaryProvider: "openai",
+      primaryModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o");
+    expect(sessionPersistenceMocks.persistReplySessionEntry).toHaveBeenCalledOnce();
+    const persistenceRequest = sessionPersistenceMocks.persistReplySessionEntry.mock.calls[0]?.[0];
+    expect(persistenceRequest).toMatchObject({
+      storePath,
+      sessionKey,
+      initialEntry: expect.objectContaining({
+        modelProvider: "retired-provider",
+        model: "retired-model",
+      }),
+    });
+    expect(persistenceRequest?.entry.modelProvider).toBeUndefined();
+    expect(persistenceRequest?.entry.model).toBeUndefined();
+    expect(sessionEntry).toEqual(persistedEntry);
+    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+  });
+
+  it("keeps last-used when it already matches the current primary", async () => {
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      modelProvider: "openai",
+      model: "gpt-4o",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      primaryProvider: "openai",
+      primaryModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
+    });
+
+    expect(sessionEntry.modelProvider).toBe("openai");
+    expect(sessionEntry.model).toBe("gpt-4o");
+    expect(sessionPersistenceMocks.persistReplySessionEntry).not.toHaveBeenCalled();
   });
 });
 

@@ -1,4 +1,5 @@
 /** Model selection state for reply runs, including catalog and override handling. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
@@ -111,6 +112,55 @@ function loadPreparedModelCatalogRuntime() {
 
 function loadSessionPersistenceRuntime() {
   return sessionPersistenceRuntimeLoader.load();
+}
+
+/** Persists a default-primary inherit onto a session entry (clears overrides and stale last-used). */
+async function persistSessionPrimaryModelInherit(params: {
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  sessionKey: string;
+  storePath?: string;
+  primaryProvider: string;
+  primaryModel: string;
+  preserveAuthProfileOverride?: boolean;
+}): Promise<boolean> {
+  const initialSessionEntry = { ...params.sessionEntry };
+  const nextSessionEntry = { ...params.sessionEntry };
+  const { updated } = applyModelOverrideToSessionEntry({
+    entry: nextSessionEntry,
+    selection: {
+      provider: params.primaryProvider,
+      model: params.primaryModel,
+      isDefault: true,
+    },
+    preserveAuthProfileOverride: params.preserveAuthProfileOverride,
+  });
+  if (!updated) {
+    return false;
+  }
+  if (params.storePath) {
+    const { persistReplySessionEntry } = await loadSessionPersistenceRuntime();
+    const persistence = await persistReplySessionEntry({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      initialEntry: initialSessionEntry,
+      entry: nextSessionEntry,
+    });
+    if (persistence.status === "lifecycle-invalidated") {
+      throw new SessionWorkStartInvalidatedError(persistence.error);
+    }
+    const resetApplied = sessionModelOverrideChangesApplied({
+      initial: initialSessionEntry,
+      next: nextSessionEntry,
+      current: persistence.entry,
+    });
+    adoptPersistedSessionSnapshot(params.sessionEntry, persistence.entry);
+    params.sessionStore[params.sessionKey] = params.sessionEntry;
+    return resetApplied;
+  }
+  adoptPersistedSessionSnapshot(params.sessionEntry, nextSessionEntry);
+  params.sessionStore[params.sessionKey] = params.sessionEntry;
+  return true;
 }
 
 /** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
@@ -339,42 +389,64 @@ export async function createModelSelectionState(params: {
       resetModelOverrideRef = key;
       resetModelOverrideReason = "temporarily-unavailable";
     } else if (shouldResetOverride) {
-      const initialSessionEntry = { ...sessionEntry };
-      const nextSessionEntry = { ...sessionEntry };
-      const { updated } = applyModelOverrideToSessionEntry({
-        entry: nextSessionEntry,
-        selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+      const resetApplied = await persistSessionPrimaryModelInherit({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        primaryProvider,
+        primaryModel,
         preserveAuthProfileOverride: staleDirectStoredOverride,
       });
-      let resetApplied = updated;
-      if (updated) {
-        if (storePath) {
-          const { persistReplySessionEntry } = await loadSessionPersistenceRuntime();
-          const persistence = await persistReplySessionEntry({
-            storePath,
-            sessionKey,
-            initialEntry: initialSessionEntry,
-            entry: nextSessionEntry,
-          });
-          if (persistence.status === "lifecycle-invalidated") {
-            throw new SessionWorkStartInvalidatedError(persistence.error);
-          }
-          const persistedEntry = persistence.entry;
-          resetApplied = sessionModelOverrideChangesApplied({
-            initial: initialSessionEntry,
-            next: nextSessionEntry,
-            current: persistedEntry,
-          });
-          adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
-        } else {
-          adoptPersistedSessionSnapshot(sessionEntry, nextSessionEntry);
-        }
-        sessionStore[sessionKey] = sessionEntry;
-      }
       resetModelOverride = resetApplied;
       if (resetApplied) {
         resetModelOverrideRef = key;
         resetModelOverrideReason = staleDirectStoredOverride ? "stale" : "disallowed";
+      }
+    }
+  }
+
+  // Last-used model/modelProvider is last-run cache, not a user pin. After
+  // defaults.primary changes (or the pair is unknown in catalog), leaving it
+  // in place keeps status/CLI bindings on the old provider until a manual
+  // sessions.patchMany sweep. Inherit primary here; keep explicit overrides.
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    !directStoredModelOverride &&
+    !hasOneTurnModelOverride &&
+    !modelSelectionLocked
+  ) {
+    const runtimeModel = normalizeOptionalString(sessionEntry.model);
+    const runtimeProvider = normalizeOptionalString(sessionEntry.modelProvider);
+    if (runtimeModel || runtimeProvider) {
+      const normalizedLastUsed = normalizeRuntimeRef(
+        runtimeProvider ?? defaultProvider,
+        runtimeModel ?? defaultModel,
+        runtimeModelNormalization,
+      );
+      const lastUsedKey = modelKey(normalizedLastUsed.provider, normalizedLastUsed.model);
+      const primaryKey = modelKey(primaryProvider, primaryModel);
+      const catalogForLookup = modelCatalog ?? allowedModelCatalog;
+      const lastUsedCataloged = Boolean(
+        findSelectedCatalogEntry({
+          catalog: catalogForLookup,
+          provider: normalizedLastUsed.provider,
+          model: normalizedLastUsed.model,
+        }),
+      );
+      const lastUsedUnknown =
+        catalogAuthoritative && catalogForLookup.length > 0 && !lastUsedCataloged;
+      if (lastUsedKey !== primaryKey || lastUsedUnknown) {
+        await persistSessionPrimaryModelInherit({
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          primaryProvider,
+          primaryModel,
+        });
       }
     }
   }
