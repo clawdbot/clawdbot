@@ -467,6 +467,7 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
   });
   const gatewayUrl = new URL(instance.url);
   gatewayUrl.protocol = gatewayUrl.protocol === "wss:" ? "https:" : "http:";
+  // Both clients share a device identity; use the same canonical runtime metadata.
   const options: GatewayClientOptions = {
     url: instance.url,
     origin: gatewayUrl.origin,
@@ -482,7 +483,6 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     ],
-    platform: process.platform,
     requestTimeoutMs: 30_000,
     onHelloOk: resolveHello,
     onConnectError: rejectHello,

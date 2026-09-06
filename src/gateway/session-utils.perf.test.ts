@@ -19,12 +19,12 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 import * as titleReader from "./session-transcript-title-reader.js";
 import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
 import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
-import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -74,7 +74,7 @@ describe("session list resolver cache", () => {
           });
         });
         try {
-          const result = await listSessionsFromStoreAsync({
+          const result = await listSessionFixture({
             cfg,
             storePath: path.join(stateDir, "sessions.json"),
             store,
@@ -310,7 +310,7 @@ describe("session list resolver cache", () => {
         expect(acpSelects).toBe(3);
 
         acpSelects = 0;
-        const result = await listSessionsFromStoreAsync({
+        const result = await listSessionFixture({
           cfg,
           storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
           store: {
@@ -326,7 +326,7 @@ describe("session list resolver cache", () => {
           acpSelects = 0;
           const rows = vi.spyOn(rowProjection, "buildGatewaySessionRow");
           try {
-            const searched = await listSessionsFromStoreAsync({
+            const searched = await listSessionFixture({
               cfg,
               storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
               store: Object.fromEntries(
@@ -397,7 +397,7 @@ describe("session list resolver cache", () => {
           })),
         );
       try {
-        const result = await listSessionsFromStoreAsync({
+        const result = await listSessionFixture({
           cfg,
           storePath,
           store,
@@ -419,7 +419,7 @@ describe("session list resolver cache", () => {
         });
 
         titleBatchSpy.mockClear();
-        await listSessionsFromStoreAsync({
+        await listSessionFixture({
           cfg,
           storePath,
           store,

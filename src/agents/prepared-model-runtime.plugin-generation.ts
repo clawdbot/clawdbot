@@ -118,6 +118,7 @@ export async function buildPreparedPluginModelCatalog(params: {
   };
   catalogMode: PreparedModelRuntimeCatalogMode;
   modelRegistry: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["modelRegistry"];
+  providerOutcomes?: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["providerOutcomes"];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
   const { credentials, input } = params.agentFacts;
@@ -129,6 +130,7 @@ export async function buildPreparedPluginModelCatalog(params: {
       config: input.config,
       modelRegistry: params.modelRegistry,
       metadataSnapshot,
+      providerOutcomes: params.providerOutcomes,
       includeProviderPluginAugmentation: params.catalogMode === "live",
       ...(input.env ? { env: input.env } : {}),
       ...(input.readOnly ? { readOnly: true } : {}),

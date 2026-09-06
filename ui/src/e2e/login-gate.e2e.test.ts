@@ -167,6 +167,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const header = page.locator(".chat-pane__header");
       await header.waitFor({ state: "visible" });
+      await header.locator(".chat-side-panel-toggle").click();
+      await header.getByRole("button", { name: "Focus", exact: true }).click();
       await gateway.setOnline(false);
 
       await expect
@@ -191,7 +193,7 @@ suite.define(() => {
       expect(await outlet.getAttribute("aria-disabled")).toBeNull();
       expect(await header.isVisible()).toBe(true);
 
-      const headerActions = header.locator(".chat-pane__actions");
+      const headerActions = header.locator("fieldset.chat-pane__actions");
       expect(
         await headerActions.evaluate((element) => (element as HTMLFieldSetElement).disabled),
       ).toBe(true);
@@ -200,6 +202,11 @@ suite.define(() => {
       for (const button of await actionButtons.all()) {
         expect(await button.isDisabled()).toBe(true);
       }
+      const restore = header.getByRole("button", { name: "Restore split", exact: true });
+      expect(await restore.isEnabled()).toBe(true);
+      await restore.click();
+      await page.locator(".side-panel-empty--selector").waitFor();
+      expect(await header.locator(".chat-side-panel-toggle").isEnabled()).toBe(true);
     } finally {
       await closeContext(context);
     }

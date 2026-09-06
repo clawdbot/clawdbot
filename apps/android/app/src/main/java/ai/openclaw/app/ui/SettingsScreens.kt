@@ -48,7 +48,6 @@ import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawAgentAvatar
-import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -177,35 +176,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.text.DateFormat
 import java.util.Date
-
-/**
- * Detail routes reachable from the Android settings home surface.
- */
-internal enum class SettingsRoute {
-  Home,
-  Profile,
-  Voice,
-  Agents,
-  ProvidersModels,
-  Approvals,
-  CronJobs,
-  Usage,
-  Skills,
-  SkillWorkshop,
-  SystemAgent,
-  NodesDevices,
-  Channels,
-  Dreaming,
-  Terminal,
-  Desktop,
-  Notifications,
-  PhoneCapabilities,
-  Gateway,
-  Appearance,
-  Health,
-  About,
-  Licenses,
-}
 
 /**
  * Dispatches a selected settings route to its detail screen without changing navigation ownership.
@@ -358,7 +328,7 @@ private fun CronJobsSettingsScreen(
     Text(
       text = nativeString("Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it."),
       style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textSubtle,
+      color = ClawTheme.colors.textMuted,
     )
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -400,7 +370,7 @@ private fun CronSummaryStrip(rows: List<SettingsMetric>) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       rows.forEach { row ->
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
+          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
           Text(text = row.value, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
       }
@@ -622,13 +592,10 @@ private fun ApprovalsSettingsScreen(
   onBack: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
-  val execApprovals by viewModel.execApprovals.collectAsState()
-  val execApprovalsRefreshing by viewModel.execApprovalsRefreshing.collectAsState()
-  val execApprovalsErrorText by viewModel.execApprovalsErrorText.collectAsState()
-  val execApprovalsNotice by viewModel.execApprovalsNotice.collectAsState()
+  val inbox by viewModel.execApprovalInbox.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val issueCount = execApprovals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
+  val issueCount = inbox.approvals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -640,26 +607,26 @@ private fun ApprovalsSettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric(nativeString("Gateway Pending"), execApprovals.size.toString()),
+          SettingsMetric(nativeString("Gateway Pending"), inbox.approvals.size.toString()),
           SettingsMetric(nativeString("Thread Activity"), pendingToolCalls.size.toString()),
           SettingsMetric(nativeString("Issues"), issueCount.toString()),
           SettingsMetric(nativeString("Active Runs"), pendingRunCount.toString()),
         ),
     )
     ClawSecondaryButton(
-      text = if (execApprovalsRefreshing) nativeString("Refreshing") else nativeString("Refresh"),
+      text = if (inbox.refreshing) nativeString("Refreshing") else nativeString("Refresh"),
       onClick = viewModel::refreshExecApprovals,
-      enabled = isConnected && !execApprovalsRefreshing,
+      enabled = isConnected && !inbox.refreshing,
       modifier = Modifier.fillMaxWidth(),
     )
-    if (execApprovalsErrorText != null) {
+    inbox.errorText?.let { errorText ->
       ClawPanel {
-        Text(text = gatewayExecApprovalTextForDisplay(execApprovalsErrorText ?: ""), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+        Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
-    // Terminal outcomes always retire their card first, so the notice renders as a
-    // standalone banner above the list; it stays visible until the user dismisses it.
-    execApprovalsNotice?.let { notice ->
+    // The inbox publishes terminal notices with their cards retired in the same snapshot.
+    // Keep the banner independent of remaining cards until the user dismisses it.
+    inbox.notice?.let { notice ->
       ExecApprovalNotice(notice = notice, onDismiss = { viewModel.dismissExecApprovalsNotice(notice) })
     }
     if (!isConnected) {
@@ -669,7 +636,7 @@ private fun ApprovalsSettingsScreen(
           Text(text = nativeString("Connect the gateway to load approval requests in the app."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
-    } else if (execApprovals.isEmpty()) {
+    } else if (inbox.approvals.isEmpty()) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Text(text = nativeString("No gateway approvals."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -678,7 +645,7 @@ private fun ApprovalsSettingsScreen(
       }
     } else {
       ExecApprovalsPanel(
-        approvals = execApprovals,
+        approvals = inbox.approvals,
         onResolve = viewModel::resolveExecApproval,
       )
     }
@@ -2259,7 +2226,13 @@ private fun AppLanguageRow(
 
 private fun appLanguageTitle(language: AppLanguage): String = if (language == AppLanguage.System) nativeString("System") else language.displayName
 
-internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = nativeString(mode.displayLabel)
+// Literal lookups keep every mode visible to the phone localization extractor.
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
+  when (mode) {
+    AppearanceThemeMode.System -> nativeString("System")
+    AppearanceThemeMode.Dark -> nativeString("Dark")
+    AppearanceThemeMode.Light -> nativeString("Light")
+  }
 
 internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map(::appearanceThemeSummary)
 
@@ -2665,7 +2638,7 @@ private fun ExecApprovalCard(
       approval.warningText?.let { warningText ->
         Text(text = warningText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
-      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
       approval.errorText?.let { errorText ->
         Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       }
@@ -2744,7 +2717,7 @@ private fun ExecApprovalNotice(
         Text(
           text = nativeString("Approval \${notice.approvalId}", notice.approvalId),
           style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
+          color = ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
@@ -2764,7 +2737,7 @@ private fun SessionToolCallsPanel(toolCalls: List<ChatPendingToolCall>) {
 @Composable
 private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   val hasIssue = toolCall.isError == true
-  ClawDetailRow(
+  ClawListItem(
     title = approvalActionName(toolCall.name),
     subtitle = approvalSubtitle(toolCall, hasIssue),
     leading = { ClawIconBadge(icon = Icons.Default.Lock) },
@@ -2797,7 +2770,7 @@ internal fun usageRefreshVisible(
 @Composable
 private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   val hasIssue = provider.error != null
-  ClawDetailRow(
+  ClawListItem(
     title = provider.displayName,
     subtitle = usageProviderSubtitle(provider),
     leading = { ClawTextBadge(text = provider.displayName.uppercaseFirstGraphemeOrNull() ?: "U") },
@@ -2810,7 +2783,7 @@ private fun CronJobListRow(
   job: GatewayCronJobSummary,
   onClick: () -> Unit,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = job.name,
     subtitle = cronJobSubtitle(job),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open automation detail"), onClick = onClick),
@@ -2986,7 +2959,7 @@ private fun AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
     subtitle = if (isDefault) nativeString("Default assistant") else nativeString("Ready"),
     leading = {

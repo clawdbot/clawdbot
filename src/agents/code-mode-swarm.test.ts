@@ -416,8 +416,7 @@ describe("Code Mode swarm guest", () => {
     const { apiFiles: files } = createCodeModeNamespaceRuntime();
 
     expect(files.map((file) => file.path)).toEqual(["agents.d.ts"]);
-    expect(files[0]?.content).toContain("Promise.all");
-    expect(files[0]?.content).toContain("while (!ready)");
+    expect(files[0]?.content).toContain("Promise.allSettled");
     expect(files[0]?.content).toContain("schema: AgentJsonSchema");
   });
 });

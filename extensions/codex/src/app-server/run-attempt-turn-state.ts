@@ -10,6 +10,7 @@ import {
   type CodexAttemptTimeout,
 } from "./attempt-deadlines.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
+import type { AttemptSettlementWarning } from "./attempt-terminal.js";
 import {
   resolveCodexNativeHookRelayTtlMs,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
@@ -48,6 +49,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     // this marker remains the user-interrupt hint until Codex exposes abortReason.
     sawCodexInterruptMarker: false,
     timeout: undefined as CodexAttemptTimeout | undefined,
+    // SAFETY: Only the correlated completed-answer deadline fills this initially empty slot.
+    settlementWarning: undefined as AttemptSettlementWarning | undefined,
+    // SAFETY: Finalization fills this initially empty slot while its transcript mirror is pending.
+    pendingSettlementStage: undefined as string | undefined,
     clientClosedPromptError: undefined as string | undefined,
     clientClosedDiagnostic: undefined as string | undefined,
     clientClosedAbort: false,
@@ -69,6 +74,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     currentTurnHadNonTerminalDynamicToolResult: false,
   };
   const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
+  const settlementExpired = createDeferred<void>();
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   // One execution promise per call id prevents duplicate delivery from
   // repeating non-idempotent computer input while the attempt remains active.
@@ -150,6 +156,30 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     signal: runAbortController.signal,
     onDeadlineChanged: params.onAttemptDeadlineChanged,
     onTimeout: (timeout) => {
+      const pendingStage =
+        state.pendingSettlementStage ??
+        projectorRef.current?.settlement.pendingStage ??
+        "notification_queue";
+      if (timeout.kind === "settlement" && projectorRef.current?.recoverCompletedAnswer()) {
+        state.settlementWarning = {
+          pendingStage,
+          elapsedMs: timeout.elapsedMs,
+          timeoutMs: timeout.timeoutMs,
+        };
+        state.projectionClosed = true;
+        trajectoryRecorder?.recordEvent("turn.settlement_warning", {
+          threadId: resourceState.thread.threadId,
+          turnId: turnIdRef.current,
+          ...state.settlementWarning,
+        });
+        embeddedAgentLog.warn(
+          "codex app-server retaining completed answer after settlement expiry",
+          state.settlementWarning,
+        );
+        completeTurn();
+        settlementExpired.resolve();
+        return;
+      }
       state.timeout = timeout;
       projectorRef.current?.markTimedOut();
       const error = new Error(
@@ -161,6 +191,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         threadId: resourceState.thread.threadId,
         turnId: turnIdRef.current,
         ...timeout,
+        pendingStage,
       };
       trajectoryRecorder?.recordEvent(`turn.${timeout.kind}_timeout`, fields);
       embeddedAgentLog.warn(error.message, fields);
@@ -171,6 +202,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   return {
     state,
     completion,
+    settlementExpired: settlementExpired.promise,
     pendingOpenClawDynamicToolCompletionIds,
     openClawDynamicToolExecutions,
     activeTurnItemIds,

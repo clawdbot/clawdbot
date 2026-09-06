@@ -35,7 +35,7 @@ import {
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
-import { ensureMcpLoopbackServer } from "./mcp-http.js";
+import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import * as toolResolution from "./tool-resolution.js";
 
 vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
@@ -152,7 +152,7 @@ async function withCliQuestionLoopback(
         };
         // Config identity is stable: tools/list must seed the same cache used by tools/call.
         setRuntimeConfigSnapshot(config);
-        const server = await ensureMcpLoopbackServer();
+        await ensureMcpLoopbackServer();
         const { getActiveMcpLoopbackRuntime } = await import("./mcp-http.loopback-runtime.js");
         const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "loopback runtime");
         const toolCalls = new Set<Promise<unknown>>();
@@ -185,7 +185,7 @@ async function withCliQuestionLoopback(
           method: "tools/list" | "tools/call",
           attached = false,
         ) => {
-          const response = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+          const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
             method: "POST",
             signal: requestController.signal,
             headers: {
@@ -297,7 +297,7 @@ async function withCliQuestionLoopback(
             }
           },
           () => Promise.allSettled(requests),
-          () => server.close(),
+          () => closeMcpLoopbackServer(),
           () => Promise.allSettled(toolCalls),
           () =>
             runQaGatewayFixture(

@@ -96,50 +96,71 @@ describe("media understanding attachment cache", () => {
     expect(result.mime).toBe("image/png");
   });
 
-  it("bounds bytes consumed when a local file grows after stat", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-growth-" }, async (base) => {
-      const attachmentPath = path.join(base, "growing.png");
-      await fs.writeFile(attachmentPath, PNG_1X1);
-      const maxBytes = PNG_1X1.length;
-      const open = fs.open.bind(fs);
-      let consumed = 0;
-      let grew = false;
-      const growBeforeRead = async () => {
-        if (!grew) {
-          grew = true;
-          await fs.appendFile(attachmentPath, Buffer.alloc(4096));
-        }
-      };
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        const read = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
-          await growBeforeRead();
-          const result = await read(...readArgs);
-          consumed += result.bytesRead;
-          return result;
+  it.each(["unchanged", "growing", "read-failure"] as const)(
+    "closes one bounded local read when the file is %s",
+    async (behavior) => {
+      await withTestDir({ prefix: "openclaw-media-cache-growth-" }, async (base) => {
+        const attachmentPath = path.join(base, "growing.png");
+        await fs.writeFile(attachmentPath, PNG_1X1);
+        const maxBytes = PNG_1X1.length;
+        const open = fs.open.bind(fs);
+        let consumed = 0;
+        let opens = 0;
+        let closes = 0;
+        let grew = false;
+        const readError = new Error("synthetic read failure");
+        const growBeforeRead = async () => {
+          if (behavior === "read-failure") {
+            throw readError;
+          }
+          if (behavior === "growing" && !grew) {
+            grew = true;
+            await fs.appendFile(attachmentPath, Buffer.alloc(4096));
+          }
+        };
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          opens += 1;
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            closes += 1;
+            await close();
+          });
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+            await growBeforeRead();
+            const result = await read(...readArgs);
+            consumed += result.bytesRead;
+            return result;
+          });
+          const readFile = handle.readFile.bind(handle);
+          vi.spyOn(handle, "readFile").mockImplementation(async (...readArgs) => {
+            await growBeforeRead();
+            const result = await readFile(...readArgs);
+            consumed += result.length;
+            return result;
+          });
+          return handle;
         });
-        const readFile = handle.readFile.bind(handle);
-        vi.spyOn(handle, "readFile").mockImplementation(async (...readArgs) => {
-          await growBeforeRead();
-          const result = await readFile(...readArgs);
-          consumed += result.length;
-          return result;
+        const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
+          localPathRoots: [base],
+          includeDefaultLocalPathRoots: false,
         });
-        return handle;
-      });
-      const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
-        localPathRoots: [base],
-        includeDefaultLocalPathRoots: false,
-      });
 
-      await expect(
-        cache.getBuffer({ attachmentIndex: 0, maxBytes, timeoutMs: 1000 }),
-      ).rejects.toMatchObject({ reason: "maxBytes" });
-      expect(consumed).toBeGreaterThan(0);
-      expect(consumed).toBeLessThanOrEqual(maxBytes + 1);
-    });
-  });
+        const result = cache.getBuffer({ attachmentIndex: 0, maxBytes, timeoutMs: 1000 });
+        if (behavior === "unchanged") {
+          await expect(result).resolves.toMatchObject({ buffer: PNG_1X1 });
+        } else if (behavior === "growing") {
+          await expect(result).rejects.toMatchObject({ reason: "maxBytes" });
+        } else {
+          await expect(result).rejects.toBe(readError);
+        }
+        expect(opens).toBe(1);
+        expect(closes).toBe(opens);
+        expect(consumed).toBe(behavior === "read-failure" ? 0 : maxBytes + Number(grew));
+      });
+    },
+  );
 
   it.each(["local", "staged"] as const)(
     "enforces a zero-byte path limit for %s files",

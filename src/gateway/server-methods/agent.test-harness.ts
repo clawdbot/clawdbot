@@ -313,7 +313,8 @@ vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
-vi.mock("../../infra/agent-run-registry.js", () => ({
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
   claimAgentRunContext: mocks.registerAgentRunContext,
   clearAgentRunContext: mocks.clearAgentRunContext,
   getAgentRunContext: vi.fn(() => undefined),
@@ -1079,6 +1080,7 @@ export async function invokeAgentIdentityGet(
     respond?: ReturnType<typeof vi.fn>;
     reqId?: string;
     context?: GatewayRequestContext;
+    client?: AgentHandlerArgs["client"];
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -1094,7 +1096,7 @@ export async function invokeAgentIdentityGet(
       id: options?.reqId ?? "agent-identity-test-req",
       method: "agent.identity.get",
     },
-    client: null,
+    client: options?.client ?? null,
     isWebchatConnect: () => false,
   });
   return respond;

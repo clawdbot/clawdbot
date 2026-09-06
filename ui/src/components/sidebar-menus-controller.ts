@@ -13,14 +13,13 @@ import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
@@ -404,7 +403,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     }
     const { selectedAgentId } = this.host.getSessionNavigationState();
     const store = sessionPullRequestsForGateway(context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       session.key,
       parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
     );

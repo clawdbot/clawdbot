@@ -11,6 +11,14 @@ import {
   loadPendingDelivery,
   markDeliveryPlatformSendAttemptStarted,
 } from "../infra/outbound/delivery-queue-storage.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunVerification,
+} from "../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -19,6 +27,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -44,7 +53,8 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: mocks.recoveryDeliver,
 }));
 
-vi.mock("../infra/outbound/channel-resolution.js", () => ({
+vi.mock("../infra/outbound/channel-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/outbound/channel-resolution.js")>()),
   resolveOutboundChannelMessageAdapter: mocks.resolveOutboundChannelMessageAdapter,
 }));
 
@@ -146,6 +156,61 @@ describe("restart sentinel notice recovery", () => {
     });
   }
 
+  it("sends only the four update milestones across repeated phases and successor startup", async () => {
+    const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({ channel: "matrix", messageId: "notice" }),
+            },
+          }),
+        },
+      ]),
+    );
+    mocks.sendDurableMessageBatch.mockImplementation(async (request) => {
+      await markAttempt(request);
+      return { status: "sent", results: [{ channel: "matrix", messageId: "notice" }] };
+    });
+    let run = createUpdateRun({
+      trigger: "chat",
+      before: { version: "2026.9.1" },
+      target: { version: "2026.9.2" },
+      origin: { deliveryContext: { channel: "matrix", to: "room:update" } },
+    });
+    const notify = createUpdateRunNotifier(run, {}, {});
+    await notify(run, "ack");
+    await notify(run, "ack");
+    for (const phase of ["staging", "validating", "activating"] as const) {
+      run = recordUpdateRunPhase(run.runId, phase);
+      await notify(run, "activating");
+    }
+    await notify(run, "activating");
+    run = recordUpdateRunPhase(run.runId, "verifying");
+    run = recordUpdateRunVerification(run.runId, { booted: true, runningVersion: "2026.9.2" });
+    const successor = createUpdateRunNotifier(run, {}, {});
+    await successor(run, "verifying");
+    await successor(run, "verifying");
+    run = finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.2" } });
+    await successor(run, "finished");
+    await notify(run, "finished");
+    expect(
+      mocks.sendDurableMessageBatch.mock.calls.map(([request]) => request.payloads[0].text),
+    ).toEqual([
+      "⬆️ Updating OpenClaw 2026.9.1 → 2026.9.2. The gateway stays available while the update is validated; you'll get a message here when it finishes.",
+      "⏳ Restarting the gateway now (v2026.9.1 → v2026.9.2)…",
+      "🔁 Back on v2026.9.2, verifying…",
+      renderUpdateRunReport(run).markdown,
+    ]);
+    expect(getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(true);
+    expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+  });
+
   it.each(["sent", "suppressed", "failed", "throw"] as const)(
     "reports %s lifecycle delivery without starting inline recovery",
     async (outcome) => {
@@ -190,30 +255,41 @@ describe("restart sentinel notice recovery", () => {
     expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
   });
 
-  it("bounds a blocked lifecycle send to ten seconds and preserves queued recovery", async () => {
+  it("bounds a blocked lifecycle send while its work owner retains queue settlement", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const queueId = "update-run-ack:timeout";
     const started = createDeferredCore();
     const finish = createDeferredCore();
+    const work = new AsyncWorkScope();
     mocks.sendDurableMessageBatch.mockImplementationOnce(async () => {
       started.resolve();
       await finish.promise;
       return { status: "sent", results: [{ channel: "whatsapp", messageId: "late-ack" }] };
     });
     let settled = false;
-    const send = sendLifecycleNotice(queueId).finally(() => {
-      settled = true;
-    });
+    const send = work
+      .track(() => sendLifecycleNotice(queueId))
+      .finally(() => {
+        settled = true;
+      });
     await started.promise;
 
+    let drained = false;
+    let draining: Promise<void> | undefined;
     try {
       await vi.advanceTimersByTimeAsync(9_999);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       await expect(send).resolves.toBe(false);
       expect(queueStatus(queueId)).toBe("pending");
+      draining = work.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
     } finally {
       finish.resolve();
+      await (draining ?? work.drain());
       await vi.waitFor(() => expect(queueStatus(queueId)).toBe("completed"));
     }
     expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
@@ -225,6 +301,7 @@ describe("restart sentinel notice recovery", () => {
     const started = createDeferredCore();
     const finish = createDeferredCore();
     const completed = createDeferredCore();
+    const work = new AsyncWorkScope();
     const result = attachOutboundDeliveryCommitHook(
       { channel: "whatsapp", messageId: "ack-before-hook-timeout" },
       async () => {
@@ -234,15 +311,23 @@ describe("restart sentinel notice recovery", () => {
       },
     );
     mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "sent", results: [result] });
-    const send = sendLifecycleNotice(queueId);
+    const send = work.track(() => sendLifecycleNotice(queueId));
     await started.promise;
 
+    let drained = false;
+    let draining: Promise<void> | undefined;
     try {
       expect(queueStatus(queueId)).toBe("completed");
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(send).resolves.toBe(true);
+      draining = work.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
     } finally {
       finish.resolve();
+      await (draining ?? work.drain());
       await completed.promise;
     }
     expect(mocks.recoveryDeliver).not.toHaveBeenCalled();

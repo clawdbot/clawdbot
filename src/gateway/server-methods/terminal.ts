@@ -316,7 +316,10 @@ export async function openTerminalSession(
     respondTerminalUnavailable(respond, "terminal connection closed", request.failureHint);
     return;
   }
-  if (request.requireCliAgents && context.getRuntimeConfig().gateway?.cliAgents?.enabled !== true) {
+  if (
+    request.requireCliAgents &&
+    context.getRuntimeConfig().gateway?.cliAgents?.enabled === false
+  ) {
     invalid(
       respond,
       "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
@@ -407,7 +410,7 @@ export async function openTerminalSession(
           context.isConnectionActive?.(connId) !== false &&
           terminalEnabled(context) &&
           (!request.requireCliAgents ||
-            context.getRuntimeConfig().gateway?.cliAgents?.enabled === true) &&
+            context.getRuntimeConfig().gateway?.cliAgents?.enabled !== false) &&
           context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
           authorizeCatalogTerminalNode(context, relay.plan).ok &&
           !deadline.controller.signal.aborted &&

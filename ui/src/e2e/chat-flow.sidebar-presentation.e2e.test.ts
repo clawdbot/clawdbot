@@ -16,6 +16,7 @@ import {
   pauseVirtualClock,
   requireRecord,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -254,11 +255,7 @@ suite.define(() => {
   });
 
   it("keeps long sidebar labels clipped after a session switch", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.clock.install();
     const sessions = chatSessionListResponse();
@@ -682,27 +679,27 @@ suite.define(() => {
   });
 
   it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const avatarBody = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
       "base64",
     );
-    await page.route(/\/avatar\/main\?meta=1$/, (route) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
-      }),
-    );
-    await page.route(/\/avatar\/main$/, (route) =>
-      route.fulfill({ contentType: "image/png", body: avatarBody }),
-    );
+    const avatarAuthorizations: Array<string | undefined> = [];
+    await page.route(/\/avatar\/main\?v=fixture$/, (route) => {
+      avatarAuthorizations.push(route.request().headers().authorization);
+      return route.fulfill({ contentType: "image/png", body: avatarBody });
+    });
     await installMockGateway(page, {
-      methodResponses: { "sessions.list": chatSessionListResponse() },
+      methodResponses: {
+        "agent.identity.get": {
+          agentId: "main",
+          name: "OpenClaw",
+          avatar: "/avatar/main?v=fixture",
+          avatarStatus: "local",
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
       sessionKey: "agent:main:session-a",
     });
 
@@ -739,6 +736,7 @@ suite.define(() => {
 
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
       await expect.poll(() => avatar.isVisible()).toBe(true);
+      expect(avatarAuthorizations).toEqual(["Bearer e2e-device-token"]);
       expect(
         await page.evaluate(
           () =>

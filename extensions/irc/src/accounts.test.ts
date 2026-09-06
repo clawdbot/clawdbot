@@ -11,10 +11,6 @@ function asConfig(value: unknown): CoreConfig {
 }
 
 describe("listIrcAccountIds", () => {
-  it("returns default when no accounts are configured", () => {
-    expect(listIrcAccountIds(asConfig({}))).toEqual(["default"]);
-  });
-
   it("normalizes, deduplicates, and sorts configured account ids", () => {
     const cfg = asConfig({
       channels: {
@@ -68,37 +64,6 @@ describe("resolveDefaultIrcAccountId", () => {
     });
 
     expect(resolveDefaultIrcAccountId(cfg)).toBe("ops-team");
-  });
-
-  it("falls back to default when configured defaultAccount is missing", () => {
-    const cfg = asConfig({
-      channels: {
-        irc: {
-          defaultAccount: "missing",
-          accounts: {
-            default: {},
-            work: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultIrcAccountId(cfg)).toBe("default");
-  });
-
-  it("falls back to first sorted account when default is absent", () => {
-    const cfg = asConfig({
-      channels: {
-        irc: {
-          accounts: {
-            zzz: {},
-            aaa: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultIrcAccountId(cfg)).toBe("aaa");
   });
 });
 

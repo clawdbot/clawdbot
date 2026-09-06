@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createProcessAdapterEvents } from "../../process/supervisor/adapters/process-events.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
@@ -35,25 +36,37 @@ type TestAdapter = ChildAdapter & {
 
 function createTestAdapter(): TestAdapter {
   const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+  const events = createProcessAdapterEvents();
+  let settled = false;
+  const settle: TestAdapter["settle"] = (code, signal = null) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    events.emitExit(code, signal);
+    exit.resolve({ code, signal });
+  };
   let stdoutListener: ((chunk: string) => void) | undefined;
   let stderrListener: ((chunk: string) => void) | undefined;
   const adapter: TestAdapter = {
     pid: 1234,
     supportsRawOutput: false,
-    onStdout: (listener) => {
+    onExit: events.onExit,
+    onError: events.onError,
+    onStdout: vi.fn((listener) => {
       stdoutListener = listener;
-    },
+    }),
     onStderr: (listener) => {
       stderrListener = listener;
     },
     wait: async () => await exit.promise,
     kill: vi.fn((signal?: NodeJS.Signals) => {
-      exit.resolve({ code: null, signal: signal ?? "SIGTERM" });
+      settle(null, signal ?? "SIGTERM");
     }),
-    dispose: vi.fn(),
+    dispose: vi.fn(() => events.clear()),
     emitStdout: (chunk) => stdoutListener?.(chunk),
     emitStderr: (chunk) => stderrListener?.(chunk),
-    settle: (code, signal = null) => exit.resolve({ code, signal }),
+    settle,
   };
   return adapter;
 }
@@ -189,8 +202,6 @@ describe("local CLI pending process cancellation", () => {
     const spawn = vi.spyOn(supervisor, "spawn");
     const first = supervisor.spawn({
       runId: "surviving-process",
-      sessionId: context.params.sessionId,
-      backendId: context.backendResolved.id,
       scopeKey,
       mode: "child",
       argv: ["agent-cli"],
@@ -214,6 +225,7 @@ describe("local CLI pending process cancellation", () => {
 
   it("preserves the caller run id and cleans up cancellation after normal completion", async () => {
     const controller = new AbortController();
+    const spawn = vi.spyOn(supervisor, "spawn");
     const adapter = createTestAdapter();
     const addListener = vi.spyOn(controller.signal, "addEventListener");
     const removeListener = vi.spyOn(controller.signal, "removeEventListener");
@@ -227,13 +239,15 @@ describe("local CLI pending process cancellation", () => {
       }),
     );
     await vi.waitFor(() => {
-      expect(supervisor.getRecord("cli-normal")).toMatchObject({ state: "running" });
+      expect(adapter.onStdout).toHaveBeenCalledOnce();
     });
     adapter.emitStdout("completed");
     adapter.settle(0);
 
     await expect(run).resolves.toMatchObject({ text: "completed" });
-    expect(supervisor.getRecord("cli-normal")).toMatchObject({ state: "exited" });
+    const managed = await spawn.mock.results[0]!.value;
+    expect(managed.runId).toBe("cli-normal");
+    expect(managed.activity.resultSettled).toBe(true);
     const abortListener = addListener.mock.calls.find(([event]) => event === "abort")?.[1];
     expect(abortListener).toBeTypeOf("function");
     expect(removeListener).toHaveBeenCalledWith("abort", abortListener);
@@ -244,29 +258,26 @@ describe("local CLI pending process cancellation", () => {
     const startup = createDeferred<ChildAdapter>();
     const adapter = createTestAdapter();
     const cancel = vi.spyOn(supervisor, "cancel");
+    const spawn = vi.spyOn(supervisor, "spawn");
     createChildAdapterMock.mockReturnValueOnce(startup.promise);
 
     const run = executePreparedCliRun(
       createRunContext({ runId: "cli-pending", signal: controller.signal }),
     );
     await vi.waitFor(() => {
-      expect(supervisor.getRecord("cli-pending")).toMatchObject({ state: "starting" });
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
     });
 
     controller.abort();
     expect(cancel).toHaveBeenCalledWith("cli-pending", "manual-cancel");
-    expect(supervisor.getRecord("cli-pending")).toMatchObject({
-      state: "exiting",
-      terminationReason: "manual-cancel",
-    });
+    expect(adapter.kill).not.toHaveBeenCalled();
 
     startup.resolve(adapter);
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect(adapter.kill).toHaveBeenCalledWith("SIGKILL");
-    expect(supervisor.getRecord("cli-pending")).toMatchObject({
-      state: "exited",
-      terminationReason: "manual-cancel",
-    });
+    const managed = await spawn.mock.results[0]!.value;
+    await expect(managed.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    expect(managed.activity.resultSettled).toBe(true);
   });
 
   it("never starts a resumed replacement cancelled behind a real supervisor scope fence", async () => {
@@ -289,8 +300,6 @@ describe("local CLI pending process cancellation", () => {
 
     const first = supervisor.spawn({
       runId: "cli-existing",
-      sessionId: context.params.sessionId,
-      backendId: context.backendResolved.id,
       scopeKey,
       mode: "child",
       argv: ["agent-cli"],
@@ -299,11 +308,10 @@ describe("local CLI pending process cancellation", () => {
 
     await vi.waitFor(() => {
       expect(spawn).toHaveBeenCalledTimes(2);
-      expect(supervisor.getRecord("cli-existing")).toMatchObject({ state: "starting" });
       expect(createChildAdapterMock).toHaveBeenCalledOnce();
     });
     expect(cancel).not.toHaveBeenCalled();
-    expect(supervisor.getRecord("cli-resume")).toBeUndefined();
+    expect(firstAdapter.kill).not.toHaveBeenCalled();
 
     controller.abort();
     expect(cancel).toHaveBeenCalledWith("cli-resume", "manual-cancel");
@@ -313,10 +321,9 @@ describe("local CLI pending process cancellation", () => {
     await expect(replacement).rejects.toMatchObject({ name: "AbortError" });
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
     expect(firstAdapter.kill).not.toHaveBeenCalled();
-    expect(supervisor.getRecord("cli-resume")).toMatchObject({
-      state: "exited",
-      terminationReason: "manual-cancel",
-    });
+    const replacementRun = await spawn.mock.results[1]!.value;
+    await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    expect(replacementRun.activity.resultSettled).toBe(true);
 
     firstRun.cancel();
     await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
@@ -442,7 +449,7 @@ describe("local CLI pending process cancellation", () => {
     const second = executePreparedCliRun(
       createRunContext({ runId: "cli-queue-aborted", signal: controller.signal }),
     );
-    const secondOutcome = Promise.allSettled([second]);
+    const secondRejected = expect(second).rejects.toMatchObject({ name: "AbortError" });
     controller.abort();
     firstPreparation.resolve();
 
@@ -450,11 +457,8 @@ describe("local CLI pending process cancellation", () => {
     firstAdapter.emitStdout("first");
     firstAdapter.settle(0);
     await expect(first).resolves.toMatchObject({ text: "first" });
-    await expect(secondOutcome).resolves.toEqual([
-      { status: "rejected", reason: expect.objectContaining({ name: "AbortError" }) },
-    ]);
+    await secondRejected;
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
-    expect(supervisor.getRecord("cli-queue-aborted")).toBeUndefined();
   });
 
   it("removes the startup abort listener when process spawning rejects", async () => {
@@ -503,7 +507,7 @@ describe("local CLI pending process cancellation", () => {
       let error: unknown;
       try {
         await vi.waitFor(() => {
-          expect(supervisor.getRecord(runId)).toMatchObject({ state: "running" });
+          expect(adapter.onStdout).toHaveBeenCalledOnce();
         });
         adapter.emitStderr(stderr);
       } finally {

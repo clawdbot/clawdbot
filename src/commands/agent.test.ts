@@ -10,7 +10,7 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
 import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
-import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
+import * as authProfileStoreModule from "../agents/auth-profiles/store-runtime.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
@@ -23,7 +23,10 @@ import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js"
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
-import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
+import {
+  readAgentRunTerminalError,
+  readAgentRunTerminalOutcome,
+} from "../channels/turn/agent-run-terminal-outcome.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -82,12 +85,17 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => {
+vi.mock("../agents/auth-profiles/store.js", async (importOriginal) => {
+  return {
+    ...(await importOriginal<typeof import("../agents/auth-profiles/store.js")>()),
+    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+  };
+});
+vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
     ensureAuthProfileStore: vi.fn(createEmptyStore),
     ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
@@ -743,6 +751,7 @@ describe("agentCommand", () => {
       await withTempHome(async (home) => {
         mockConfig(home, path.join(home, "sessions.json"));
         const controller = new AbortController();
+        const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
         const text = meta.error?.message ?? "ok";
         const rawResult = {
           ...createDefaultAgentResult(),
@@ -753,7 +762,10 @@ describe("agentCommand", () => {
           if (fault === "callback") {
             await params.onAgentEvent?.({
               stream: "lifecycle",
-              data: { phase: "finishing", error: "Deferred provider failure" },
+              data: {
+                phase: "finishing",
+                error: `Deferred provider failure. Authorization: Bearer ${secret}`,
+              },
             });
           }
           return rawResult;
@@ -778,7 +790,14 @@ describe("agentCommand", () => {
         expect(result?.payloads).toEqual([{ text, mediaUrl: null }]);
         expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
         expect(readAgentRunTerminalOutcome(rawResult)).toBeUndefined();
+        expect(readAgentRunTerminalError(rawResult)).toBeUndefined();
         expect(readAgentRunTerminalOutcome(result)).toBe(outcome);
+        if (fault === "callback") {
+          expect(readAgentRunTerminalError(result)).toContain("Deferred provider failure.");
+          expect(readAgentRunTerminalError(result)).not.toContain(secret);
+        } else if (outcome === "completed") {
+          expect(readAgentRunTerminalError(result)).toBeUndefined();
+        }
       });
     },
   );

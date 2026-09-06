@@ -3,38 +3,61 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 
 const CHILD_READY_TIMEOUT_MS = 45_000;
 const TEST_TIMEOUT_MS = 60_000;
+const CHILD_CLOSE_TIMEOUT_MS = 5_000;
 const RELEASE_DELAY_MS = 400;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const children = new Set<ChildProcess>();
+const tempDirs = createTempDirTracker();
+const children = new Map<ChildProcess, Promise<unknown[]>>();
 
-afterEach(() => {
-  for (const child of children) {
+function ownChild(child: ChildProcess): Promise<unknown[]> {
+  const closed = once(child, "close");
+  children.set(child, closed);
+  void closed.catch(() => {});
+  return closed;
+}
+
+async function cleanupFixtures() {
+  for (const child of children.keys()) {
     child.kill("SIGKILL");
   }
+  const results = await withTestTimeout(
+    Promise.allSettled(children.values()),
+    CHILD_CLOSE_TIMEOUT_MS,
+    "direct-stop fixture children did not close; retaining their temporary directories",
+  );
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) {
+    throw new AggregateError(errors, "direct-stop fixture cleanup failed; retaining state");
+  }
   children.clear();
-});
+  tempDirs.cleanup();
+}
 
-const moduleUrl = (relativePath: string) => pathToFileURL(path.resolve(relativePath)).href;
+afterEach(cleanupFixtures);
+
+const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+  resolveRuntimeWorkerUrl(entry).href;
 
 const childScript = `
   import fs from "node:fs";
   import path from "node:path";
-  import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-drain.ts"))};
-  import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-queue.ts"))};
+  import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressDrain))};
+  import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressQueue))};
   import {
     clearActiveEmbeddedRun,
     setActiveEmbeddedRun,
-  } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/runs.ts"))};
-  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/active-run-projections.ts"))};
-  import { runGatewayLoop } from ${JSON.stringify(moduleUrl("src/cli/gateway-cli/run-loop.ts"))};
-  import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl("src/process/gateway-work-admission.ts"))};
+  } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runs))};
+  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.activeRunProjections))};
+  import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
+  import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.workAdmission))};
 
   const tracePath = process.argv[1];
   const stateDir = process.argv[2];
@@ -130,6 +153,31 @@ function readTrace(tracePath: string): string[] {
 describe("runGatewayLoop direct-stop active work", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
+  posixIt("joins forced child cleanup before deleting its fixture directory", async () => {
+    const fixtureDir = tempDirs.make("openclaw-direct-stop-failure-");
+    const child = spawn(
+      process.execPath,
+      ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1_000)'],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const closed = ownChild(child);
+    let rootExistsAtClose = false;
+    child.once("close", () => {
+      rootExistsAtClose = fs.existsSync(fixtureDir);
+    });
+    await withTestTimeout(
+      once(child.stdout!, "data"),
+      CHILD_READY_TIMEOUT_MS,
+      "forced cleanup fixture did not start",
+    );
+
+    await cleanupFixtures();
+
+    expect(await closed).toEqual([null, "SIGKILL"]);
+    expect(rootExistsAtClose).toBe(true);
+    expect(fs.existsSync(fixtureDir)).toBe(false);
+  });
+
   posixIt.each([false, true])(
     "reports and drains a rootless adopted channel run after OS SIGTERM (trace=%s)",
     async (traceEnabled) => {
@@ -158,7 +206,8 @@ describe("runGatewayLoop direct-stop active work", () => {
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      children.add(child);
+      // Register close before readiness: failed startup still owns both output streams.
+      const exited = ownChild(child);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -173,9 +222,6 @@ describe("runGatewayLoop direct-stop active work", () => {
         { timeout: CHILD_READY_TIMEOUT_MS, interval: 25 },
       );
       // The exit event can precede the final stdout data; close joins both streams.
-      const exited = once(child, "close") as Promise<
-        [code: number | null, signal: NodeJS.Signals | null]
-      >;
       expect(child.kill("SIGTERM")).toBe(true);
 
       const exit = await exited;

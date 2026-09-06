@@ -18,9 +18,10 @@ On the first run against a brand-new workspace (default `~/.openclaw/workspace`)
 OpenClaw:
 
 - Seeds `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`. Environment-specific tool notes belong in the `## Tools` section of `AGENTS.md`.
-- Has the agent follow a capped three-beat birth sequence: it asks what you want
-  to call it, shares one short soul/vibe line, and asks whether you want the
-  minimal recommended plugin set or maximum convenience.
+- Has the agent follow a capped four-beat birth sequence: it asks what you want
+  to call it, shares one short soul/vibe line, asks whether you want the
+  minimal recommended plugin set or maximum convenience, and closes with one
+  short safety note about the access it runs with.
 - Persists the agreed identity twice: into `IDENTITY.md` and `SOUL.md` (what the
   agent reads about itself) and via `openclaw agents set-identity` (what channels
   and the UI display).

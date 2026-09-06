@@ -6,12 +6,13 @@ import {
   finalizeReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
   recordSessionParticipant,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
-import type { SteerDocumentContext } from "../../media-understanding/apply.js";
+import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
@@ -159,7 +160,8 @@ describe("createChatSendMessageInjectionStarter", () => {
   function makeStarterParams(params?: {
     body?: string;
     rawMessage?: string;
-    documentContext?: SteerDocumentContext;
+    media?: RuntimeMsgContext["media"];
+    documentContext?: InboundDocumentContext;
     replyOptionImages?: ChatImageContent[];
     isInternalTextSlashCommandTurn?: boolean;
   }) {
@@ -172,7 +174,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       },
       session: { cfg: {}, entry: undefined },
       turn: {
-        ctx: { Provider: "dashboard", Body: params?.body },
+        ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
         isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
         replyOptionImages: params?.replyOptionImages ?? [],
         replyOptionMedia: [],
@@ -183,23 +185,46 @@ describe("createChatSendMessageInjectionStarter", () => {
     } as unknown as Parameters<typeof createChatSendMessageInjectionStarter>[0];
   }
 
-  it("appends document context to the injected steer text", () => {
+  it.each([
+    {
+      caption: "see attached",
+      label: "captioned",
+      expectedText:
+        '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\nsee attached\n\n<file name="note.txt" mime="text/plain">doc body</file>',
+    },
+    {
+      caption: "",
+      label: "blank-caption",
+      expectedText:
+        '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\n<file name="note.txt" mime="text/plain">doc body</file>',
+    },
+  ])("retains marker and document text for a $label steer", ({ caption, expectedText }) => {
     vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
-    createChatSendMessageInjectionStarter(
-      makeStarterParams({
-        body: "see attached",
-        documentContext: {
-          text: '<file name="note.txt" mime="text/plain">doc body</file>',
-          images: [],
+    const documentText = '<file name="note.txt" mime="text/plain">doc body</file>';
+    const params = makeStarterParams({
+      body: caption,
+      rawMessage: caption,
+      media: [
+        {
+          path: "media://inbound/note.txt",
+          contentType: "text/plain",
+          kind: "document",
+          fileName: "note.txt",
         },
-      }),
-    )();
+      ],
+      documentContext: { text: documentText, images: [] },
+    });
+    const durableContext = structuredClone(params.turn.ctx);
 
+    createChatSendMessageInjectionStarter(params)();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
     expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
-      'see attached\n\n<file name="note.txt" mime="text/plain">doc body</file>',
+      params.target,
+      expectedText,
       expect.objectContaining({ isInboundUserMessage: true }),
     );
+    expect(params.turn.ctx).toEqual(durableContext);
   });
 
   it("keeps the base text untouched when no document context was rendered", () => {
@@ -213,43 +238,39 @@ describe("createChatSendMessageInjectionStarter", () => {
     );
   });
 
-  it("injects document context alone when the steer carries no text", () => {
-    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
-    createChatSendMessageInjectionStarter(
-      makeStarterParams({
-        rawMessage: "",
-        documentContext: { text: '<file name="note.txt" mime="text/plain">x</file>', images: [] },
-      }),
-    )();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
-      '<file name="note.txt" mime="text/plain">x</file>',
-      expect.anything(),
-    );
-  });
-
   it("merges extracted page images after the prepared inbound images", () => {
     vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
-    createChatSendMessageInjectionStarter(
-      makeStarterParams({
-        body: "see attached",
-        replyOptionImages: [
-          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
-        ],
-        documentContext: {
-          text: "[PDF content rendered to images]",
-          images: [
-            { type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 1 },
-            { type: "image", data: "page-2", mimeType: "image/png", attachmentIndex: 1 },
-          ],
+    const params = makeStarterParams({
+      body: "see attached",
+      media: [
+        { path: "media://inbound/photo.png", contentType: "image/png" },
+        {
+          path: "media://inbound/scan.pdf",
+          contentType: "application/pdf",
+          kind: "document",
         },
-      }),
-    )();
+      ],
+      replyOptionImages: [
+        { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
+      ],
+      documentContext: {
+        text: "[PDF content rendered to images]",
+        images: [
+          { type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 1 },
+          { type: "image", data: "page-2", mimeType: "image/png", attachmentIndex: 1 },
+        ],
+      },
+    });
+    const durableContext = structuredClone(params.turn.ctx);
+
+    createChatSendMessageInjectionStarter(params)();
 
     expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
       expect.anything(),
-      "see attached\n\n[PDF content rendered to images]",
+      "[media attached: 2 files]\n" +
+        "[media attached 1/2: media://inbound/photo.png (image/png)]\n" +
+        "[media attached 2/2: media://inbound/scan.pdf (application/pdf)]\n\n" +
+        "see attached\n\n[PDF content rendered to images]",
       expect.objectContaining({
         images: [
           { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
@@ -258,6 +279,7 @@ describe("createChatSendMessageInjectionStarter", () => {
         ],
       }),
     );
+    expect(params.turn.ctx).toEqual(durableContext);
   });
 
   it("injects extracted page images when the steer carries no inbound images", () => {

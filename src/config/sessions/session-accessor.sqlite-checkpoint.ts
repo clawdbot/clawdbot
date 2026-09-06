@@ -144,7 +144,11 @@ async function applySqliteCompactionCheckpointSessionOperation(
         result,
       };
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
+    emitCommittedSessionIdentityDiff(
+      resolved.agentId,
+      committed.previousIdentity,
+      committed.currentIdentity,
+    );
     return committed.result;
   });
 }

@@ -84,6 +84,7 @@
     <string name="native_0b0c15d15d686c72" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"セットアップコードが受け付けられませんでした"</string>
     <string name="native_0b184bc5d5341998" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"サインアウト"</string>
     <string name="native_0b23b09cee45a5e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera PTZ"</string>
+    <string name="native_0b69a7256d086b75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ファイルを共有できませんでした"</string>
     <string name="native_0b914a09797ede88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"システムアプリを表示"</string>
     <string name="native_0bb9ff3a7312f664" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"プロバイダーのモデル設定を表示するには、Gatewayを更新してください。"</string>
     <string name="native_0bdbb750609ca61c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"最初のページ"</string>
@@ -146,11 +147,9 @@
     <string name="native_14638daf580b6ee0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Androidセットアップガイド"</string>
     <string name="native_146c4d822cea4531" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個のアプリの転送をブロックしています。"</string>
     <string name="native_1485bc093cdbef6d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ペアリング済みデバイス"</string>
-    <string name="native_14a01f1f39e117c7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">":%1$s"</string>
     <string name="native_14bd5cb7d035e354" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"検索を非表示"</string>
     <string name="native_1520b570498730a0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 件保留中"</string>
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"デバイス名"</string>
-    <string name="native_1553635e57f3f346" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s://%2$s:%3$s%4$s"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"送信"</string>
     <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"位置情報"</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"例: America/New_York"</string>
@@ -417,6 +416,7 @@
     <string name="native_3c6168bbf86e6e4b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"同意して有効にする"</string>
     <string name="native_3c6af34c83122de7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayの更新が必要"</string>
     <string name="native_3cb27ae0fbca8ae3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"画像をコピー"</string>
+    <string name="native_3ccb9221e7520ec2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"このエージェントの進捗カードを読み込むには、Gatewayを更新してください。"</string>
     <string name="native_3d06950825de7452" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway URL"</string>
     <string name="native_3d200f624b8bda8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"main, isolated, current, または session:&lt;id&gt;"</string>
     <string name="native_3d434618889c0332" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"メディアを利用できません"</string>
@@ -646,6 +646,7 @@
     <string name="native_604e6d6faf8d0295" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1回限りの実行が成功した後、この自動化を削除します。"</string>
     <string name="native_60730b6ecdee4be7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"接続済み (オペレーター: %1$s)"</string>
     <string name="native_608b57eae065c589" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayのペアリングが完了しました。 有効にしたデバイス機能をOpenClawが使用できるよう、このスマートフォンをノードとして承認してください。"</string>
+    <string name="native_60acc53f13a5d1bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ダーク"</string>
     <string name="native_60ea1847c2ba5446" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"応答が中止されました"</string>
     <string name="native_6105d6cc76af4003" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"画像"</string>
     <string name="native_614b8348a2dbe46b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 件保留中"</string>
@@ -1008,7 +1009,6 @@
     <string name="native_958074a2ffa6bae8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"他のアプリを操作"</string>
     <string name="native_95d0536838bd0e14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Signalインデックス"</string>
     <string name="native_95f20b63460b030c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"シークレットを入力…"</string>
-    <string name="native_963e80a1954e4b73" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s:%2$s"</string>
     <string name="native_966dccd25d82bd2a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClawに%1$sと伝える"</string>
     <string name="native_96a5ba634bfc2ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"検出済み"</string>
     <string name="native_9709a3b2e51f0ef3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"サイドバーを非表示"</string>
@@ -1438,6 +1438,7 @@
     <string name="native_db259fef5236a070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill Workshopの提案を更新するには、Gatewayに接続してください。"</string>
     <string name="native_db4fa8d71b5b2d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClawのリクエストに失敗しました。"</string>
     <string name="native_dbb6cf817820de0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"権限が必要です"</string>
+    <string name="native_dbcd5e7bb7a0f538" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ライト"</string>
     <string name="native_dc1c61f0f60f79a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"プロバイダーの準備状況と\n設定済みのモデルを確認します。"</string>
     <string name="native_dc380888c4e2c776" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"読み込み中"</string>
     <string name="native_dc6409a0d1c41734" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"失敗アラート"</string>
@@ -1663,7 +1664,6 @@
     <string name="native_fdd0d769c49517c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ネットワークタイムアウト"</string>
     <string name="native_fe18013d93d22f4f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"今"</string>
     <string name="native_fe4e8d175e15f0a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"グループ名を変更…"</string>
-    <string name="native_febd009ea6d42c29" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s://%2$s%3$s"</string>
     <string name="native_fed2d83c98a40d55" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw nodes approve REQUEST_ID"</string>
     <string name="native_ff1cee74414621d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ピン留め"</string>
     <string name="native_ff2670a0df18e148" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"thread list"</string>

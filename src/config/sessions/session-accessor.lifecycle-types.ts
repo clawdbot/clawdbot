@@ -190,6 +190,7 @@ export type SessionEntryLifecycleMutationResult = {
 
 export type DeletedAgentSessionEntryPurgeParams = {
   cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentId: string;
   storeAgentId: string;
   storePath: string;

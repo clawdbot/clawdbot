@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -65,6 +65,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
@@ -234,9 +235,9 @@ const OFFLOAD_PNG_BASE64 =
 const TINY_JPEG_BASE64 =
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fICUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAXAAADAQAAAAAAAAAAAAAAAAAAAQMC/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQAAAB6AAAAP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8Af//Z";
 
-vi.mock("../../media-understanding/apply.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../media-understanding/apply.runtime.js")>(
-    "../../media-understanding/apply.runtime.js",
+vi.mock("../../media-understanding/file-context.js", async () => {
+  const actual = await vi.importActual<typeof import("../../media-understanding/file-context.js")>(
+    "../../media-understanding/file-context.js",
   );
   return {
     ...actual,
@@ -269,19 +270,21 @@ vi.mock("../session-utils.js", async () => {
           sessionFile: mockState.transcriptPath,
           ...mockState.sessionEntry,
         };
-    return {
-      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-      cfg: {
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
-        },
+    const cfg = {
+      ...mockState.config,
+      session: {
+        ...(mockState.config.session as Record<string, unknown> | undefined),
+        mainKey: mockState.mainSessionKey,
       },
+    };
+    return {
+      cfg,
+      agentId: resolveSessionStoreAgentId(cfg, rawKey, opts?.agentId),
       storePath: mockState.storePath,
       store: entry ? { [canonicalKey]: entry } : {},
       entry,
       canonicalKey,
+      storeKeys: [canonicalKey],
     };
   };
   return {
@@ -1372,13 +1375,12 @@ async function runNonStreamingChatSend(params: {
     return undefined;
   }
 
-  await waitForAssertion(() => {
-    expect(params.context.broadcast.mock.calls.length).toBe(1);
-  });
-
-  const chatCall = mockCallAt(params.context.broadcast, 0);
-  expect(chatCall?.[0]).toBe("chat");
-  return chatCall?.[1] as Record<string, any> | undefined;
+  const terminalCalls = () =>
+    params.context.broadcast.mock.calls.filter(
+      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
+    );
+  await waitForAssertion(() => expect(terminalCalls()).toHaveLength(1));
+  return asOptionalRecord(terminalCalls()[0]?.[1]);
 }
 
 async function expectUnpersistedAgentRunFinal(params: {
@@ -4805,6 +4807,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(broadcastText).toContain("Trajectory exports can include");
     expect(broadcastText).toContain("through exec approval");
     expect(broadcastText).toContain("Approve once");
+    await waitForAssertion(() =>
+      expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
+    );
   });
 
   it("keeps slash-command block text when the final payload only adds media", async () => {

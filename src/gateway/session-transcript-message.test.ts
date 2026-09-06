@@ -1,5 +1,8 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import {
   projectSessionMessagePayload,
   projectTranscriptEntryMessage,
@@ -13,6 +16,53 @@ const message = {
 };
 
 describe("trusted transcript display metadata", () => {
+  it("keeps nested activity run ownership distinct from entry deduplication in history and live events", () => {
+    const activity = {
+      ...createNestedToolActivity({
+        runId: "owning-run",
+        scopeId: "attempt",
+        afterEntryId: "parent",
+        startOrder: 0,
+        parentToolCallId: "exec",
+        toolCallId: "nested-read",
+        toolName: "read",
+        input: { path: "example.txt" },
+        result: { content: [{ type: "text", text: "done" }] },
+        isError: false,
+        startedAt: 1,
+        timestamp: 2,
+      }),
+      idempotencyKey: "attempt:nested-read",
+    };
+    const history = projectChatDisplayMessage(
+      projectTranscriptEntryMessage(
+        { type: "message", id: "entry", message: activity },
+        2,
+        position,
+      ),
+    );
+    const live = projectSessionMessagePayload({
+      message: activity,
+      messageId: "entry",
+      messageSeq: 2,
+      transcriptPosition: position,
+      sessionKey: "agent:main:dashboard:nested",
+    }).payload?.message;
+    for (const projected of [history, live]) {
+      expect(readSessionMessageIdentity(projected)).toMatchObject({
+        id: "entry",
+        sequence: 2,
+        runId: "owning-run",
+        idempotencyKey: "attempt:nested-read",
+        sendId: null,
+      });
+      expect(
+        asOptionalRecord(asOptionalRecord(projected)?.["__openclaw"])?.transcriptPosition,
+      ).toEqual(position);
+    }
+    expect(activity).not.toHaveProperty("__openclaw");
+  });
+
   it.each([undefined, position])(
     "uses only reader-supplied placement (%j)",
     (transcriptPosition) => {

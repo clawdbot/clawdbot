@@ -1,5 +1,6 @@
 // WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import type { IncomingMessage } from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
@@ -15,6 +16,7 @@ import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import {
   ensureProfileForEmail,
   setDisplayName,
@@ -41,7 +43,6 @@ import {
   getRequiredSharedGatewaySessionGeneration,
 } from "../../server-shared-auth-generation.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
-import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -1311,6 +1312,67 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     },
   );
 
+  it.each(["resume", "close"] as const)(
+    "settles identity sync parked by suspension when the Gateway handles %s",
+    async (action) => {
+      await withGatewayTestState({ label: "gateway-suspended-identity" }, async () => {
+        const canonical = ensureProfileForEmail("canonical@example.test");
+        const sync = vi.fn(async () => ({
+          profileId: canonical.id,
+          updatedAt: canonical.updatedAt,
+        }));
+        createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+        resolveConnectAuthStateMock.mockResolvedValueOnce({
+          authResult: {
+            ok: true,
+            method: "tailscale",
+            user: "ada@github",
+            tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+          },
+          authOk: true,
+          authMethod: "tailscale",
+          sharedAuthOk: true,
+        });
+        const suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspension?.commit()).toBe(true);
+        let closing: Promise<void> | undefined;
+        try {
+          const harness = attachGatewayHarness({
+            connId: "conn-suspended-identity",
+            connectNonce: "nonce-suspended-identity",
+          });
+          harness.sendConnect("connect-suspended-identity", {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: { id: "test", version: "dev", platform: "test", mode: "test" },
+            role: "operator",
+            caps: [],
+          });
+          await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+          await nextTurn();
+          expect(sync).not.toHaveBeenCalled();
+          if (action === "resume") {
+            suspension?.release();
+            await waitForFast(() => expect(sync).toHaveBeenCalledOnce());
+            return;
+          }
+          let drained = false;
+          closing = cleanupGatewayHarnesses().then(() => {
+            drained = true;
+          });
+          await nextTurn();
+          expect.soft(drained, "closing does not wait for suspension expiry").toBe(true);
+          suspension?.release();
+          await closing;
+          expect(sync).not.toHaveBeenCalled();
+        } finally {
+          suspension?.release();
+          await closing;
+        }
+      });
+    },
+  );
+
   it("resolves a GitHub-backed role before registering the connection or sending hello", async () => {
     await withGatewayTestState({ label: "gateway-github-role-before-hello" }, async () => {
       const canonical = ensureProfileForEmail("canonical@example.test");
@@ -2412,242 +2474,4 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 });
 
-describe("resolvePinnedClientMetadata", () => {
-  it.each([
-    ["darwin", "macos"],
-    ["win32", "windows"],
-  ])(
-    "pins legacy node-host platform alias %s to paired canonical %s",
-    (claimedPlatform, pairedPlatform) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId: "node-host",
-          clientMode: "node",
-          claimedPlatform,
-          claimedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
-          pairedPlatform,
-          pairedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
-        }),
-      ).toEqual({
-        platformMismatch: false,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: pairedPlatform,
-        pinnedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
-      });
-    },
-  );
-
-  it.each([
-    ["darwin", "macos", "Mac"],
-    ["win32", "windows", "Windows"],
-  ])(
-    "normalizes exact legacy node-host platform %s to canonical %s",
-    (legacyPlatform, canonicalPlatform, deviceFamily) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId: "node-host",
-          clientMode: "node",
-          claimedPlatform: legacyPlatform,
-          claimedDeviceFamily: deviceFamily,
-          pairedPlatform: legacyPlatform,
-          pairedDeviceFamily: deviceFamily,
-        }),
-      ).toEqual({
-        platformMismatch: false,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: canonicalPlatform,
-        pinnedDeviceFamily: deviceFamily,
-      });
-    },
-  );
-
-  it.each([
-    ["macos", "darwin", "Mac"],
-    ["windows", "win32", "Windows"],
-  ])(
-    "pins canonical node-host platform %s over paired legacy alias %s",
-    (claimedPlatform, pairedPlatform, deviceFamily) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId: "node-host",
-          clientMode: "node",
-          claimedPlatform,
-          claimedDeviceFamily: deviceFamily,
-          pairedPlatform,
-          pairedDeviceFamily: deviceFamily,
-        }),
-      ).toEqual({
-        platformMismatch: false,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: claimedPlatform,
-        pinnedDeviceFamily: deviceFamily,
-      });
-    },
-  );
-
-  it.each([
-    ["openclaw-ios", "iOS 26.5.0", "iOS 26.4.2", "iPhone"],
-    ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
-    ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
-    ["openclaw-android", "Android 16", "Android 15", "Android"],
-    ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
-    ["openclaw-macos", "macOS 27.0.0", "macOS 26.5.1", "Mac"],
-  ])(
-    "allows %s platform version refresh without metadata-upgrade approval",
-    (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId,
-          clientMode: "node",
-          claimedPlatform,
-          claimedDeviceFamily: deviceFamily,
-          pairedPlatform,
-          pairedDeviceFamily: deviceFamily,
-        }),
-      ).toEqual({
-        platformMismatch: false,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: claimedPlatform,
-        pinnedDeviceFamily: deviceFamily,
-        refreshPairedPlatform: claimedPlatform,
-      });
-    },
-  );
-
-  it.each(["node", "ui"])("allows a macOS platform version refresh in %s mode", (clientMode) => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId: "openclaw-macos",
-        clientMode,
-        claimedPlatform: "macOS 26.5.2",
-        claimedDeviceFamily: "Mac",
-        pairedPlatform: "macOS 26.5.1",
-        pairedDeviceFamily: "Mac",
-      }),
-    ).toEqual({
-      platformMismatch: false,
-      deviceFamilyMismatch: false,
-      pinnedPlatform: "macOS 26.5.2",
-      pinnedDeviceFamily: "Mac",
-      refreshPairedPlatform: "macOS 26.5.2",
-    });
-  });
-
-  it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId: "node-host",
-        clientMode: "node",
-        claimedPlatform: "macos",
-        claimedDeviceFamily: "Mac",
-        pairedPlatform: "macOS 26.5.2",
-        pairedDeviceFamily: "Mac",
-      }),
-    ).toEqual({
-      platformMismatch: false,
-      deviceFamilyMismatch: false,
-      pinnedPlatform: "macOS 26.5.2",
-      pinnedDeviceFamily: "Mac",
-    });
-  });
-
-  it("refreshes a shared node-host macOS pin from the native Mac app", () => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId: "openclaw-macos",
-        clientMode: "ui",
-        claimedPlatform: "macOS 26.5.2",
-        claimedDeviceFamily: "Mac",
-        pairedPlatform: "macos",
-        pairedDeviceFamily: "Mac",
-      }),
-    ).toEqual({
-      platformMismatch: false,
-      deviceFamilyMismatch: false,
-      pinnedPlatform: "macOS 26.5.2",
-      pinnedDeviceFamily: "Mac",
-      refreshPairedPlatform: "macOS 26.5.2",
-    });
-  });
-
-  it("still requires approval when an iOS device family changes", () => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId: "openclaw-ios",
-        clientMode: "node",
-        claimedPlatform: "iOS 26.5.0",
-        claimedDeviceFamily: "iPad",
-        pairedPlatform: "iOS 26.4.2",
-        pairedDeviceFamily: "iPhone",
-      }),
-    ).toEqual({
-      platformMismatch: false,
-      deviceFamilyMismatch: true,
-      pinnedPlatform: "iOS 26.5.0",
-      pinnedDeviceFamily: "iPhone",
-      refreshPairedPlatform: "iOS 26.5.0",
-    });
-  });
-
-  it("still requires approval when a macOS device family changes", () => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId: "openclaw-macos",
-        clientMode: "node",
-        claimedPlatform: "macOS 26.5.2",
-        claimedDeviceFamily: "VirtualMac",
-        pairedPlatform: "macOS 26.5.1",
-        pairedDeviceFamily: "Mac",
-      }),
-    ).toEqual({
-      platformMismatch: false,
-      deviceFamilyMismatch: true,
-      pinnedPlatform: "macOS 26.5.2",
-      pinnedDeviceFamily: "Mac",
-      refreshPairedPlatform: "macOS 26.5.2",
-    });
-  });
-
-  it.each([
-    ["node-host", "macOS 26.5.2", "macOS 26.5.1"],
-    ["openclaw-macos", "macOS anything", "macOS previous"],
-    ["openclaw-macos", "macOS", "macOS 26.5.1"],
-  ])(
-    "keeps non-version macOS platform changes approval-bound for %s",
-    (clientId, claimed, paired) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId,
-          clientMode: "node",
-          claimedPlatform: claimed,
-          claimedDeviceFamily: "Mac",
-          pairedPlatform: paired,
-          pairedDeviceFamily: "Mac",
-        }),
-      ).toMatchObject({
-        platformMismatch: true,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: undefined,
-      });
-    },
-  );
-
-  it("keeps non-native-app platform version changes approval-bound", () => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId: "node-host",
-        clientMode: "node",
-        claimedPlatform: "linux 6.9",
-        claimedDeviceFamily: "Linux",
-        pairedPlatform: "linux 6.8",
-        pairedDeviceFamily: "Linux",
-      }),
-    ).toEqual({
-      platformMismatch: true,
-      deviceFamilyMismatch: false,
-      pinnedPlatform: undefined,
-      pinnedDeviceFamily: "Linux",
-    });
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

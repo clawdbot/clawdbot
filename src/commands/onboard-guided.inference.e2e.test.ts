@@ -102,7 +102,7 @@ describe("guided onboarding inference composition", () => {
         {
           text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
         },
-        { selectValues: ["full", "use"] },
+        { selectValues: ["full", "detected-ai"] },
       );
       const runSetupMemoryImportStep = vi.fn(async () => ({
         status: "skipped" as const,

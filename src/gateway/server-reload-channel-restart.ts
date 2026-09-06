@@ -2,8 +2,27 @@ import { getLoadedChannelPluginEntryById } from "../channels/plugins/registry-lo
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import type { StartChannelOptions } from "./server-channel-runtime.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
+
+async function startGatewayChannelForReload(
+  params: Pick<GatewayReloadHandlerParams, "startChannel">,
+  channel: ChannelKind,
+  accountId?: string,
+  options: Pick<StartChannelOptions, "skipUnavailableAccounts"> = {},
+): Promise<void> {
+  // Registry selection and admission detachment belong to the channel manager.
+  const outcomes = await params.startChannel(channel, accountId, {
+    preserveManualStop: true,
+    ...options,
+  });
+  for (const [id, outcome] of outcomes) {
+    if (outcome.status === "retry") {
+      throw new Error(`${channel}[${id}] replacement not admitted: ${outcome.reason}`);
+    }
+  }
+}
 
 export async function rollbackStoppedGatewayChannels(
   params: Pick<GatewayReloadHandlerParams, "startChannel" | "logChannels">,
@@ -14,8 +33,7 @@ export async function rollbackStoppedGatewayChannels(
     channels: [...channels],
     run: async (channel) => {
       params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-      // Registry selection and admission detachment belong to the channel manager.
-      await params.startChannel(channel, undefined, { preserveManualStop: true });
+      await startGatewayChannelForReload(params, channel);
       channels.delete(channel);
     },
     onFailure: (channel, err) => {
@@ -110,21 +128,33 @@ export async function restartGatewayChannels(options: {
   const operation = suppressed ? "stop" : "restart";
   const phase = suppressed ? "suppressed hot reload" : "hot reload";
   const accountTargets = collectChannelAccountTargets();
+  const restartTarget = async (channel: ChannelKind, accountId?: string) => {
+    const target =
+      accountId === undefined ? `${channel} channel` : `${channel} account ${accountId}`;
+    const canRestart = () => !suppressed && !isLifecycleReloadAborted();
+    params.logChannels.info(
+      suppressed ? `stopping ${target} before suppressed hot reload` : `restarting ${target}`,
+    );
+    if (accountId !== undefined || !channelsStoppedBeforePluginReload.has(channel)) {
+      await params.stopChannel(channel, accountId, {
+        manual: false,
+        ...(canRestart() ? { routeHandoff: true } : {}),
+      });
+    }
+    if (canRestart()) {
+      await startGatewayChannelForReload(params, channel, accountId, {
+        skipUnavailableAccounts: true,
+      });
+    } else {
+      // Cancellation ends the promise of replacement ingress; do not leave
+      // senders retrying an account whose reload will never start it.
+      params.releaseChannelRouteHandoffs(channel, accountId);
+    }
+  };
   const accountFailures: string[] = [];
   for (const [channel, accountId] of accountTargets) {
     try {
-      params.logChannels.info(
-        suppressed
-          ? `stopping ${channel} account ${accountId} before suppressed hot reload`
-          : `restarting ${channel} account ${accountId}`,
-      );
-      await params.stopChannel(channel, accountId, { manual: false });
-      if (!suppressed && !isLifecycleReloadAborted()) {
-        await params.startChannel(channel, accountId, {
-          preserveManualStop: true,
-          skipUnavailableAccounts: true,
-        });
-      }
+      await restartTarget(channel, accountId);
     } catch (err) {
       accountFailures.push(`${channel}[${accountId}]`);
       params.logChannels.error(
@@ -138,20 +168,7 @@ export async function restartGatewayChannels(options: {
       if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(channel) === false) {
         return;
       }
-      params.logChannels.info(
-        suppressed
-          ? `stopping ${channel} channel before suppressed hot reload`
-          : `restarting ${channel} channel`,
-      );
-      if (!channelsStoppedBeforePluginReload.has(channel)) {
-        await params.stopChannel(channel, undefined, { manual: false });
-      }
-      if (!suppressed && !isLifecycleReloadAborted()) {
-        await params.startChannel(channel, undefined, {
-          preserveManualStop: true,
-          skipUnavailableAccounts: true,
-        });
-      }
+      await restartTarget(channel);
     },
     onFailure: (channel, err) => {
       params.logChannels.error(

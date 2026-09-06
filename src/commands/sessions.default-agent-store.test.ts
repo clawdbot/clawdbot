@@ -155,6 +155,38 @@ describe("sessionsCommand default store agent selection", () => {
     expect(listSessionEntriesMock).toHaveBeenCalledTimes(2);
   });
 
+  it("applies a global active limit while preserving store order for tied timestamps", async () => {
+    const now = Date.now();
+    listSessionEntriesMock
+      .mockReturnValueOnce(
+        toSessionEntrySummaries({
+          "agent:main:tie": { sessionId: "main-tie", updatedAt: now - 60_000 },
+          "agent:main:old": { sessionId: "main-old", updatedAt: now - 180_000 },
+        }),
+      )
+      .mockReturnValueOnce(
+        toSessionEntrySummaries({
+          "agent:voice:tie": { sessionId: "voice-tie", updatedAt: now - 60_000 },
+          "agent:voice:newest": { sessionId: "voice-newest", updatedAt: now - 30_000 },
+        }),
+      );
+    const { runtime, logs } = createRuntime();
+
+    await sessionsCommand({ allAgents: true, json: true, active: "2", limit: 2 }, runtime);
+
+    expect(JSON.parse(logs[0] ?? "{}")).toMatchObject({
+      count: 2,
+      totalCount: 3,
+      hasMore: true,
+      limitApplied: 2,
+      activeMinutes: 2,
+      sessions: [
+        { key: "agent:voice:newest", agentId: "voice" },
+        { key: "agent:main:tie", agentId: "main" },
+      ],
+    });
+  });
+
   it("uses configured default agent id when resolving implicit session store path", async () => {
     listSessionEntriesMock.mockReset();
     listSessionEntriesMock.mockReturnValue([]);

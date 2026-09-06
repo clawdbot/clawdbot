@@ -1,24 +1,19 @@
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  listAgentIds,
+  resolveSessionAgentIdsStrict,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  sessionCatalogAdoptedSourceKey,
-  type SessionCatalogEntrySnapshot,
-  type SessionCatalogProvider,
+import type {
+  SessionCatalogEntrySnapshot,
+  SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
+import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
-import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
-import { listNodeAdoptedSessionEntries } from "./session-catalog-node-adoption.js";
-import {
-  compareNodeLabels,
-  listPairedNode,
-  nodeLabel,
-  type CatalogNode,
-} from "./session-catalog-node-continue.js";
+import type { CatalogNode } from "./session-catalog-node-continue.js";
 import {
   catalogError,
   CatalogParamsError,
@@ -74,6 +69,7 @@ async function listVisiblePage(params: {
   limit: number;
   onExcludedThread?: (thread: { threadId: string; rolloutPath?: string }) => Promise<void>;
   searchTerm?: string;
+  signal?: AbortSignal;
 }): Promise<CodexSessionCatalogPage> {
   const excluded = params.excludedThreadIds;
   const sessions: ReturnType<typeof parseCatalogPage>["sessions"] = [];
@@ -81,7 +77,9 @@ async function listVisiblePage(params: {
   let nextCursor: string | undefined;
   let backwardsCursor: string | undefined;
   const seenCursors = new Set<string>();
+  // An issued page still settles; retirement stops its follow-up reads and classification.
   for (let pageIndex = 0; pageIndex < MAX_TITLE_SEARCH_CATALOG_PAGES; pageIndex += 1) {
+    params.signal?.throwIfAborted();
     let excludedFromPage = false;
     const rawPage = await params.control.listPage({
       limit: params.limit - sessions.length,
@@ -89,12 +87,14 @@ async function listVisiblePage(params: {
       ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
       ...(params.cwd ? { cwd: params.cwd } : {}),
     });
+    params.signal?.throwIfAborted();
     const page = filterCatalogPageByTitle(parseCatalogPage(rawPage), params.searchTerm);
     if (pageIndex === 0) {
       backwardsCursor = page.backwardsCursor;
     }
     for (const managed of rawPage.managedThreads ?? []) {
       excludedFromPage = true;
+      params.signal?.throwIfAborted();
       await params.onExcludedThread?.(managed);
     }
     for (const session of page.sessions) {
@@ -103,6 +103,7 @@ async function listVisiblePage(params: {
         continue;
       }
       excludedFromPage = true;
+      params.signal?.throwIfAborted();
       await params.onExcludedThread?.({ threadId: session.threadId });
     }
     nextCursor = page.nextCursor;
@@ -130,6 +131,7 @@ async function listGatewayHost(params: {
   query: ReturnType<typeof readGatewayParams>;
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
+  signal?: AbortSignal;
   source?: CodexCatalogHome;
   excludedThreadIds?: ReadonlySet<string>;
   onExcludedThread?: (thread: { threadId: string; rolloutPath?: string }) => Promise<void>;
@@ -145,7 +147,12 @@ async function listGatewayHost(params: {
       limit: params.query.limitPerHost,
       onExcludedThread: params.onExcludedThread,
       searchTerm: params.query.search,
+      signal: params.signal,
     });
+    params.signal?.throwIfAborted();
+    const { listAdoptedSessionEntries } = await import("./session-catalog-adoption.js");
+    const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
+    params.signal?.throwIfAborted();
     const adoptedSessions = await listAdoptedSessionEntries({
       agentId: params.agentId,
       bindingStore: params.bindingStore,
@@ -195,6 +202,8 @@ export async function listCodexSessionCatalog(params: {
   query?: CodexSessionCatalogParams;
   listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: CodexSessionCatalogHost) => void;
+  waitUntil?: (completion: Promise<void>) => void;
+  signal?: AbortSignal;
   sessionEntries?: SessionCatalogEntrySnapshot;
   includeLocal?: boolean;
   localHomes?: CodexCatalogHome[];
@@ -215,6 +224,7 @@ export async function listCodexSessionCatalog(params: {
       ? [undefined]
       : []);
   const managedThreads = await params.bindingStore.managedThreads?.snapshot();
+  params.signal?.throwIfAborted();
   const fallbackSource = params.control.homesForAgent(agentId)[0];
   const localHosts = localSources.map((source) =>
     (() => {
@@ -230,6 +240,7 @@ export async function listCodexSessionCatalog(params: {
         query,
         runtime: params.runtime,
         sessionEntries: params.sessionEntries,
+        signal: params.signal,
         excludedThreadIds: managedThreadIds,
         ...(ownershipSource && params.bindingStore.managedThreads
           ? {
@@ -249,9 +260,7 @@ export async function listCodexSessionCatalog(params: {
     })(),
   );
   for (const host of localHosts) {
-    if (params.onHost) {
-      void host.then(params.onHost).catch(() => undefined);
-    }
+    publishSessionCatalogHost(params, host);
   }
   const wantsNodes =
     !requestedHostIds || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
@@ -284,6 +293,10 @@ export async function listCodexSessionCatalog(params: {
       hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
+  params.signal?.throwIfAborted();
+  const { listNodeAdoptedSessionEntries } = await import("./session-catalog-node-adoption.js");
+  const { compareNodeLabels, listPairedNode } = await import("./session-catalog-node-continue.js");
+  params.signal?.throwIfAborted();
   const adoptedNodeSessions = listNodeAdoptedSessionEntries({
     agentId,
     config: params.config,
@@ -298,6 +311,8 @@ export async function listCodexSessionCatalog(params: {
       query,
       adoptedSessions: adoptedNodeSessions,
       terminalCapabilities: codexNodeTerminalCapability(node),
+      waitUntil: params.waitUntil,
+      signal: params.signal,
       ...(params.onHost ? { onHost: params.onHost } : {}),
     }),
   );
@@ -539,6 +554,7 @@ export async function readCodexSessionTranscript(params: {
           ),
         { threadId: params.threadId, cursor, limit },
       );
+  const { nodeLabel } = await import("./session-catalog-node-continue.js");
   return {
     hostId: params.hostId,
     label: nodeLabel(node),

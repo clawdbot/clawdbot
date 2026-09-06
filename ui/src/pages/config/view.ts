@@ -86,6 +86,7 @@ function renderAppearance(props: ConfigProps) {
 }
 
 export function renderConfig(props: ConfigProps) {
+  const renderSection = props.renderSection ?? ((editor) => editor);
   const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
   const showRootTab = props.showRootTab ?? true;
@@ -499,54 +500,56 @@ export function renderConfig(props: ConfigProps) {
                           <div class="config-loading__spinner"></div>
                           <span>${t("configView.loadingSchema")}</span>
                         </div>`
-                      : renderConfigForm({
-                          schema: editorSchema,
-                          uiHints: props.uiHints,
-                          value: props.formValue,
-                          embedded: props.embeddedEditor === true || Boolean(showSetup),
-                          rawAvailable,
-                          disabled: configBusy || !props.formValue || !mutationAllowed,
-                          unsupportedPaths: analysis.unsupportedPaths,
-                          onPatch: props.onFormPatch,
-                          onRemove: props.onFormRemove,
-                          activeSection: props.activeSection,
-                          activeSubsection: null,
-                          showAdvanced: effectiveShowAdvanced,
-                          forceAdvancedSection: props.forceAdvancedSection,
-                          onShowAdvanced: () => props.setShowAdvancedSettings(true),
-                          onHideAdvanced: props.forceShowAdvanced
-                            ? undefined
-                            : () => props.setShowAdvancedSettings(false),
-                          sectionActions:
-                            props.activeSection === "env"
-                              ? html`<button
-                                  class="btn btn--sm ${envSensitiveVisible ? "active" : ""}"
-                                  aria-pressed=${envSensitiveVisible ? "true" : "false"}
-                                  title=${
-                                    envSensitiveVisible
-                                      ? t("configView.hideEnvValues")
-                                      : t("configView.revealEnvValues")
-                                  }
-                                  @click=${() => {
-                                    viewState.envRevealed = !viewState.envRevealed;
-                                    requestUpdate();
-                                  }}
-                                >
-                                  ${envSensitiveVisible ? icons.eyeOff : icons.eye}
-                                  ${t("configView.peek")}
-                                </button>`
-                              : undefined,
-                          showSectionDocs: props.showSectionDocs,
-                          sectionPrelude: props.sectionPrelude,
-                          revealSensitive:
-                            props.activeSection === "env" ? envSensitiveVisible : false,
-                          isSensitivePathRevealed: (path) =>
-                            isSensitivePathRevealed(viewState, path),
-                          onToggleSensitivePath: (path) => {
-                            toggleSensitivePathReveal(viewState, path);
-                            requestUpdate();
-                          },
-                        })
+                      : renderSection(
+                          renderConfigForm({
+                            schema: editorSchema,
+                            uiHints: props.uiHints,
+                            value: props.formValue,
+                            embedded: props.embeddedEditor === true || Boolean(showSetup),
+                            rawAvailable,
+                            disabled: configBusy || !props.formValue || !mutationAllowed,
+                            unsupportedPaths: analysis.unsupportedPaths,
+                            onPatch: props.onFormPatch,
+                            onRemove: props.onFormRemove,
+                            activeSection: props.activeSection,
+                            activeSubsection: null,
+                            showAdvanced: effectiveShowAdvanced,
+                            forceAdvancedSection: props.forceAdvancedSection,
+                            onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                            onHideAdvanced: props.forceShowAdvanced
+                              ? undefined
+                              : () => props.setShowAdvancedSettings(false),
+                            sectionActions:
+                              props.activeSection === "env"
+                                ? html`<button
+                                    class="btn btn--sm ${envSensitiveVisible ? "active" : ""}"
+                                    aria-pressed=${envSensitiveVisible ? "true" : "false"}
+                                    title=${
+                                      envSensitiveVisible
+                                        ? t("configView.hideEnvValues")
+                                        : t("configView.revealEnvValues")
+                                    }
+                                    @click=${() => {
+                                      viewState.envRevealed = !viewState.envRevealed;
+                                      requestUpdate();
+                                    }}
+                                  >
+                                    ${envSensitiveVisible ? icons.eyeOff : icons.eye}
+                                    ${t("configView.peek")}
+                                  </button>`
+                                : undefined,
+                            showSectionDocs: props.showSectionDocs,
+                            sectionPrelude: props.sectionPrelude,
+                            revealSensitive:
+                              props.activeSection === "env" ? envSensitiveVisible : false,
+                            isSensitivePathRevealed: (path) =>
+                              isSensitivePathRevealed(viewState, path),
+                            onToggleSensitivePath: (path) => {
+                              toggleSensitivePathReveal(viewState, path);
+                              requestUpdate();
+                            },
+                          }),
+                        )
                   }
                   ${
                     showSetup && !props.schemaLoading

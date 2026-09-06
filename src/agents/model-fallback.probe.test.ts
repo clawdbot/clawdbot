@@ -22,7 +22,7 @@ function routingProvenance(
 
 // Mock auth-profile submodules before importing model-fallback so the module
 // captures probe-specific auth behavior instead of real profile stores.
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(),
 }));
@@ -118,7 +118,7 @@ vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
 }));
 
-type AuthProfilesStoreModule = typeof import("./auth-profiles/store.js");
+type AuthProfilesStoreModule = typeof import("./auth-profiles/store-runtime.js");
 type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check.js");
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
@@ -155,7 +155,7 @@ let cleanupLogCapture: (() => void) | undefined;
 const OPENAI_PROBE_CANDIDATE = { provider: "openai", model: "gpt-4.1-mini" } as const;
 
 async function loadModelFallbackProbeModules() {
-  const authProfilesStoreModule = await import("./auth-profiles/store.js");
+  const authProfilesStoreModule = await import("./auth-profiles/store-runtime.js");
   const authProfilesSourceCheckModule = await import("./auth-profiles/source-check.js");
   const authProfilesUsageModule = await import("./auth-profiles/usage.js");
   const authProfilesOrderModule = await import("./auth-profiles/order.js");

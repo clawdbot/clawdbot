@@ -162,6 +162,7 @@ export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: st
 export type ResolvedBoardView = {
   provider: BoardProvider;
   snapshot: BoardSnapshot;
+  available: boolean;
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;

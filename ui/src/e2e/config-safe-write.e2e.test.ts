@@ -391,12 +391,13 @@ suite.define(() => {
         const patchedResponse = configResponse(patchedConfig, "snapshot-2", "snapshot-1");
         await gateway.setMethodResponse("config.get", patchedResponse);
         await gateway.resolveDeferred("config.patch", {
+          config: patchedConfig,
           hash: "snapshot-2",
           ok: true,
         });
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBe(configGetsBeforePatch + 1);
+          .toBe(configGetsBeforePatch);
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
         await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
         await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);

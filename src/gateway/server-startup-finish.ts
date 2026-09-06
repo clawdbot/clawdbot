@@ -196,6 +196,7 @@ export async function finishGatewayStartup(params: {
   );
   const activateScheduledServicesWhenReady = () => {
     if (
+      opts.updateCanary ||
       lifecycle.closePreludeStarted ||
       !postAttachRuntimeReturned ||
       !startupState.sidecarsReady ||
@@ -228,9 +229,9 @@ export async function finishGatewayStartup(params: {
     () => import("./server-active-work.js"),
   );
   const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
-  const trackStartupWork = <T>(run: () => Promise<T>): Promise<T> => {
+  const trackStartupWork = <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     // Register before starting, without lending the connection scope to long-lived services.
-    const operation = Promise.resolve().then(run);
+    const operation = Promise.resolve().then(() => run(runtime.connectionWork.signal));
     return runtime.connectionWork.track(() => operation);
   };
   const postAttachHandles = await trackStartupWork(() =>
@@ -238,6 +239,7 @@ export async function finishGatewayStartup(params: {
       loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
         startGatewayPostAttachRuntime({
           minimalTestGateway,
+          updateCanary: opts.updateCanary,
           cfgAtStart,
           getConfig: getRuntimeConfig,
           bindHost,
@@ -354,6 +356,10 @@ export async function finishGatewayStartup(params: {
     log.info("gateway ready");
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
+  if (opts.updateCanary) {
+    // Copied queues and jobs must not resume; the canary owns only startup probes.
+    return { startupSettled: postAttachHandles.startupSettled };
+  }
   if (!minimalTestGateway) {
     const { startOpenClawDatabaseIntegrityVerifier } =
       await import("../state/openclaw-database-verify.js");
@@ -443,6 +449,13 @@ export async function finishGatewayStartup(params: {
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,
     stopPostReadySidecars: stopRegisteredPostReadySidecars,
     reloadPlugins: kernel.reloadPlugins,
+    reloadPluginServices: async (config, serviceIds) => {
+      const services = runtimeState.pluginServices;
+      if (!services) {
+        throw new Error("Plugin services are not attached");
+      }
+      await services.reload(config, serviceIds);
+    },
     logHooks,
     logChannels,
     logCron,
@@ -476,6 +489,7 @@ export async function finishGatewayStartup(params: {
       controlUiRootLifecycle.setEnabled(
         opts.controlUiEnabled ?? nextConfig.gateway?.controlUi?.enabled ?? true,
       );
+      runtime.configureDiagnostics(nextConfig);
       const rateLimit = nextConfig.gateway?.auth?.rateLimit;
       authRateLimiter.updateConfig(rateLimit);
       browserAuthRateLimiter.updateConfig({ ...rateLimit, exemptLoopback: false });

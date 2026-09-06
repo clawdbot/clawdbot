@@ -1613,6 +1613,7 @@ describe("applyMediaUnderstanding", () => {
       outcome: "no-attachment",
       attachments: [],
       attachmentDispositions: {},
+      attachmentProcessing: {},
     });
   });
 
@@ -2185,6 +2186,26 @@ describe("applyMediaUnderstanding", () => {
     expectPolicyRejectedFileApplied({ ctx, result, mime: "application/pdf" });
   });
 
+  it("keeps cached attachment bytes intact when a PDF extractor mutates its input", async () => {
+    const original = Buffer.from("%PDF-1.7\nfixture");
+    const mediaPath = await createTempMediaFile({ fileName: "mutable.pdf", content: original });
+    const { MediaAttachmentCache } = await import("./attachments.cache.js");
+    const pdf = await import("../media/pdf-extract.js");
+    const getBuffer = vi.spyOn(MediaAttachmentCache.prototype, "getBuffer");
+    const extract = vi.spyOn(pdf, "extractPdfContent").mockImplementation(async ({ buffer }) => {
+      buffer.fill(0);
+      return { text: "extracted PDF", images: [] };
+    });
+    try {
+      const { ctx } = await applyWithDisabledMedia({ body: "<media:file>", mediaPath });
+      expect(ctx.Body).toContain("extracted PDF");
+      expect((await getBuffer.mock.results[0]?.value)?.buffer).toEqual(original);
+    } finally {
+      extract.mockRestore();
+      getBuffer.mockRestore();
+    }
+  });
+
   it("respects configured allowedMimes for text-like attachments", async () => {
     const tsvText = "a\tb\tc\n1\t2\t3";
     const tsvPath = await createTempMediaFile({
@@ -2626,7 +2647,7 @@ describe("applyMediaUnderstanding", () => {
 
   describe("renderInboundDocumentContext", () => {
     it("renders a document attachment without mutating ctx", async () => {
-      const { renderInboundDocumentContext } = await import("./apply.js");
+      const { renderInboundDocumentContext } = await import("./file-context.js");
       const mediaPath = await createTempMediaFile({
         fileName: "steer-note.txt",
         content: "document body for the steered run",
@@ -2648,7 +2669,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     it("returns empty for image attachments owned by the injected images channel", async () => {
-      const { renderInboundDocumentContext } = await import("./apply.js");
+      const { renderInboundDocumentContext } = await import("./file-context.js");
       const mediaPath = await createTempMediaFile({
         fileName: "steer.png",
         content: createSafeAudioFixtureBuffer(16),
@@ -2665,17 +2686,17 @@ describe("applyMediaUnderstanding", () => {
       expect(ctx.Body).toBe("see attached");
     });
 
-    it("returns undefined when the steer carries no attachments", async () => {
-      const { renderInboundDocumentContext } = await import("./apply.js");
+    it("returns empty context when the steer carries no attachments", async () => {
+      const { renderInboundDocumentContext } = await import("./file-context.js");
       const context = await renderInboundDocumentContext({
         ctx: { Body: "plain steer" } as MsgContext,
         cfg: {} as OpenClawConfig,
       });
-      expect(context).toBeUndefined();
+      expect(context).toEqual({ text: "", images: [] });
     });
 
     it("returns rendered PDF page images for a scanned document", async () => {
-      const { renderInboundDocumentContext } = await import("./apply.js");
+      const { renderInboundDocumentContext } = await import("./file-context.js");
       const mediaPath = await createTempMediaFile({
         fileName: "scan.pdf",
         content: Buffer.from("%PDF-1.4\n", "utf8"),
@@ -2704,7 +2725,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     it("applies the skipped-attachment marker budget to steer blocks", async () => {
-      const { renderInboundDocumentContext } = await import("./apply.js");
+      const { renderInboundDocumentContext } = await import("./file-context.js");
       const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");
       const media: { path: string; contentType: string }[] = [];
       for (let i = 0; i < 7; i += 1) {

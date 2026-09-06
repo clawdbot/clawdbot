@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
@@ -19,7 +20,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
-import type { SteerDocumentContext } from "../../media-understanding/apply.js";
+import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
@@ -39,9 +40,7 @@ export function createChatSendMessageInjectionStarter(params: {
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  /** Document-attachment context rendered before the fork: the active run never
-   * reaches reply dispatch, so its prompt would otherwise see bare media facts. */
-  documentContext?: SteerDocumentContext;
+  documentContext?: InboundDocumentContext;
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
@@ -63,8 +62,9 @@ export function createChatSendMessageInjectionStarter(params: {
     const documentContext = params.documentContext?.text.trim();
     let text = baseText;
     if (documentContext) {
-      const base = baseText?.trim();
-      text = base ? `${baseText?.trimEnd()}\n\n${documentContext}` : documentContext;
+      text = [buildInboundMediaNoteProjection(ctx).text, baseText.trim(), documentContext]
+        .filter(Boolean)
+        .join("\n\n");
     }
     const documentImages = params.documentContext?.images ?? [];
     const injectionImages: ChatImageContent[] | undefined =

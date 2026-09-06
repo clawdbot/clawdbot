@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
 import {
   borrowOpenClawAgentDatabase,
@@ -15,6 +16,8 @@ import {
   listOpenClawRegisteredAgentDatabases,
   OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+  withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -85,6 +88,121 @@ afterAll(() => {
 });
 
 describe("openclaw agent database handle cache", () => {
+  it("rechecks idle cache capacity after concurrent native admissions", async () => {
+    const env = requireFixtureEnv();
+    closeFirstBaseHandle();
+    const opened = await Promise.all(
+      ["async-first", "async-second"].map((agentId) =>
+        withOpenClawAgentDatabaseAsync({ agentId, env }, (database) => database),
+      ),
+    );
+    expect(opened.every((database) => database.db.isOpen)).toBe(true);
+    expect(listOpenClawAgentDatabasesForTest()).toHaveLength(OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP);
+  });
+
+  it("retains concurrent admissions through adoption and the transaction's borrower handoff", async () => {
+    const env = requireFixtureEnv();
+    closeFirstBaseHandle();
+    const baseBorrows = baseDatabases
+      .slice(1)
+      .map(({ agentId }) => borrowOpenClawAgentDatabase({ agentId, env }));
+    const entered = createDeferredCore();
+    const proceed = createDeferredCore();
+    const transferred: ReturnType<typeof borrowOpenClawAgentDatabase>[] = [];
+    let operations = 0;
+    const admitted = ["adoption-first", "adoption-second"].map((agentId) => {
+      const options = { agentId, env };
+      return withOpenClawAgentDatabaseAsync(options, async (database) => {
+        if (++operations === 2) {
+          entered.resolve();
+        }
+        await (async () => await proceed.promise)();
+        expect(database.db.isOpen).toBe(true);
+        return runOpenClawAgentWriteTransaction((current) => {
+          expect(current.db).toBe(database.db);
+          transferred.push(borrowOpenClawAgentDatabase(options));
+          return database;
+        }, options);
+      });
+    });
+    const finished = Promise.all(admitted);
+    try {
+      await Promise.race([entered.promise, finished]);
+      openOpenClawAgentDatabase({ agentId: "adoption-pressure", env });
+      proceed.resolve();
+      const databases = await finished;
+      expect(databases.every((database) => database.db.isOpen)).toBe(true);
+      expect(listOpenClawAgentDatabasesForTest()).toHaveLength(
+        OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP + 2,
+      );
+      for (const borrowed of transferred) {
+        borrowed.release();
+      }
+      openOpenClawAgentDatabase({ agentId: "after-adoption", env });
+      expect(databases.every((database) => !database.db.isOpen)).toBe(true);
+    } finally {
+      proceed.resolve();
+      await Promise.allSettled(admitted);
+      for (const borrowed of [...transferred, ...baseBorrows]) {
+        borrowed.release();
+      }
+    }
+  });
+
+  it.each([false, true])(
+    "releases a cached operation's borrow after settlement (throws=%s)",
+    async (throws) => {
+      const env = requireFixtureEnv();
+      const target = baseDatabases[0]!;
+      const retained = baseDatabases
+        .slice(1)
+        .map(({ agentId }) => borrowOpenClawAgentDatabase({ agentId, env }));
+      const entered = createDeferredCore();
+      const proceed = createDeferredCore();
+      const result = withOpenClawAgentDatabaseAsync(
+        { agentId: target.agentId, env },
+        async (database) => {
+          entered.resolve();
+          await (async () => await proceed.promise)();
+          expect(database).toBe(target);
+          expect(database.db.isOpen).toBe(true);
+          if (throws) {
+            throw new Error("synthetic operation failure");
+          }
+          return database.agentId;
+        },
+      );
+      const settled = throws
+        ? expect(result).rejects.toThrow("synthetic operation failure")
+        : expect(result).resolves.toBe(target.agentId);
+      try {
+        await entered.promise;
+        openOpenClawAgentDatabase({ agentId: "cached-operation-pressure", env });
+        expect(target.db.isOpen).toBe(true);
+        proceed.resolve();
+        await settled;
+        openOpenClawAgentDatabase({ agentId: "after-cached-operation", env });
+        expect(target.db.isOpen).toBe(false);
+      } finally {
+        proceed.resolve();
+        await Promise.allSettled([result]);
+        for (const borrowed of retained) {
+          borrowed.release();
+        }
+      }
+    },
+  );
+
+  it("does not invoke an admitted operation after explicit disposal revokes its handle", async () => {
+    const env = requireFixtureEnv();
+    const target = baseDatabases[0]!;
+    const operation = vi.fn();
+    const result = withOpenClawAgentDatabaseAsync({ agentId: target.agentId, env }, operation);
+    closeOpenClawAgentDatabaseByPath(target.path);
+    await expect(result).rejects.toThrow(/closed|revoked/);
+    expect(operation).not.toHaveBeenCalled();
+  });
+
   it("keeps only the capped number of open handles", () => {
     const env = requireFixtureEnv();
     const databases = [

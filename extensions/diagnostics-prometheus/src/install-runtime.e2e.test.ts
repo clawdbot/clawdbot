@@ -1,5 +1,6 @@
 // Proves the external Prometheus plugin's managed install and trusted runtime boundary.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -254,7 +255,9 @@ async function waitForGateway(params: {
 }
 
 describe("diagnostics-prometheus managed install runtime", () => {
-  it("installs the exact official package and exports metrics at Gateway startup", async () => {
+  it("installs the exact official package and exports metrics at Gateway startup", async ({
+    signal,
+  }) => {
     const workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "openclaw-prometheus-install-",
@@ -355,6 +358,9 @@ describe("diagnostics-prometheus managed install runtime", () => {
       },
     );
     children.push(gateway);
+    const gatewayClosed = once(gateway, "close", { signal });
+    // Setup can fail before this waiter is awaited; afterEach still owns forced cleanup.
+    void gatewayClosed.catch(() => {});
     await gatewayLogHandle.close();
     await waitForGateway({ child: gateway, logPath: gatewayLog, port: gatewayPort });
 
@@ -439,8 +445,20 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(gatewayLogs).not.toContain(
       "diagnostics-prometheus: internal diagnostics capability unavailable",
     );
-    await stopChildProcess(gateway, 5_000);
-    expect(gateway.exitCode).toBe(0);
-    expect(gateway.signalCode).toBeNull();
+    try {
+      // Graceful stop drains legitimate startup work; the forced reaper is cleanup only.
+      expect(gateway.kill("SIGTERM")).toBe(true);
+      await gatewayClosed;
+      expect(gateway.exitCode).toBe(0);
+      expect(gateway.signalCode).toBeNull();
+    } catch (cause) {
+      const termination = { exitCode: gateway.exitCode, signalCode: gateway.signalCode };
+      // Snapshot termination before reading the log that afterEach will remove.
+      const shutdownLogs = await fs.readFile(gatewayLog, "utf8");
+      throw new Error(
+        `Gateway shutdown failed: ${JSON.stringify(termination)}\n${shutdownLogs.slice(-8_000)}`,
+        { cause },
+      );
+    }
   }, 300_000);
 });

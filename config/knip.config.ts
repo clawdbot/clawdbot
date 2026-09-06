@@ -31,6 +31,8 @@ const repositoryScriptEntries = [
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/check-plugin-sdk-exports.mts!",
+  // openclaw-performance.yml invokes the paired benchmark CLI by path.
+  "scripts/vitest-pair-benchmark.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
   // Invoked by the documented macOS Computer Use live-proof shell rig.
@@ -60,6 +62,11 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  "scripts/e2e/lib/fleet-cache/assert-cell.mjs!",
+  "scripts/e2e/lib/fleet-cache/assert-podman-cell.mjs!",
+  "scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs!",
+  "scripts/e2e/lib/fleet-cache/probe-podman-cell.mjs!",
+  "scripts/e2e/lib/fleet-cache/runtime-preflight.mjs!",
   "scripts/e2e/lib/npm-telegram-live/prepare-package.mts!",
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
@@ -131,7 +138,6 @@ const repositoryScriptEntries = [
   "scripts/run-stylelint.mts!",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
-  "scripts/test-projects-child.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
@@ -193,6 +199,7 @@ const rootEntries = [
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
+  "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
@@ -458,7 +465,6 @@ const config = {
     "src/plugins/interactive-registry.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
-    "src/tasks/detached-task-runtime-state.ts": ["exports"],
     // Focused Control UI tests consume these explicit state-machine seams;
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
@@ -863,6 +869,10 @@ const config = {
       "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/slack`]: bundledPluginWorkspace([
+      // The vendor integrity test executes this verifier by path.
+      "scripts/verify-official-skills.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: bundledPluginWorkspace(),

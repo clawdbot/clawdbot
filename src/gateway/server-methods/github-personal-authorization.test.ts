@@ -52,50 +52,76 @@ function createRequest() {
   return { client, context };
 }
 
+function sessionRead(agentId = "main") {
+  return {
+    cfg: {},
+    canonicalKey: `agent:${agentId}:main`,
+    agentId,
+    storePath: "/test/sessions.json",
+    store: {},
+    storeKeys: [`agent:${agentId}:main`],
+    entry: { sessionId: "session-cache-test", updatedAt: 1 },
+    legacyKey: undefined,
+  };
+}
+
 describe("GitHub publication request discovery", () => {
   beforeEach(() => {
     mocks.loadSession.mockReset();
-    mocks.loadSession.mockReturnValue({
-      cfg: {},
-      canonicalKey: "agent:main:main",
-      agentId: "main",
-      storePath: "/test/sessions.json",
-      store: {},
-      storeKeys: ["agent:main:main"],
-      entry: { sessionId: "session-cache-test", updatedAt: 1 },
-      legacyKey: undefined,
-    });
+    mocks.loadSession.mockReturnValue(sessionRead());
   });
 
-  it("shares store discovery while re-reading publication options live", () => {
-    const read = prepareGitHubPublicationOptionsRead(createRequest(), "main");
+  it.each([undefined, "research"])(
+    "shares store discovery while re-reading publication options live for %s",
+    (agentId) => {
+      mocks.loadSession.mockReturnValue(sessionRead(agentId));
+      const read = prepareGitHubPublicationOptionsRead(createRequest(), {
+        sessionKey: "main",
+        agentId,
+      });
 
-    expect(read.currentSession()).toEqual(read.session);
-    expect(mocks.loadSession).toHaveBeenCalledTimes(2);
-    const targetDiscoveryCache = mocks.loadSession.mock.calls[0]?.[1]?.targetDiscoveryCache;
-    expect(targetDiscoveryCache).toBeInstanceOf(Map);
-    expect(mocks.loadSession.mock.calls[1]?.[1]?.targetDiscoveryCache).toBe(targetDiscoveryCache);
-    expect(mocks.loadSession).toHaveBeenNthCalledWith(2, "agent:main:main", {
-      agentId: "main",
-      targetDiscoveryCache,
-    });
-  });
-
-  it("shares store discovery across every personal session authority re-read", () => {
-    const action = preparePersonalGitHubSessionAction(createRequest(), "main");
-    action.assertCurrent();
-
-    expect(mocks.loadSession).toHaveBeenCalledTimes(3);
-    const targetDiscoveryCache = mocks.loadSession.mock.calls[0]?.[1]?.targetDiscoveryCache;
-    expect(targetDiscoveryCache).toBeInstanceOf(Map);
-    for (const call of [2, 3]) {
-      expect(mocks.loadSession.mock.calls[call - 1]?.[1]?.targetDiscoveryCache).toBe(
-        targetDiscoveryCache,
-      );
-      expect(mocks.loadSession).toHaveBeenNthCalledWith(call, "agent:main:main", {
-        agentId: "main",
+      expect(read.currentSession()).toEqual(read.session);
+      expect(mocks.loadSession).toHaveBeenCalledTimes(2);
+      const targetDiscoveryCache = mocks.loadSession.mock.calls[0]?.[1]?.targetDiscoveryCache;
+      expect(targetDiscoveryCache).toBeInstanceOf(Map);
+      expect(mocks.loadSession).toHaveBeenNthCalledWith(1, "main", {
+        agentId,
         targetDiscoveryCache,
       });
-    }
-  });
+      expect(mocks.loadSession.mock.calls[1]?.[1]?.targetDiscoveryCache).toBe(targetDiscoveryCache);
+      expect(mocks.loadSession).toHaveBeenNthCalledWith(2, `agent:${agentId ?? "main"}:main`, {
+        agentId: agentId ?? "main",
+        targetDiscoveryCache,
+      });
+    },
+  );
+
+  it.each([undefined, "research"])(
+    "shares store discovery across every personal session authority re-read for %s",
+    (agentId) => {
+      mocks.loadSession.mockReturnValue(sessionRead(agentId));
+      const action = preparePersonalGitHubSessionAction(createRequest(), {
+        sessionKey: "main",
+        agentId,
+      });
+      action.assertCurrent();
+
+      expect(mocks.loadSession).toHaveBeenCalledTimes(3);
+      const targetDiscoveryCache = mocks.loadSession.mock.calls[0]?.[1]?.targetDiscoveryCache;
+      expect(targetDiscoveryCache).toBeInstanceOf(Map);
+      expect(mocks.loadSession).toHaveBeenNthCalledWith(1, "main", {
+        agentId,
+        targetDiscoveryCache,
+      });
+      for (const call of [2, 3]) {
+        expect(mocks.loadSession.mock.calls[call - 1]?.[1]?.targetDiscoveryCache).toBe(
+          targetDiscoveryCache,
+        );
+        expect(mocks.loadSession).toHaveBeenNthCalledWith(call, `agent:${agentId ?? "main"}:main`, {
+          agentId: agentId ?? "main",
+          targetDiscoveryCache,
+        });
+      }
+    },
+  );
 });

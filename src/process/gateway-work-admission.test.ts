@@ -1,4 +1,5 @@
 // Covers root work counting and reversible suspension admission transitions.
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -18,6 +19,7 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
+  runWithGatewayIndependentRootWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
   runWithRetainedGatewayRootWork,
   runOutsideGatewayRootWorkAdmission,
@@ -584,6 +586,84 @@ it("defers required internal root work until suspension reopens", async () => {
   await pending;
 
   expect(entered).toHaveBeenCalledOnce();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it.each(["before admission", "while suspended", "during resume"] as const)(
+  "retires independent work cancelled %s without running it after resume",
+  async (timing) => {
+    const controller = new AbortController();
+    const suspension =
+      timing === "before admission" ? null : tryBeginGatewaySuspendAdmission(() => {});
+    if (suspension) {
+      expect(suspension.commit()).toBe(true);
+    }
+    if (timing === "before admission") {
+      controller.abort();
+    }
+    const run = vi.fn(async () => {});
+    let outcome: "resolved" | "rejected" | undefined;
+    let rejection: unknown;
+    const completion = runWithGatewayIndependentRootWorkAdmission(
+      run,
+      "test:cancellable",
+      controller.signal,
+    ).then(
+      () => {
+        outcome = "resolved";
+      },
+      (error: unknown) => {
+        outcome = "rejected";
+        rejection = error;
+      },
+    );
+    try {
+      if (timing === "during resume") {
+        suspension?.release();
+      }
+      controller.abort();
+      await nextTurn();
+      expect.soft(outcome, "cancellation does not wait for suspension release").toBe("rejected");
+    } finally {
+      suspension?.release();
+      await completion;
+    }
+    expect(rejection).toMatchObject({ name: "AbortError" });
+    expect(run).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  },
+);
+
+it("retains resumed independent work until its original completion after admission cancellation", async () => {
+  const controller = new AbortController();
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  let settled = false;
+  const execution = runWithGatewayIndependentRootWorkAdmission(
+    async () => {
+      started.resolve();
+      await release.promise;
+    },
+    "test:cancellable",
+    controller.signal,
+  ).then(() => {
+    settled = true;
+  });
+  try {
+    suspension?.release();
+    await started.promise;
+    controller.abort();
+    await nextTurn();
+    expect(settled).toBe(false);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+  } finally {
+    suspension?.release();
+    release.resolve();
+    await execution;
+  }
+  expect(settled).toBe(true);
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 

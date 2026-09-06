@@ -68,11 +68,8 @@ type ChatSendInternalOptions = {
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
-// Document rendering is only needed for a steered attachment; loading it
-// eagerly would pull the media provider registry and its plugin graph into
-// every chat.send handler load. The .runtime facade is the lazy boundary.
 const mediaDocumentContextLoader = createLazyImportLoader(
-  () => import("../../media-understanding/apply.runtime.js"),
+  () => import("../../media-understanding/file-context.js"),
 );
 
 async function handleChatSendWithOptions(
@@ -239,15 +236,6 @@ async function handleChatSendWithOptions(
       replyContextFieldsPromise,
     } = userTurn;
     preparedMediaRecorder = userTurnRecorder;
-    admitted.value.setPendingInputCleanup(() => {
-      userTurnRecorder.finishPendingInput?.(
-        activeRunAbort.controller.signal.aborted &&
-          activeRunAbort.entry?.abortStopReason !== "restart" &&
-          !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
-          ? "cancelled"
-          : "interrupted",
-      );
-    });
     const preparedUserTurn = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -259,6 +247,23 @@ async function handleChatSendWithOptions(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    admitted.value.setPendingInputCleanup(() => {
+      try {
+        userTurnRecorder.finishPendingInput?.(
+          activeRunAbort.controller.signal.aborted &&
+            activeRunAbort.entry?.abortStopReason !== "restart" &&
+            !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
+            ? "cancelled"
+            : "interrupted",
+        );
+      } finally {
+        void preparedUserTurn
+          .discardUnreferencedMedia(userTurnRecorder.getPendingInputMessage?.())
+          .catch((error: unknown) =>
+            context.logGateway.warn(`Failed to discard unused chat media: ${String(error)}`),
+          );
+      }
+    });
     if (
       entry?.sessionId &&
       isOperatorUiClient(clientInfo) &&
@@ -392,14 +397,9 @@ async function handleChatSendWithOptions(
         client?.internal?.syntheticClient ? undefined : client?.authenticatedUserProfile?.profileId,
       );
     }
-    // Steer targets never reach reply dispatch, so document attachments would
-    // otherwise reach the active run as bare media facts. Render their context
-    // up front. A failed lazy load or render must not abort a steerable
-    // message: normal reply dispatch tolerates media-understanding failures by
-    // proceeding with the raw content, so steer injection keeps the same
-    // contract and falls back to the original text.
+    // Rendering can fail independently of admission; preserve the raw steer on failure.
     const steerDocumentContext =
-      messageInjectionTarget && !isInternalTextSlashCommandTurn
+      messageInjectionTarget && !isInternalTextSlashCommandTurn && ctx.media?.length
         ? await mediaDocumentContextLoader
             .load()
             .then((runtime) =>
@@ -414,6 +414,12 @@ async function handleChatSendWithOptions(
               return undefined;
             })
         : undefined;
+    if (activeRunAbort.controller.signal.aborted) {
+      return finishAbortedChatSend();
+    }
+    if (sessionRoutingChanged(context.getRuntimeConfig())) {
+      return admitted.value.rejectSessionRoutingChanged();
+    }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
       request: normalizedRequest.value,

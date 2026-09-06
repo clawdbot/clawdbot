@@ -10,6 +10,7 @@ import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
 const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
 const MACOS_PRODUCER_WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
+const SHARED_PRODUCER_WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
@@ -49,6 +50,12 @@ type ProducerWorkflow = {
     scan?: {
       "runs-on"?: string;
       steps?: WorkflowStep[];
+    };
+    "scan-ios"?: {
+      "runs-on"?: string;
+    };
+    "scan-macos"?: {
+      "runs-on"?: string;
     };
   };
 };
@@ -481,9 +488,14 @@ describe("iOS Periphery comment workflow", () => {
     const macosWorkflow = parse(
       readFileSync(MACOS_PRODUCER_WORKFLOW_PATH, "utf8"),
     ) as ProducerWorkflow;
+    const sharedWorkflow = parse(
+      readFileSync(SHARED_PRODUCER_WORKFLOW_PATH, "utf8"),
+    ) as ProducerWorkflow;
 
-    expect(iosWorkflow.jobs?.scan?.["runs-on"]).toContain("github.run_attempt > 1");
+    expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("macos-26");
     expect(macosWorkflow.jobs?.scan?.["runs-on"]).toBe("macos-26");
+    expect(sharedWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("macos-26");
+    expect(sharedWorkflow.jobs?.["scan-macos"]?.["runs-on"]).toBe("macos-26");
   });
   it("accepts a valid small Periphery artifact", async () => {
     const archive = makeZip({

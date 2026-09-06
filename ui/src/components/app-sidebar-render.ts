@@ -8,7 +8,6 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
-import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -106,13 +105,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   });
   const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
   const gateway = host.sessionDataContext?.gateway;
-  const avatarAuthToken = gateway
-    ? resolveControlUiAuthToken({
-        hello: gateway.snapshot.hello,
-        settings: { token: gateway.connection.token },
-        password: gateway.connection.password,
-      })
-    : null;
   const avatarAuthReady = Boolean(
     gateway &&
     (gateway.snapshot.hello ||
@@ -131,7 +123,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .avatarUrl=${
           cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
         }
-        .authToken=${avatarAuthToken}
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
         .environment=${host.sessionDataContext?.config?.current?.environment ?? null}

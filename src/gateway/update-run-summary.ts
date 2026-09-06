@@ -12,6 +12,8 @@ export function summarizeUpdateRunResponse(response: unknown) {
     typeof value === "string" ? value.slice(0, limit) : undefined;
   const status = text(result.status, 40) || "error";
   const ok = raw.ok === true && (handoff.status === "started" || status === "ok");
+  const acknowledgementOwned = raw.ackDelivered === true || raw.ackQueued === true;
+  const acknowledgement = readStringField(raw, "acknowledgement");
   const before = text(asRecord(result.before).version, 100);
   const after = text(asRecord(result.after).version, 100);
   const failedSteps = (Array.isArray(result.steps) ? result.steps : [])
@@ -29,6 +31,7 @@ export function summarizeUpdateRunResponse(response: unknown) {
     })
     .slice(-3);
   const summary = {
+    runId: text(raw.runId, 100),
     ok,
     status,
     reason: text(result.reason, 240),
@@ -53,10 +56,14 @@ export function summarizeUpdateRunResponse(response: unknown) {
             message: readStringField(handoff, "message"),
           },
     ...(typeof raw.ackDelivered === "boolean" ? { ackDelivered: raw.ackDelivered } : {}),
+    ...(typeof raw.ackQueued === "boolean" ? { ackQueued: raw.ackQueued } : {}),
+    acknowledgement,
     failedSteps,
-    next: ok
-      ? "Update handed off. Reply briefly and wait for the automatic completion or failure notice; do not run shell commands or restart anything."
-      : "Tell the user the update did not start and why; relay any exact manual instructions.",
+    next:
+      readStringField(raw, "message") ??
+      (ok
+        ? `${acknowledgementOwned ? "The gateway owns the acknowledgement; do not send another acknowledgement." : `Reply with the update acknowledgement${acknowledgement ? `: ${acknowledgement}` : "."}`} Wait for the automatic restart, verification, and final notices; do not run shell commands or restart anything.`
+        : "Tell the user the update did not start and why; relay any exact manual instructions."),
   };
   if (JSON.stringify(summary, null, 2).length >= 4000) {
     for (const step of failedSteps) {

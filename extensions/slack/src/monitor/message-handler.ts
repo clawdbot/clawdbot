@@ -1,6 +1,6 @@
-// Slack plugin module implements message handler behavior.
 import {
   createChannelInboundDebouncer,
+  resolveInboundDebounceMs,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -116,13 +116,15 @@ export function createSlackMessageHandler(params: {
           `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
         ),
     });
-  const { debounceMs, debouncer } = createChannelInboundDebouncer<{
+  const { debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
+    debounceMs: number;
   }>({
     cfg: ctx.cfg,
     channel: "slack",
     serializeImmediate: true,
+    resolveDebounceMs: (entry) => entry.debounceMs,
     buildKey: (entry) =>
       buildSlackDebounceKey(entry.message, ctx.accountId, entry.opts.eventScope?.teamId),
     shouldDebounce: (entry) =>
@@ -415,6 +417,8 @@ export function createSlackMessageHandler(params: {
       ctx.accountId,
       teamId,
     );
+    // Pending-key tracking and enqueue must agree even if flushing another key awaits.
+    const debounceMs = resolveInboundDebounceMs({ cfg: readConfig(), channel: "slack" });
     const canDebounce =
       !opts.eventScope && debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
     if (!canDebounce && conversationKey) {
@@ -433,6 +437,7 @@ export function createSlackMessageHandler(params: {
     }
     const dispatchCompletion = opts.awaitDispatch ? createDeferred<void>() : undefined;
     await debouncer.enqueue({
+      debounceMs,
       message: resolvedMessage,
       opts: {
         ...opts,

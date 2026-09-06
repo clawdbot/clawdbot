@@ -8,7 +8,7 @@ describe("resolveNodeHostGatewayPlatformIdentity", () => {
     { runtime: "win32", platform: "windows", deviceFamily: "Windows", modelIdentifier: undefined },
     {
       runtime: "freebsd",
-      platform: "unknown",
+      platform: "freebsd",
       deviceFamily: undefined,
       modelIdentifier: undefined,
     },

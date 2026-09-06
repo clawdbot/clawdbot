@@ -76,7 +76,6 @@ import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-re
 import {
   cloneSessionEntry,
   resolveSqliteScope,
-  resolveSqliteStoreScope,
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -505,7 +504,11 @@ export async function applySessionEntryLifecycleMutation(params: {
         }),
       );
     }, toDatabaseOptions(resolved));
-    emitCommittedLifecycleIdentityMutations({ projected, removedSessionKeys });
+    emitCommittedLifecycleIdentityMutations({
+      agentId: resolved.agentId,
+      projected,
+      removedSessionKeys,
+    });
     return { archivedTranscripts, beforeCount, maintenancePlans, removedSessionKeys };
   }
 
@@ -562,7 +565,12 @@ export async function applySessionEntryLifecycleMutation(params: {
 export async function purgeDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
 ): Promise<void> {
-  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.storeAgentId });
+  const resolved = resolveSqliteScope({
+    agentId: params.storeAgentId,
+    env: params.env,
+    sessionKey: "",
+    storePath: params.storePath,
+  });
   const prepared = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const store = readSessionEntryStore(database);
@@ -645,7 +653,7 @@ export async function purgeDeletedAgentSessionEntries(
             }),
           );
         }, toDatabaseOptions(resolved));
-        emitCommittedSessionEntryRemovals(prepared.entryRemovals);
+        emitCommittedSessionEntryRemovals(resolved.agentId, prepared.entryRemovals);
         return { archivedTranscripts, maintenancePlans };
       }),
   );

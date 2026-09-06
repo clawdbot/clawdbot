@@ -27,7 +27,7 @@ test.each([
   { mode: "traces-only", metricsEnabled: false, traces: true, logs: false },
   { mode: "logs-only", metricsEnabled: false, traces: false, logs: true },
 ])(
-  "retains event-loop windows only as metrics with a preloaded SDK ($mode)",
+  "retains event-loop and GC durations only as metrics with a preloaded SDK ($mode)",
   async ({ metricsEnabled, traces, logs }) => {
     const receiver = await startOtlpReceiver();
     let meterProvider: MeterProvider | undefined;
@@ -43,9 +43,9 @@ test.each([
             exportIntervalMillis: 60_000,
           }),
         ],
-        views: [
-          {
-            instrumentName: "openclaw.gateway.event_loop.*",
+        views: ["openclaw.gateway.event_loop.*", "openclaw.gc.duration_ms"].map(
+          (instrumentName) => ({
+            instrumentName,
             attributesProcessors: [
               {
                 process(attributes, measurementContext) {
@@ -58,8 +58,8 @@ test.each([
                 },
               },
             ],
-          },
-        ],
+          }),
+        ),
       });
       metrics.disable();
       expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
@@ -75,7 +75,7 @@ test.each([
             ...bridge,
             onEvent(listener, filter) {
               return bridge.onEvent((event, metadata, privateData) => {
-                if (event.type === "gateway.event_loop.sample") {
+                if (event.type === "gateway.event_loop.sample" || event.type === "diagnostic.gc") {
                   deliveredSamples++;
                 }
                 listener(event, metadata, privateData);
@@ -99,7 +99,11 @@ test.each([
               .at(-1)
               ?.scopeMetrics.flatMap((scope) => scope.metrics) ?? []
           )
-            .filter((metric) => metric.descriptor.name.startsWith("openclaw.gateway.event_loop."))
+            .filter(
+              (metric) =>
+                metric.descriptor.name.startsWith("openclaw.gateway.event_loop.") ||
+                metric.descriptor.name === "openclaw.gc.duration_ms",
+            )
             .map(
               (metric) =>
                 [
@@ -125,6 +129,7 @@ test.each([
             intervalMs,
             delayMaxMs,
           });
+          emitInternalDiagnosticEventForTest({ type: "diagnostic.gc", durationMs: delayMaxMs });
           await waitForDiagnosticEventsDrained();
         });
         await meterProvider.forceFlush();
@@ -138,6 +143,10 @@ test.each([
               unit: "ms",
               points: [{ attributes: {}, value: totalMs }],
             },
+            "openclaw.gc.duration_ms": {
+              unit: "ms",
+              points: [{ attributes: {}, value: { count, sum } }],
+            },
           });
         } else {
           expect(sampleMetrics()).toEqual({});
@@ -149,6 +158,7 @@ test.each([
         intervalMs: 99_000,
         delayMaxMs: 99_000,
       });
+      emitDiagnosticEvent({ type: "diagnostic.gc", durationMs: 99_000 });
       await waitForDiagnosticEventsDrained();
       await meterProvider.forceFlush();
       expect(sampleMetrics()).toEqual(retained);
@@ -156,10 +166,10 @@ test.each([
         Object.values(sampleMetrics()).flatMap((metric) =>
           metric.points.map(({ attributes }) => attributes),
         ),
-      ).toEqual(metricsEnabled ? [{}, {}] : []);
-      expect(deliveredSamples).toBe(metricsEnabled ? 3 : 0);
+      ).toEqual(metricsEnabled ? [{}, {}, {}] : []);
+      expect(deliveredSamples).toBe(metricsEnabled ? 6 : 0);
       expect(observedParents).toEqual(
-        metricsEnabled ? [undefined, undefined, undefined, undefined] : [],
+        metricsEnabled ? [undefined, undefined, undefined, undefined, undefined, undefined] : [],
       );
       await stopStartedOtelServices();
       expect(sdk.exporter.getFinishedSpans()).toEqual([]);

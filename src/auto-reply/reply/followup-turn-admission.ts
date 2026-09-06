@@ -448,7 +448,10 @@ export async function admitFollowupTurn(params: {
         throw error;
       }
       operation.fail("run_failed", error);
-      const admittedVerboseLevel = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
+      const admittedVerboseLevel =
+        turn.queued.run.verboseLevelOverride ??
+        session.current()?.verboseLevel ??
+        turn.queued.run.verboseLevel;
       const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
         includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
       });

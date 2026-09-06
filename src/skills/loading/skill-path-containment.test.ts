@@ -11,6 +11,7 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { loadSingleSkillDirectory } from "./local-loader.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
@@ -230,6 +231,37 @@ describe("skill path containment", () => {
       expect(warningLine).toContain(`root=${path.join(workspaceDir, "skills")}`);
       expect(warningLine).toContain(`requested=${requestedPath}`);
       expect(warningLine).toContain("resolved=");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked skills in the Workshop-owned directory",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const config = {
+        agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
+      };
+      const workshopSkillsDir = resolveWorkshopSkillsDir(config, "main");
+      const outsideDir = await createTempWorkspaceDir();
+      const outsideSkillDir = path.join(outsideDir, "outside-workshop-skill");
+      await writeSkill({
+        dir: outsideSkillDir,
+        name: "outside-workshop-skill",
+        description: "Outside Workshop",
+      });
+      await fs.mkdir(workshopSkillsDir, { recursive: true });
+      await fs.symlink(
+        outsideSkillDir,
+        path.join(workshopSkillsDir, "outside-workshop-skill"),
+        "dir",
+      );
+      const warn = captureWarningLogger();
+
+      const entries = loadTestWorkspaceSkills(workspaceDir, { config, agentId: "main" });
+
+      expect(entries).toEqual([]);
+      expect(firstWarningLine(warn)).toContain("source=openclaw-workshop");
+      expect(firstWarningLine(warn)).toContain("reason=symlink-escape");
     },
   );
 
