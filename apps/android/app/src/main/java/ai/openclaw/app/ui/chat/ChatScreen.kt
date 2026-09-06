@@ -112,6 +112,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -172,6 +174,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -183,6 +186,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -194,6 +198,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -207,12 +212,14 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1413,7 +1420,7 @@ private fun ChatMessageList(
 
   // The header stays outside the weighted transcript so composer panels cannot collapse it.
   header(readerScroll.jumpToLatest.takeIf { readerScroll.showJumpToLatest })
-  CompositionLocalProvider(LocalChatReaderNavigation provides readerScroll.onManualNavigation) {
+  CompositionLocalProvider(LocalChatReaderNavigation provides readerScroll.navigation) {
     ChatMessageDisclosure(
       messages = messages,
       owner = fullMessageOwner,
@@ -1859,7 +1866,7 @@ internal fun ChatBubble(
               textParts = displayableContent.mapNotNull { it.text },
               plainText = messageText,
               expanded = userMessageExpanded,
-              onToggleExpanded = { userMessageExpanded = !userMessageExpanded },
+              onExpandedChange = { userMessageExpanded = it },
             )
           }
           displayableContent.forEach { part ->
@@ -1996,9 +2003,12 @@ private fun ChatUserMessageText(
   textParts: List<String>,
   plainText: String,
   expanded: Boolean,
-  onToggleExpanded: () -> Unit,
+  onExpandedChange: (Boolean) -> Unit,
 ) {
   val preview = ChatUserMessageDisclosurePolicy.collapsedPreview(plainText)
+  val action = key(plainText) { rememberChatReaderAction() }
+  val requester = remember(action) { BringIntoViewRequester() }
+  var pendingPlacement by remember(action) { mutableStateOf<CompletableDeferred<IntSize>?>(null) }
   if (preview != null && !expanded) {
     Text(
       text = preview,
@@ -2006,7 +2016,16 @@ private fun ChatUserMessageText(
       color = ClawTheme.colors.text,
     )
   } else {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(
+      modifier =
+        Modifier.bringIntoViewRequester(requester).onGloballyPositioned { coordinates ->
+          pendingPlacement?.let { pending ->
+            pendingPlacement = null
+            pending.complete(coordinates.size)
+          }
+        },
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
       textParts.forEach { text ->
         ChatMarkdown(
           text = text,
@@ -2020,7 +2039,23 @@ private fun ChatUserMessageText(
 
   if (preview != null) {
     val toggleLabel = if (expanded) nativeString("Close") else nativeString("View all")
-    ChatMessageDisclosureButton(toggleLabel, onToggleExpanded)
+    ChatMessageDisclosureButton(toggleLabel) {
+      // Repeated actions from one render keep the same open/close intent.
+      onExpandedChange(!expanded)
+      if (expanded) {
+        pendingPlacement = null
+        action.pause()
+      } else {
+        // Only this tap requests a reveal. Restored expansion and ordinary re-layout
+        // keep their reading position; placement, not a guessed frame delay, admits it.
+        val placement = CompletableDeferred<IntSize>()
+        pendingPlacement = placement
+        action.launch {
+          val size = placement.await()
+          requester.bringIntoView(Rect(0f, 0f, size.width.toFloat(), action.viewportHeight(size.height).toFloat()))
+        }
+      }
+    }
   }
 }
 

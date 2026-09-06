@@ -736,6 +736,14 @@ class ChatFullMessageOwnershipLayoutTest {
       assertNull(model.chatError.value)
     }
 
+    // View all pauses following. Return to latest through the outer list before testing the inner drag.
+    val latestViewport = transcript.fetchSemanticsNode().boundsInRoot
+    transcript.performSemanticsAction(SemanticsActions.ScrollBy) { scroll ->
+      assertTrue(scroll(0f, -latestViewport.height))
+    }
+    composeRule.waitForIdle()
+    assertEquals("Explicit outer scrolling must settle at latest", 0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+
     // Prove live-follow through consecutive updates, not an assumed Jump affordance after layout settles.
     appendAssistant(1)
     composeRule.onNodeWithText(gateway.backgroundText(0)).assertIsDisplayed()

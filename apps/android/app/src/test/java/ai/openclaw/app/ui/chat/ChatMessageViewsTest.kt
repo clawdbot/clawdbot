@@ -1,18 +1,26 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.parseChatMessageContent
+import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import android.widget.TextView
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -21,7 +29,9 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -29,6 +39,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 class ChatMessageViewsTest {
@@ -184,6 +196,77 @@ class ChatMessageViewsTest {
     }
 
     assertEquals(listOf("rewind:photo-entry", "fork:document-entry"), actions)
+  }
+
+  @Test
+  @Config(sdk = [36], qualifiers = "w360dp-h800dp-420dpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun repeatedUserDisclosureActionsKeepDesiredStateAndRevealItsStart() {
+    val introduction = "The first user paragraph must be readable."
+    val text = introduction + "\n\n" + (1..80).joinToString("\n\n") { "User paragraph $it remains in this message." }
+    val message = ChatMessage("user-disclosure", "user", listOf(ChatMessageContent(text = text)), null)
+    composeRule.setContent {
+      ClawDesignTheme {
+        val timeline = buildChatTimeline(listOf(message), 0, emptyList(), null)
+        val reader = rememberChatReaderScrollController("user-disclosure-owner", timeline, historyLoading = false)
+        CompositionLocalProvider(LocalChatReaderNavigation provides reader.navigation) {
+          LazyColumn(
+            state = reader.listState,
+            reverseLayout = true,
+            modifier = Modifier.size(360.dp, 240.dp).clipToBounds(),
+          ) {
+            item {
+              ChatBubble(
+                messageId = message.id,
+                entryId = null,
+                role = "user",
+                live = false,
+                content = message.content,
+                timestampMs = null,
+                onReplyMessage = {},
+                sessionActionsEnabled = false,
+                onRewindMessage = {},
+                onForkMessage = {},
+                speechState = null,
+                onToggleListen = { _, _ -> },
+                inlineMediaPlaybackBlocked = false,
+                inlineWidgetResolverReady = false,
+                resolveInlineWidgetResource = { _, _ -> null },
+                loadImageArtifact = { null },
+                loadMediaArtifact = { _, _, _ -> null },
+              )
+            }
+          }
+        }
+      }
+    }
+
+    fun repeatCurrentAction(label: String) {
+      val target = composeRule.onNode(hasText(label) and hasClickAction())
+      target.performScrollTo().assertIsDisplayed().assertIsEnabled()
+      val action = checkNotNull(target.fetchSemanticsNode().config[SemanticsActions.OnClick].action)
+      val autoAdvance = composeRule.mainClock.autoAdvance
+      composeRule.mainClock.autoAdvance = false
+      try {
+        val frame = composeRule.mainClock.currentTime
+        composeRule.runOnUiThread {
+          assertTrue(action())
+          assertTrue(action())
+        }
+        composeRule.mainClock.advanceTimeBy(0, ignoreFrameDuration = true)
+        assertEquals("Both actions must precede the next frame", frame, composeRule.mainClock.currentTime)
+      } finally {
+        composeRule.mainClock.autoAdvance = autoAdvance
+      }
+      composeRule.waitForIdle()
+    }
+
+    repeatCurrentAction("View all")
+    composeRule.onNodeWithText("Close").assertExists()
+    composeRule.onNodeWithText(introduction, useUnmergedTree = true).assertIsDisplayed()
+    repeatCurrentAction("Close")
+    composeRule.onNodeWithText("Close").assertDoesNotExist()
+    composeRule.onNodeWithText("View all").assertExists()
   }
 
   @Test

@@ -5,7 +5,10 @@ import ai.openclaw.app.ui.design.ClawTheme
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -72,6 +75,26 @@ class ChatCodeBlockLayoutTest {
     assertCopiedSource(code)
     click("Start of code")
     visibleGlyph("FIRST_CODE")
+  }
+
+  @Test
+  fun standaloneEndRevealsTheLastLineInsideAShortScrollingParent() {
+    val code = (0 until 700).joinToString("\n") { "R$it" }
+    show {
+      Box(
+        Modifier
+          .height(198.dp)
+          .clipToBounds()
+          .verticalScroll(rememberScrollState()),
+      ) {
+        ChatCodeBlock(code = code, language = null)
+      }
+    }
+
+    visibleGlyph("R0")
+    click("End of code")
+    composeRule.waitForIdle()
+    visibleGlyph("R699")
   }
 
   @Test

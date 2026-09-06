@@ -26,15 +26,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeWithVelocity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -67,6 +72,57 @@ class ChatReaderScrollOwnershipLayoutTest {
   @Test
   fun manualNavigationStopsReplacementAfterTheOlderTransitionIsCancelled() {
     verifyManualTakeover(replaceRunningTransition = true)
+  }
+
+  @Test
+  fun explicitReadingDuringAFlingDoesNotResumeFollowingAtLatest() {
+    showReader(readLatestOnNavigation = true)
+    composeRule.waitForIdle()
+    click("Read earlier")
+    composeRule.waitForIdle()
+
+    fun latestRowVisible(): Boolean {
+      val layout = reader.listState.layoutInfo
+      val latestRow = layout.visibleItemsInfo.firstOrNull { it.key == "message:assistant 59" }
+      return latestRow != null && latestRow.offset >= layout.viewportStartOffset && latestRow.offset + latestRow.size <= layout.viewportEndOffset
+    }
+
+    assertEquals(1f, checkNotNull(observedScale), 0f)
+    val transcript = composeRule.onNode(hasScrollToIndexAction()).assertIsDisplayed()
+    assertFalse("The reading target must initially be outside the viewport", latestRowVisible())
+    val dragDistance = with(composeRule.density) { 48.dp.toPx() }
+    val releaseVelocity = with(composeRule.density) { 400.dp.toPx() }
+    val originalAutoAdvance = composeRule.mainClock.autoAdvance
+    composeRule.mainClock.autoAdvance = false
+    try {
+      transcript.performTouchInput {
+        swipeWithVelocity(center, center - Offset(0f, dragDistance), endVelocity = releaseVelocity)
+      }
+      val moving = advanceUntilMoving(viewport(), "real-fling-before-reader-navigation")
+      assertTrue("Explicit reading must interrupt a moving fling", moving.scrolling)
+      assertFalse("The target must still require explicit reading", latestRowVisible())
+      click("Read latest")
+      composeRule.mainClock.autoAdvance = true
+      composeRule.waitForIdle()
+      assertFalse(viewport().scrolling)
+      assertTrue("Explicit reading must reveal the complete target", latestRowVisible())
+      val reading = composeRule.onNodeWithText("assistant 59").assertIsDisplayed().getUnclippedBoundsInRoot()
+      click("Append assistant")
+      composeRule.waitForIdle()
+      assertEquals(62, reader.listState.layoutInfo.totalItemsCount)
+      val after = composeRule.onNodeWithText("assistant 59").assertIsDisplayed().getUnclippedBoundsInRoot()
+      assertEquals("Explicit reading must survive the previous fling's idle event", reading.top.value, after.top.value, 1f / composeRule.density.density)
+      composeRule.onNodeWithText("assistant 60").assertIsNotDisplayed()
+      click("Jump to latest")
+      composeRule.waitForIdle()
+      composeRule.onNodeWithText("assistant 60").assertIsDisplayed()
+      click("Append assistant")
+      composeRule.waitForIdle()
+      composeRule.onNodeWithText("assistant 61").assertIsDisplayed()
+    } finally {
+      composeRule.mainClock.autoAdvance = originalAutoAdvance
+      composeRule.waitForIdle()
+    }
   }
 
   @Test
@@ -130,7 +186,7 @@ class ChatReaderScrollOwnershipLayoutTest {
         assertTrue(first.scrolling)
       }
 
-      // This visible fixture control uses the same provided navigation callback as
+      // This visible fixture control uses the same provided navigation owner as
       // View all and Start/End of code; it does not reach into reader implementation state.
       click("Read here")
       drainCurrentWork()
@@ -190,7 +246,10 @@ class ChatReaderScrollOwnershipLayoutTest {
       .performClick()
   }
 
-  private fun showReader(initialHistoryLoading: Boolean = false) {
+  private fun showReader(
+    initialHistoryLoading: Boolean = false,
+    readLatestOnNavigation: Boolean = false,
+  ) {
     val initialMessages = listOf(message("old user", "user", 1)) + (0 until 60).map { message("assistant $it", "assistant", it + 2) }
     composeRule.setContent {
       ClawDesignTheme {
@@ -201,20 +260,28 @@ class ChatReaderScrollOwnershipLayoutTest {
         val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
         SideEffect { reader = current }
         LaunchedEffect(Unit) { observedScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor }
-        CompositionLocalProvider(LocalChatReaderNavigation provides current.onManualNavigation) {
-          val manualNavigation = LocalChatReaderNavigation.current
+        CompositionLocalProvider(LocalChatReaderNavigation provides current.navigation) {
+          val navigation = checkNotNull(LocalChatReaderNavigation.current)
           Column(Modifier.size(360.dp, 700.dp).clipToBounds()) {
             Row(horizontalArrangement = Arrangement.SpaceBetween) {
               TextButton(onClick = current.jumpToLatest) { Text("Jump to latest") }
               TextButton(
                 onClick = {
-                  current.onManualNavigation()
-                  scope.launch { current.listState.scrollToItem(checkNotNull(timeline.readAnchorIndex)) }
+                  navigation.launch(scope) { current.listState.scrollToItem(checkNotNull(timeline.readAnchorIndex)) }
                 },
               ) { Text("Read earlier") }
-              TextButton(onClick = manualNavigation) { Text("Read here") }
+              TextButton(onClick = {
+                if (readLatestOnNavigation) {
+                  navigation.launch(scope) { current.listState.scrollToItem(checkNotNull(timeline.latestContentIndex)) }
+                } else {
+                  navigation.pause()
+                }
+              }) { Text(if (readLatestOnNavigation) "Read latest" else "Read here") }
             }
             TextButton(onClick = { messages = initialMessages + message("new user", "user", 1000) }) { Text("Append user turn") }
+            if (readLatestOnNavigation) {
+              TextButton(onClick = { messages = messages + message("assistant ${messages.count { it.role == "assistant" }}", "assistant", messages.size + 1) }) { Text("Append assistant") }
+            }
             TextButton(onClick = { historyLoading = !historyLoading }) { Text("Loading: $historyLoading") }
             Text("User turns: ${messages.count { it.role == "user" }}")
             LazyColumn(
