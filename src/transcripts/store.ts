@@ -298,23 +298,24 @@ export class TranscriptsStore {
     return read.iterateTranscriptReadEntries(this.database().db, options);
   }
 
-  readEntry(selector: string, exporting = false) {
-    return read.readTranscriptEntry(this.database().db, selector, exporting);
+  readEntry(selector: string, purpose: read.TranscriptReadPurpose = "page") {
+    return read.readTranscriptEntry(this.database().db, selector, purpose);
   }
 
   readLatestEntry() {
     return read.readLatestTranscriptEntry(this.database().db);
   }
 
-  readNotes(session: TranscriptSessionDescriptor, exporting = false) {
-    return read.readStoredTranscriptNotes(this.database().db, session, exporting);
+  readNotes(session: TranscriptSessionDescriptor, purpose: read.TranscriptReadPurpose = "page") {
+    return read.readStoredTranscriptNotes(this.database().db, session, purpose);
   }
 
   readUtterancePage(
     session: TranscriptSessionDescriptor,
     options: { limit?: number; after?: number; query?: string } = {},
+    purpose: "page" | "legacy" = "page",
   ) {
-    return read.readTranscriptUtterancePage(this.database().db, session, options);
+    return read.readTranscriptUtterancePage(this.database().db, session, options, purpose);
   }
 
   iterateUtterances(session: TranscriptSessionDescriptor) {

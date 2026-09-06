@@ -167,12 +167,12 @@ Open **Meetings** in the [Control UI](/web/control-ui#meetings-page) to browse
 captured meetings and notes without a terminal. The page and other Gateway
 clients use these read-only RPC methods:
 
-| Method               | Parameters                                                                                                                                             | Result                                                                                                                                         |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transcripts.list`   | Optional `limit` (1–200, default 50), `cursor`, `query`, exact `providerId`/`accountId`/`agentId`, and `startedAfter`/`startedBefore` date-time bounds | Newest-first `sessions`, including participants, utterance counts, active state, summary availability, a bounded overview, and `nextCursor`.   |
-| `transcripts.get`    | Required `selector`; optional `includeUtterances`, `limit` (1–100, default 50), `cursor`, and utterance `query`                                        | One `session`, stored `summary`, optional full-text `utterances`, and `nextCursor`.                                                            |
-| `transcripts.export` | Required `selector` and `format` (`markdown` or `jsonl`)                                                                                               | A base64-encoded file with `filename`, `mimeType`, and `sizeBytes`.                                                                            |
-| `transcripts.status` | None                                                                                                                                                   | Capture enablement, provider availability and setup metadata, configured-source health, active subscriptions, and the latest saved transcript. |
+| Method               | Parameters                                                                                                                                             | Result                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transcripts.list`   | Optional `limit` (1–200, default 50), `cursor`, `query`, exact `providerId`/`accountId`/`agentId`, and `startedAfter`/`startedBefore` date-time bounds | Newest-first `sessions`, including participants, utterance counts, active state, summary availability, a bounded overview, and `nextCursor`.                               |
+| `transcripts.get`    | Required `selector`; optional `includeUtterances`, `limit` (1–100), `cursor`, and utterance `query`                                                    | One `session`, stored `summary`, optional `utterances`, and `nextCursor`. Explicit pagination returns full text; legacy requests retain the recent window described below. |
+| `transcripts.export` | Required `selector` and `format` (`markdown` or `jsonl`)                                                                                               | A base64-encoded file with `filename`, `mimeType`, and `sizeBytes`.                                                                                                        |
+| `transcripts.status` | None                                                                                                                                                   | Capture enablement, provider availability and setup metadata, configured-source health, active subscriptions, and the latest saved transcript.                             |
 
 These methods require `operator.read` or its write/admin implication and expose
 meetings across one trusted Gateway domain. Restricted operator profiles need
@@ -195,11 +195,24 @@ changing either requires a fresh first page. A null `nextCursor` ends pagination
 
 The stored summary Markdown is the canonical notes text, matching the CLI's
 `show` output. Reads do not generate summaries or materialize files. Utterances
-are omitted unless requested and paginated without truncating stored text;
-`query` searches the full stored transcript, including unloaded pages. Each read
-result is bounded to 1 MiB. Oversized rows or invalid cursors fail visibly.
+are omitted unless `includeUtterances` is true. Supplying `limit`, `cursor`, or
+`query` selects paginated reads: at most 100 utterances per page, default 50,
+without truncating stored text. `query` searches the full stored transcript,
+including unloaded pages. Paginated reads, lists, and status results are bounded
+to 1 MiB, with stored payload bounds enforced before transfer into JavaScript.
+Oversized rows or invalid cursors fail visibly.
 Summary participants and model/heuristic provenance are shown when available;
 older summaries need not contain them.
+
+For compatibility with clients released before archive pagination, `transcripts.get`
+without `limit`, `cursor`, or `query` retains the most recent 2,000 utterances in
+chronological order, with each sanitized text clipped to 4,000 UTF-16 units.
+These legacy requests return `nextCursor: null` and retain a 25 MiB public-result
+ceiling, matching the existing Gateway client transport limit. They preserve
+the original raw-row reading behavior before text clipping and public projection.
+Send an explicit `limit` to adopt bounded page reads and retrieve complete text;
+continue with `nextCursor` until it is null. All archive access checks apply to
+both request shapes.
 
 Exports are bounded to 4 MiB and fail without returning a partial file. Markdown
 preserves stored notes and appends the complete transcript under a separate

@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES,
+  TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
   TRANSCRIPTS_RESULT_MAX_BYTES,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -269,7 +270,7 @@ describe("transcript library SQLite reads", () => {
     ).toBeLessThanOrEqual(3);
   });
 
-  it.each(["text", "combined speaker and metadata"])(
+  it.each(["text", "combined speaker fields"])(
     "bounds %s before SQLite returns an oversized row",
     async (kind) => {
       const { store, database } = fixture();
@@ -282,8 +283,7 @@ describe("transcript library SQLite reads", () => {
           ? { text: payload }
           : {
               text: "small",
-              speaker: { id: "x".repeat(400_000), label: "y".repeat(400_000) },
-              metadata: { private: "z".repeat(400_000) },
+              speaker: { id: "x".repeat(600_000), label: "y".repeat(600_000) },
             },
       );
       const reads = observeArchiveReads(database());
@@ -291,6 +291,7 @@ describe("transcript library SQLite reads", () => {
         getTranscriptLibrary(store, {
           selector: transcriptSessionSelector(target),
           includeUtterances: true,
+          limit: 1,
         }),
       ).rejects.toThrow(
         expect.objectContaining({
@@ -468,11 +469,16 @@ describe("transcript library SQLite reads", () => {
     );
     reads.length = 0;
     await expect(
-      getTranscriptLibrary(store, { selector: transcriptSessionSelector(target) }),
+      getTranscriptLibrary(store, { selector: transcriptSessionSelector(target), limit: 50 }),
     ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
     expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
       TRANSCRIPTS_RESULT_MAX_BYTES,
     );
+    const legacy = await getTranscriptLibrary(store, {
+      selector: transcriptSessionSelector(target),
+    });
+    expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(TRANSCRIPTS_RESULT_MAX_BYTES);
+    expect(legacy.summary?.overview).toBe("é".repeat(TRANSCRIPTS_RESULT_MAX_BYTES / 2 + 1));
     const exported = await exportTranscriptLibrary(store, {
       selector: transcriptSessionSelector(target),
       format: "markdown",
@@ -480,6 +486,73 @@ describe("transcript library SQLite reads", () => {
     expect(exported.sizeBytes).toBeGreaterThan(TRANSCRIPTS_RESULT_MAX_BYTES);
     expect(exported.sizeBytes).toBeLessThan(TRANSCRIPTS_EXPORT_MAX_BYTES);
     expect(Buffer.from(exported.data, "base64").toString("utf8")).toContain("saved note");
+  });
+
+  it("clips legacy speech before its transport envelope while retaining modern raw-row bounds", async () => {
+    const { store } = fixture();
+    const target = session("legacy-clipping");
+    const selector = transcriptSessionSelector(target);
+    await store.writeSession(target);
+    await store.appendUtteranceForSession(target, {
+      text: "\u001b[31m" + "x".repeat(TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES + 1),
+    });
+    const legacy = await getTranscriptLibrary(store, { selector, includeUtterances: true });
+    expect(legacy.utterances).toEqual([{ sequence: 0, text: "x".repeat(4000) }]);
+    await expect(
+      getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        type: "transcript_result_too_large",
+        maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
+      }),
+    );
+    await store.writeSession({
+      ...target,
+      title: "x".repeat(TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES + 1),
+    });
+    await expect(getTranscriptLibrary(store, { selector })).rejects.toThrow(
+      expect.objectContaining({
+        type: "transcript_result_too_large",
+        maxBytes: TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
+      }),
+    );
+  });
+
+  it("preserves ID-only stored speakers across legacy reads, pages, and exports", async () => {
+    const { store, database } = fixture();
+    const target = session("speaker-id-only");
+    const selector = transcriptSessionSelector(target);
+    await store.writeSession(target);
+    await store.appendUtteranceForSession(target, {
+      id: "speech-id",
+      text: "Saved speech",
+      speaker: { id: "speaker-id", label: "Stored label" },
+    });
+    const db = database();
+    executeSqliteQuerySync(
+      db,
+      meetingTranscriptDb(db)
+        .updateTable("meeting_transcript_utterances")
+        .set({
+          speaker_label: null,
+          metadata_json: JSON.stringify({ private: "x".repeat(2 * TRANSCRIPTS_RESULT_MAX_BYTES) }),
+        })
+        .where("session_id", "=", target.sessionId)
+        .where("session_started_at", "=", target.startedAt),
+    );
+    for (const limit of [undefined, 1]) {
+      const read = await getTranscriptLibrary(store, { selector, includeUtterances: true, limit });
+      expect(read.utterances?.[0]).toMatchObject({ speakerId: "speaker-id", text: "Saved speech" });
+      expect(read.utterances?.[0]?.speakerLabel).toBeUndefined();
+      expect(read.utterances?.[0]?.id).toBe(limit === undefined ? undefined : "speech-id");
+    }
+    const exported = await exportTranscriptLibrary(store, { selector, format: "jsonl" });
+    expect(JSON.parse(Buffer.from(exported.data, "base64").toString("utf8"))).toEqual({
+      sequence: 0,
+      id: "speech-id",
+      speakerId: "speaker-id",
+      text: "Saved speech",
+    });
   });
 
   it("keeps exact JSON escaping checks and exports valid content above the reader limit", async () => {
@@ -493,6 +566,7 @@ describe("transcript library SQLite reads", () => {
       getTranscriptLibrary(store, {
         selector: transcriptSessionSelector(target),
         includeUtterances: true,
+        limit: 1,
       }),
     ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
     const exported = await exportTranscriptLibrary(store, {
@@ -833,7 +907,8 @@ describe("transcript library SQLite reads", () => {
           .split("\n")
           .map((line) => JSON.parse(line)),
       ).toEqual(
-        (await getTranscriptLibrary(store, { selector, includeUtterances: true })).utterances,
+        (await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 50 }))
+          .utterances,
       );
       expect(Buffer.from(jsonl.data, "base64").toString("utf8")).not.toContain("provider-only");
       expect((await store.readUtterancesForSession(target))[0]?.metadata).toEqual({
@@ -860,7 +935,7 @@ describe("transcript library SQLite reads", () => {
       text: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1),
     });
     await expect(
-      getTranscriptLibrary(store, { selector, includeUtterances: true }),
+      getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 50 }),
     ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
     for (const format of ["jsonl", "markdown"] as const) {
       const exported = await exportTranscriptLibrary(store, { selector, format });

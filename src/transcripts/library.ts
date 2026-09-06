@@ -3,8 +3,11 @@ import {
   asSafeIntegerInRange,
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES,
+  TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH,
+  TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
   TRANSCRIPTS_RESULT_MAX_BYTES,
   type TranscriptSessionSummary,
   type TranscriptsExportParams,
@@ -27,6 +30,7 @@ import {
   assertTranscriptByteCount,
   TranscriptLibraryError,
   type TranscriptReadOptions,
+  type TranscriptReadPurpose,
 } from "./store-read.js";
 import { safeTranscriptPathSegment, type TranscriptsStore } from "./store.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
@@ -74,8 +78,12 @@ function normalizeDate(value: string | undefined): string | undefined {
   return new Date(time).toISOString();
 }
 
-function requireEntry(store: TranscriptsStore, selector: string, exporting = false) {
-  const entry = store.readEntry(selector, exporting);
+function requireEntry(
+  store: TranscriptsStore,
+  selector: string,
+  purpose: TranscriptReadPurpose = "page",
+) {
+  const entry = store.readEntry(selector, purpose);
   if (!entry) {
     throw new TranscriptLibraryError(
       "transcript_session_not_found",
@@ -158,7 +166,11 @@ export async function getTranscriptLibrary(
   params: TranscriptsGetParams,
   providerName?: (providerId: string) => string | undefined,
 ): Promise<TranscriptsGetResult> {
-  const entry = requireEntry(store, params.selector);
+  const purpose =
+    params.limit === undefined && params.cursor === undefined && params.query === undefined
+      ? "legacy"
+      : "page";
+  const entry = requireEntry(store, params.selector, purpose);
   const scope = cursorScope(["get", entry.selector, params.query]);
   const position = decodeCursor(params.cursor, scope);
   const after = asSafeIntegerInRange(position?.[0], { min: 0 });
@@ -169,13 +181,19 @@ export async function getTranscriptLibrary(
     );
   }
   const page = params.includeUtterances
-    ? store.readUtterancePage(entry.session, {
-        limit: params.limit,
-        query: params.query,
-        after,
-      })
+    ? store.readUtterancePage(
+        entry.session,
+        { limit: params.limit, query: params.query, after },
+        purpose,
+      )
     : undefined;
-  const utterances = page?.utterances.map(projectTranscriptUtterance);
+  const utterances = page?.utterances.map((utterance) => {
+    const projected = projectTranscriptUtterance(utterance);
+    if (purpose === "legacy") {
+      projected.text = truncateUtf16Safe(projected.text, TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH);
+    }
+    return projected;
+  });
   const last = utterances?.at(-1);
   const result: TranscriptsGetResult = {
     session: projectTranscriptSession(
@@ -185,9 +203,12 @@ export async function getTranscriptLibrary(
     ),
     ...(utterances ? { utterances } : {}),
     nextCursor: page?.hasMore && last ? encodeCursor(scope, [last.sequence]) : null,
-    summary: await readTranscriptNotes(store, entry.session),
+    summary: await readTranscriptNotes(store, entry.session, purpose),
   };
-  assertTranscriptByteLimit(JSON.stringify(result));
+  assertTranscriptByteLimit(
+    JSON.stringify(result),
+    purpose === "legacy" ? TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES : TRANSCRIPTS_RESULT_MAX_BYTES,
+  );
   return result;
 }
 
@@ -195,7 +216,7 @@ export async function exportTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsExportParams,
 ): Promise<TranscriptsExportResult> {
-  const entry = requireEntry(store, params.selector, true);
+  const entry = requireEntry(store, params.selector, "export");
   const parts: string[] = [];
   let sizeBytes = 0;
   for (const utterance of store.iterateUtterances(entry.session)) {
@@ -203,14 +224,14 @@ export async function exportTranscriptLibrary(
       params.format === "jsonl"
         ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
         : sanitizeTerminalText(utterance.text).trim();
-    const speaker = sanitizeTerminalText(utterance.speaker?.label ?? "").trim();
+    const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
     const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
     // Include Markdown list/newline overhead while accumulating, before rendering the body.
     sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
     assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
     parts.push(line);
   }
-  const notes = params.format === "markdown" ? store.readNotes(entry.session, true) : undefined;
+  const notes = params.format === "markdown" ? store.readNotes(entry.session, "export") : undefined;
   const summary = notes?.summary;
   const title = sanitizeTerminalText(entry.session.title ?? "").trim() || "Transcript";
   const body =

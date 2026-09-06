@@ -8,6 +8,10 @@ export const TRANSCRIPTS_PAGE_MAX = 100;
 export const TRANSCRIPTS_LIST_MAX = 200;
 export const TRANSCRIPTS_RESULT_MAX_BYTES = 1024 * 1024;
 export const TRANSCRIPTS_EXPORT_MAX_BYTES = 4 * 1024 * 1024;
+// Shipped unpaged get requests retain their recent-window and transport limits.
+export const TRANSCRIPTS_LEGACY_MAX_UTTERANCES = 2_000;
+export const TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH = 4_000;
+export const TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES = 25 * 1024 * 1024;
 
 const Selector = Type.String({ minLength: 1, maxLength: TRANSCRIPTS_RESULT_MAX_BYTES });
 const Filter = Type.String({ minLength: 1, maxLength: 256 });
@@ -101,7 +105,7 @@ export const TranscriptsGetResultSchema = closedObject({
     }),
   ),
   utterances: Type.Optional(
-    Type.Array(TranscriptUtteranceSchema, { maxItems: TRANSCRIPTS_PAGE_MAX }),
+    Type.Array(TranscriptUtteranceSchema, { maxItems: TRANSCRIPTS_LEGACY_MAX_UTTERANCES }),
   ),
   nextCursor: NullableString,
 });

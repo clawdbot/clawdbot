@@ -112,7 +112,7 @@ describe("transcript Gateway read authorization and errors", () => {
       for (const [method, params, type, maxBytes] of [
         [
           "transcripts.get",
-          { selector, includeUtterances: true },
+          { selector, includeUtterances: true, limit: 50 },
           "transcript_result_too_large",
           TRANSCRIPTS_RESULT_MAX_BYTES,
         ],
@@ -524,9 +524,14 @@ describe("meeting transcript RPC", () => {
 
   it("reads canonical notes without exporting and paginates full ordered utterances", async () => {
     const count = resolveTranscriptsConfig({}).maxUtterances + 1;
+    const finalSpeech = "x".repeat(3999) + "😀" + "x".repeat(1000);
     for (let index = 0; index < count; index++) {
       await store.appendUtteranceForSession(session, {
-        text: index === count - 1 ? "\u001b[31m" + "x".repeat(5000) : `line ${index}`,
+        id: `speech-${index}`,
+        text:
+          index === count - 1
+            ? "\u001b[31m" + finalSpeech
+            : `line ${index}` + (index < 2 ? "" : "x".repeat(600)),
         speaker: { id: "speaker", label: "Ada" },
         final: true,
         metadata: { private: true },
@@ -545,6 +550,41 @@ describe("meeting transcript RPC", () => {
     );
     expect(payload.summary.participants).toEqual(["Ada"]);
     expect(payload.utterances).toBeUndefined();
+    const [recentRead, recent] = await invoke("transcripts.get", {
+      selector,
+      includeUtterances: true,
+    });
+    expect(recentRead).toBe(true);
+    expect(recent.utterances).toHaveLength(count - 1);
+    expect(recent.utterances[0]).toMatchObject({ sequence: 1, text: "line 1" });
+    expect(recent.utterances.at(-1)).toEqual({
+      sequence: count - 1,
+      speakerId: "speaker",
+      speakerLabel: "Ada",
+      text: "x".repeat(3999),
+      final: true,
+    });
+    expect(recent.nextCursor).toBeNull();
+    expect(Buffer.byteLength(JSON.stringify(recent))).toBeGreaterThan(1024 * 1024);
+    const [, searched] = await invoke("transcripts.get", {
+      selector,
+      includeUtterances: true,
+      query: "line",
+    });
+    expect(searched.utterances).toHaveLength(50);
+    expect(searched.utterances[0]).toMatchObject({ sequence: 0 });
+    const [, first] = await invoke("transcripts.get", {
+      selector,
+      includeUtterances: true,
+      limit: 1,
+    });
+    const [, next] = await invoke("transcripts.get", {
+      selector,
+      includeUtterances: true,
+      cursor: first.nextCursor,
+    });
+    expect(next.utterances).toHaveLength(50);
+    expect(next.utterances[0]).toMatchObject({ sequence: 1 });
     const utterances: Array<{ sequence: number; text: string }> = [];
     let cursor: string | null = null;
     do {
@@ -563,9 +603,10 @@ describe("meeting transcript RPC", () => {
     expect(utterances[0]).toMatchObject({ sequence: 0, text: "line 0" });
     expect(utterances.at(-1)).toEqual({
       sequence: count - 1,
+      id: `speech-${count - 1}`,
       speakerId: "speaker",
       speakerLabel: "Ada",
-      text: "x".repeat(5000),
+      text: finalSpeech,
       final: true,
     });
   });

@@ -3,20 +3,21 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { expressionBuilder, type Expression, type SqlBool } from "kysely";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES,
+  TRANSCRIPTS_LEGACY_MAX_UTTERANCES,
   TRANSCRIPTS_PAGE_DEFAULT,
   TRANSCRIPTS_PAGE_MAX,
   TRANSCRIPTS_LIST_MAX,
   TRANSCRIPTS_RESULT_MAX_BYTES,
+  type TranscriptUtterance,
   type TranscriptsListParams,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import {
   meetingTranscriptDb,
   type meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
   sessionFromRow,
-  utteranceFromRow,
 } from "./store-sqlite.js";
 import type { TranscriptsSummary } from "./summary.js";
 
@@ -69,8 +70,23 @@ export function assertTranscriptByteCount(
   }
 }
 
-function byteLimit(exporting: boolean) {
-  return exporting ? TRANSCRIPTS_EXPORT_MAX_BYTES : TRANSCRIPTS_RESULT_MAX_BYTES;
+export type TranscriptReadPurpose = "page" | "export" | "legacy";
+
+function byteLimit(purpose: TranscriptReadPurpose) {
+  // The shipped unpaged reader bounded rows and projected text, not raw stored
+  // inputs. Its public result budget is enforced after projection in library.ts.
+  return purpose === "legacy"
+    ? undefined
+    : purpose === "export"
+      ? TRANSCRIPTS_EXPORT_MAX_BYTES
+      : TRANSCRIPTS_RESULT_MAX_BYTES;
+}
+
+function assertReadBytes(bytes: number, purpose: TranscriptReadPurpose) {
+  const maxBytes = byteLimit(purpose);
+  if (maxBytes !== undefined) {
+    assertTranscriptByteCount(bytes, maxBytes, purpose === "export");
+  }
 }
 
 function textBytes(...values: Expression<unknown>[]) {
@@ -85,14 +101,20 @@ function textBytes(...values: Expression<unknown>[]) {
 function boundedText<T extends string | null>(
   value: Expression<T>,
   bytes: Expression<number>,
-  maxBytes: number,
+  maxBytes: number | undefined,
 ) {
+  if (maxBytes === undefined) {
+    return expressionBuilder().parens(value);
+  }
   // CASE pairs the size decision with its payload in one statement. The empty
   // branch preserves the row; callers reject its byte count before decoding.
   return expressionBuilder().case().when(bytes, "<=", maxBytes).then(value).else("").end();
 }
 
-function readQuery(query: ReturnType<typeof meetingTranscriptSessionQuery>, exporting = false) {
+function readQuery(
+  query: ReturnType<typeof meetingTranscriptSessionQuery>,
+  purpose: TranscriptReadPurpose = "page",
+) {
   return query.select((eb) => {
     const notes = eb
       .selectFrom("meeting_transcript_summaries as notes")
@@ -152,7 +174,7 @@ function readQuery(query: ReturnType<typeof meetingTranscriptSessionQuery>, expo
       summarySource,
       participants,
     );
-    const maxBytes = byteLimit(exporting);
+    const maxBytes = byteLimit(purpose);
     return [
       boundedText(eb.ref("session_id"), identityBytes, maxBytes).as("session_id"),
       boundedText(eb.ref("started_at"), identityBytes, maxBytes).as("started_at"),
@@ -189,8 +211,11 @@ type TranscriptReadRow = Awaited<
   ReturnType<ReturnType<typeof readQuery>["executeTakeFirstOrThrow"]>
 >;
 
-function transcriptReadEntryFromRow(row: TranscriptReadRow, exporting = false) {
-  assertTranscriptByteCount(row.payload_bytes, byteLimit(exporting), exporting);
+function transcriptReadEntryFromRow(
+  row: TranscriptReadRow,
+  purpose: TranscriptReadPurpose = "page",
+) {
+  assertReadBytes(row.payload_bytes, purpose);
   const session = sessionFromRow(row);
   const summarySource: TranscriptsSummary["source"] | undefined =
     row.summary_source === "model" || row.summary_source === "heuristic"
@@ -373,21 +398,25 @@ export function* iterateTranscriptReadEntries(
 }
 
 /** Selectors are unique; identity and payload bounds remain in the same SQLite statement. */
-export function readTranscriptEntry(database: DatabaseSync, selector: string, exporting = false) {
+export function readTranscriptEntry(
+  database: DatabaseSync,
+  selector: string,
+  purpose: TranscriptReadPurpose = "page",
+) {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     readQuery(
       meetingTranscriptDb(database)
         .selectFrom("meeting_transcript_sessions")
         .where("selector", "=", selector),
-      exporting,
+      purpose,
     ),
   );
   if (!row) {
     return undefined;
   }
-  assertTranscriptByteCount(row.identity_bytes, byteLimit(exporting), exporting);
-  return row.selector === selector ? transcriptReadEntryFromRow(row, exporting) : undefined;
+  assertReadBytes(row.identity_bytes, purpose);
+  return row.selector === selector ? transcriptReadEntryFromRow(row, purpose) : undefined;
 }
 
 export function readLatestTranscriptEntry(database: DatabaseSync) {
@@ -420,31 +449,26 @@ export function queryTranscriptReadEntries(database: DatabaseSync, options: Tran
 function utteranceQuery(
   database: DatabaseSync,
   session: TranscriptSessionDescriptor,
-  maxBytes: number,
+  purpose: TranscriptReadPurpose,
 ) {
   return meetingTranscriptUtteranceQuery(database, session).select((eb) => {
-    const identityBytes = textBytes(eb.ref("session_id"), eb.ref("session_started_at"));
+    const maxBytes = byteLimit(purpose);
+    const utteranceId = purpose === "legacy" ? eb.val(null) : eb.ref("utterance_id");
     const bytes = textBytes(
-      eb.ref("session_id"),
-      eb.ref("session_started_at"),
-      eb.ref("utterance_id"),
+      utteranceId,
       eb.ref("started_at"),
       eb.ref("ended_at"),
       eb.ref("speaker_id"),
       eb.ref("speaker_label"),
       eb.ref("text"),
-      eb.ref("metadata_json"),
     );
     return [
-      boundedText(eb.ref("session_id"), identityBytes, maxBytes).as("session_id"),
-      boundedText(eb.ref("session_started_at"), identityBytes, maxBytes).as("session_started_at"),
-      boundedText(eb.ref("utterance_id"), bytes, maxBytes).as("utterance_id"),
+      boundedText(utteranceId, bytes, maxBytes).as("utterance_id"),
       boundedText(eb.ref("started_at"), bytes, maxBytes).as("started_at"),
       boundedText(eb.ref("ended_at"), bytes, maxBytes).as("ended_at"),
       boundedText(eb.ref("speaker_id"), bytes, maxBytes).as("speaker_id"),
       boundedText(eb.ref("speaker_label"), bytes, maxBytes).as("speaker_label"),
       boundedText(eb.ref("text"), bytes, maxBytes).as("text"),
-      boundedText(eb.ref("metadata_json"), bytes, maxBytes).as("metadata_json"),
       bytes.as("payload_bytes"),
       "sequence",
       "final",
@@ -452,13 +476,30 @@ function utteranceQuery(
   });
 }
 
+function transcriptReadUtteranceFromRow(
+  row: Awaited<ReturnType<ReturnType<typeof utteranceQuery>["executeTakeFirstOrThrow"]>>,
+): TranscriptUtterance {
+  return {
+    sequence: row.sequence,
+    id: row.utterance_id ?? undefined,
+    startedAt: row.started_at ?? undefined,
+    endedAt: row.ended_at ?? undefined,
+    speakerId: row.speaker_id ?? undefined,
+    speakerLabel: row.speaker_label ?? undefined,
+    text: row.text,
+    final: row.final === null ? undefined : row.final === 1,
+  };
+}
+
 export function readTranscriptUtterancePage(
   database: DatabaseSync,
   session: TranscriptSessionDescriptor,
   options: { limit?: number; after?: number; query?: string },
+  purpose: "page" | "legacy" = "page",
 ) {
-  const limit = transcriptPageLimit(options.limit);
-  let query = utteranceQuery(database, session, TRANSCRIPTS_RESULT_MAX_BYTES);
+  const recent = purpose === "legacy";
+  const limit = recent ? TRANSCRIPTS_LEGACY_MAX_UTTERANCES : transcriptPageLimit(options.limit);
+  let query = utteranceQuery(database, session, purpose);
   if (options.after !== undefined) {
     query = query.where("sequence", ">", options.after);
   }
@@ -475,25 +516,28 @@ export function readTranscriptUtterancePage(
       ),
     );
   }
-  const rows = iterateSqliteQuerySync(database, query.orderBy("sequence", "asc").limit(limit + 1));
-  const utterances: Array<TranscriptUtterance & { sequence: number }> = [];
+  const rows = iterateSqliteQuerySync(
+    database,
+    query.orderBy("sequence", recent ? "desc" : "asc").limit(recent ? limit : limit + 1),
+  );
+  const utterances: TranscriptUtterance[] = [];
   let bytes = 0;
   for (const row of rows) {
     if (utterances.length === limit) {
       return { utterances, hasMore: true };
     }
     bytes += row.payload_bytes;
-    assertTranscriptByteCount(bytes);
-    utterances.push({ ...utteranceFromRow(row), sequence: row.sequence });
+    assertReadBytes(bytes, purpose);
+    utterances.push(transcriptReadUtteranceFromRow(row));
   }
-  return { utterances, hasMore: false };
+  return { utterances: recent ? utterances.toReversed() : utterances, hasMore: false };
 }
 
 /** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
 export function readStoredTranscriptNotes(
   database: DatabaseSync,
   session: TranscriptSessionDescriptor,
-  exporting = false,
+  purpose: TranscriptReadPurpose = "page",
 ): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -506,8 +550,8 @@ export function readStoredTranscriptNotes(
         ]);
         const bytes = textBytes(summary, eb.ref("markdown"));
         return [
-          boundedText(summary, bytes, byteLimit(exporting)).as("summary"),
-          boundedText(eb.ref("markdown"), bytes, byteLimit(exporting)).as("markdown"),
+          boundedText(summary, bytes, byteLimit(purpose)).as("summary"),
+          boundedText(eb.ref("markdown"), bytes, byteLimit(purpose)).as("markdown"),
           bytes.as("payload_bytes"),
         ];
       })
@@ -517,7 +561,7 @@ export function readStoredTranscriptNotes(
   if (!row) {
     return {};
   }
-  assertTranscriptByteCount(row.payload_bytes, byteLimit(exporting), exporting);
+  assertReadBytes(row.payload_bytes, purpose);
   let summary: Omit<TranscriptsSummary, "transcript"> | undefined;
   if (row.summary) {
     // SAFETY: writeSummary/legacy import own the summary shape; this query removes only transcript.
@@ -533,12 +577,12 @@ export function readStoredTranscriptNotes(
 export function* iterateTranscriptUtterances(
   database: DatabaseSync,
   session: TranscriptSessionDescriptor,
-): Generator<TranscriptUtterance & { sequence: number }> {
+): Generator<TranscriptUtterance> {
   for (const row of iterateSqliteQuerySync(
     database,
-    utteranceQuery(database, session, TRANSCRIPTS_EXPORT_MAX_BYTES).orderBy("sequence", "asc"),
+    utteranceQuery(database, session, "export").orderBy("sequence", "asc"),
   )) {
     assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-    yield { ...utteranceFromRow(row), sequence: row.sequence };
+    yield transcriptReadUtteranceFromRow(row);
   }
 }

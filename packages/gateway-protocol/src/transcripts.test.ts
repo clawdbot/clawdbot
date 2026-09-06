@@ -56,6 +56,18 @@ describe("transcript UI wire contracts", () => {
     expect(lazyCompile(TranscriptsListResultSchema)(transcriptListFixture)).toBe(true);
     expect(lazyCompile(TranscriptsGetResultSchema)(transcriptGetFixture)).toBe(true);
     expect(lazyCompile(TranscriptsStatusResultSchema)(transcriptStatusFixture)).toBe(true);
+    const validateGet = lazyCompile(TranscriptsGetResultSchema);
+    const utterances = Array.from({ length: 2000 }, (_, sequence) => ({
+      sequence,
+      text: "speech",
+    }));
+    expect(validateGet({ ...transcriptGetFixture, utterances })).toBe(true);
+    expect(
+      validateGet({
+        ...transcriptGetFixture,
+        utterances: [...utterances, { sequence: 2000, text: "outside the recent window" }],
+      }),
+    ).toBe(false);
   });
 
   it("keeps pagination and search bounded and rejects mutation arguments", () => {

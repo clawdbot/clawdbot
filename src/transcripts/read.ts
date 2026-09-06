@@ -6,14 +6,10 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { isTranscriptSessionActive, readTranscriptCaptureSnapshot } from "./capture.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceLocator,
-  TranscriptUtterance,
-} from "./provider-types.js";
+import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { normalizeExportText } from "./store-artifacts.js";
-import type { TranscriptReadEntry } from "./store-read.js";
+import type { TranscriptReadEntry, TranscriptReadPurpose } from "./store-read.js";
 import type { TranscriptsStore } from "./store.js";
 
 /** Only public locator fields cross the Gateway; provider-private keys stay in the archive. */
@@ -84,8 +80,9 @@ export function projectTranscriptMarkdown(markdown: string): string {
 export async function readTranscriptNotes(
   store: TranscriptsStore,
   session: TranscriptSessionDescriptor,
+  purpose: TranscriptReadPurpose = "page",
 ): Promise<TranscriptsGetResult["summary"]> {
-  const stored = store.readNotes(session);
+  const stored = store.readNotes(session, purpose);
   if (stored.markdown === undefined) {
     return undefined;
   }
@@ -107,15 +104,18 @@ export async function readTranscriptNotes(
 
 /** Downloads and reader pages share an allowlist; raw provider metadata stays local. */
 export function projectTranscriptUtterance(
-  utterance: TranscriptUtterance & { sequence: number },
+  utterance: ProjectedTranscriptUtterance,
 ): ProjectedTranscriptUtterance {
   return {
     sequence: utterance.sequence,
     id: utterance.id,
     startedAt: utterance.startedAt,
     endedAt: utterance.endedAt,
-    speakerId: utterance.speaker?.id,
-    speakerLabel: utterance.speaker ? sanitizeTerminalText(utterance.speaker.label) : undefined,
+    speakerId: utterance.speakerId,
+    speakerLabel:
+      utterance.speakerLabel === undefined
+        ? undefined
+        : sanitizeTerminalText(utterance.speakerLabel),
     text: sanitizeTerminalText(utterance.text),
     final: utterance.final,
   };
