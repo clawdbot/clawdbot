@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/team-reports",
+  "version": "2026.9.2",
+  "private": true,
+  "description": "OpenClaw team activity reports plugin (GitHub org + Discord activity with model summaries)",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

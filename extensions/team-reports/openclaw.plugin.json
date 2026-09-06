@@ -1,0 +1,14 @@
+{
+  "id": "team-reports",
+  "name": "Team Reports",
+  "description": "Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
