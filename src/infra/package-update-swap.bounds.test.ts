@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
@@ -56,7 +57,7 @@ describe("package verification bounds", () => {
         const lstat = fs.lstat.bind(fs);
         const readdir = fs.readdir.bind(fs);
         const opendir = fs.opendir.bind(fs);
-        const blocked = Promise.withResolvers<void>();
+        const blocked = createDeferredCore();
         const target =
           entry === "package"
             ? packageRoot
@@ -117,7 +118,7 @@ describe("package verification bounds", () => {
       await withTestDir({ prefix: "openclaw-rollback-deadline-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
         const realOpen = fs.open.bind(fs);
-        const late = Promise.withResolvers<Awaited<ReturnType<typeof fs.open>>>();
+        const late = createDeferredCore<Awaited<ReturnType<typeof fs.open>>>();
         const handle = await realOpen(path.join(packageRoot, "dist", "index.js"), "r");
         const close = vi.spyOn(handle, "close");
         const read = vi.spyOn(handle, "read");
@@ -168,7 +169,9 @@ describe("package verification bounds", () => {
       const directory = await fs.opendir(packageRoot);
       const child = await directory.read();
       expect(child).not.toBeNull();
-      const read = vi.spyOn(directory, "read").mockResolvedValue(child);
+      // Select the promise overload instead of Dir.read's callback overload.
+      const promiseReader: { read(): Promise<typeof child> } = directory;
+      const read = vi.spyOn(promiseReader, "read").mockResolvedValue(child);
       vi.spyOn(fs, "opendir").mockResolvedValue(directory);
       const open = vi.spyOn(fs, "open");
       const beforeActivate = vi.fn();

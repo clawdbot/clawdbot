@@ -5,7 +5,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import {
+  swapStagedPackageInstall,
+  type PackageUpdateTransaction,
+} from "../../infra/package-update-swap.js";
+import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -527,9 +531,30 @@ describe("failed package update recovery safety", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   });
 
-  it("retains and reports the recovery backup after an older-target backup move partially fails", async () => {
+  it("retains and reports the recovery backup after candidate activation fails", async () => {
     const base = tempDirs.make("update-older-target-backup-");
-    const { result, transaction, packageRoot } = await createRetainedPackageSwap(base, true);
+    const { params, packageRoot, globalRoot } = await createPackageSwapFixture(base);
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (String(args[0]) === params.stage.packageRoot) {
+        throw Object.assign(new Error("candidate activation denied"), { code: "EACCES" });
+      }
+      return rename(...args);
+    });
+    let transaction: PackageUpdateTransaction | undefined;
+    const result = await swapStagedPackageInstall({
+      ...params,
+      onTransaction: (retained) => {
+        transaction = retained;
+      },
+    });
+    if (!transaction) {
+      throw new Error("Package activation did not retain its recovery transaction");
+    }
+    expect(result).toMatchObject({
+      status: "failed",
+      step: { stderrTail: expect.stringContaining("candidate activation denied") },
+    });
     const backupRuntime = path.join(transaction.backupRoot, "dist", "index.js");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(base, "state") };
     const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
@@ -562,7 +587,11 @@ describe("failed package update recovery safety", () => {
     expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
     expect(failure.result.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ stderrTail: expect.stringContaining(transaction.backupRoot) }),
+        expect.objectContaining({
+          name: "global install backup retention",
+          exitCode: 1,
+          stderrTail: expect.stringContaining(globalRoot),
+        }),
       ]),
     );
     expect(mocks.restart).not.toHaveBeenCalled();

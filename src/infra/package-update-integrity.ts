@@ -80,7 +80,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     } finally {
       await close(directory);
     }
-    return children.sort();
+    return children.toSorted();
   }
 
   async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
