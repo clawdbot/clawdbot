@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionPath,
@@ -13,11 +14,7 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it("lets a newer durable prompt and file beat a stale navigation handoff", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const sessionKey = "agent:main:existing-session";
       const staleText = "stale draft from the first page";
