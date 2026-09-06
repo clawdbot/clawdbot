@@ -214,6 +214,9 @@ describe("backupRestoreCommand", () => {
           expect(restored.warnings.join("\n")).toMatch(/pending approvals/iu);
           expect(restored.warnings.join("\n")).toMatch(/plugins install <spec> --force/iu);
           expect(restored.warnings.join("\n")).toMatch(/openclaw skills list/iu);
+          // Omitted links are reported by creation only, so restore must still
+          // tell an operator holding someone else's archive to expect them.
+          expect(restored.warnings.join("\n")).toMatch(/some restored links dangle/iu);
           expect(runtime.log).toHaveBeenCalledOnce();
           expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]))).toEqual(restored);
           if (process.platform !== "win32") {

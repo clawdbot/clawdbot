@@ -185,7 +185,7 @@ describe("formatBackupCreateSummary", () => {
     // round-trip create test cannot catch that: its target is a tmpdir path, which
     // shortenHomePath leaves untouched. Hence this unit assertion, which uses a
     // home-relative target on purpose.
-    const home = resolveHomeDir();
+    const home = expectDefined(resolveHomeDir(), "home directory");
     const summary = formatBackupCreateSummary(
       makeResult({
         skippedSymbolicLinks: [
@@ -3078,11 +3078,22 @@ describe("createBackupArchive", () => {
   );
 
   it.runIf(process.platform !== "win32").each([
-    { label: "an existing target", targetExists: true },
-    { label: "a dangling target", targetExists: false },
+    { label: "an existing target", targetBasename: "outside-target.txt", targetExists: true },
+    { label: "a dangling target", targetBasename: "outside-target.txt", targetExists: false },
+    {
+      // An unowned target is unrestorable whatever its spelling. While one
+      // predicate answered both remappability and restorability, its backslash
+      // rule excluded this link from the omission path, so it reached the archive
+      // guard and failed the whole backup with "must be relative". A backslash
+      // target a declared asset owns still fails there, on purpose: see
+      // "rejects a declared absolute target containing a backslash".
+      label: "a target containing a backslash",
+      targetBasename: "outside\\target.txt",
+      targetExists: true,
+    },
   ])(
     "skips and reports an absolute symlink with $label outside every declared asset",
-    async ({ targetExists }) => {
+    async ({ targetBasename, targetExists }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -3091,7 +3102,7 @@ describe("createBackupArchive", () => {
         },
         async (state) => {
           const outputPath = state.path("unrestorable-symlink.tar.gz");
-          const outsideTarget = state.path("outside-target.txt");
+          const outsideTarget = state.path(targetBasename);
           if (targetExists) {
             await fs.writeFile(outsideTarget, "outside\n", "utf8");
           }

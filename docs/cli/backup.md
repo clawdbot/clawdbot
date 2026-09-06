@@ -74,6 +74,9 @@ exactly as recorded in the archive.
   reinstall with `openclaw plugins install <spec> --force`. The generated
   `plugin-skills/` symlink index is also omitted; run `openclaw skills list` or
   start an agent session after activation to rebuild it from plugin metadata.
+  Symbolic links whose target was outside the backup are omitted, so some
+  restored links dangle; the `openclaw backup create` run that wrote the archive
+  listed each omitted link, and recreating them after activation is manual.
 </Warning>
 
 Activation is a separate offline operator step. Stop the Gateway, move the
@@ -316,7 +319,7 @@ Installed plugin source and manifest files under the state directory's `extensio
 
 The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symlink index, not authoritative state. Backup creation reports and omits that root because its absolute targets are specific to the source installation. After activating restored state, run `openclaw skills list` or start an agent session to rebuild the links from current plugin metadata.
 
-Individual symbolic links elsewhere in a backed-up path can also point outside the backup, such as a virtualenv interpreter link into a system package directory. An absolute link target that no backed-up asset owns has no portable archive path, so creation omits that one link, keeps the rest of the archive, and lists the link and its target in the text summary and in the JSON result's `skippedSymbolicLinks`. Links whose target is a backed-up asset are still archived as portable relative links, and `openclaw backup verify` and `openclaw backup restore` still refuse any archive whose links escape the archive root or the declared assets. Recreate an omitted link after restoring, or back up its target as a configured path first.
+Individual symbolic links elsewhere in a backed-up path can also point outside the backup, such as a virtualenv interpreter link into a system package directory. An absolute link target that no backed-up asset owns has no portable archive path, so creation omits that one link, keeps the rest of the archive, and lists the link and its target in the text summary and in the JSON result's `skippedSymbolicLinks`. Links whose target is a backed-up asset are still archived as portable relative links, and `openclaw backup verify` and `openclaw backup restore` still refuse any archive whose links escape the archive root or the declared assets. A relative link whose own target was omitted this way remains archived and restores dangling, as a virtualenv's `bin/python` link does when `bin/python3` pointed at a system interpreter. Recreate an omitted link after restoring, or back up its target as a configured path first.
 
 Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
 
@@ -324,7 +327,7 @@ Symbolic links are archived as link metadata and are never followed. Relative li
 
 The remaining cases are handled differently on creation and on verification, because the two commands answer different questions.
 
-- **Creation** omits an absolute link that no declared asset owns, keeps the rest of the archive, and reports the link and its target (see above). Such a link has no portable archive path, so no archive can represent it and no restore could recreate it — omitting it removes nothing a stricter policy would have preserved. Creation still refuses a link containing backslashes and a relative link that escapes the archive root or every declared asset: unlike an absolute target, a relative escape _would_ resolve to a path inside or beside a restored tree, which is the substitution hazard the archive guard exists to prevent.
+- **Creation** omits an absolute link that no declared asset owns, keeps the rest of the archive, and reports the link and its target (see above). Such a link has no portable archive path, so no archive can represent it and no restore could recreate it — omitting it removes nothing a stricter policy would have preserved. The link's spelling does not change that, so an unowned absolute target containing a backslash is omitted too. Creation still refuses a relative link that escapes the archive root or every declared asset: unlike an absolute target, a relative escape _would_ resolve to a path inside or beside a restored tree, which is the substitution hazard the archive guard exists to prevent. It also still refuses an absolute link whose target _is_ a declared asset but whose path contains a backslash, because the archive payload path folds backslashes into slashes and cannot represent that target faithfully.
 - **Verification and restore** refuse any archive containing a link that escapes the archive root or the declared assets, absolute or relative, with no omission path. An archive is untrusted input at that point, so the check stays fail-closed.
 
 Installer-managed and rebuildable runtime roots under the state directory are

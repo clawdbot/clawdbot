@@ -1,4 +1,5 @@
 // Creates backup archives while filtering volatile runtime state.
+import { readlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,18 +22,17 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
+import {
+  assertArchiveSymbolicLinkTarget,
+  isUnrestorableSymbolicLinkTarget,
+  remapDeclaredAbsoluteSymbolicLinkTarget,
+} from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
   publishPreparedBackupArchive,
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
-import {
-  isUnrestorableSymbolicLinkTarget,
-  readSymbolicLinkTarget,
-  remapDeclaredAbsoluteSymbolicLinkTarget,
-} from "./backup-archive-symbolic-links.js";
 import {
   observeBackupTarEntryProgress,
   removePreparedBackupArchive,
@@ -363,6 +363,15 @@ function isBackupTarFilterSymbolicLink(
   entry: import("node:fs").Stats | import("tar").ReadEntry,
 ): boolean {
   return "isSymbolicLink" in entry ? entry.isSymbolicLink() : entry.type === "SymbolicLink";
+}
+
+/** Read a link target during traversal; a link that vanished has no target to judge. */
+function readSymbolicLinkTarget(sourcePath: string): string | undefined {
+  try {
+    return readlinkSync(sourcePath);
+  } catch {
+    return undefined;
+  }
 }
 
 const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
