@@ -53,10 +53,10 @@ describe("chat transcript rendering", () => {
     "keeps configured avatar %s consistent across saved and streaming replies with %s placement",
     async (avatar, avatarPlacement) => {
       const props = threadProps("pane-agent-avatar");
-      props.userId = "synthetic-owner";
+      props.userId = avatarPlacement === "footer" ? null : "synthetic-owner";
       props.assistantAvatar = avatar;
       props.assistantAvatarUrl = avatar?.startsWith("blob:") ? avatar : null;
-      props.avatarPlacement = avatarPlacement;
+      props.avatarPlacement = avatarPlacement === "none" ? "none" : undefined;
       props.stream = "Reply in progress";
       props.streamStartedAt = 5_000;
       props.runActive = true;
