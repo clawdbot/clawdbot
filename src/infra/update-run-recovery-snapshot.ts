@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 
 /** Path spelling does not distinguish a disposable copy from a hard-linked live DB. */
 export function assertSeparateUpdateRecoveryDatabases(
@@ -78,7 +79,7 @@ export function digestUpdateRecoveryDatabase(db: DatabaseSync, runId: string): s
     statement.setReadBigInts(true);
     const rows: string[] = [];
     for (const row of statement.iterate()) {
-      if (name === "config_machine_state" && row.state_key === `update.recovery.${runId}`) {
+      if (name === "config_machine_state" && row.state_key === UPDATE_RECOVERY_KEY_PREFIX + runId) {
         continue;
       }
       rows.push(createHash("sha256").update(serializeRow(row)).digest("hex"));

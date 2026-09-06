@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { isUpdateRecoveryMachineStateKey } from "./update-run-recovery-keys.js";
 import { validateUpdateRecoveryPublicationDatabaseAtPath } from "./update-run-recovery-publication.js";
 import {
   beginUpdateRecovery,
@@ -463,6 +464,75 @@ describe("recovery carry-forward", () => {
       validateUpdateRecoveryDatabaseBinding(f.stagedDb, result.record, result.stagedBinding),
     ).not.toThrow();
   });
+  it("selects exactly the carry-forward namespace while retaining operator and plugin rows", async () => {
+    const f = await fixture();
+    const nonRecoveryKeys = [
+      "UPDATE.RECOVERY.operator",
+      "update.recovery/operator",
+      "update.recovery",
+      "update.recoveryx.plugin",
+      " update.recovery.operator",
+      "plugin.fixture",
+    ];
+    for (const [db, value] of [
+      [f.sourceDb, '"current"'],
+      [f.stagedDb, '"preserved"'],
+    ] as const) {
+      for (const key of nonRecoveryKeys) {
+        db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(key, value, 9);
+      }
+    }
+    const other = { ...f.expected, runId: randomUUID(), transactionId: randomUUID() };
+    f.sourceDb
+      .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+      .run("update.recovery." + other.runId, JSON.stringify(other), other.updatedAtMs);
+    const obsoleteKey = "update.recovery." + randomUUID();
+    f.stagedDb
+      .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+      .run(obsoleteKey, "{}", 1);
+    const rows = (db: typeof f.sourceDb) =>
+      db
+        .prepare(
+          "SELECT state_key, value_json, updated_at_ms FROM config_machine_state ORDER BY state_key",
+        )
+        .all();
+    const projection = (db: typeof f.sourceDb) =>
+      rows(db).filter((row) => isUpdateRecoveryMachineStateKey(row.state_key));
+    expect(
+      projection(f.sourceDb)
+        .map((row) => String(row.state_key))
+        .toSorted(),
+    ).toEqual(["update.recovery." + f.expected.runId, "update.recovery." + other.runId].toSorted());
+    const preserved = rows(f.stagedDb).filter(
+      (row) => !isUpdateRecoveryMachineStateKey(row.state_key),
+    );
+    const result = prepareUpdateRecoveryCarryForward(f.params);
+    expect(projection(f.stagedDb)).toEqual(projection(f.sourceDb));
+    expect(rows(f.stagedDb).some((row) => row.state_key === obsoleteKey)).toBe(false);
+    expect(
+      rows(f.stagedDb).filter((row) => !isUpdateRecoveryMachineStateKey(row.state_key)),
+    ).toEqual(preserved);
+    expect(() =>
+      validateUpdateRecoveryDatabaseBinding(f.stagedDb, result.record, result.stagedBinding),
+    ).not.toThrow();
+  });
+
+  it.each(["update.recovery.", "update.recovery.invalid"])(
+    "keeps malformed owned key %s out of generic merging but rejects its carry-forward",
+    async (key) => {
+      const f = await fixture();
+      f.sourceDb.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(key, "{}", 1);
+      expect(isUpdateRecoveryMachineStateKey(key)).toBe(true);
+      const before = readUpdateRecoveryDatabaseBinding(f.sourceDb, f.expected);
+      const stageRows = () =>
+        f.stagedDb.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all();
+      const stagedBefore = stageRows();
+      expect(() => prepareUpdateRecoveryCarryForward(f.params)).toThrow();
+      expect(readUpdateRecoveryDatabaseBinding(f.sourceDb, f.expected)).toEqual(before);
+      expect(stageRows()).toEqual(stagedBefore);
+    },
+  );
+
   it("carries all current history and matching intent into an old copy without overwriting unrelated state", async () => {
     const f = await fixture();
     const result = prepareUpdateRecoveryCarryForward(f.params);

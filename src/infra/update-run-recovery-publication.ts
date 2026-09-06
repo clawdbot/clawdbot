@@ -3,6 +3,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import {
   assertUpdateRecoveryPublicationRecord,
   UpdateRecoveryConflictError,
@@ -50,7 +51,7 @@ export function validateUpdateRecoveryPublicationDatabase(
       getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
         .selectFrom("config_machine_state")
         .select("value_json")
-        .where("state_key", "=", "update.recovery." + expected.runId),
+        .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + expected.runId),
     );
     if (!row || Buffer.byteLength(row.value_json) > 1024 * 1024) {
       throw new UpdateRecoveryConflictError();

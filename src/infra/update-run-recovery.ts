@@ -13,6 +13,7 @@ import {
 } from "./kysely-sync.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { ensureUpdateRunLedgerSchema } from "./update-run-ledger.js";
+import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import {
   UpdateRecoveryRecordSchema,
   UpdateRecoveryConflictError,
@@ -39,7 +40,6 @@ export type {
   UpdateRecoveryRestoreProgress,
 } from "./update-run-recovery-schema.js";
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
-const RECOVERY_KEY_PREFIX = "update.recovery.";
 const MAX_RECOVERY_BYTES = 1024 * 1024;
 
 /** Current executor-held exclusion, never deserialized. CAS does not authorize effects. */
@@ -78,11 +78,11 @@ function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
     getNodeSqliteKysely<RecoveryDatabase>(db)
       .selectFrom("config_machine_state")
       .select(["state_key", "value_json"])
-      .where("state_key", ">=", RECOVERY_KEY_PREFIX)
-      .where("state_key", "<", "update.recovery/")
+      .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
+      .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
       .orderBy("state_key", "asc"),
   ).rows.map((row) =>
-    decodeRecovery(row.value_json, row.state_key.slice(RECOVERY_KEY_PREFIX.length)),
+    decodeRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
   );
 }
 /** Must run before general database open, admission writes, or runtime migration. */
@@ -135,7 +135,7 @@ function requireRevision(
     getNodeSqliteKysely<RecoveryDatabase>(db)
       .selectFrom("config_machine_state")
       .select("value_json")
-      .where("state_key", "=", RECOVERY_KEY_PREFIX + expected.runId),
+      .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + expected.runId),
   );
   if (!row?.value_json) {
     throw new UpdateRecoveryConflictError();
@@ -172,7 +172,7 @@ function mutateRecovery(
         getNodeSqliteKysely<RecoveryDatabase>(db)
           .updateTable("config_machine_state")
           .set({ value_json: encodeRecovery(record), updated_at_ms: record.updatedAtMs })
-          .where("state_key", "=", RECOVERY_KEY_PREFIX + record.runId)
+          .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + record.runId)
           .where("value_json", "=", raw),
       );
       if (result.numAffectedRows !== 1n) {
@@ -229,7 +229,7 @@ export function beginUpdateRecovery(
         getNodeSqliteKysely<RecoveryDatabase>(db)
           .insertInto("config_machine_state")
           .values({
-            state_key: RECOVERY_KEY_PREFIX + input.runId,
+            state_key: UPDATE_RECOVERY_KEY_PREFIX + input.runId,
             value_json: raw,
             updated_at_ms: now,
           }),
@@ -564,7 +564,7 @@ function assertExactRecovery(db: DatabaseSync, expected: UpdateRecoveryRecord): 
     getNodeSqliteKysely<RecoveryDatabase>(db)
       .selectFrom("config_machine_state")
       .select("updated_at_ms")
-      .where("state_key", "=", RECOVERY_KEY_PREFIX + expected.runId),
+      .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + expected.runId),
   );
   if (raw !== encodeRecovery(expected) || row?.updated_at_ms !== expected.updatedAtMs) {
     throw new UpdateRecoveryConflictError();
@@ -706,15 +706,15 @@ export function prepareUpdateRecoveryCarryForward(params: {
       source
         .selectFrom("config_machine_state")
         .selectAll()
-        .where("state_key", ">=", RECOVERY_KEY_PREFIX)
-        .where("state_key", "<", "update.recovery/"),
+        .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
+        .where("state_key", "<", UPDATE_RECOVERY_KEY_END),
     ).rows;
     executeSqliteQuerySync(
       stagedDb,
       stage
         .deleteFrom("config_machine_state")
-        .where("state_key", ">=", RECOVERY_KEY_PREFIX)
-        .where("state_key", "<", "update.recovery/")
+        .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
+        .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
         .where(
           "state_key",
           "not in",
@@ -723,7 +723,7 @@ export function prepareUpdateRecoveryCarryForward(params: {
     );
     for (const row of recoveries) {
       // Decode all carried operational rows; corrupt facts must not be published.
-      decodeRecovery(row.value_json, row.state_key.slice(RECOVERY_KEY_PREFIX.length));
+      decodeRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length));
       executeSqliteQuerySync(
         stagedDb,
         stage
@@ -738,7 +738,7 @@ export function prepareUpdateRecoveryCarryForward(params: {
         getNodeSqliteKysely<RecoveryDatabase>(db)
           .updateTable("config_machine_state")
           .set({ value_json: raw, updated_at_ms: record.updatedAtMs })
-          .where("state_key", "=", RECOVERY_KEY_PREFIX + record.runId),
+          .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + record.runId),
       );
     }
     params.validateStagedDatabase(stagedDb);
