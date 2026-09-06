@@ -456,6 +456,39 @@ describe("runSqliteImmediateTransactionSync", () => {
 });
 
 describe("runSqliteImmediateTransaction", () => {
+  it("repeats preparation and can decline a write while another writer remains active", async () => {
+    const dir = tempDirs.make("openclaw-sqlite-preparation-");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(dir, "index.sqlite"));
+    const writer = new DatabaseSync(path.join(dir, "index.sqlite"));
+    openDatabases.push(db, writer);
+    db.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; CREATE TABLE entries(id TEXT PRIMARY KEY);",
+    );
+    writer.exec("BEGIN IMMEDIATE");
+    let eligible = true;
+    let preparations = 0;
+    const write = vi.fn(() => db.prepare("INSERT INTO entries VALUES ('unexpected')").run());
+    const pending = runSqliteImmediateTransaction(db, async () => {
+      preparations += 1;
+      expect(db.isTransaction).toBe(false);
+      return eligible ? write : undefined;
+    });
+    void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(preparations).toBeGreaterThan(1));
+      eligible = false;
+      await expect(pending).resolves.toBeUndefined();
+      expect(writer.isTransaction).toBe(true);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.prepare("SELECT id FROM entries").all()).toEqual([]);
+      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+    } finally {
+      writer.exec("ROLLBACK");
+      await pending.catch(() => undefined);
+    }
+  });
+
   it.each(["existing", "preparation"])(
     "rejects a transaction from %s before admitting writes",
     async (owner) => {
