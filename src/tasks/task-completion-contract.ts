@@ -17,6 +17,20 @@ const BARE_PROGRESS_ONLY_PATTERN =
 const FOLLOW_UP_PLANNING_PREFIX_PATTERN =
   /^(?:after(?:wards|\s+that)?|from\s+there|next|once\s+(?:done|that(?:'|\u2019)?s\s+done|that\s+is\s+done)|then)[,.\s]+/i;
 
+// A real final summary can open with progress narration ("I'll verify\u2026") yet
+// still carry the deliverable. The progress-only prefix check would block it,
+// and the sentence-boundary rescue misses comma-joined or progress-worded
+// result sentences. Treat any strong result/report/verification marker anywhere
+// in the text as proof the completion is not progress-only. Markers are kept
+// deliberately strong (section headers, past-tense completion verbs, explicit
+// pass outcomes, check glyphs) so genuine narration is not swallowed.
+const COMPLETION_RESULT_MARKER_PATTERN =
+  /(?:(?:^|[\s([*_>\u2022-])(?:result|results|report|summary|outcome|conclusion|finding|findings|verification|verified|deliverable|proof|status|changes?|recommendation|backup|rollback|files?\s+changed)\s*[:\-\u2013\u2014])|\b(?:done|completed|finished|fixed|patched|resolved|deployed|landed|merged|implemented|confirmed)\b|\b(?:tests?|build|lint|checks?|syntax)\s+(?:passed|succeeded|green)\b|[\u2713\u2714\u2705]/i;
+
+function containsCompletionResultMarker(value: string): boolean {
+  return COMPLETION_RESULT_MARKER_PATTERN.test(value);
+}
+
 function normalizeCompletionText(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -51,9 +65,12 @@ function hasNonProgressFollowupSentence(value: string): boolean {
   return matchesProgressOnlyPrefix(firstSentence) && !isProgressOnlyCompletionText(rest);
 }
 
-function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
+export function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
   const normalized = normalizeCompletionText(value);
   if (!normalized) {
+    return false;
+  }
+  if (containsCompletionResultMarker(normalized)) {
     return false;
   }
   if (hasNonProgressFollowupSentence(normalized)) {
