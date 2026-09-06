@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { z } from "zod";
 import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import type { BackupAsset } from "../commands/backup-shared.js";
@@ -67,9 +68,20 @@ const resourceSchema = z
     restore: z.enum(["replace", "preserve"]),
   })
   .strict();
+/** A locator, never serialized authority. Reopen against a fresh binding and artifact root. */
+export const UpdateCheckpointRefSchema = z
+  .object({
+    checkpointId: z.string().uuid(),
+    manifestPath: absolutePath,
+    manifestSha256: digest,
+  })
+  .strict();
+export type UpdateCheckpointRef = z.infer<typeof UpdateCheckpointRefSchema>;
 const manifestSchema = z
   .object({
     checkpointId: z.string().uuid(),
+    purpose: z.enum(["checkpoint", "preimage"]).optional(),
+    preimageRef: UpdateCheckpointRefSchema.optional(),
     binding: bindingSchema,
     createdAtMs: z.number().int(),
     exclusions: z.array(z.string()),
@@ -101,15 +113,6 @@ export type UpdateCheckpointSourceBinding = {
 };
 export type UpdateCheckpointResource = z.infer<typeof resourceSchema>;
 export type UpdateCheckpointManifest = z.infer<typeof manifestSchema>;
-/** A locator, never serialized authority. Reopen against a fresh binding and artifact root. */
-export const UpdateCheckpointRefSchema = z
-  .object({
-    checkpointId: z.string().uuid(),
-    manifestPath: absolutePath,
-    manifestSha256: digest,
-  })
-  .strict();
-export type UpdateCheckpointRef = z.infer<typeof UpdateCheckpointRefSchema>;
 export type ReopenedUpdateCheckpoint = {
   ref: UpdateCheckpointRef;
   manifest: UpdateCheckpointManifest;
@@ -217,23 +220,117 @@ function assertResourceBoundaries(
   }
 }
 
-/** Capture under exclusion, after service preimages are known and before update mutation. */
-export async function captureUpdateCheckpoint(
-  params: UpdateCheckpointAccess & {
+/** Data retained by the lifecycle owner before independent writers can resume. */
+export type UpdateCheckpointPreimageInput = {
+  checkpointRef: UpdateCheckpointRef;
+  postMutationSources: readonly UpdateCheckpointSourceBinding[];
+};
+
+type CaptureOptions = {
+  resources: readonly UpdateCheckpointResource[];
+  exclusions: readonly string[];
+  /** Owner-retained outputs, including absence; required for replacement after-images. */
+  expectedSources?: readonly UpdateCheckpointSourceBinding[];
+  pluginIndexMutations?: readonly UpdateCheckpointPluginIndexMutation[];
+  /** Earlier bytes plus lifecycle-owner outputs retained before other writers resume. */
+  preimages?: UpdateCheckpointPreimageInput;
+};
+
+/** File-only preimages, not a whole-state checkpoint or authority to stop a service.
+ * The owner must exclude mutations to these exact config/service sources while
+ * capturing. Other runtime writers may run; no database is read here.
+ */
+export async function captureUpdateCheckpointPreimages(
+  params: UpdateCheckpointReadAccess & {
     resources: readonly UpdateCheckpointResource[];
-    exclusions: readonly string[];
-    /** When supplied, bind every replaceable non-SQLite source, including absence.
-     * These facts do not grant authority; assertQuiescent must still be current.
-     * Plugin row provenance is separately bound by pluginIndexMutations.
-     */
-    expectedSources?: readonly UpdateCheckpointSourceBinding[];
-    /** Retain success-settled writer receipts in commit order, never reconstruct by reading later. */
-    pluginIndexMutations?: readonly UpdateCheckpointPluginIndexMutation[];
+    assertSourcesQuiescent: () => undefined;
   },
+): Promise<UpdateCheckpointRef> {
+  assertPreimageResources(params.resources);
+  return await captureCheckpoint(
+    {
+      ...params,
+      exclusions: [],
+      assertCurrent() {
+        const result: unknown = params.assertSourcesQuiescent();
+        if (result !== undefined) {
+          if (isPromiseLike(result)) {
+            void Promise.resolve(result).catch(() => undefined);
+          }
+          throw new TypeError("Preimage source fence must be synchronous and return undefined");
+        }
+      },
+    },
+    "preimage",
+  );
+}
+
+/** Seal full state under current exclusion; imported preimages must match owner-bound post-stop facts. */
+export async function captureUpdateCheckpoint(
+  params: UpdateCheckpointAccess & CaptureOptions,
+): Promise<UpdateCheckpointRef> {
+  return await captureCheckpoint(
+    { ...params, assertCurrent: params.assertQuiescent },
+    "checkpoint",
+  );
+}
+
+function assertPreimageResources(resources: readonly UpdateCheckpointResource[]): void {
+  if (
+    !resources.length ||
+    resources.some(
+      (resource) =>
+        (resource.kind !== "config" && resource.kind !== "service") ||
+        resource.restore !== "replace",
+    )
+  ) {
+    throw new Error("Preimage capture requires explicit config/service files only");
+  }
+}
+
+async function captureCheckpoint(
+  params: UpdateCheckpointReadAccess & CaptureOptions & { assertCurrent: () => void },
+  purpose: "checkpoint" | "preimage",
 ): Promise<UpdateCheckpointRef> {
   const binding = bindingSchema.parse(params.binding);
   absolutePath.parse(params.artifactRoot);
   assertResourceBoundaries(params.resources, params.artifactRoot);
+  params.assertCurrent();
+  if (params.preimages && (purpose === "preimage" || params.expectedSources)) {
+    throw new Error("Preimages cannot be used as mutation after-images");
+  }
+  const preimage = params.preimages
+    ? await reopenUpdateCheckpointPreimages(params.preimages.checkpointRef, params)
+    : undefined;
+  const postMutationSources = new Map<string, CheckpointFileState | null>();
+  if (preimage && params.preimages) {
+    for (const expected of params.preimages.postMutationSources) {
+      if (
+        postMutationSources.has(expected.sourcePath) ||
+        !preimage.manifest.resources.some((resource) => resource.sourcePath === expected.sourcePath)
+      ) {
+        throw new Error("Invalid preimage source binding coverage");
+      }
+      postMutationSources.set(
+        expected.sourcePath,
+        CheckpointFileStateSchema.nullable().parse(expected.state),
+      );
+    }
+    if (
+      postMutationSources.size !== preimage.manifest.resources.length ||
+      preimage.manifest.resources.some(
+        (resource) =>
+          !params.resources.some(
+            (target) =>
+              target.sourcePath === resource.sourcePath &&
+              target.kind === resource.kind &&
+              target.restore === resource.restore,
+          ),
+      )
+    ) {
+      throw new Error("Incomplete preimage source binding coverage");
+    }
+  }
   const pluginIndexMutations = z
     .array(UpdateCheckpointPluginIndexMutationSchema)
     .max(1024)
@@ -274,7 +371,7 @@ export async function captureUpdateCheckpoint(
       throw new Error("Incomplete checkpoint source binding coverage");
     }
   }
-  params.assertQuiescent();
+  params.assertCurrent();
   const checkpointId = randomUUID();
   const root = await ensureDurableDirectory({ directoryPath: params.artifactRoot, mode: 0o700 });
   requireDirectorySync(root.parentSync, "Checkpoint artifact root creation");
@@ -282,6 +379,8 @@ export async function captureUpdateCheckpoint(
   await fs.mkdir(directory, { mode: 0o700 });
   const manifest: UpdateCheckpointManifest = {
     checkpointId,
+    purpose,
+    ...(preimage ? { preimageRef: preimage.ref } : {}),
     binding,
     createdAtMs: Date.now(),
     exclusions: [...params.exclusions],
@@ -290,7 +389,7 @@ export async function captureUpdateCheckpoint(
   };
   const sourceStates = new Map<string, CheckpointFileState | null>();
   for (const [index, resource] of params.resources.entries()) {
-    params.assertQuiescent();
+    params.assertCurrent();
     const before = await inspectCheckpointFile(resource.sourcePath);
     if (
       expectedSources.has(resource.sourcePath) &&
@@ -299,6 +398,35 @@ export async function captureUpdateCheckpoint(
       throw new Error(`Checkpoint source binding changed: ${resource.sourcePath}`);
     }
     sourceStates.set(resource.sourcePath, before);
+    if (purpose === "preimage" && before && before.kind !== "file") {
+      throw new Error("Preimage capture requires regular files or explicit absence");
+    }
+    const imported = preimage?.manifest.resources.find(
+      (entry) => entry.sourcePath === resource.sourcePath,
+    );
+    if (imported && preimage) {
+      if (!isDeepStrictEqual(before, postMutationSources.get(resource.sourcePath))) {
+        throw new Error(`Preimage source binding changed: ${resource.sourcePath}`);
+      }
+      const artifact = imported.captured ? `resource-${index}` : null;
+      const captured =
+        artifact && imported.artifact && imported.captured
+          ? await copyCheckpointFile(
+              path.join(path.dirname(preimage.ref.manifestPath), imported.artifact),
+              path.join(directory, artifact),
+              imported.captured,
+            )
+          : null;
+      manifest.resources.push({
+        ...resource,
+        artifact,
+        captured,
+        sourceState: imported.sourceState,
+        sourceBindingValidated: false,
+        userVersion: null,
+      });
+      continue;
+    }
     const artifact = before ? `resource-${index}` : null;
     let captured = before;
     let userVersion: number | null = null;
@@ -312,7 +440,7 @@ export async function captureUpdateCheckpoint(
           await createUpdateCheckpointSqliteSnapshot({
             sourcePath: resource.sourcePath,
             targetPath,
-            assertQuiescent: params.assertQuiescent,
+            assertQuiescent: params.assertCurrent,
           })
         ).userVersion;
         captured = await inspectCheckpointFile(targetPath);
@@ -349,20 +477,20 @@ export async function captureUpdateCheckpoint(
   // Bind absence and physical identity as well as bytes before publishing any
   // manifest; matching artifact hashes alone only prove that the copy is intact.
   for (const [sourcePath, expected] of sourceStates) {
-    params.assertQuiescent();
+    params.assertCurrent();
     if (!isDeepStrictEqual(await inspectCheckpointFile(sourcePath), expected)) {
       throw new Error(`Resource changed before checkpoint seal: ${sourcePath}`);
     }
   }
-  params.assertQuiescent();
+  params.assertCurrent();
   const bytes = JSON.stringify(manifest);
   const manifestPath = path.join(directory, "manifest.json");
   await fs.writeFile(manifestPath, bytes, { flag: "wx", mode: 0o600 });
   await syncCheckpointTree(directory);
   requireDirectorySync(await syncDirectory(params.artifactRoot), "Checkpoint artifact root");
   const ref = { checkpointId, manifestPath, manifestSha256: sha256Hex(bytes) };
-  await reopenUpdateCheckpoint(ref, params);
-  params.assertQuiescent();
+  await reopenCheckpoint(ref, params, purpose);
+  params.assertCurrent();
   return ref;
 }
 
@@ -370,6 +498,22 @@ export async function captureUpdateCheckpoint(
 export async function reopenUpdateCheckpoint(
   ref: UpdateCheckpointRef,
   access: UpdateCheckpointReadAccess,
+): Promise<ReopenedUpdateCheckpoint> {
+  return await reopenCheckpoint(ref, access, "checkpoint");
+}
+
+/** Read-only validation of the early file artifact; never a restore/admission operation. */
+export async function reopenUpdateCheckpointPreimages(
+  ref: UpdateCheckpointRef,
+  access: UpdateCheckpointReadAccess,
+): Promise<ReopenedUpdateCheckpoint> {
+  return await reopenCheckpoint(ref, access, "preimage");
+}
+
+async function reopenCheckpoint(
+  ref: UpdateCheckpointRef,
+  access: UpdateCheckpointReadAccess,
+  purpose: "checkpoint" | "preimage",
 ): Promise<ReopenedUpdateCheckpoint> {
   UpdateCheckpointRefSchema.parse(ref);
   absolutePath.parse(access.artifactRoot);
@@ -391,6 +535,20 @@ export async function reopenUpdateCheckpoint(
     JSON.stringify(manifest.binding) !== JSON.stringify(bindingSchema.parse(access.binding))
   ) {
     throw new Error("Checkpoint binding mismatch");
+  }
+  if ((manifest.purpose ?? "checkpoint") !== purpose) {
+    throw new Error("Checkpoint purpose mismatch");
+  }
+  if (purpose === "preimage") {
+    assertPreimageResources(manifest.resources);
+    if (
+      manifest.preimageRef ||
+      manifest.resources.some(
+        (resource) => resource.captured?.kind === "directory" || resource.sourceState === undefined,
+      )
+    ) {
+      throw new Error("Invalid preimage resources");
+    }
   }
   assertResourceBoundaries(manifest.resources, access.artifactRoot);
   if (
@@ -449,6 +607,22 @@ export async function retireUpdateCheckpoint(
   ref: UpdateCheckpointRef,
   access: UpdateCheckpointAccess & { assertSuperseded: () => void },
 ): Promise<void> {
+  return await retireCheckpoint(ref, access, "checkpoint");
+}
+
+/** The retention owner may retire these copies only once they are superseded. */
+export async function retireUpdateCheckpointPreimages(
+  ref: UpdateCheckpointRef,
+  access: UpdateCheckpointAccess & { assertSuperseded: () => void },
+): Promise<void> {
+  return await retireCheckpoint(ref, access, "preimage");
+}
+
+async function retireCheckpoint(
+  ref: UpdateCheckpointRef,
+  access: UpdateCheckpointAccess & { assertSuperseded: () => void },
+  purpose: "checkpoint" | "preimage",
+): Promise<void> {
   try {
     await fs.lstat(ref.manifestPath);
   } catch (error) {
@@ -457,7 +631,7 @@ export async function retireUpdateCheckpoint(
     }
     throw error;
   }
-  await reopenUpdateCheckpoint(ref, access);
+  await reopenCheckpoint(ref, access, purpose);
   access.assertSuperseded();
   access.assertQuiescent();
   await fs.rm(path.dirname(ref.manifestPath), { recursive: true });
