@@ -309,20 +309,27 @@ export function runServiceChildGroupAnchor(): void {
         await requestCleanup("lineage-lost");
       }
     };
-    // Output EOF is independent of lineage EOF. Pipeline closes each forwarded stream
-    // after its final write while the control channel retains descendant authority.
-    pipeline(command.stdout!, process.stdout, () => {
+    // Own these private output descriptors: global stdio can keep them open after
+    // pipeline ends, while the control channel must retain descendant authority.
+    pipeline(command.stdout!, createWriteStream("", { fd: 1, autoClose: true }), () => {
       stdoutDrained = true;
       void settleRoot();
     });
-    pipeline(command.stderr!, process.stderr, () => {
+    pipeline(command.stderr!, createWriteStream("", { fd: 2, autoClose: true }), () => {
       stderrDrained = true;
       void settleRoot();
     });
     if (start.stdinMode !== "inherit" && command.stdin) {
-      process.stdin.pipe(command.stdin);
-      if (start.stdinMode === "pipe-closed" && process.stdin.readableEnded) {
-        command.stdin.end();
+      const input = process.stdin;
+      const destination = command.stdin;
+      const endInput = () => destination.end();
+      // Own EOF explicitly: pipe's default end check initializes global Bun output writers.
+      input.pipe(destination, { end: false });
+      destination.once("close", () => input.off("end", endInput));
+      if (input.readableEnded) {
+        endInput();
+      } else {
+        input.once("end", endInput);
       }
     }
     command.once("error", (error) => {
