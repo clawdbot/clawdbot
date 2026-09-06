@@ -1895,10 +1895,16 @@ class NodeRuntime private constructor(
       // Preserve the user's explicit agent choice for same-gateway reconnects. The
       // reconnect resync (refreshAgentsFromGateway) restores it when the gateway
       // stableId matches; a different gateway still wins its canonical default.
-      pendingSelectedChatAgentRestore =
-        selectedChatAgentId?.let { agentId ->
-          connectedEndpoint?.stableId?.let { stableId -> stableId to agentId }
-        }
+      //
+      // Only capture a new snapshot when the user still has an active selection.
+      // Repeated disconnect callbacks (finishTransport + runLoop) call this
+      // multiple times; the second call must not erase a snapshot saved by the
+      // first, otherwise ordinary reconnect falls back to the default agent.
+      val currentSelection = selectedChatAgentId
+      if (currentSelection != null) {
+        pendingSelectedChatAgentRestore =
+          connectedEndpoint?.stableId?.let { stableId -> stableId to currentSelection }
+      }
       selectedChatAgentId = null
       chatSelectionSeq.incrementAndGet()
       sessionCatalogRefreshSeq.incrementAndGet()

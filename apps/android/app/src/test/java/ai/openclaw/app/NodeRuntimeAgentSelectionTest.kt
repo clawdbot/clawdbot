@@ -27,6 +27,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -1028,7 +1029,7 @@ class NodeRuntimeAgentSelectionTest {
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
         runtime.refreshAgents()
-        waitUntilAgentsRefreshed(runtime)
+        waitUntilAgentBindingRestored(runtime, "scout")
 
         // The user's explicit agent choice is restored on same-gateway reconnect.
         assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
@@ -1065,7 +1066,7 @@ class NodeRuntimeAgentSelectionTest {
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("10.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
         runtime.refreshAgents()
-        waitUntilAgentsRefreshed(runtime)
+        waitUntilAgentBindingRestored(runtime, "main")
 
         // A different gateway wins its canonical default agent; the stale choice is NOT carried over.
         assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
@@ -1106,10 +1107,72 @@ class NodeRuntimeAgentSelectionTest {
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
         runtime.refreshAgents()
-        waitUntilAgentsRefreshed(runtime)
+        waitUntilAgentBindingRestored(runtime, "writer")
 
         // The explicit selection while disconnected wins; the stale pending restore is NOT used.
         assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  /**
+   * Real disconnect callbacks fire multiple times: finishTransport invokes
+   * onDisconnected, then GatewaySession.runLoop invokes it again before
+   * connectOnce, and explicit shutdown has a terminal Offline callback. The
+   * second clearOperatorGatewayState call must not erase the snapshot saved
+   * by the first, otherwise the pending restore is lost and reconnect falls
+   * back to the default agent. See issue #139277 / PR #140060 P1 finding.
+   */
+  @Test
+  fun repeatedDisconnectCallbacksPreserveRestoreSnapshot() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"}]}"""
+        }
+        runtime.refreshAgents()
+        waitUntilAgentsRefreshed(runtime)
+
+        runtime.selectChatAgent("scout")
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // First disconnect callback (finishTransport → onDisconnected).
+        runtime.javaClass
+          .getDeclaredMethod("clearOperatorGatewayState", java.lang.Boolean.TYPE)
+          .apply { isAccessible = true }
+          .invoke(runtime, true)
+        // The snapshot is captured and the in-memory selection cleared.
+        assertNull(ReflectionHelpers.getField<String?>(runtime, "selectedChatAgentId"))
+        val snapshotAfterFirst =
+          ReflectionHelpers.getField<Pair<String, String>?>(runtime, "pendingSelectedChatAgentRestore")
+        assertNotNull(snapshotAfterFirst)
+        assertEquals("scout", snapshotAfterFirst!!.second)
+
+        // Second disconnect callback (runLoop → onDisconnected) — selectedChatAgentId
+        // is already null; the snapshot must NOT be erased.
+        runtime.javaClass
+          .getDeclaredMethod("clearOperatorGatewayState", java.lang.Boolean.TYPE)
+          .apply { isAccessible = true }
+          .invoke(runtime, true)
+        val snapshotAfterSecond =
+          ReflectionHelpers.getField<Pair<String, String>?>(runtime, "pendingSelectedChatAgentRestore")
+        assertNotNull(snapshotAfterSecond)
+        assertEquals("scout", snapshotAfterSecond!!.second)
+
+        ReflectionHelpers.setField(runtime, "operatorConnected", false)
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", null)
+
+        // Reconnect to the same gateway.
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+        ReflectionHelpers.setField(runtime, "operatorConnected", true)
+        runtime.refreshAgents()
+        waitUntilAgentBindingRestored(runtime, "scout")
+
+        // The user's explicit agent choice is restored despite repeated disconnect callbacks.
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -1121,6 +1184,28 @@ class NodeRuntimeAgentSelectionTest {
       Thread.sleep(10)
     }
     error("Expected agents list to be refreshed")
+  }
+
+  /**
+   * Waits until refreshAgentsFromGateway has fully completed, including agent-list
+   * publication AND session-binding restoration. The gatewayAgents list is
+   * published before the selection is restored within publishGatewayData, so
+   * checking only gatewayAgents can observe stale session bindings.
+   */
+  private fun waitUntilAgentBindingRestored(
+    runtime: NodeRuntime,
+    expectedAgentId: String,
+  ) {
+    repeat(500) {
+      if (
+        runtime.gatewayAgents.value.isNotEmpty() &&
+        resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value) == expectedAgentId
+      ) {
+        return
+      }
+      Thread.sleep(10)
+    }
+    error("Expected agent binding to be restored to '$expectedAgentId'")
   }
 
   private fun createConnectedRuntime(): NodeRuntime {
