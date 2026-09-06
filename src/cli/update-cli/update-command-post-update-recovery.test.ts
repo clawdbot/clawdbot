@@ -588,6 +588,7 @@ describe("failed package update recovery safety", () => {
 
   it.each([
     "global install verify",
+    "global install swap",
     "pnpm package lifecycle marker",
     "pnpm package preinstall",
     "pnpm package postinstall",
@@ -613,6 +614,7 @@ describe("failed package update recovery safety", () => {
     expect(failure.exitCode).toBe(1);
 
     expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restartCandidate).not.toHaveBeenCalled();
   });
 
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {

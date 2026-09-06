@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import {
+  collectPackageDistInventory,
+  readPackageDistInventoryIfPresent,
+} from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import {
@@ -238,6 +243,7 @@ export async function swapStagedPackageInstall(params: {
   let shimBackupDir: string | undefined;
   let hadPackage = false;
   let previousVersion: string | null = null;
+  let previousDistFiles: string[] | undefined;
   const shims: Array<{ source: string; destination: string; backup: string | null }> = [];
   const rollback: Array<() => Promise<void>> = [];
   let packageRollbackVerified = false;
@@ -254,10 +260,17 @@ export async function swapStagedPackageInstall(params: {
       }
     }
     if (rollback.length === 0 && hadPackage && previousVersion) {
-      // A backup move can fail before mutation or after a partial copy. Recheck
-      // the complete original runtime; its surviving version file alone proves nothing.
+      // Copy cleanup can remove the inventory before failing on a runtime file.
+      // Verify against the pre-move file list, including for older packages.
       const original = await verifyPackageUpdateRecovery(params.installTarget.packageRoot);
-      packageRollbackVerified = original.serviceRestartSafe && original.version === previousVersion;
+      packageRollbackVerified =
+        original.serviceRestartSafe &&
+        original.version === previousVersion &&
+        previousDistFiles !== undefined &&
+        isDeepStrictEqual(
+          await collectPackageDistInventory(targetPackageRoot).catch(() => null),
+          previousDistFiles,
+        );
       if (packageRollbackVerified) {
         activePackageRoot = params.installTarget.packageRoot;
       }
@@ -304,6 +317,11 @@ export async function swapStagedPackageInstall(params: {
     previousVersion = hadPackage
       ? await readPackageVersionIfPresent(params.installTarget.packageRoot)
       : null;
+    if (hadPackage && previousVersion) {
+      previousDistFiles =
+        (await readPackageDistInventoryIfPresent(targetPackageRoot)) ??
+        (await collectPackageDistInventory(targetPackageRoot));
+    }
     packageRollbackVerified = hadPackage && previousVersion !== null;
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     const shimNames = new Set([params.packageName, "openclaw"]);

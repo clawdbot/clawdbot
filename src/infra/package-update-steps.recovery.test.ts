@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
@@ -410,6 +411,10 @@ describe("package update recovery safety", () => {
           return await rename(...args);
         });
         const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+          if (String(target) === path.join(source, "dist", "index.js") && !cleanupRejected) {
+            // Directory iteration can remove the inventory before the runtime entry.
+            await fs.rm(path.join(source, PACKAGE_DIST_INVENTORY_RELATIVE_PATH), { force: true });
+          }
           await unlink(target);
           if (String(target) === path.join(source, "dist", "index.js") && !cleanupRejected) {
             cleanupRejected = true;
