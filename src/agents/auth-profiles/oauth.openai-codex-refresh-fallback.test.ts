@@ -1168,6 +1168,52 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect((await readPersistedStore(agentDir)).lastGood).toBeUndefined();
   });
 
+  it("does not select an alternate Codex OAuth profile for a locked profile", async () => {
+    const staleProfileId = "openai:default";
+    const healthyProfileId = "openai:user@example.test";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [staleProfileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+          [healthyProfileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "healthy-access-token",
+            refresh: "healthy-refresh-token",
+            expires: Date.now() + 60 * 60_000,
+            email: "user@example.test",
+          },
+        },
+        lastGood: { openai: staleProfileId },
+      },
+      agentDir,
+    );
+    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+      );
+    });
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "openai",
+        modelApi: "openai-chatgpt-responses",
+        profileId: staleProfileId,
+        lockedProfile: true,
+        agentDir,
+      }),
+    ).rejects.toThrow(OAuthRefreshFailureError);
+
+    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reports the alternate Codex OAuth profile after stale lastGood fallback", async () => {
     const staleProfileId = "openai:default";
     const healthyProfileId = "openai:user@example.test";

@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 /** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
@@ -62,6 +62,7 @@ const providerRuntimeWarnMock = vi.fn();
 let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
 let attachModelProviderRuntimePluginHandle: typeof import("./provider-hook-runtime.js").attachModelProviderRuntimePluginHandle;
 let resolveProviderPluginsForHooks: typeof import("./provider-hook-runtime.js").resolveProviderPluginsForHooks;
+let resolveLoadedProviderPluginsForHooks: typeof import("./provider-hook-runtime.js").resolveLoadedProviderPluginsForHooks;
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
@@ -128,14 +129,7 @@ const DEMO_SANITIZED_MESSAGE: AgentMessage = {
   api: MODEL.api,
   provider: MODEL.provider,
   model: MODEL.id,
-  usage: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  },
+  usage: createZeroUsageFixture(),
   stopReason: "stop",
   timestamp: 2,
 };
@@ -361,8 +355,11 @@ describe("provider-runtime", () => {
     } = await import("./provider-runtime.js"));
     ({ resolvePreparedExtraParams, applyExtraParamsToAgent } =
       await import("../agents/embedded-agent-runner/extra-params.js"));
-    ({ attachModelProviderRuntimePluginHandle, resolveProviderPluginsForHooks } =
-      await import("./provider-hook-runtime.js"));
+    ({
+      attachModelProviderRuntimePluginHandle,
+      resolveProviderPluginsForHooks,
+      resolveLoadedProviderPluginsForHooks,
+    } = await import("./provider-hook-runtime.js"));
     await import("../agents/ai-transport-runtime-host.js");
     ({ getAiTransportHost } = await import("@openclaw/ai"));
     ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
@@ -1041,6 +1038,89 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["config", "default"] as const)(
+    "uses refreshed same-id metadata after %s runtime invalidation",
+    async (cacheOwner) => {
+      const config: OpenClawConfig | undefined = cacheOwner === "config" ? {} : undefined;
+      setActivePluginRegistry(
+        createEmptyPluginRegistry(),
+        "metadata-owner",
+        "default",
+        "/tmp/work",
+      );
+      const metadata = (source: string) =>
+        createPluginMetadataSnapshot({
+          config,
+          manifestRegistry: {
+            plugins: [
+              {
+                id: "same-provider-owner",
+                providers: [DEMO_PROVIDER_ID],
+                channels: [],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                origin: "config",
+                rootDir: `/plugins/${source}`,
+                source: `/plugins/${source}/index.js`,
+                manifestPath: `/plugins/${source}/openclaw.plugin.json`,
+              },
+            ],
+            diagnostics: [],
+          },
+        });
+      const firstMetadata = metadata("first");
+      const currentMetadata = metadata("current");
+      const provider = (owner: string): ProviderPlugin => ({
+        id: DEMO_PROVIDER_ID,
+        label: owner,
+        auth: [],
+        resolveAuthProfileId: (context) => `${owner}/${context.preferredProfileId}`,
+      });
+      const firstProvider = provider("first");
+      const currentProvider = provider("current");
+      resolvePluginProvidersMock.mockImplementation((params) =>
+        params.pluginMetadataSnapshot === firstMetadata ? [firstProvider] : [currentProvider],
+      );
+      const context = {
+        provider: DEMO_PROVIDER_ID,
+        modelId: MODEL.id,
+        preferredProfileId: "first-profile",
+        profileOrder: [],
+        authStore: { version: 1 as const, profiles: {} },
+      };
+      const first = resolveProviderRuntimePlugin({
+        provider: DEMO_PROVIDER_ID,
+        config,
+        pluginMetadataSnapshot: firstMetadata,
+      });
+      expect(first?.resolveAuthProfileId?.(context)).toBe("first/first-profile");
+      const { invalidatePluginRuntimeDiscoveryAfterConfigMutation } =
+        await import("./registry-refresh.js");
+      const warnings: string[] = [];
+      await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
+        logger: { warn: (message) => warnings.push(message) },
+      });
+      expect(warnings).toEqual([]);
+      const current = resolveProviderRuntimePlugin({
+        provider: DEMO_PROVIDER_ID,
+        config,
+        pluginMetadataSnapshot: currentMetadata,
+      });
+      expect(
+        current?.resolveAuthProfileId?.({ ...context, preferredProfileId: "current-profile" }),
+      ).toBe("current/current-profile");
+      // The already-prepared handle owns its selected plugin, while credential inputs stay per-call.
+      expect(
+        resolveProviderAuthProfileId({
+          provider: DEMO_PROVIDER_ID,
+          runtimeHandle: { provider: DEMO_PROVIDER_ID, plugin: first },
+          context: { ...context, preferredProfileId: "current-profile" },
+        }),
+      ).toBe("first/current-profile");
+    },
+  );
+
   it("does not reuse runtime provider cache entries across env-resolved plugin roots", () => {
     const firstProvider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
@@ -1142,6 +1222,59 @@ describe("provider-runtime", () => {
     expect(plugins[0]?.auth).toBe(provider.auth);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
+
+  it.each(["matching", "filtered", "missing-owner"] as const)(
+    "uses the correct hook owner with a %s request registry",
+    (scope) => {
+      const active = createEmptyPluginRegistry();
+      const scoped = createEmptyPluginRegistry();
+      for (const [registry, label] of [
+        [active, "active"],
+        [scoped, "scoped"],
+      ] as const) {
+        registry.plugins.push({
+          id: "demo-plugin",
+          status: scope === "missing-owner" && registry === scoped ? "disabled" : "loaded",
+        } as never);
+        registry.providers.push({
+          pluginId: "demo-plugin",
+          source: "demo/index.js",
+          provider: {
+            id: scope === "filtered" && registry === scoped ? "other" : "demo",
+            label,
+            auth: [],
+          },
+        });
+      }
+      setActivePluginRegistry(active, "active", "default", "/tmp/work");
+      const plugins = withPluginRuntimeRegistryScope(scoped, () =>
+        resolveProviderPluginsForHooks({
+          onlyPluginIds: ["demo-plugin"],
+          providerRefs: ["demo"],
+        }),
+      );
+      expect(plugins.map((plugin) => plugin.label)).toEqual([
+        scope === "matching" ? "scoped" : "active",
+      ]);
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([{ onlyPluginIds: [] }, { onlyPluginIds: [" demo-plugin "] }])(
+    "keeps the raw loaded owner scope $onlyPluginIds",
+    ({ onlyPluginIds }) => {
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push({ id: "demo-plugin", status: "loaded" } as never);
+      registry.providers.push({
+        pluginId: "demo-plugin",
+        source: "demo/index.js",
+        provider: { id: "demo", label: "Demo", auth: [] },
+      });
+      setActivePluginRegistry(registry, "active", "default", "/tmp/work");
+      expect(resolveLoadedProviderPluginsForHooks({ onlyPluginIds })).toBeUndefined();
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not cache default runtime provider misses without active registry invalidation", () => {
     const provider: ProviderPlugin = {

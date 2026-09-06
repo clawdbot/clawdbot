@@ -4,6 +4,7 @@ import { execFile, spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -115,6 +116,7 @@ async function createGatewayControl(): Promise<FakeGatewayControl> {
   const released = createDeferred();
   const launches: number[] = [];
   const observers = { beforeRelease: () => {}, onLaunch: () => {} };
+  const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (url.pathname === "/wait") {
@@ -130,6 +132,10 @@ async function createGatewayControl(): Promise<FakeGatewayControl> {
       observers.onLaunch();
     }
     response.end("ok");
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -152,9 +158,11 @@ async function createGatewayControl(): Promise<FakeGatewayControl> {
     },
     close: async () => {
       released.resolve();
-      server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
     },
   };

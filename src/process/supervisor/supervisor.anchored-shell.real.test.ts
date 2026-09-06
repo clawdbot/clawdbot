@@ -110,7 +110,7 @@ async function createDescendantScope(
   }
   const supervisor = createProcessSupervisor();
   const scopeKey = `anchored-shell:${cwd}`;
-  const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+  const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   const run = await supervisor.spawn({
     ...(options.oneShot
       ? {
@@ -166,6 +166,48 @@ async function expectPending(promise: Promise<void>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
+  it.skipIf(process.platform !== "win32")(
+    "keeps anchored Windows commands console-free",
+    async () => {
+      const cwd = tempDirs.make("openclaw-anchored-shell-console-");
+      const koffiPath = createRequire(import.meta.url).resolve("koffi");
+      await writeFile(
+        path.join(cwd, "console.cjs"),
+        `
+        const koffi = require(${JSON.stringify(koffiPath)});
+        const kernel32 = koffi.load("kernel32.dll");
+        const getConsoleWindow = kernel32.func("__stdcall", "GetConsoleWindow", "void *", []);
+        process.stdout.write(JSON.stringify({ hasConsole: Boolean(getConsoleWindow()) }));
+        process.stderr.write("owned-console-stderr");
+        process.exitCode = 23;
+      `,
+        "utf8",
+      );
+      const supervisor = createProcessSupervisor();
+      try {
+        const run = await supervisor.spawn({
+          mode: "anchored-shell",
+          command: `"${process.execPath}" console.cjs`,
+          sessionId: "console-free-command",
+          backendId: "console-free-command",
+          cwd,
+        });
+        const result = await run.wait();
+        await run.waitForExtinction!();
+        expect(result).toMatchObject({
+          reason: "exit",
+          exitCode: 23,
+          stderr: "owned-console-stderr",
+        });
+        expect(JSON.parse(result.stdout), "PR138751_UNEXPECTED_CONSOLE").toEqual({
+          hasConsole: false,
+        });
+      } finally {
+        await supervisor.shutdown();
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each([
     { oneShot: false, ignoreTerm: false },
     { oneShot: true, ignoreTerm: false },

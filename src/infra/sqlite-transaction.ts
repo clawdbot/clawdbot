@@ -1,5 +1,6 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -11,6 +12,7 @@ import {
   runWithSqliteBusyTimeout,
   shouldReportSqliteLockFailure,
 } from "./sqlite-busy-timeout.js";
+import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 
 const SQLITE_LOCK_ERROR_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
 // Node reports SQLite failures with a generic string code and the extended
@@ -22,6 +24,20 @@ const SQLITE_NOTADB_RESULT_CODE = 26;
 const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
+
+// The same native handle can cross transformed SDK module graphs. Retain the
+// first terminal failure even when an inner caller catches it and continues.
+const abortedTransactionSymbol = Symbol.for("openclaw.sqliteAbortedTransaction");
+type TransactionDatabase = DatabaseSync & {
+  [abortedTransactionSymbol]?: { error: unknown };
+};
+
+function assertTransactionUsable(db: TransactionDatabase): void {
+  const aborted = db[abortedTransactionSymbol];
+  if (aborted) {
+    throw aborted.error;
+  }
+}
 
 const transactionLog = createSubsystemLogger("sqlite/transaction");
 const writeAdmissionServices = resolveGlobalSingleton(
@@ -260,27 +276,37 @@ function commitImmediateTransaction(
   });
 }
 
-function abortImmediateTransaction(db: DatabaseSync): void {
+function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void {
+  db[abortedTransactionSymbol] ??= { error };
+  discardSqliteTransactionState(db);
+  clearNodeSqliteKyselyCacheForDatabase(db);
+  try {
+    db.close();
+  } catch {
+    // Preserve the primary failure. The transaction helper also refuses reuse
+    // if the handle was already closed or a lifecycle close hook failed.
+  }
+}
+
+function abortImmediateTransaction(db: TransactionDatabase, error: unknown): void {
+  if (db[abortedTransactionSymbol]) {
+    return;
+  }
   try {
     db.exec("ROLLBACK");
   } catch {
-    // If rollback itself fails, close the handle so callers cannot keep using a
-    // connection that may still hold an abandoned write transaction.
-    try {
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      db.close();
-    } catch {
-      // Preserve the original transaction error; close failure is secondary.
-    }
+    // An abandoned transaction must not leak into later writes on this handle.
+    discardUnsafeConnection(db, error);
   }
 }
 
 function runSqliteTransactionSync<T>(
-  db: DatabaseSync,
+  db: TransactionDatabase,
   operation: () => T,
   mode: SqliteTransactionMode,
   options?: SqliteTransactionOptions,
 ): T {
+  assertTransactionUsable(db);
   if (db.isTransaction) {
     // SQLite targets the most recent matching savepoint. Reusing its name keeps
     // nested native/SDK calls correct without module-local depth or counters.
@@ -288,13 +314,21 @@ function runSqliteTransactionSync<T>(
     try {
       const result = operation();
       assertSyncTransactionResult(result);
+      assertTransactionUsable(db);
       db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       return result;
     } catch (error) {
+      const failure = db[abortedTransactionSymbol];
+      if (failure) {
+        throw failure.error;
+      }
       try {
         db.exec("ROLLBACK TO SAVEPOINT openclaw_tx_nested");
-      } finally {
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
+      } catch {
+        // SQLITE_FULL and RAISE(ROLLBACK) can remove the entire transaction,
+        // including its savepoints. Never let a caught failure autocommit later.
+        discardUnsafeConnection(db, error);
       }
       throw error;
     }
@@ -305,6 +339,7 @@ function runSqliteTransactionSync<T>(
   try {
     const result = operation();
     assertSyncTransactionResult(result);
+    assertTransactionUsable(db);
     logSlowTransactionHold({
       elapsedMs: Date.now() - transactionStartedAt,
       options,
@@ -312,7 +347,8 @@ function runSqliteTransactionSync<T>(
     commitImmediateTransaction(db, options);
     return result;
   } catch (error) {
-    abortImmediateTransaction(db);
+    abortImmediateTransaction(db, error);
+    assertTransactionUsable(db);
     throw error;
   }
 }
@@ -332,4 +368,55 @@ export function runSqliteImmediateTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   return runSqliteTransactionSync(db, operation, "immediate", options);
+}
+
+/** Prepare outside the transaction; yield for admission without replaying admitted writes. */
+export async function runSqliteImmediateTransaction<T>(
+  db: DatabaseSync,
+  prepare: () => Promise<(() => T) | undefined>,
+  options?: SqliteTransactionOptions,
+): Promise<T | undefined> {
+  assertTransactionUsable(db);
+  if (db.isTransaction) {
+    throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
+  }
+  const deadline = performance.now() + readSqliteBusyTimeout(db);
+  let entered = false;
+  while (true) {
+    const operation = await prepare();
+    assertTransactionUsable(db);
+    if (db.isTransaction) {
+      throw new Error("SQLite preparation left a transaction open");
+    }
+    if (!operation) {
+      return undefined;
+    }
+    try {
+      return runWithSqliteBusyTimeout(
+        db,
+        0,
+        (restore) =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              entered = true;
+              restore();
+              return operation();
+            },
+            options,
+          ),
+        { lockFailureReporting: "suppress" },
+      );
+    } catch (error) {
+      if (entered || !isSqliteLockError(error) || performance.now() >= deadline) {
+        throw error;
+      }
+      // The synchronous helper restored connection policy and left no transaction.
+      await sleep(Math.min(25, Math.max(0, deadline - performance.now())));
+      assertTransactionUsable(db);
+      if (performance.now() >= deadline) {
+        throw error;
+      }
+    }
+  }
 }

@@ -1838,32 +1838,22 @@ openclaw-chat-video-player {
   justify-self: end;
 }
 
-/* Both targets share one outer surface; the divider is the only internal edge. */
-.task-suggestion__split {
-  display: inline-flex;
-  align-items: stretch;
-  height: 34px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: 11px;
-  corner-shape: superellipse(1.5);
-  background: var(--task-suggestion-action-bg);
-  user-select: none;
-}
-
-.task-suggestion__start {
+.task-suggestion__start,
+:root[data-theme-mode="light"] .task-suggestion__start {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 34px;
   padding: 0 12px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 11px;
+  corner-shape: superellipse(1.5);
+  background: var(--task-suggestion-action-bg);
   color: var(--task-suggestion-action-fg);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
+  user-select: none;
 }
 
 .task-suggestion__start svg {
@@ -1873,29 +1863,14 @@ openclaw-chat-video-player {
 
 .task-suggestion__start:hover:not(:disabled),
 .task-suggestion__start:focus-visible,
-.task-suggestion__menu-trigger:hover:not(:disabled),
-.task-suggestion__menu-trigger:focus-visible {
-  background: color-mix(in srgb, var(--task-suggestion-action-fg) 8%, transparent);
+:root[data-theme-mode="light"] .task-suggestion__start:hover:not(:disabled),
+:root[data-theme-mode="light"] .task-suggestion__start:focus-visible {
+  background: color-mix(
+    in srgb,
+    var(--task-suggestion-action-bg) 90%,
+    var(--task-suggestion-action-fg)
+  );
   color: var(--task-suggestion-action-fg);
-}
-
-.task-suggestion__menu-trigger {
-  display: grid;
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
-  border-radius: 0 !important;
-  background: transparent;
-  color: var(--task-suggestion-action-fg);
-}
-
-.task-suggestion__menu-trigger:hover:not(:disabled),
-.task-suggestion__menu-trigger:focus-visible {
-  border-left-color: color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
 }
 
 :root[data-theme-mode="light"] .task-suggestions {
@@ -1904,41 +1879,6 @@ openclaw-chat-video-player {
   --task-suggestion-prompt-bg: var(--card);
   --task-suggestion-action-bg: color-mix(in srgb, var(--accent) 72%, var(--text-strong) 28%);
   --task-suggestion-action-fg: var(--primary-foreground);
-}
-
-:root[data-theme-mode="light"] .task-suggestion__start,
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
-  border-top: 0;
-  border-right: 0;
-  border-bottom: 0;
-  background: transparent;
-  color: var(--task-suggestion-action-fg);
-}
-
-:root[data-theme-mode="light"] .task-suggestion__start:hover:not(:disabled),
-:root[data-theme-mode="light"] .task-suggestion__start:focus-visible,
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger:hover:not(:disabled),
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger:focus-visible {
-  background: color-mix(in srgb, var(--task-suggestion-action-fg) 10%, transparent);
-  color: var(--task-suggestion-action-fg);
-}
-
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
-  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
-}
-
-.task-suggestion__menu-trigger svg {
-  width: 12px;
-  height: 12px;
-}
-
-.task-suggestion__menu[open] .task-suggestion__menu-trigger svg {
-  transform: rotate(180deg);
-}
-
-.task-suggestion__menu::part(menu) {
-  min-width: 190px;
-  max-width: min(320px, calc(100vw - 24px));
 }
 
 .task-suggestion__header-action:disabled {

@@ -355,9 +355,9 @@ export function activateCodexAttemptTurn(
       }
       return buildCodexUserInput(text, result.images);
     },
-    beforeConfirmConsumed: async (items) => {
-      // Internal steering can own a user turn too. Commit its recorder after the
-      // preceding answers so source provenance and transcript ordering survive.
+    beforeSubmit: async (items) => {
+      // Commit preceding answers and user custody before Codex can act on the
+      // steer. Its acknowledgment and user-message echo can both arrive later.
       const transcriptItems = items.filter(
         (item) =>
           item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
@@ -366,9 +366,11 @@ export function activateCodexAttemptTurn(
         return;
       }
       await promptMirrorPromise;
+      assertSteeringActive();
       const messages = activeProjector.buildSteeringTranscriptPrefix();
       if (params.sessionTarget && messages.length > 0) {
         await codexTranscriptMirrorRuntime.mirror({
+          assertCurrent: assertSteeringActive,
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,
           sessionId: params.sessionId,
@@ -380,6 +382,7 @@ export function activateCodexAttemptTurn(
           runMirrorIdentityPrefix: `${activeTurnId}:`,
           config: params.config,
         });
+        assertSteeringActive();
         activeProjector.markSteeringTranscriptPersisted();
       }
       for (const item of transcriptItems) {
@@ -387,9 +390,10 @@ export function activateCodexAttemptTurn(
         if (!recorder) {
           continue;
         }
+        assertSteeringActive();
         await recorder.persistApproved();
         if (!recorder.hasPersisted()) {
-          throw new Error("Codex consumed steering before its user turn was persisted");
+          throw new Error("Codex steering requires a persisted user turn before submission");
         }
       }
     },
@@ -417,6 +421,9 @@ export function activateCodexAttemptTurn(
       sessionKey: params.sessionKey ?? params.sessionId,
       text,
       authority: { kind: authorityKind, assertCurrent: injectionGuard(assertCurrent) },
+      sourceRecorder: optionsLocal.userTurnTranscriptRecorder,
+      // Older supported hosts use the ordinary-question callback. Current hosts
+      // prefer the recorder owner so staged secret inputs commit before consumption.
       persist: optionsLocal.userTurnTranscriptRecorder
         ? async () => {
             await optionsLocal.userTurnTranscriptRecorder?.persistApproved();

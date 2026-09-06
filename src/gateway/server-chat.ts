@@ -1,10 +1,11 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
+import { Value } from "typebox/value";
 import {
+  ChatStatusEventSchema,
   projectChatErrorDetail,
   type ChatEvent,
-  type ChatRunStartupPhase,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
@@ -98,21 +99,6 @@ const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
   failure: "error",
 } as const;
 const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
-
-function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
-  switch (value) {
-    case "preparing_workspace":
-    case "naming_worktree":
-    case "creating_worktree":
-    case "running_setup":
-    case "provisioning_environment":
-    case "preparing_context":
-    case "starting_model":
-      return value;
-    default:
-      return undefined;
-  }
-}
 
 function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
   const data = payload.data;
@@ -1537,18 +1523,30 @@ export function createAgentEventHandler({
         recordsEmbeddedProgress ? "summary" : "full",
       );
     }
-    if (evt.stream === "run_status") {
-      const phase = readChatRunStartupPhase(evt.data?.phase);
-      if (phase && chatLink && isControlUiVisible && sessionKey && !isAborted) {
-        const payload = {
-          runId: clientRunId,
-          sessionKey,
-          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-          ...(spawnedBy && { spawnedBy }),
-          seq: evt.seq,
-          state: "status" as const,
-          phase,
-        } satisfies ChatEvent;
+    if (evt.stream === "run_status" && chatLink && isControlUiVisible && sessionKey && !isAborted) {
+      const payload = {
+        runId: clientRunId,
+        sessionKey,
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+        ...(spawnedBy && { spawnedBy }),
+        seq: evt.seq,
+        state: "status" as const,
+        ...(evt.data.phase === "retrying"
+          ? {
+              phase: "starting_model",
+              ...(evt.data.reason === "rate_limit"
+                ? {
+                    retry: {
+                      attempt: evt.data.attempt,
+                      maxAttempts: evt.data.maxAttempts,
+                      reason: evt.data.reason,
+                    },
+                  }
+                : {}),
+            }
+          : { phase: evt.data.phase }),
+      };
+      if (Value.Check(ChatStatusEventSchema, payload)) {
         sendLivePayload("chat", sessionKey, payload, {
           agentId: sessionAgentId,
           controlUiVisible: true,
@@ -1653,8 +1651,10 @@ export function createAgentEventHandler({
       }
     } else {
       const itemPhase = isItemEvent && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      // The runtime error frame drains this text before retry cleanup retires its group.
       if (
-        itemPhase === "start" &&
+        (itemPhase === "start" ||
+          (lifecyclePhase === "error" && evt.data.completionSource !== "reply-dispatch")) &&
         (isControlUiVisible || hasSessionMessageSubscribers) &&
         !isAborted
       ) {
@@ -1760,18 +1760,6 @@ export function createAgentEventHandler({
         if (evt.data.completionSource !== "reply-dispatch") {
           // Runtime retries isolate failed text; reply-dispatch retains its
           // post-hook payloads and abort state until its own completion settles.
-          if (sessionKey) {
-            flushBufferedChatDeltaIfNeeded(
-              sessionKey,
-              sessionAgentId,
-              clientRunId,
-              evt.runId,
-              evt.seq,
-              {
-                controlUiVisible: isControlUiVisible,
-              },
-            );
-          }
           chatRunState.clearRun(clientRunId);
         }
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });

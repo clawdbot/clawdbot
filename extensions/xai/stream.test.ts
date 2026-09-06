@@ -8,6 +8,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
@@ -28,14 +29,7 @@ function xaiAssistantMessage(content: AssistantMessage["content"]): AssistantMes
     api: "openai-responses" as const,
     provider: "xai",
     model: "grok-4.3",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: 1,
   };

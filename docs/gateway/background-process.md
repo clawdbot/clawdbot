@@ -97,6 +97,17 @@ command or closed output pipe alone does not establish that its descendants have
 stopped. Forced termination without confirmed cleanup remains uncertain. Local
 TUI shell shutdown uses the same cleanup owner for its own commands.
 
+One-shot tool cleanup keeps configured sandbox runtimes on their
+[session, agent, or shared lifetime](/gateway/sandboxing#modes-scope-and-backend). It joins the local
+command transport and backend cleanup for that command. It does not stop a shared
+sandbox or claim that every remote descendant has exited. Host commands, including
+elevated commands from sandboxed sessions, still require owned process-tree cleanup.
+
+When a host command requires process-tree cleanup, a `pty` request falls back to
+the child-process path before starting a native PTY and reports a warning. Commands
+that require a terminal may fail under that fallback. Cleanup failures remain
+uncertain rather than being reported as a clean shutdown.
+
 ## process tool
 
 Actions:
@@ -131,6 +142,11 @@ Notes:
 - `process poll` and `process log` distinguish output discarded at the aggregate retention cap from output merely omitted by the pending buffer or retained tail. Discarded output cannot be recovered; paged logs can inspect only the retained portion.
 - `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
+
+In [Code Mode](/tools/code-mode), `process` returns its structured details directly.
+For `action: "log"`, `output` contains the requested log page, including paging,
+retention, and input-recovery hints. Failed process actions include an `error`
+message alongside `status: "failed"`, so the agent can choose the next action.
 
 ## Examples
 

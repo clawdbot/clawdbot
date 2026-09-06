@@ -72,7 +72,7 @@ class ProbeWebSocket {
   }
 }
 
-vi.mock("ws", () => ({ WebSocket: ProbeWebSocket }));
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({ WebSocket: ProbeWebSocket }));
 
 const { probeGateway } = await import("./probe.js");
 

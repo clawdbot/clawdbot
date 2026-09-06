@@ -259,7 +259,6 @@ extensions/whatsapp/src/connection-controller.ts
 extensions/workboard/browser/lib/workboard/index.test.ts
 extensions/workboard/browser/pages/workboard/view.test.ts
 extensions/workboard/src/sqlite-store.ts
-extensions/workboard/src/store-card-helpers.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
@@ -273,7 +272,6 @@ packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/agent-tools-parameter-schema.ts
 packages/ai/src/providers/anthropic.test.ts
 packages/ai/src/providers/anthropic.ts
-packages/ai/src/providers/google-shared.ts
 packages/ai/src/providers/mistral.ts
 packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
@@ -624,7 +622,6 @@ src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
-src/gateway/server-methods/devices.test.ts
 src/gateway/server-methods/devices.ts
 src/gateway/server-methods/doctor.test.ts
 src/gateway/server-methods/doctor.ts

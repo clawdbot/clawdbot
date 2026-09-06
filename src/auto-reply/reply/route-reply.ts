@@ -17,6 +17,7 @@ import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugi
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isOutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -130,6 +131,7 @@ type RouteReplyResult = {
   delivered: boolean;
   /** True when the adapter may have sent but returned no delivery identity. */
   ambiguous?: boolean;
+  queueCustody?: "held" | "released";
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
   /** Delivery disposition reason when additional caller context is useful. */
@@ -388,16 +390,21 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
             }
           : undefined,
     });
-    if (send.status === "failed") {
-      throw send.error;
-    }
-    if (send.status === "partial_failed") {
-      const delivery = summarizeVisibleRouteReplyDelivery(send.results);
+    if (send.status === "failed" || send.status === "partial_failed") {
+      const delivery = summarizeVisibleRouteReplyDelivery(
+        send.status === "failed" ? [] : send.results,
+      );
       return {
         ok: false,
         delivered: delivery.delivered,
         error: `Failed to route reply to ${channel}: ${formatErrorMessage(send.error)}`,
         messageId: delivery.messageId,
+        ...(!delivery.delivered && durableMessageBatchMayHaveReachedRecipient(send)
+          ? { ambiguous: true }
+          : {}),
+        ...(isOutboundDeliveryError(send.error) && send.error.queueCustody
+          ? { queueCustody: send.error.queueCustody }
+          : {}),
       };
     }
     if (
@@ -416,11 +423,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       };
     }
     if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
-      // The adapter call completed but returned no identity. Treat that as
-      // potentially visible so callers never retry or emit a duplicate fallback.
       return {
         ok: true,
-        delivered: true,
+        delivered: false,
         ambiguous: true,
         reason: "adapter_returned_no_identity",
       };
@@ -437,6 +442,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return {
       ok: false,
       delivered: false,
+      ...(isOutboundDeliveryError(err)
+        ? {
+            queueCustody: err.queueCustody,
+            ...(err.sentBeforeError ? { ambiguous: true } : {}),
+          }
+        : {}),
       error: `Failed to route reply to ${channel}: ${message}`,
     };
   }

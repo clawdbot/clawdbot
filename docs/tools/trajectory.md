@@ -52,7 +52,8 @@ results, runtime events, and local paths, so the chat command always runs
 through exec approval. Approve the export once when you intend to create the
 bundle; do not use allow-all. In group chats, OpenClaw sends the approval
 prompt and export result to the owner privately instead of posting trajectory
-details back to the shared room.
+details back to the shared room. The room receives only a status notice that
+distinguishes confirmed, pending, and suppressed private delivery.
 
 For local inspection or support workflows, run the underlying CLI command
 directly:

@@ -25,7 +25,6 @@ import {
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import { prepareProviderExternalAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveManifestSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
-import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -34,6 +33,11 @@ import {
 } from "./model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import { mergeProviderModels, type SourceModelFields } from "./models-config.merge.js";
+import {
+  buildPluginCatalogConfig,
+  prepareProviderCatalogRun,
+  reportProviderCatalogSecretFailure,
+} from "./models-config.providers.catalog-context.js";
 import {
   resolveImplicitProviderDiscoveryScope,
   type ProviderDiscoveryScope,
@@ -292,6 +296,7 @@ async function resolvePluginImplicitProviders(
     } else {
       result = await runProviderCatalogWithTimeout({
         provider,
+        authStore: ctx.authStore,
         ...(providerIds !== undefined ? { providerIds } : {}),
         config: catalogConfig,
         agentDir: ctx.agentDir,
@@ -349,24 +354,10 @@ async function resolvePluginImplicitProviders(
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
-function buildPluginCatalogConfig(ctx: ImplicitProviderContext): OpenClawConfig {
-  if (!ctx.explicitProviders || Object.keys(ctx.explicitProviders).length === 0) {
-    return ctx.config ?? {};
-  }
-  return {
-    ...ctx.config,
-    models: {
-      ...ctx.config?.models,
-      providers: {
-        ...ctx.config?.models?.providers,
-        ...ctx.explicitProviders,
-      },
-    },
-  };
-}
-
 async function runProviderCatalogWithTimeout(
   params: Parameters<typeof runProviderCatalog>[0] & {
+    agentDir: string;
+    authStore: AuthProfileStore;
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
@@ -378,30 +369,39 @@ async function runProviderCatalogWithTimeout(
   let active = true;
   const catalogParams = {
     ...params,
+    isActive: () => active,
     reportCatalogOutcome: (outcome: ProviderCatalogOutcome) => {
       if (active) {
         params.reportCatalogOutcome?.(outcome);
       }
     },
   };
+  const runCatalog = async () => {
+    const prepared = await prepareProviderCatalogRun(catalogParams);
+    return active ? runProviderCatalog(prepared) : undefined;
+  };
   try {
     if (!timeoutMs) {
-      return await runProviderCatalog(catalogParams);
+      return await runCatalog();
     }
-    const catalogRun = runProviderCatalog(catalogParams);
+    const catalogRun = runCatalog();
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
     return await Promise.race([
       catalogRun,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          active = false;
           reject(timeoutError);
         }, timeoutMs);
         timer.unref?.();
       }),
     ]);
   } catch (error) {
-    if (!isTrustedSecretSurfaceUnavailableError(error) && error !== timeoutError) {
+    if (await reportProviderCatalogSecretFailure(error, params)) {
+      return undefined;
+    }
+    if (error !== timeoutError) {
       throw error;
     }
     for (const provider of params.providerIds ?? [params.provider.id]) {
@@ -597,10 +597,8 @@ export async function resolveImplicitProviders(
       },
     });
   }
-  if (
-    params.providerDiscoveryEntriesOnly !== true &&
-    discoveryProviders.some(hasRuntimeProviderCatalog)
-  ) {
+  const hasLiveCatalog = discoveryProviders.some(hasRuntimeProviderCatalog);
+  if (params.providerDiscoveryEntriesOnly !== true && hasLiveCatalog) {
     const { prepareProviderDiscoveryAuth } =
       await import("./models-config.providers.discovery-auth.runtime.js");
     Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));

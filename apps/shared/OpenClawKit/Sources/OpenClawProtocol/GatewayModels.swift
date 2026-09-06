@@ -6505,6 +6505,8 @@ public struct SessionObserverPlanProgress: Codable, Sendable {
 public struct SessionObserverDigest: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let sessionid: String?
+    public let lifecyclerevision: String?
     public let runid: String?
     public let revision: Int
     public let updatedat: Int
@@ -6516,6 +6518,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     public init(
         sessionkey: String,
         agentid: String? = nil,
+        sessionid: String? = nil,
+        lifecyclerevision: String? = nil,
         runid: String? = nil,
         revision: Int,
         updatedat: Int,
@@ -6526,6 +6530,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.sessionid = sessionid
+        self.lifecyclerevision = lifecyclerevision
         self.runid = runid
         self.revision = revision
         self.updatedat = updatedat
@@ -6538,6 +6544,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case sessionid = "sessionId"
+        case lifecyclerevision = "lifecycleRevision"
         case runid = "runId"
         case revision
         case updatedat = "updatedAt"
@@ -23169,6 +23177,7 @@ public struct ChatStatusEvent: Codable, Sendable {
     public let seq: Int
     public let state: String
     public let phase: ChatRunStartupPhase
+    public let retry: [String: AnyCodable]?
 
     public init(
         runid: String,
@@ -23177,7 +23186,8 @@ public struct ChatStatusEvent: Codable, Sendable {
         spawnedby: String? = nil,
         seq: Int,
         state: String,
-        phase: ChatRunStartupPhase)
+        phase: ChatRunStartupPhase,
+        retry: [String: AnyCodable]? = nil)
     {
         self.runid = runid
         self.sessionkey = sessionkey
@@ -23186,6 +23196,7 @@ public struct ChatStatusEvent: Codable, Sendable {
         self.seq = seq
         self.state = state
         self.phase = phase
+        self.retry = retry
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -23196,6 +23207,7 @@ public struct ChatStatusEvent: Codable, Sendable {
         case seq
         case state
         case phase
+        case retry
     }
 }
 
@@ -27987,6 +27999,528 @@ public enum ChatEvent: Codable, Sendable {
         case .final(let value): try value.encode(to: encoder)
         case .aborted(let value): try value.encode(to: encoder)
         case .error(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct UpdateReportParamsPreview: Codable, Sendable {
+    public let action: String
+    public let attemptid: String
+
+    public init(
+        attemptid: String
+    )
+    {
+        self.action = "preview"
+        self.attemptid = attemptid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case attemptid = "attemptId"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "attemptId"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportParamsPreview: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "preview" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal preview"
+            )
+        }
+        self.action = "preview"
+        self.attemptid = try container.decode(String.self, forKey: .attemptid)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("preview", forKey: .action)
+        try container.encode(attemptid, forKey: .attemptid)
+    }
+}
+
+public struct UpdateReportParamsSubmit: Codable, Sendable {
+    public let action: String
+    public let attemptid: String
+    public let previewdigest: String
+
+    public init(
+        attemptid: String,
+        previewdigest: String
+    )
+    {
+        self.action = "submit"
+        self.attemptid = attemptid
+        self.previewdigest = previewdigest
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case attemptid = "attemptId"
+        case previewdigest = "previewDigest"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "attemptId", "previewDigest"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportParamsSubmit: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "submit" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal submit"
+            )
+        }
+        self.action = "submit"
+        self.attemptid = try container.decode(String.self, forKey: .attemptid)
+        self.previewdigest = try container.decode(String.self, forKey: .previewdigest)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("submit", forKey: .action)
+        try container.encode(attemptid, forKey: .attemptid)
+        try container.encode(previewdigest, forKey: .previewdigest)
+    }
+}
+
+public enum UpdateReportParams: Codable, Sendable {
+    case preview(UpdateReportParamsPreview)
+    case submit(UpdateReportParamsSubmit)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "action"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "preview": self = try .preview(UpdateReportParamsPreview(from: decoder))
+        case "submit": self = try .submit(UpdateReportParamsSubmit(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown UpdateReportParams discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .preview(let value): try value.encode(to: encoder)
+        case .submit(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct UpdateReportResultReady: Codable, Sendable {
+    public let status: String
+    public let attemptid: String
+    public let body: String
+    public let previewdigest: String
+    public let title: String
+
+    public init(
+        attemptid: String,
+        body: String,
+        previewdigest: String,
+        title: String
+    )
+    {
+        self.status = "ready"
+        self.attemptid = attemptid
+        self.body = body
+        self.previewdigest = previewdigest
+        self.title = title
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case attemptid = "attemptId"
+        case body
+        case previewdigest = "previewDigest"
+        case title
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "attemptId", "body", "previewDigest", "title"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportResultReady: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "ready" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal ready"
+            )
+        }
+        self.status = "ready"
+        self.attemptid = try container.decode(String.self, forKey: .attemptid)
+        self.body = try container.decode(String.self, forKey: .body)
+        self.previewdigest = try container.decode(String.self, forKey: .previewdigest)
+        self.title = try container.decode(String.self, forKey: .title)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("ready", forKey: .status)
+        try container.encode(attemptid, forKey: .attemptid)
+        try container.encode(body, forKey: .body)
+        try container.encode(previewdigest, forKey: .previewdigest)
+        try container.encode(title, forKey: .title)
+    }
+}
+
+public struct UpdateReportResultCreated: Codable, Sendable {
+    public let status: String
+    public let message: String?
+    public let url: String
+
+    public init(
+        message: String? = nil,
+        url: String
+    )
+    {
+        self.status = "created"
+        self.message = message
+        self.url = url
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case message
+        case url
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "message", "url"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportResultCreated: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "created" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal created"
+            )
+        }
+        self.status = "created"
+        self.message = try container.decodeIfPresent(String.self, forKey: .message)
+        self.url = try container.decode(String.self, forKey: .url)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("created", forKey: .status)
+        try container.encodeIfPresent(message, forKey: .message)
+        try container.encode(url, forKey: .url)
+    }
+}
+
+public struct UpdateReportResultFallback: Codable, Sendable {
+    public let status: String
+    public let fallbackurl: String
+    public let message: String
+
+    public init(
+        fallbackurl: String,
+        message: String
+    )
+    {
+        self.status = "fallback"
+        self.fallbackurl = fallbackurl
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case fallbackurl = "fallbackUrl"
+        case message
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "fallbackUrl", "message"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportResultFallback: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "fallback" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal fallback"
+            )
+        }
+        self.status = "fallback"
+        self.fallbackurl = try container.decode(String.self, forKey: .fallbackurl)
+        self.message = try container.decode(String.self, forKey: .message)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("fallback", forKey: .status)
+        try container.encode(fallbackurl, forKey: .fallbackurl)
+        try container.encode(message, forKey: .message)
+    }
+}
+
+public struct UpdateReportResultPending: Codable, Sendable {
+    public let status: String
+    public let message: String
+
+    public init(
+        message: String
+    )
+    {
+        self.status = "pending"
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case message
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "message"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportResultPending: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "pending" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal pending"
+            )
+        }
+        self.status = "pending"
+        self.message = try container.decode(String.self, forKey: .message)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("pending", forKey: .status)
+        try container.encode(message, forKey: .message)
+    }
+}
+
+public struct UpdateReportResultRetryable: Codable, Sendable {
+    public let status: String
+    public let message: String
+
+    public init(
+        message: String
+    )
+    {
+        self.status = "retryable"
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case message
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "message"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportResultRetryable: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "retryable" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal retryable"
+            )
+        }
+        self.status = "retryable"
+        self.message = try container.decode(String.self, forKey: .message)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("retryable", forKey: .status)
+        try container.encode(message, forKey: .message)
+    }
+}
+
+public struct UpdateReportResultDuplicate: Codable, Sendable {
+    public let status: String
+    public let fallbackurl: String?
+    public let message: String
+    public let url: String?
+
+    public init(
+        fallbackurl: String? = nil,
+        message: String,
+        url: String? = nil
+    )
+    {
+        self.status = "duplicate"
+        self.fallbackurl = fallbackurl
+        self.message = message
+        self.url = url
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case fallbackurl = "fallbackUrl"
+        case message
+        case url
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "fallbackUrl", "message", "url"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UpdateReportResultDuplicate: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "duplicate" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal duplicate"
+            )
+        }
+        self.status = "duplicate"
+        self.fallbackurl = try container.decodeIfPresent(String.self, forKey: .fallbackurl)
+        self.message = try container.decode(String.self, forKey: .message)
+        self.url = try container.decodeIfPresent(String.self, forKey: .url)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("duplicate", forKey: .status)
+        try container.encodeIfPresent(fallbackurl, forKey: .fallbackurl)
+        try container.encode(message, forKey: .message)
+        try container.encodeIfPresent(url, forKey: .url)
+    }
+}
+
+public enum UpdateReportResult: Codable, Sendable {
+    case ready(UpdateReportResultReady)
+    case created(UpdateReportResultCreated)
+    case fallback(UpdateReportResultFallback)
+    case pending(UpdateReportResultPending)
+    case retryable(UpdateReportResultRetryable)
+    case duplicate(UpdateReportResultDuplicate)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "ready": self = try .ready(UpdateReportResultReady(from: decoder))
+        case "created": self = try .created(UpdateReportResultCreated(from: decoder))
+        case "fallback": self = try .fallback(UpdateReportResultFallback(from: decoder))
+        case "pending": self = try .pending(UpdateReportResultPending(from: decoder))
+        case "retryable": self = try .retryable(UpdateReportResultRetryable(from: decoder))
+        case "duplicate": self = try .duplicate(UpdateReportResultDuplicate(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown UpdateReportResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .ready(let value): try value.encode(to: encoder)
+        case .created(let value): try value.encode(to: encoder)
+        case .fallback(let value): try value.encode(to: encoder)
+        case .pending(let value): try value.encode(to: encoder)
+        case .retryable(let value): try value.encode(to: encoder)
+        case .duplicate(let value): try value.encode(to: encoder)
         }
     }
 }

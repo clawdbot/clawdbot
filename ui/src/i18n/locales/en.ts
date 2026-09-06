@@ -635,6 +635,7 @@ export const en: TranslationMap & {
       hostHint:
         "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
+    report: {},
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -752,6 +753,7 @@ export const en: TranslationMap & {
       binding: "Binding",
       useDefault: "Use default",
       any: "any",
+      unavailable: "Unavailable",
     },
     inventory: {
       title: "Paired devices",
@@ -3526,10 +3528,6 @@ export const en: TranslationMap & {
   skillWorkshop: {
     title: "Skill Workshop",
     header: {
-      useCurrentChat: "Use current chat",
-      useCurrentChatAria: "Use current chat for revision requests",
-      useCurrentChatTooltip:
-        "Send revision requests to the current chat session instead of the proposal's workshop session.",
       selfLearning: "Self-learning",
       selfLearningAria: "Toggle autonomous self-learning",
       selfLearningTooltip:
@@ -3698,7 +3696,6 @@ export const en: TranslationMap & {
     today: {
       emptyTitle: "Nothing waiting today",
       emptyBody: "Your agent hasn't drafted anything new. Switch to Board to browse history.",
-      new: "NEW",
       waiting: "WAITING",
       reviewed: "REVIEWED",
       agent: "agent",
@@ -3720,10 +3717,9 @@ export const en: TranslationMap & {
       notForMe: "Not for me",
       upNext: "Up next · {count} more waiting",
       seeAll: "See all proposals →",
-      collection: "Your collection · {count} in use",
-      manage: "Manage →",
-      workflowHeading: "How the agent will use it",
-      applicabilityHeading: "When the agent should use it",
+      recentlyApplied: "Recently applied",
+      manage: "View history →",
+      readSkill: "Read full skill",
     },
   },
   // Chat swarm summaries render before the lazy Activity catalog loads.
@@ -4063,6 +4059,7 @@ export const en: TranslationMap & {
     placeholder: "Search chats and commands…",
     noResults: "No results",
     searchFailed: "Chat search failed — check the gateway logs and retry",
+    modelSearchFailed: "Model search unavailable. Change your search to retry.",
     searchPartial: "Transcript search unavailable — showing chat titles and metadata",
     searchIncomplete: "Transcript matches may be incomplete — indexing or search limits apply",
     categories: {
@@ -4647,6 +4644,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
+      retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
       creatingWorktree: "Creating worktree…",
@@ -4880,20 +4878,14 @@ export const en: TranslationMap & {
     },
     taskSuggestions: {
       eyebrow: "Suggested task · in {repo}",
-      startWorktree: "Start in a worktree",
-      startLocal: "Start in current checkout",
-      startCloud: "Send to cloud · {profile}",
-      startCloudGeneric: "Send to cloud",
+      startSession: "Start in a new session",
       copyPrompt: "Copy prompt",
       copyPromptFailed: "Couldn't copy the prompt to the clipboard",
       promptCopied: "Copied",
-      fixInSession: "Fix in this session",
-      noCloudConfigured: "No cloud environment configured",
       showInstructions: "Show instructions",
       hideInstructions: "Hide instructions",
       previous: "Previous suggested task",
       next: "Next suggested task",
-      moreActions: "More ways to start this task",
       starting: "Starting…",
       dismiss: "Dismiss {title}",
       adminRequired: "Administrator access is required to start suggested tasks.",
@@ -5506,6 +5498,8 @@ export const en: TranslationMap & {
         "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
     },
     pendingInputs: {
+      resuming:
+        "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:

@@ -71,7 +71,7 @@ describe("queued delivery dispatch evidence", () => {
     });
 
     expect(failure).toMatchObject({ message: "dispatch preparation failed" });
-    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
+    expect(isOutboundDeliveryError(failure) && failure.queueCustody).toBe("held");
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       retryCount: 1,
       recoveryState: "send_attempt_started",
@@ -89,13 +89,17 @@ describe("queued delivery dispatch evidence", () => {
     const failure = await attemptSend({ sendMatrix, onPayloadDeliveryOutcome });
 
     expect(failure).toMatchObject({ message: "first payload send failed", sentBeforeError: true });
-    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
+    expect(isOutboundDeliveryError(failure) && failure.queueCustody).toBe("held");
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       retryCount: 1,
       recoveryState: "unknown_after_send",
     });
     expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "failed", sentBeforeError: true }),
+      expect.objectContaining({
+        status: "failed",
+        sentBeforeError: true,
+        error: expect.objectContaining({ queueCustody: "held" }),
+      }),
     );
   });
 
@@ -122,7 +126,11 @@ describe("queued delivery dispatch evidence", () => {
       recoveryState: "unknown_after_send",
     });
     expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "failed", sentBeforeError: true }),
+      expect.objectContaining({
+        status: "failed",
+        sentBeforeError: true,
+        error: expect.objectContaining({ queueCustody: "held" }),
+      }),
     );
   });
 
