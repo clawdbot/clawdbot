@@ -197,6 +197,30 @@ describe("retryClawHubRead", () => {
     expect(delays).toEqual([1_000]);
   });
 
+  it("does not retry or wait after the caller cancels a ClawHub read", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    const sleep = vi.fn(async () => {});
+    let attempts = 0;
+
+    await expect(
+      retryClawHubRead(
+        async () => {
+          attempts += 1;
+          controller.abort(reason);
+          throw reason;
+        },
+        {
+          disposeRetry: async () => {},
+          signal: controller.signal,
+          sleep,
+        },
+      ),
+    ).rejects.toBe(reason);
+    expect(attempts).toBe(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("retries transient internal server errors", async () => {
     const delays: number[] = [];
     let attempts = 0;

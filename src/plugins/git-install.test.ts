@@ -6,6 +6,7 @@ import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -82,6 +83,7 @@ function firstInstallOptions():
       emitSuccessSecurityEvent?: boolean;
       packageDir?: string;
       mode?: string;
+      signal?: AbortSignal;
       installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
     }
   | undefined {
@@ -91,6 +93,7 @@ function firstInstallOptions():
         emitSuccessSecurityEvent?: boolean;
         packageDir?: string;
         mode?: string;
+        signal?: AbortSignal;
         installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
       }
     | undefined;
@@ -867,5 +870,51 @@ describe("installPluginFromGitSpec", () => {
     } finally {
       await fs.rm(gitDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the existing managed repo when cancellation arrives during package validation", async () => {
+    const gitDir = trackedTempDirs.make("openclaw-git-install-abort-validation-");
+    const normalizedSpec = "git:https://github.com/acme/demo.git";
+    const existingRepoDir = expectedGitRepoDir({ gitDir, normalizedSpec });
+    const markerPath = path.join(existingRepoDir, "existing.txt");
+    await fs.mkdir(existingRepoDir, { recursive: true });
+    await fs.writeFile(markerPath, "keep");
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "new-commit\n", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    const validationStarted = createDeferred();
+    const releaseValidation = createDeferred();
+    const controller = new AbortController();
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string; signal?: AbortSignal }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        await fs.writeFile(path.join(params.packageDir, "replacement.txt"), "new");
+        validationStarted.resolve();
+        await releaseValidation.promise;
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          version: "2.0.0",
+          extensions: ["index.js"],
+        };
+      },
+    );
+
+    const update = installPluginFromGitSpec({
+      spec: normalizedSpec,
+      gitDir,
+      mode: "update",
+      signal: controller.signal,
+    });
+    await validationStarted.promise;
+    controller.abort();
+    releaseValidation.resolve();
+
+    await expect(update).rejects.toMatchObject({ name: "AbortError" });
+    expect(firstInstallOptions()?.signal).toBe(controller.signal);
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("keep");
+    await expect(fs.access(path.join(existingRepoDir, "replacement.txt"))).rejects.toThrow();
   });
 });

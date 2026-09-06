@@ -553,6 +553,7 @@ async function fetchClawHubSubjectSecurity(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<ClawHubFetchedSubjectSecurity> {
   if (params.subject.kind === "plugin") {
     const security = await fetchClawHubPackageSecurity({
@@ -561,6 +562,7 @@ async function fetchClawHubSubjectSecurity(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     return {
       security,
@@ -601,10 +603,12 @@ export async function checkClawHubPackageTrust(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   logger?: ClawHubInstallLogger;
   mode?: "install" | "update";
   confirmInstall?: () => boolean | Promise<boolean>;
 }): Promise<ClawHubTrustFailure | ClawHubTrustAcceptedResult> {
+  params.signal?.throwIfAborted();
   let trust: ClawHubPackageSecurityTrust;
   let overview: string;
   let warningLinks: ClawHubFetchedSubjectSecurity["links"];
@@ -617,6 +621,7 @@ export async function checkClawHubPackageTrust(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     const identityFailure = validateClawHubSecurityIdentity({
       security: fetchedSecurity.security,
@@ -631,6 +636,7 @@ export async function checkClawHubPackageTrust(params: {
     overview = fetchedSecurity.security.overview;
     warningLinks = fetchedSecurity.links;
   } catch (error) {
+    params.signal?.throwIfAborted();
     return {
       ok: false,
       error: `ClawHub release trust check failed for "${releaseLabel}": ${sanitizeTerminalText(formatErrorMessage(error))}`,
@@ -638,6 +644,7 @@ export async function checkClawHubPackageTrust(params: {
       version: params.version,
     };
   }
+  params.signal?.throwIfAborted();
 
   const assessment = assessClawHubTrust(trust);
   const checkedAt = new Date().toISOString();

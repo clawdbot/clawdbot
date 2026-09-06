@@ -45,11 +45,15 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
   logger?: ArchiveLogger;
   limits?: ArchiveExtractLimits;
   rootMarkers?: readonly string[];
+  signal?: AbortSignal;
   onExtracted: (rootDir: string) => Promise<TResult>;
 }): Promise<TResult | { ok: false; error: string }> {
+  params.signal?.throwIfAborted();
   return await withInstallWorkspace(params.tempDirPrefix, async (tmpDir) => {
+    params.signal?.throwIfAborted();
     const extractDir = path.join(tmpDir, "extract");
     await fs.mkdir(extractDir, { recursive: true });
+    params.signal?.throwIfAborted();
 
     params.logger?.info?.(`Extracting ${params.archivePath}…`);
     try {
@@ -60,7 +64,9 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
         logger: params.logger,
         limits: params.limits,
       });
+      params.signal?.throwIfAborted();
     } catch (err) {
+      params.signal?.throwIfAborted();
       return { ok: false, error: `failed to extract archive: ${String(err)}` };
     }
 
@@ -69,7 +75,9 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
       rootDir = await resolvePackedRootDir(extractDir, {
         rootMarkers: params.rootMarkers ? [...params.rootMarkers] : undefined,
       });
+      params.signal?.throwIfAborted();
     } catch (err) {
+      params.signal?.throwIfAborted();
       return { ok: false, error: String(err) };
     }
     return await params.onExtracted(rootDir);

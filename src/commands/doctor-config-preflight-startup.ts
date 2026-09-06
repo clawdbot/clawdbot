@@ -53,7 +53,9 @@ export async function prepareStartupMigrationPlugins(params: {
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   readRefreshedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  signal?: AbortSignal;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  params.signal?.throwIfAborted();
   if (params.converge) {
     if (!params.lease) {
       throw new Error("Startup plugin convergence requires the startup migration lease.");
@@ -63,7 +65,10 @@ export async function prepareStartupMigrationPlugins(params: {
   setActiveDegradedPlugins([]);
   const convergence = await (
     params.converge ? runStartupUpgradeConvergence : refreshStartupPluginQuarantine
-  )(params);
+  )({
+    ...params,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
   setActiveDegradedPlugins(convergence.quarantinedPlugins);
   if (convergence.blockingDiagnostic) {
     throwStartupMigrationRefusal(
@@ -114,9 +119,11 @@ export async function completeStartupMigrationPreflight(params: {
   startupMigrationLease: StartupMigrationLease | undefined;
   startupMigrationWarnings: readonly string[];
   stateMigrationsAllowed: boolean | undefined;
+  signal?: AbortSignal;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
   let snapshotRead = params.snapshotRead;
   const snapshot = snapshotRead.snapshot;
+  params.signal?.throwIfAborted();
   if (
     (params.shouldRecordStateCheckpoint || params.shouldRecordStartupCheckpoint) &&
     params.startupMigrationHeartbeatError

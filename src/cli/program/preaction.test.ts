@@ -4,6 +4,7 @@ import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
+import { installGatewayRunRuntimeHooks } from "../gateway-cli/runtime-hooks.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 import {
@@ -378,34 +379,24 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("runs gateway pre-bootstrap before full-CLI gateway bootstrap", async () => {
-    prepareGatewayRunBootstrapMock.mockResolvedValueOnce(false);
+  it("passes CLI options and the startup signal to Gateway pre-bootstrap", async (context) => {
+    const startupSignal = new AbortController().signal;
+    context.onTestFinished(installGatewayRunRuntimeHooks({ startupSignal }));
     const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
     gatewayRunCommand.setOptionValueWithSource("force", true, "cli");
-    try {
-      await runPreAction({
-        parseArgv: ["gateway", "run"],
-        processArgv: [
-          "node",
-          "openclaw",
-          "--log-level",
-          "debug",
-          "gateway",
-          "run",
-          "--raw-stream-path",
-          "--reset",
-          "--force",
-        ],
-      });
-    } finally {
+    context.onTestFinished(() => {
       gatewayRunCommand.setOptionValueWithSource("force", false, "default");
-    }
+    });
+    await runPreAction({
+      parseArgv: ["gateway", "run"],
+      processArgv: ["node", "openclaw", "gateway", "run", "--reset", "--force"],
+    });
 
     expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
       opts: { force: true, reset: false },
       runtime: runtimeMock,
+      signal: startupSignal,
     });
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it("passes the gateway config recheck to the state migration boundary", async () => {

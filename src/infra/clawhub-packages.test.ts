@@ -81,12 +81,16 @@ describe("clawhub packages", () => {
 
   it("fetches typed package security reports", async () => {
     let requestedUrl = "";
+    let requestSignal: AbortSignal | undefined;
+    const controller = new AbortController();
     await expect(
       fetchClawHubPackageSecurity({
         name: "@openclaw/diagnostics-otel",
         version: "2026.3.22",
-        fetchImpl: async (input) => {
+        signal: controller.signal,
+        fetchImpl: async (input, init) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
+          requestSignal = init?.signal ?? undefined;
           return new Response(
             JSON.stringify({
               package: {
@@ -139,6 +143,9 @@ describe("clawhub packages", () => {
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
     );
+    expect(requestSignal).toBeDefined();
+    controller.abort();
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it("rejects malformed package security reports", async () => {

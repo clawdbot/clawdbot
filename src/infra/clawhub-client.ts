@@ -29,6 +29,7 @@ type ClawHubRequestParams = {
   json?: unknown;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   search?: Record<string, string | undefined>;
   fetchImpl?: ClawHubFetch;
   skipAuth?: boolean;
@@ -216,7 +217,11 @@ export async function requestClawHub(
       ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
       ...params.headers,
     };
-    const init: RequestInit = { signal: controller.signal };
+    const init: RequestInit = {
+      signal: params.signal
+        ? AbortSignal.any([params.signal, controller.signal])
+        : controller.signal,
+    };
     if (params.method) {
       init.method = params.method;
     }
@@ -243,6 +248,7 @@ export async function requestClawHub(
     disposeRetry: async ({ response }) => {
       await response.body?.cancel().catch(() => undefined);
     },
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 

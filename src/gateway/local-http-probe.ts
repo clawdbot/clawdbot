@@ -51,7 +51,12 @@ export async function requestGatewayLocalHttpProbe(params: {
       }
       settled = true;
       clearTimeout(deadline);
+      params.signal?.removeEventListener("abort", onAbort);
       resolve(result);
+    };
+    const onAbort = () => {
+      req.destroy();
+      finish(null);
     };
     const request = params.tlsFingerprint ? httpsRequest : httpRequest;
     const req = request(
@@ -100,6 +105,7 @@ export async function requestGatewayLocalHttpProbe(params: {
       req.destroy();
       finish(null);
     }, params.timeoutMs);
+    params.signal?.addEventListener("abort", onAbort, { once: true });
     req.once("timeout", () => {
       req.destroy();
       finish(null);
@@ -141,6 +147,7 @@ export function createConfiguredGatewayLocalProbe(
   return {
     async requestHttp(params) {
       const resolvedTlsFingerprint = await resolveTlsFingerprint();
+      params.signal?.throwIfAborted();
       if (tlsConfig?.enabled === true && !resolvedTlsFingerprint) {
         return null;
       }

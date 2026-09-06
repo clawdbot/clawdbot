@@ -18,6 +18,7 @@ export async function reconcileUnchangedUpdate(params: {
   resolution: NpmSpecResolution;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
+  signal?: AbortSignal;
   hasSpecOverride: boolean;
   syncOfficialInstall: boolean;
 }): Promise<{ config: OpenClawConfig; changed: boolean; outcome: PluginUpdateOutcome }> {
@@ -28,8 +29,10 @@ export async function reconcileUnchangedUpdate(params: {
         probeNpmVersion: params.resolution.version,
         updateChannel: params.updateChannel,
         timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
       })
     : undefined;
+  params.signal?.throwIfAborted();
 
   let config = params.config;
   let changed = false;

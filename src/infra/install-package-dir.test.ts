@@ -9,6 +9,7 @@ import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "..
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
+import { pathExists } from "./fs-safe.js";
 import {
   copyPackageDirInstallTransactionRequest,
   installPackageDir,
@@ -26,6 +27,14 @@ vi.mock("../process/exec.js", async () => {
   return {
     ...actual,
     runCommandWithTimeout: vi.fn(actual.runCommandWithTimeout),
+  };
+});
+
+vi.mock("./fs-safe.js", async () => {
+  const actual = await vi.importActual<typeof import("./fs-safe.js")>("./fs-safe.js");
+  return {
+    ...actual,
+    pathExists: vi.fn(actual.pathExists),
   };
 });
 
@@ -246,6 +255,73 @@ describe("installPackageDir", () => {
     });
     expect(backupReached).toBe(false);
     await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+  });
+
+  it("does not publish staged files after validation observes cancellation", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("cancelled-install");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const installBaseDir = path.join(fixtureRoot, "plugins");
+    const targetDir = path.join(installBaseDir, "demo");
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+
+    await expect(
+      installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "install",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "",
+        signal: controller.signal,
+        afterInstall: async () => {
+          controller.abort(reason);
+          return { ok: true };
+        },
+      }),
+    ).rejects.toBe(reason);
+    await expectMissingPath(targetDir);
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+  });
+
+  it("cleans the staged directory when cancellation lands during the update target check", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("cancelled-update-target-check");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+
+    vi.mocked(pathExists).mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return true;
+    });
+
+    await expect(
+      installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "update",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-backups"),
+    ).resolves.toHaveLength(0);
   });
 
   it("restores edits detected after the existing install moves to backup", async () => {

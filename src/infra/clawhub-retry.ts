@@ -1,4 +1,5 @@
 // Defines the bounded retry contract shared by ClawHub runtime and release reads.
+import { sleepWithAbort } from "./backoff.js";
 import { parseRetryAfterHeaderSeconds } from "./retry-after.js";
 import { retryAsync } from "./retry.js";
 
@@ -12,6 +13,7 @@ type ClawHubResponseHandle = {
 type ClawHubRetryOptions<T extends ClawHubResponseHandle> = {
   disposeRetry: (result: T) => Promise<void>;
   retryRateLimit?: boolean;
+  signal?: AbortSignal;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -48,10 +50,12 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
   request: () => Promise<T>,
   options: ClawHubRetryOptions<T>,
 ): Promise<T> {
+  options.signal?.throwIfAborted();
   try {
     return await retryAsync(
       async () => {
         const result = await request();
+        options.signal?.throwIfAborted();
         if (isRetryableClawHubStatus(result.response.status, options.retryRateLimit === true)) {
           throw new RetryableClawHubResponse(result);
         }
@@ -61,6 +65,7 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
         attempts: CLAWHUB_RETRY_DELAYS_MS.length + 1,
         minDelayMs: 0,
         maxDelayMs: CLAWHUB_MAX_RETRY_AFTER_MS,
+        shouldRetry: () => options.signal?.aborted !== true,
         delayMs: ({ attempt }) => CLAWHUB_RETRY_DELAYS_MS[attempt - 1] ?? 0,
         retryAfterMs: (error) =>
           error instanceof RetryableClawHubResponse
@@ -71,10 +76,21 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
             await options.disposeRetry(err.result);
           }
         },
-        sleep: options.sleep,
+        sleep: options.signal
+          ? async (ms) => {
+              options.signal?.throwIfAborted();
+              if (options.sleep) {
+                await options.sleep(ms);
+              } else {
+                await sleepWithAbort(ms, options.signal);
+              }
+              options.signal?.throwIfAborted();
+            }
+          : options.sleep,
       },
     );
   } catch (error) {
+    options.signal?.throwIfAborted();
     // Callers own final HTTP error handling and therefore need the response.
     if (error instanceof RetryableClawHubResponse) {
       return error.result;

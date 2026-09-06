@@ -166,9 +166,49 @@ describe("supervised gateway lock recovery", () => {
     });
     expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(1);
     expect(startLoop).toHaveBeenCalledTimes(4);
-    expect(sleep).toHaveBeenNthCalledWith(1, 5);
-    expect(sleep).toHaveBeenNthCalledWith(2, 5);
-    expect(sleep).toHaveBeenNthCalledWith(3, 2);
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([5, 5, 2]);
+  });
+
+  it("stops supervised lock recovery when gateway startup is cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    let sleepStarted!: () => void;
+    const sleeping = new Promise<void>((resolve) => {
+      sleepStarted = resolve;
+    });
+    const startLoop = vi.fn(async () => {
+      throw new GatewayLockError("gateway already running");
+    });
+    const sleep = vi.fn(async (_ms: number, signal?: AbortSignal) => {
+      sleepStarted();
+      expect(signal).toBe(controller.signal);
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            expect(signal.reason).toBe(reason);
+            reject(reason);
+          },
+          { once: true },
+        );
+      });
+    });
+
+    const recovery = testing.runGatewayLoopWithSupervisedLockRecovery({
+      startLoop,
+      supervisor: "systemd",
+      port: 18789,
+      healthHost: "127.0.0.1",
+      log: createLogger(),
+      startupSignal: controller.signal,
+      probeHealth: vi.fn(async () => false),
+      sleep,
+    });
+    await sleeping;
+    controller.abort(reason);
+
+    await expect(recovery).rejects.toBe(reason);
+    expect(startLoop).toHaveBeenCalledTimes(1);
   });
 
   it("bounds supervised retries for EADDRINUSE lock errors", async () => {
@@ -200,9 +240,7 @@ describe("supervised gateway lock recovery", () => {
     );
 
     expect(startLoop).toHaveBeenCalledTimes(4);
-    expect(sleep).toHaveBeenNthCalledWith(1, 5);
-    expect(sleep).toHaveBeenNthCalledWith(2, 5);
-    expect(sleep).toHaveBeenNthCalledWith(3, 2);
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([5, 5, 2]);
   });
 
   it.each(["gateway already running", "another gateway instance is already listening"])(

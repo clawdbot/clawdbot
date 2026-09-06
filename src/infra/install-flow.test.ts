@@ -127,6 +127,32 @@ describe("withExtractedArchiveRoot", () => {
     });
   });
 
+  it("does not hand an extracted archive to installers after cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    vi.spyOn(installSource, "withInstallWorkspace").mockImplementation(
+      async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
+    );
+    vi.spyOn(archive, "extractArchive").mockImplementation(async () => {
+      controller.abort(reason);
+    });
+    vi.spyOn(archive, "resolvePackedRootDir").mockResolvedValue(
+      "/tmp/openclaw-install-flow/extract/package",
+    );
+    const onExtracted = vi.fn(async () => ({ ok: true as const }));
+
+    await expect(
+      withExtractedArchiveRoot({
+        archivePath: "/tmp/plugin.tgz",
+        tempDirPrefix: "openclaw-plugin-",
+        timeoutMs: 1000,
+        signal: controller.signal,
+        onExtracted,
+      }),
+    ).rejects.toBe(reason);
+    expect(onExtracted).not.toHaveBeenCalled();
+  });
+
   it("returns extract failure when extraction throws", async () => {
     const result = await runExtractedArchiveFailureCase(() => {
       vi.spyOn(archive, "extractArchive").mockRejectedValue(new Error("boom"));

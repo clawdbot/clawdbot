@@ -143,4 +143,35 @@ describe("git install target ownership", () => {
     });
     expect(await git(installed.targetDir, "rev-parse", "HEAD")).toBe(installed.git.commit);
   });
+
+  it.each([{ deferred: false }, { deferred: true }])(
+    "keeps the existing checkout when cancellation reaches $deferred publication",
+    async ({ deferred }) => {
+      const installed = await installPluginFromGitSpec({ spec });
+      if (!installed.ok) {
+        throw new Error(installed.error);
+      }
+      const markerPath = path.join(installed.targetDir, "operator-note.txt");
+      await fs.writeFile(markerPath, "keep this checkout");
+      await commitPlugin("demo", "2.0.0");
+      const controller = new AbortController();
+      const options = {
+        spec,
+        mode: "update" as const,
+        signal: controller.signal,
+        onBeforePluginArtifactCommit: async () => {
+          controller.abort();
+        },
+      };
+
+      await expect(
+        installPluginFromGitSpec(deferred ? requestDeferredPluginInstall(options) : options),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(await git(installed.targetDir, "rev-parse", "HEAD")).toBe(installed.git.commit);
+      await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("keep this checkout");
+      await expect(
+        fs.readFile(path.join(installed.targetDir, "package.json"), "utf8"),
+      ).resolves.toContain('"version":"1.0.0"');
+    },
+  );
 });
