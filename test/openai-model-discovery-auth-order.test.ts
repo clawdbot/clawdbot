@@ -381,6 +381,10 @@ describe("Provider model discovery auth preparation", () => {
       store.profiles[fallbackProfileId] = fallbackCredential;
       await state.writeAuthProfiles(store);
       const persistedBefore = readAuthProfileStoreForTest(agentDir);
+      const persistedFirstProfile = persistedBefore.profiles[profileId];
+      if (!persistedFirstProfile) {
+        throw new Error("missing persisted first-profile fixture");
+      }
       const refreshStarted = createDeferredCore();
       const refreshResult =
         createDeferredCore<
@@ -453,7 +457,7 @@ describe("Provider model discovery auth preparation", () => {
       );
       const persisted = readAuthProfileStoreForTest(agentDir);
       expect(persisted.profiles[profileId]).toMatchObject(
-        completion === "success" ? refreshedCredential : persistedBefore.profiles[profileId],
+        completion === "success" ? refreshedCredential : persistedFirstProfile,
       );
       expect(persisted.profiles[fallbackProfileId]).toMatchObject(
         timedOut ? fallbackCredential : refreshedFallback,
