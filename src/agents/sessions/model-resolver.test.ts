@@ -39,6 +39,19 @@ function registry(models: Model[], authenticatedModels: Model[] = models): Model
 }
 
 describe("exact model reference selection", () => {
+  it.each([
+    { provider: "custom", id: " alpha", reference: "custom/ alpha" },
+    { provider: "custom ", id: "alpha", reference: "custom /alpha" },
+  ])("preserves literal canonical components in $reference", ({ provider, id, reference }) => {
+    const exact = model(provider, id);
+    const models = [model("custom", "alpha"), exact];
+    expect(findExactModelReferenceMatch(reference, models)).toBe(exact);
+    expect(parseModelPattern(reference, models).model).toBe(exact);
+    expect(resolveCliModel({ cliModel: reference, modelRegistry: registry(models) }).model).toBe(
+      exact,
+    );
+  });
+
   it.each(["alpha", "custom/alpha", " CUSTOM / alpha "])(
     "prefers the exact model id in %s before case-insensitive matching",
     (reference) => {
@@ -106,6 +119,20 @@ describe("exact model reference selection", () => {
     );
   });
 
+  it.each(["Alpha", "custom/Alpha", "ALPHA", "custom/ALPHA"])(
+    "preserves the first row when %s matches repeated model identities",
+    async (reference) => {
+      const first = model("custom", "Alpha");
+      const models = [first, first, { ...first, name: "Duplicate catalog row" }];
+      expect(findExactModelReferenceMatch(reference, models)).toBe(first);
+      expect(parseModelPattern(reference, models).model).toBe(first);
+      const selected = resolveCliModel({ cliModel: reference, modelRegistry: registry(models) });
+      expect(selected.model).toBe(first);
+      expect(selected.error).toBeUndefined();
+      expect(await resolveModelScope([reference], registry(models))).toEqual([{ model: first }]);
+    },
+  );
+
   it("keeps an explicit provider ahead of a slash-containing bare id", () => {
     const scoped = model("custom", "Alpha");
     const models = [model("gateway", "custom/alpha"), scoped];
@@ -114,6 +141,184 @@ describe("exact model reference selection", () => {
       resolveCliModel({ cliModel: "custom/alpha", modelRegistry: registry(models) }).model,
     ).toBe(scoped);
   });
+
+  it.each(["custom", "CUSTOM"])("preserves the exact provider identity %s", (provider) => {
+    const exact = model(provider, "alpha");
+    const other = model(provider === "custom" ? "CUSTOM" : "custom", "alpha");
+    for (const models of [
+      [exact, other],
+      [other, exact],
+    ]) {
+      expect(findExactModelReferenceMatch(`${provider}/alpha`, models)).toBe(exact);
+      expect(parseModelPattern(`${provider}/alpha`, models).model).toBe(exact);
+      for (const selection of [
+        { cliModel: `${provider}/alpha` },
+        { cliProvider: provider, cliModel: "alpha" },
+      ]) {
+        expect(resolveCliModel({ ...selection, modelRegistry: registry(models) }).model).toBe(
+          exact,
+        );
+      }
+    }
+  });
+
+  it.each([
+    { cliModel: "Custom/alpha" },
+    { cliProvider: "Custom", cliModel: "alpha" },
+    { cliProvider: "Custom", cliModel: "unknown" },
+  ])("rejects ambiguous provider identities: %j", (selection) => {
+    const models = [model("custom", "alpha"), model("CUSTOM", "alpha")];
+    const result = resolveCliModel({ ...selection, modelRegistry: registry(models) });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("ambiguous");
+  });
+
+  it.each([{ cliModel: "Custom/alpha" }, { cliProvider: "Custom", cliModel: "alpha" }])(
+    "does not disambiguate provider identities through fuzzy matching: %j",
+    (selection) => {
+      const models = [model("custom", "alpha-one"), model("CUSTOM", "alpha-two")];
+      const result = resolveCliModel({ ...selection, modelRegistry: registry(models) });
+      expect(result.model).toBeUndefined();
+      expect(result.error).toContain("ambiguous");
+    },
+  );
+
+  it("keeps duplicate names as aliases for registry-first metadata", () => {
+    const first = { ...model("custom", "shared"), name: "Canonical title" };
+    const later = { ...first, name: "Hidden title", baseUrl: "https://later.example.test" };
+    const models = [first, later];
+    expect(parseModelPattern("Canonical title", models).model).toBe(first);
+    expect(parseModelPattern("Hidden title", models).model).toBe(first);
+    const result = resolveCliModel({ cliModel: "Hidden title", modelRegistry: registry(models) });
+    expect(result.model).toBe(first);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("uses the full tuple to disambiguate folded provider names", () => {
+    const exact = model("custom", "alpha");
+    const models = [exact, model("CUSTOM", "other")];
+    expect(findExactModelReferenceMatch("Custom/alpha", models)).toBe(exact);
+    expect(parseModelPattern("Custom/alpha", models).model).toBe(exact);
+    for (const selection of [
+      { cliModel: "Custom/alpha" },
+      { cliProvider: "Custom", cliModel: "alpha" },
+    ]) {
+      expect(resolveCliModel({ ...selection, modelRegistry: registry(models) }).model).toBe(exact);
+    }
+  });
+
+  it("keeps exact raw-id fallback when folded providers are ambiguous", () => {
+    const exact = model("gateway", "Custom/raw-id");
+    const models = [model("custom", "other"), model("CUSTOM", "different"), exact];
+    const result = resolveCliModel({ cliModel: exact.id, modelRegistry: registry(models) });
+    expect(result.model).toBe(exact);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("strips the entire explicit provider prefix when its identity contains slashes", () => {
+    const exact = model("team/custom", "alpha");
+    const result = resolveCliModel({
+      cliProvider: "team/custom",
+      cliModel: "team/custom/alpha",
+      modelRegistry: registry([exact]),
+    });
+    expect(result.model).toBe(exact);
+    expect(result.warning).toBeUndefined();
+    expect(result.error).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "resolves a slash-provider tuple before raw ids (short provider: %s)",
+    (shortProvider) => {
+      const exact = model("team/custom", "Alpha");
+      const models = [model("gateway", "team/custom/Alpha"), exact];
+      if (shortProvider) {
+        models.push(model("team", "other"));
+      }
+      expect(findExactModelReferenceMatch("team/custom/Alpha", models)).toBe(exact);
+      expect(parseModelPattern("team/custom/Alpha", models).model).toBe(exact);
+      expect(
+        resolveCliModel({ cliModel: "team/custom/Alpha", modelRegistry: registry(models) }).model,
+      ).toBe(exact);
+    },
+  );
+
+  it("requires an explicit provider when distinct tuples share a canonical reference", () => {
+    const models = [model("team/custom", "Alpha"), model("team", "custom/Alpha")];
+    const reference = "team/custom/Alpha";
+    expect(findExactModelReferenceMatch(reference, models)).toBeUndefined();
+    expect(parseModelPattern(reference, models).warning).toContain("ambiguous");
+    const result = resolveCliModel({ cliModel: reference, modelRegistry: registry(models) });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("ambiguous");
+    for (const exact of models) {
+      expect(
+        resolveCliModel({
+          cliProvider: exact.provider,
+          cliModel: reference,
+          modelRegistry: registry(models),
+        }).model,
+      ).toBe(exact);
+    }
+  });
+
+  it("keeps mixed-case full tuples ambiguous across different slash boundaries", () => {
+    const models = [model("team", "custom/Alpha"), model("TEAM/CUSTOM", "alpha")];
+    const reference = "team/custom/alpha";
+    expect(findExactModelReferenceMatch(reference, models)).toBeUndefined();
+    expect(parseModelPattern(reference, models).warning).toContain("ambiguous");
+    const result = resolveCliModel({ cliModel: reference, modelRegistry: registry(models) });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("ambiguous");
+    for (const exact of models) {
+      expect(findExactModelReferenceMatch(`${exact.provider}/${exact.id}`, models)).toBe(exact);
+    }
+  });
+
+  it.each([false, true])(
+    "infers slash-containing providers for fuzzy patterns (short provider: %s)",
+    (shortProvider) => {
+      const exact = model("team/custom", "alpha");
+      const models = shortProvider ? [model("team", "other"), exact] : [exact];
+      const result = resolveCliModel({
+        cliModel: "team/custom/alph",
+        modelRegistry: registry(models),
+      });
+      expect(result.model).toBe(exact);
+      expect(result.error).toBeUndefined();
+      expect(result.warning).toBeUndefined();
+    },
+  );
+
+  it("does not choose an owner when different slash-provider scopes both match fuzzily", () => {
+    const models = [model("team/custom", "alpha"), model("team", "custom/alpha")];
+    const result = resolveCliModel({
+      cliModel: "team/custom/alph",
+      modelRegistry: registry(models),
+    });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("ambiguous");
+  });
+
+  it.each([false, true])(
+    "preserves slash-provider resolution through thinking suffixes (ambiguous: %s)",
+    (ambiguous) => {
+      const exact = model("team/custom", "Alpha");
+      const models = [exact, model("team", ambiguous ? "custom/Alpha" : "other")];
+      const result = resolveCliModel({
+        cliModel: "team/custom/Alpha:high",
+        modelRegistry: registry(models),
+      });
+      if (ambiguous) {
+        expect(result.model).toBeUndefined();
+        expect(result.error).toContain("ambiguous");
+      } else {
+        expect(result.model).toBe(exact);
+        expect(result.thinkingLevel).toBe("high");
+        expect(result.error).toBeUndefined();
+      }
+    },
+  );
 
   it("uses exact raw ids when an inferred provider has no matching model", () => {
     const exact = model("gateway", "custom/alpha");
@@ -129,6 +334,22 @@ describe("exact model reference selection", () => {
       model: exact,
       thinkingLevel: undefined,
     });
+  });
+
+  it("keeps a literal raw colon id before inferring a qualified thinking suffix", () => {
+    const qualified = model("custom", "alpha");
+    const literal = model("gateway", "custom/alpha:high");
+    const modelRegistry = registry([qualified, literal]);
+    const result = resolveCliModel({ cliModel: literal.id, modelRegistry });
+    expect(result.model).toBe(literal);
+    expect(result.thinkingLevel).toBeUndefined();
+    const explicit = resolveCliModel({
+      cliProvider: "custom",
+      cliModel: literal.id,
+      modelRegistry,
+    });
+    expect(explicit.model).toBe(qualified);
+    expect(explicit.thinkingLevel).toBe("high");
   });
 
   it("keeps glob matching case-insensitive without collapsing exact identities", async () => {
