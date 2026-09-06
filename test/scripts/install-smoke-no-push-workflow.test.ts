@@ -128,6 +128,13 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     expect(workflowIdentity.run).not.toContain("EXPECTED_WORKFLOW_SHA");
+    expect(step(preflight, "Materialize selected-source contract resolver").with).toMatchObject({
+      repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      ref: "${{ steps.workflow.outputs.workflow_sha }}",
+      path: ".release-harness",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts/resolve-fs-safe-native-contract.mjs",
+    });
 
     const identityResult = spawnSync(
       "bash",
@@ -137,6 +144,7 @@ describe("install smoke no-push root image transport", () => {
         env: {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+          GITHUB_OUTPUT: "/dev/null",
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: "openclaw/openclaw",
