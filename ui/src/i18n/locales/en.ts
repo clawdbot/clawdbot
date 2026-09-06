@@ -3579,8 +3579,8 @@ export const en: TranslationMap & {
         "Compares saved instructions with the installed skill. Intermediate edits and supporting files are not shown.",
       noSavedVersion: "No saved version is available to compare with this skill.",
       savedVersionError: "Could not load saved versions. Refresh to try again.",
+      comparing: "Comparing saved instructions…",
       unchanged: "The instructions match this saved version.",
-      diffTruncated: "This diff is shortened. Some changes may not be shown.",
     },
     recency: {
       today: "Today",
