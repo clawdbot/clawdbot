@@ -739,7 +739,6 @@ src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
 src/plugins/contracts/tts-contract-suites.ts
 src/plugins/conversation-binding.test.ts
-src/plugins/conversation-binding.ts
 src/plugins/discovery.test.ts
 src/plugins/discovery.ts
 src/plugins/hook-types.ts
