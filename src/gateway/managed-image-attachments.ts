@@ -1587,14 +1587,7 @@ function sendStatus(res: ServerResponse, statusCode: number, body: string) {
 
 function buildManagedMediaContentDisposition(value: string | null, contentType: string): string {
   const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
-  const base = (value ?? fallback).replace(/[\r\n"\\]/g, "_").trim();
-  const filename = base || fallback;
-  if (mediaKindFromMime(contentType) === "document") {
-    return buildAssistantMediaContentDisposition(filename, contentType);
-  }
-  return /^[\x20-\x7e]+$/u.test(filename)
-    ? `inline; filename="${filename}"`
-    : buildAssistantMediaContentDisposition(filename, contentType);
+  return buildAssistantMediaContentDisposition(value?.trim() || fallback, contentType);
 }
 
 export async function handleManagedOutgoingMediaHttpRequest(
