@@ -2,16 +2,23 @@ import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
+  sessionPathForFile,
   sessionPathForSessionIdentity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  ensureMemoryChunkProvenance,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { recordMemorySessionTombstones } from "../memory-entry-origins.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import { closeAllMemoryIndexManagers, MemoryIndexManager } from "./manager.js";
 
@@ -279,6 +286,84 @@ describe("memory manager shared agent connection", () => {
         writer.exec("ROLLBACK");
       }
       writer.close();
+      await manager.close();
+    }
+  });
+
+  it("rebuilds a session snapshot after metadata refresh loses to schema invalidation", async () => {
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const transcript = path.join(
+      sessionsDir,
+      "metadata-race.jsonl.deleted.2026-09-01T00-00-00.000Z",
+    );
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const writeTranscript = (content: string) =>
+      fs.writeFile(
+        transcript,
+        `${JSON.stringify({ type: "message", message: { role: "user", content } })}\n`,
+      );
+    await writeTranscript("Old violet history.");
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
+      "cli",
+    );
+    await manager.sync({ reason: "baseline", force: true });
+    const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
+    const sourcePath = sessionPathForFile(transcript);
+    const readSource = shared.db.prepare(
+      "SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'sessions'",
+    );
+    expect(readSource.get(sourcePath)).toBeDefined();
+    // Legacy/imported chunks can await a later constructor's provenance reconciliation.
+    shared.db
+      .prepare(
+        "DELETE FROM memory_index_chunk_provenance WHERE chunk_id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = 'sessions')",
+      )
+      .run(sourcePath);
+    Reflect.set(manager, "sessionsDirty", true);
+    Reflect.set(manager, "sessionsDirtyFiles", new Set([transcript]));
+    const writer = new DatabaseSync(shared.path);
+    writer.exec("BEGIN IMMEDIATE");
+    const admissionBlocked = createDeferred<void>();
+    const exec = shared.db.exec.bind(shared.db);
+    const observeAdmission = vi.spyOn(shared.db, "exec").mockImplementation((sql) => {
+      try {
+        return exec(sql);
+      } catch (error) {
+        admissionBlocked.resolve();
+        throw error;
+      }
+    });
+    const sync = manager.sync({ reason: "session-delta" });
+    void sync.catch(() => undefined);
+    try {
+      await Promise.race([admissionBlocked.promise, sync]);
+      ensureMemoryChunkProvenance(writer);
+      await writeTranscript("Newest violet history.");
+      writer.exec("COMMIT");
+      const outcome = await sync.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(readSource.get(sourcePath)).toEqual({ hash: "" });
+      expect(outcome).toBeInstanceOf(MemoryIndexRevisionConflictError);
+      expect(manager.status().dirty).toBe(true);
+      await manager.sync({ reason: "retry-metadata" });
+      const indexed = shared.db
+        .prepare("SELECT text FROM memory_index_chunks WHERE path = ? AND source = 'sessions'")
+        .all(sourcePath)
+        .map((row) => row.text)
+        .join("\n");
+      expect(indexed).toContain("Newest violet history.");
+      expect(indexed).not.toContain("Old violet history.");
+      expect(manager.status().dirty).toBe(false);
+    } finally {
+      observeAdmission.mockRestore();
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK");
+      }
+      writer.close();
+      await sync.catch(() => undefined);
       await manager.close();
     }
   });

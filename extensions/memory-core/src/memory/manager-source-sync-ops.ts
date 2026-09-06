@@ -11,6 +11,7 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
+import { MemoryIndexRevisionConflictError } from "./manager-db.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
   isMemorySessionIndexable,
@@ -297,9 +298,9 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       });
       if (!params.needsFullReindex && existingHash === entry.hash) {
         // Converge restored source fingerprints without replacing unchanged chunks.
-        const skipped =
-          !this.sessionsDirtyFiles.has(absPath) ||
-          (await runSqliteImmediateTransaction(
+        if (
+          this.sessionsDirtyFiles.has(absPath) &&
+          !(await runSqliteImmediateTransaction(
             this.db,
             async () => () =>
               updateUnchangedSessionSourceMetadata.run(
@@ -308,11 +309,14 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
                 entry.path,
                 entry.hash,
               ).changes === 1,
-          ));
-        if (skipped) {
-          this.advanceSyncProgress(params.progress);
-          return null;
+          ))
+        ) {
+          throw new MemoryIndexRevisionConflictError(
+            `Memory session source ${entry.path} changed during metadata refresh; retry incremental sync.`,
+          );
         }
+        this.advanceSyncProgress(params.progress);
+        return null;
       }
       return { ...entry, sessionId: corpusEntryForPath(absPath).sessionId };
     };
