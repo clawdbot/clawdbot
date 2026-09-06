@@ -114,7 +114,9 @@ describe("Agent-specific exec tool defaults", () => {
     await shortProcess.execute("load-short-process", { action: "list" });
     const observedAt = Date.now();
     // The old 60s global TTL sweeps every 30s, so allow its next full sweep.
-    await new Promise((resolve) => setTimeout(resolve, 95_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 95_000);
+    });
     const longResult = await longProcess.execute("long-retention-log", {
       action: "log",
       sessionId: longId,
