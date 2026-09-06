@@ -66,7 +66,9 @@ async function runMainCronCase(
     heartbeatPaused?: boolean;
     disableBeforeRun?: boolean;
     scheduleKind?: "at" | "every";
-    heartbeatSessionKey?: string;
+    isolatedHeartbeat?: boolean;
+    mainSessionKey?: string;
+    seedMainSession?: boolean;
     heartbeatResponse?: ReturnType<typeof createHeartbeatToolResponsePayload>;
   } = {},
 ) {
@@ -88,24 +90,28 @@ async function runMainCronCase(
         heartbeat: {
           every: options.heartbeatEvery ?? "5m",
           target: "telegram",
-          ...(options.heartbeatSessionKey ? { isolatedSession: true } : {}),
+          ...(options.isolatedHeartbeat ? { isolatedSession: true } : {}),
         },
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
-    session: { store: sandbox.sessionStorePath },
+    session: {
+      store: sandbox.sessionStorePath,
+      ...(options.mainSessionKey ? { mainKey: options.mainSessionKey } : {}),
+    },
   };
   const expectedMainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
-  await seedMainSessionStore(sandbox.sessionStorePath, cfg, {
-    lastChannel: "telegram",
-    lastProvider: "telegram",
-    lastTo: "-100155462274",
-  });
+  if (options.seedMainSession !== false) {
+    await seedMainSessionStore(sandbox.sessionStorePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: "-100155462274",
+    });
+  }
 
   const runHeartbeatOnceReal: NonNullable<CronServiceDeps["runHeartbeatOnce"]> = (opts) =>
     runHeartbeatOnce({
       ...opts,
-      ...(options.heartbeatSessionKey ? { sessionKey: options.heartbeatSessionKey } : {}),
       cfg,
       deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
     });
@@ -205,7 +211,7 @@ async function runMainCronCase(
         expect(completed?.state.nextRunAtMs).toBe(expectedNextRunAtMs);
       }
       expect(terminal.nextRunAtMs).toBe(expectedNextRunAtMs);
-      return;
+      return { expectedMainSessionKey, sandbox, terminal };
     }
     expect(terminal.status).toBe("ok");
     if (wakeMode === "next-heartbeat") {
@@ -234,13 +240,15 @@ async function runMainCronCase(
     >;
     expect(replyCtx.InternalTurnSource).toBe("cron");
     expect(replyCtx.Provider).toBeUndefined();
-    expect(replyCtx.SessionKey).toBe(expectedMainSessionKey);
+    expect(replyCtx.SessionKey).toBe(
+      options.isolatedHeartbeat ? `${expectedMainSessionKey}:heartbeat` : expectedMainSessionKey,
+    );
     expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
     expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);
     if (options.deleteAfterRun) {
       expect(cron.getJob(job.id)).toBeUndefined();
     }
-    return { sandbox, terminal };
+    return { expectedMainSessionKey, sandbox, terminal };
   } finally {
     cron.stop();
     const drained = await waitForActiveCronJobs(5_000);
@@ -295,32 +303,38 @@ describe("main cron with the real heartbeat runner", () => {
   });
 
   it("keeps a transient isolated heartbeat successful without creating an orphan outcome", async () => {
-    const sessionKey = "agent:main:cron:job:run:transient";
     const result = await runMainCronCase("direct", "now", {
-      heartbeatSessionKey: sessionKey,
+      isolatedHeartbeat: true,
+      mainSessionKey: "cron:job:run:transient",
+      seedMainSession: false,
       heartbeatResponse: createHeartbeatToolResponsePayload({
         outcome: "progress",
         notify: false,
         summary: "Transient heartbeat completed",
       }),
     });
+    if (!result) {
+      throw new Error("expected completed cron run");
+    }
+    const sessionKey = result.expectedMainSessionKey;
     const db = openOpenClawAgentDatabase(
       toDatabaseOptions(
         resolveSqliteScope({
           agentId: "main",
+          sessionKey,
           storePath: result?.sandbox.sessionStorePath,
         }),
       ),
     ).db;
 
-    expect(result?.terminal.status).toBe("ok");
+    expect(result.terminal.status).toBe("ok");
     expect(
       db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(sessionKey),
     ).toBeUndefined();
     expect(
-      db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(
-        `${sessionKey}:heartbeat`,
-      ),
+      db
+        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+        .get(`${sessionKey}:heartbeat`),
     ).toEqual({ session_key: `${sessionKey}:heartbeat` });
     expect(db.prepare("SELECT COUNT(*) AS count FROM heartbeat_outcomes").get()).toEqual({
       count: 0,
