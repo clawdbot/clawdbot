@@ -61,6 +61,8 @@ export function createSessionMaintenanceFollowup(params: {
     | "groupChannel"
     | "groupSpace"
     | "skillsSnapshot"
+    | "thinkingCatalog"
+    | "skipProviderRuntimeHints"
     | "thinkLevel"
     | "verboseLevel"
     | "timeoutMs"
@@ -101,6 +103,8 @@ export function createSessionMaintenanceFollowup(params: {
       authProfileIdSource: params.auth.authProfileIdSource,
       blockReplyBreak: "message_end",
       skillsSnapshot: run.skillsSnapshot,
+      thinkingCatalog: run.thinkingCatalog,
+      skipProviderRuntimeHints: run.skipProviderRuntimeHints,
       thinkLevel: run.thinkLevel,
       verboseLevel: run.verboseLevel ?? "off",
       timeoutMs: run.timeoutMs,
@@ -215,7 +219,6 @@ export function scheduleSessionMaintenance(
                   cfg: prepared.cfg,
                   followupRun,
                   promptForEstimate: "",
-                  sessionCtx: {},
                   defaultModel: followupRun.run.model,
                   resolvedVerboseLevel: followupRun.run.verboseLevel ?? "off",
                   sessionEntry: entry,

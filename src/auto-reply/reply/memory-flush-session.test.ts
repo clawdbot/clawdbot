@@ -19,7 +19,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareMemoryFlushCheckpoint } from "./memory-flush-checkpoint.js";
+import { prepareMemoryFlushSession } from "./memory-flush-session.js";
 
 async function withAdmittedInput(
   compacted: boolean,
@@ -106,7 +106,7 @@ it.each([false, true])(
         expectedWriterRunId: "foreground-writer",
         threadId: "foreground-native-thread",
       };
-      const checkpoint = await prepareMemoryFlushCheckpoint({
+      const checkpoint = await prepareMemoryFlushSession({
         admission,
         source: sourceWithForeignAuthority,
         runId: "memory-helper",
@@ -153,7 +153,7 @@ it("does not use an admission after the source transcript changes", async () => 
     });
     await waitForSessionTranscriptProjection(scope);
     await expect(
-      prepareMemoryFlushCheckpoint({
+      prepareMemoryFlushSession({
         admission,
         source: scope,
         runId: "stale-helper",
@@ -167,7 +167,7 @@ it("keeps custom context-engine bootstrap, rewrite, and assembly inside the chec
   await withAdmittedInput(true, async ({ scope, workspaceDir, admission, priorContext }) => {
     const before = loadTranscriptEventsSync(scope);
     const anchor = readActiveTranscriptEntryAnchor(admission);
-    const checkpoint = await prepareMemoryFlushCheckpoint({
+    const checkpoint = await prepareMemoryFlushSession({
       admission,
       source: scope,
       runId: "plugin-checkpoint",
@@ -246,7 +246,7 @@ it("does not acquire a checkpoint after caller cancellation", async () => {
     const before = loadTranscriptEventsSync(scope);
     const reason = new Error("cancel required checkpoint");
     await expect(
-      prepareMemoryFlushCheckpoint({
+      prepareMemoryFlushSession({
         admission,
         source: scope,
         runId: "cancelled-helper",
@@ -262,6 +262,33 @@ it("does not expose a processed recorder as a pending checkpoint admission", asy
   await withAdmittedInput(false, async ({ recorder }) => {
     recorder.markSentToProvider?.();
     expect(readPendingUserTurnTranscriptAdmission(recorder)).toBeUndefined();
+  });
+});
+
+it("includes the completed foreground turn when optional memory has no admission fence", async () => {
+  await withAdmittedInput(true, async ({ scope, workspaceDir, recorder }) => {
+    recorder.markSentToProvider?.();
+    const source = SessionManager.open(scope, workspaceDir);
+    source.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "The current question is now answered." }],
+        stopReason: "stop",
+      }),
+    );
+    const before = loadTranscriptEventsSync(scope);
+    const memory = await prepareMemoryFlushSession({
+      source: scope,
+      runId: "optional-after-reply",
+      workspaceDir,
+    });
+    const messages = memory.sessionManager.buildSessionContext().messages;
+    expect(messages).toEqual(source.buildSessionContext().messages);
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The current question is now answered." }],
+    });
+    expect(memory.sessionManager.getSessionTarget()).toBeUndefined();
+    expect(loadTranscriptEventsSync(scope)).toEqual(before);
   });
 });
 
@@ -292,13 +319,13 @@ it("rejects a partial bounded checkpoint instead of silently starting with less 
     }
     const before = loadTranscriptEventsSync(scope);
     await expect(
-      prepareMemoryFlushCheckpoint({
+      prepareMemoryFlushSession({
         admission,
         source: scope,
         runId: "bounded-helper",
         workspaceDir: state.workspaceDir,
       }),
-    ).rejects.toThrow("bounded prior-context view");
+    ).rejects.toThrow("bounded conversation view");
     expect(loadTranscriptEventsSync(scope)).toEqual(before);
   });
 });

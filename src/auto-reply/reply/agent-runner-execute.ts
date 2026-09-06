@@ -197,7 +197,6 @@ export async function executePreparedReplyAgentRun(
         cfg,
         followupRun,
         promptForEstimate: followupRun.prompt,
-        sessionCtx,
         opts,
         defaultModel,
         resolvedVerboseLevel,

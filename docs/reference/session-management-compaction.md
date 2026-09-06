@@ -337,11 +337,12 @@ OpenClaw supports "silent" turns for background tasks where the user should not 
 
 Before auto-compaction happens, OpenClaw can run a silent agentic turn that writes durable state to disk (for example `memory/YYYY-MM-DD.md` in the agent workspace) so compaction cannot erase critical context. It monitors session context usage, and once it crosses a soft threshold below the compaction threshold, it sends a silent "write memory now" directive using the exact silent token `NO_REPLY` / `no_reply` so the user sees nothing.
 
-When required preflight runs after a user message has already been admitted, the
-checkpoint reads a detached view of the processed conversation before that message.
-Memory-file writes remain durable, but the checkpoint cannot move the conversation
-cursor or consume the waiting user input. Post-reply memory flushing can include the
-completed turn normally.
+Memory flushing runs against a private, detached view of the conversation. Its
+internal prompts and replies never enter the original transcript, including when
+a new user message interrupts it. Memory-file writes remain durable. Required
+preflight excludes the already-admitted waiting user; post-reply flushing includes
+the completed turn. Any compaction inside the flush affects only its private view;
+the original conversation has a separate compaction step.
 
 Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agents-defaults-compaction):
 

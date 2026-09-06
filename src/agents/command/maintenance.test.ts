@@ -26,7 +26,7 @@ const {
 registerAgentCommandCompactionTestHooks();
 
 describe("agent command foreground completion", () => {
-  it.each(["none", "compaction", "memory", "notification"] as const)(
+  it.each(["none", "compaction", "memory"] as const)(
     "retains the accepted preflight successor (abort=%s)",
     async (abortStage) => {
       const aborted = abortStage !== "none";
@@ -45,46 +45,9 @@ describe("agent command foreground completion", () => {
       );
       state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
         events.push("checkpoint");
-        if (abortStage === "notification") {
-          params.onSessionIdChanged?.("unaccepted-notification");
+        if (abortStage === "memory") {
           controller.abort(abortError);
           return { sessionEntry: params.sessionEntry, outcome: "failed" };
-        }
-        if (abortStage === "memory") {
-          const entry = expectDefined(
-            loadSessionEntry({ sessionKey, storePath }),
-            "checkpoint owner",
-          );
-          const accepted = await acceptCompactionSuccessor({
-            currentTarget: { agentId: "main", sessionId, sessionKey, storePath },
-            currentSessionFile: sessionKey,
-            expectedEntry: {
-              sessionId: entry.sessionId,
-              lifecycleRevision: entry.lifecycleRevision,
-              activeWriterRunId: entry.activeWriterRunId,
-            },
-            assertActive: () => params.abortSignal?.throwIfAborted(),
-            result: {
-              ok: true,
-              compacted: true,
-              result: { sessionId: successorId, tokensBefore: 90_000, tokensAfter: 42 },
-            },
-          });
-          if (params.sessionStore) {
-            params.sessionStore[sessionKey] = accepted.entry;
-          }
-          params.onCompactionAccounting?.({
-            kind: "durable",
-            count: 1,
-            previousSessionId: sessionId,
-            target: {
-              ...accepted.sessionTarget,
-              lifecycleRevision: accepted.entry.lifecycleRevision,
-              activeWriterRunId: accepted.entry.activeWriterRunId,
-            },
-          });
-          controller.abort(abortError);
-          return { sessionEntry: accepted.entry, outcome: "failed" };
         }
         return { sessionEntry: params.sessionEntry, outcome: "completed" };
       });
@@ -144,13 +107,13 @@ describe("agent command foreground completion", () => {
       if (aborted) {
         await expect(command).rejects.toBe(abortError);
         expect(onSessionIdChanged.mock.calls).toEqual(
-          abortStage === "notification" ? [] : [[successorId]],
+          abortStage === "memory" ? [] : [[successorId]],
         );
         expect(events).toEqual(
           abortStage === "compaction" ? ["checkpoint", "compaction"] : ["checkpoint"],
         );
         expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe(
-          abortStage === "notification" ? sessionId : successorId,
+          abortStage === "memory" ? sessionId : successorId,
         );
         expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
         expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();

@@ -3,31 +3,15 @@ import { buildEmbeddedRunBaseParams } from "../../auto-reply/reply/agent-runner-
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
 import { createSessionMaintenanceFollowup } from "./run.js";
 
-it("carries restrictive conversation policy into maintenance without foreground authority", async () => {
+it("preserves prepared model facts and restrictive policy without foreground authority", async () => {
   const foreground = createTestFollowupRun({
+    provider: "test-provider",
+    model: "test-model",
+    thinkingCatalog: [{ provider: "test-provider", id: "test-model", input: ["text", "image"] }],
     senderIsOwner: true,
     conversationToolPolicy: { deny: ["read"] },
     toolOverrides: { webSearch: false },
   });
-  foreground.run.config = {
-    models: {
-      providers: {
-        "test-provider": {
-          baseUrl: "http://127.0.0.1:1/v1",
-          models: [
-            {
-              id: "test-model",
-              name: "Fixture",
-              input: ["text"],
-              reasoning: false,
-              maxTokens: 1_024,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
-        },
-      },
-    },
-  };
   const maintenance = createSessionMaintenanceFollowup({
     run: foreground.run,
     sessionEntry: { sessionId: "maintenance", updatedAt: 1 },
@@ -43,7 +27,11 @@ it("carries restrictive conversation policy into maintenance without foreground 
     model: "test-model",
     runId: "maintenance-run",
     authProfile: {},
+    isReasoningTagProvider: () => {
+      throw new Error("Prepared runtime hints must not be rediscovered");
+    },
   });
+  expect(embedded.modelHasVision).toBe(true);
   expect(embedded.conversationToolPolicy).toEqual({ deny: ["read"] });
   expect(embedded.senderIsOwner).toBe(false);
   expect(embedded.toolOverrides).toBeUndefined();

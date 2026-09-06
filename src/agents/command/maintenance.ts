@@ -184,7 +184,6 @@ async function runCommandPreflightMaintenance(
         cfg: prepared.cfg,
         followupRun,
         promptForEstimate: prepared.body,
-        sessionCtx: {},
         defaultModel: modelSelection.defaultModel,
         resolvedVerboseLevel: params.embeddedSessionState.resolvedVerboseLevel ?? "off",
         sessionEntry: entry,
@@ -194,11 +193,6 @@ async function runCommandPreflightMaintenance(
         storePath: prepared.storePath,
         isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
         abortSignal: opts.abortSignal,
-        onCompactionAccounting: (fact) => {
-          if (fact?.kind === "durable" && fact.previousSessionId !== undefined) {
-            params.onCommittedSessionId(fact.target.sessionId);
-          }
-        },
       });
       assertActive();
       return flushed.sessionEntry;

@@ -10,9 +10,9 @@ import { withSessionContextAdmission } from "../../config/sessions/session-trans
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 
-/** A required checkpoint reads prior conversation without adopting the pending user. */
-export async function prepareMemoryFlushCheckpoint(params: {
-  admission: UserTurnTranscriptAdmissionReceipt;
+/** Memory inference owns a detached view; an admission excludes its waiting user. */
+export async function prepareMemoryFlushSession(params: {
+  admission?: UserTurnTranscriptAdmissionReceipt;
   source: SessionTranscriptRuntimeTarget & { agentId: string; sessionKey: string };
   runId: string;
   workspaceDir: string;
@@ -27,7 +27,7 @@ export async function prepareMemoryFlushCheckpoint(params: {
       maxBytes: MAX_VISIBLE_MESSAGE_MAX_BYTES,
       maxEvents: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
       onTruncated: () => {
-        throw new Error("Required memory checkpoint exceeds the bounded prior-context view.");
+        throw new Error("Memory flush exceeds the bounded conversation view.");
       },
     });
     // The navigation owner resolves opaque parents and retained compaction boundaries.
