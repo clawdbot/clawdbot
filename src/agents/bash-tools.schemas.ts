@@ -32,35 +32,32 @@ export const execSchema = Type.Object({
   ),
   env: Type.Optional(
     Type.Record(Type.String(), Type.String(), {
-      description: "Env overrides. Literal values; no expansion. Omit to inherit.",
+      description: "Literal overrides; no expansion. Omit to inherit.",
     }),
   ),
   yieldMs: Type.Optional(
     Type.Number({
-      description:
-        "Milliseconds before backgrounding; default 10000. Does not change timeoutSeconds.",
+      description: "Milliseconds before backgrounding; default 10000.",
     }),
   ),
   background: Type.Optional(
     Type.Boolean({
-      description:
-        "Return immediately while the command runs. timeoutSeconds still applies; use timeoutSeconds: 0 for persistent services.",
+      description: "Background now; timeoutSeconds applies.",
     }),
   ),
   timeoutSeconds: Type.Optional(
     Type.Number({
-      description:
-        "Total command lifetime in seconds; expiry terminates the process. Omit to use the configured default; 0 disables this timeout.",
+      description: "Process lifetime in seconds; 0 disables.",
     }),
   ),
   pty: Type.Optional(
     Type.Boolean({
-      description: "Use PTY for TTY-required CLIs and coding agents.",
+      description: "PTY for TTY-required CLIs/coding agents.",
     }),
   ),
   elevated: Type.Optional(
     Type.Boolean({
-      description: "Run on host with elevated permissions if allowed.",
+      description: "Host elevation if allowed.",
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
