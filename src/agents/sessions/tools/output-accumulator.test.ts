@@ -72,9 +72,6 @@ describe("OutputAccumulator", () => {
           outputLines: 1,
           lastLinePartial: partial,
         });
-        // Metadata only: duplicating the truncated text here doubles the Code Mode
-        // value past the output budget and erases the whole bash result.
-        expect("content" in snapshot.truncation).toBe(false);
         expect(accumulator.getLastLineBytes()).toBe(lastLineBytes);
         expect(await readFile(snapshot.fullOutputPath!, "utf8")).toBe(fullOutput);
       } finally {

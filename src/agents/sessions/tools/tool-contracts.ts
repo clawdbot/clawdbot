@@ -5,6 +5,7 @@
  */
 import { Type, type Static } from "typebox";
 import type { Edit } from "./edit-diff.js";
+import type { TruncationResult } from "./truncate.js";
 
 export interface BashToolInput {
   command: string;
@@ -12,7 +13,7 @@ export interface BashToolInput {
 }
 
 export interface BashToolDetails {
-  truncation?: ReadToolTruncationDetails;
+  truncation?: TruncationResult;
   fullOutputPath?: string;
 }
 
@@ -45,9 +46,10 @@ export interface FindToolInput {
   limit?: number;
 }
 
+// Keep one text payload; duplicate truncation content can exceed Code Mode value bounds.
 export interface FindToolDetails {
   content: string;
-  truncation?: ReadToolTruncationDetails;
+  truncation?: Omit<TruncationResult, "content">;
   resultLimitReached?: number;
 }
 
@@ -63,7 +65,7 @@ export interface GrepToolInput {
 
 export interface GrepToolDetails {
   content: string;
-  truncation?: ReadToolTruncationDetails;
+  truncation?: Omit<TruncationResult, "content">;
   matchLimitReached?: number;
   linesTruncated?: boolean;
 }
