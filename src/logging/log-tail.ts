@@ -16,7 +16,8 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
-export const LOG_GENERATION_WINDOW_BYTES = 64 * 1024;
+// Follow validation fingerprints the entire bounded tail window, not just its edge samples.
+export const LOG_GENERATION_WINDOW_BYTES = MAX_BYTES;
 type LogTailLimit = number | "all";
 type LogFileStat = {
   dev: bigint;

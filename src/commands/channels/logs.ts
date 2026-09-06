@@ -383,6 +383,18 @@ async function followChannelLogs(
         reanchored = true;
       }
 
+      if (tail.generationStable === false) {
+        try {
+          await delay(interval, undefined, { signal: controller.signal });
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          throw error;
+        }
+        continue;
+      }
+
       if (!reanchored && previousGeneration !== undefined && previousCheckpoint !== undefined) {
         const postReadGeneration = await readFileCheckpoint(
           tail.file,
