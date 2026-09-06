@@ -395,8 +395,8 @@ describe("SessionHistorySseState", () => {
       projection: {
         messages,
         turnBoundaryPending: false,
-        streamErrorFallbackPending: false,
-        streamErrorFallbackRepaired: false,
+        assistantErrorPending: false,
+        assistantErrorRecoveryObserved: false,
       },
       limit: 1,
     });

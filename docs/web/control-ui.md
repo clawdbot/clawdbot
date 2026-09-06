@@ -1240,6 +1240,10 @@ workspace-only filesystem protection, also permits image previews outside that
 workspace. An explicit session permission mode takes precedence over the agent's
 filesystem setting.
 
+Sessions dispatched to a cloud worker cannot read Gateway-local file paths,
+even with Full Access. Dispatch also revokes pending local previews and downloads.
+Gateway-owned inbound uploads remain available.
+
 Full Access also preserves playback and downloads for existing attachments in
 the agent's configured workspace. It does not permit arbitrary outside
 non-image files.

@@ -1,6 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Gateway session lifecycle state projection.
-// Converts agent run lifecycle events into session row/store status updates.
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -90,7 +88,7 @@ function isFiniteTimestamp(value: unknown): value is number {
 }
 
 function resolveLifecyclePhase(event: Pick<LifecycleEventLike, "data">): LifecyclePhase | null {
-  const phase = typeof event.data?.phase === "string" ? event.data.phase : "";
+  const phase = event.data?.phase;
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
 }
 
@@ -102,9 +100,8 @@ const SESSION_STATUS_BY_TERMINAL_CLASSIFICATION = {
 } as const satisfies Record<ReturnType<typeof classifyAgentRunTerminalOutcome>, SessionRunStatus>;
 
 function resolveTerminalOutcome(event: LifecycleEventLike): AgentRunTerminalOutcome {
-  const phase = resolveLifecyclePhase(event);
   return buildAgentRunTerminalOutcomeFromLifecycleEvent({
-    phase: phase === "error" ? "error" : "end",
+    phase: event.data?.phase === "error" ? "error" : "end",
     data: event.data,
     endedAt: event.data?.endedAt ?? event.ts,
   });
@@ -459,18 +456,17 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           error: resolveTerminalOutcome(params.event).error,
         };
       }
-      const recoveryTerminalRunId = normalizeLifecycleRunId(params.event.runId);
       const recoveryTerminalIsCurrent =
         params.event.mainSessionRestartRecovery === true &&
         params.event.lifecycleGeneration === getAgentEventLifecycleGeneration() &&
-        recoveryTerminalRunId !== undefined &&
+        eventRunId !== undefined &&
         (phase === "end" || phase === "error");
       const terminalOutcome = recoveryTerminalIsCurrent
         ? resolveSettledLifecycleTerminalOutcome(params.event)
         : undefined;
-      if (terminalOutcome && recoveryTerminalRunId && Object.keys(patch).length > 0) {
+      if (terminalOutcome && eventRunId && Object.keys(patch).length > 0) {
         terminalRecovery = {
-          runId: recoveryTerminalRunId,
+          runId: eventRunId,
           outcome: terminalOutcome,
         };
       }
