@@ -474,13 +474,7 @@ function resolveSkillsWatcherUsePolling(): boolean {
     return platform === "os400";
   }
   const normalized = envPolling.toLowerCase();
-  if (normalized === "false" || normalized === "0") {
-    return false;
-  }
-  if (normalized === "true" || normalized === "1") {
-    return true;
-  }
-  return Boolean(normalized);
+  return Boolean(normalized) && normalized !== "false" && normalized !== "0";
 }
 
 // Requires resolveWatchTargets to produce a stable-order result (it returns a
@@ -535,9 +529,7 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
       return;
     }
     state.pendingPath = changedPath ?? state.pendingPath;
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
+    clearTimeout(state.timer);
     state.timer = setTimeout(() => {
       const pendingPath = state.pendingPath;
       state.pendingPath = undefined;
@@ -612,9 +604,7 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
 }
 
 async function teardownSkillsPathWatcher(state: SkillsPathWatchState): Promise<void> {
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
+  clearTimeout(state.timer);
   try {
     const wasClosed = state.watcher.closed;
     const closing = state.watcher.close();
