@@ -179,16 +179,17 @@ export async function rollbackFailedUpdate(params: {
       after: undefined,
       steps: [...result.steps, restored],
     };
-    if (activePackageRoot) {
-      result.after = await readPackageUpdateIdentity(activePackageRoot);
-    }
     if (restored.exitCode === 0) {
+      // The transaction verified the previous package. Do not gate its restart
+      // on an extra diagnostic read whose result would be discarded.
       result.after = result.before;
       result.recovery = {
         serviceRestartSafe: false,
         packageRollbackVerified: true,
         reason: "runtime-verification-failed",
       };
+    } else if (activePackageRoot) {
+      result.after = await readPackageUpdateIdentity(activePackageRoot);
     }
     if (opts.run) {
       recordUpdateRunStep(
