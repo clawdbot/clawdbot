@@ -24,13 +24,13 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
 } from "./tool-result-error.js";
-import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
@@ -1101,48 +1101,50 @@ describe("Tool Search", () => {
   ])(
     "builds a bounded capability directory for $mode mode",
     ({ mode, expectedGuidance, expectedDeferredGuidance }) => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = { tools: { toolSearch: { enabled: true, mode } } } as never;
-    const controls = [
-      fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
-      fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
-      fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
-      fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
-    ];
-    const tools = [
-      ...controls,
-      fakeTool("read", "Read a file"),
-      fakeTool("write", "Write a file"),
-      fakeTool("edit", "Edit a file"),
-      fakeTool("apply_patch", "Apply a patch"),
-      fakeTool("exec", "Run a command"),
-      fakeTool("process", "Manage a process"),
-      pluginTool("fake_weather", "Read current weather"),
-      pluginTool("fake_calendar", "Schedule a calendar event"),
-      directOnlyTool("computer", "Control a desktop"),
-    ];
+      const catalogRef = createToolSearchCatalogRef();
+      const config = { tools: { toolSearch: { enabled: true, mode } } } as never;
+      const controls = [
+        fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+      ];
+      const tools = [
+        ...controls,
+        fakeTool("read", "Read a file"),
+        fakeTool("write", "Write a file"),
+        fakeTool("edit", "Edit a file"),
+        fakeTool("apply_patch", "Apply a patch"),
+        fakeTool("exec", "Run a command"),
+        fakeTool("process", "Manage a process"),
+        pluginTool("fake_weather", "Read current weather"),
+        pluginTool("fake_calendar", "Schedule a calendar event"),
+        directOnlyTool("computer", "Control a desktop"),
+      ];
 
-    if (mode === "directory") {
-      applyToolSchemaDirectoryCatalog({ tools, config, catalogRef });
-    } else {
-      applyToolSearchCatalog({ tools, config, catalogRef });
-    }
+      if (mode === "directory") {
+        applyToolSchemaDirectoryCatalog({ tools, config, catalogRef });
+      } else {
+        applyToolSearchCatalog({ tools, config, catalogRef });
+      }
 
-    const directory = buildToolSchemaDirectoryPrompt({ config, catalogRef });
+      const directory = buildToolSchemaDirectoryPrompt({ config, catalogRef });
 
-    expect(directory).toContain("- fake_calendar (fake-catalog): Schedule a calendar event");
-    expect(directory).toContain("- fake_weather (fake-catalog): Read current weather");
-    expect(directory.indexOf("- fake_calendar")).toBeLessThan(directory.indexOf("- fake_weather"));
-    expect(directory).toContain(expectedGuidance);
-    if (expectedDeferredGuidance) {
-      expect(directory).toContain(expectedDeferredGuidance);
-    }
-    expect(directory).toContain("apply_patch");
-    expect(directory).toContain("process");
-    expect(directory).toContain("Policy-approved MCP and client tools");
-    expect(directory).not.toContain("Control a desktop");
-    expect(directory).not.toContain('"properties"');
-    expect(directory.length).toBeLessThanOrEqual(testing.maxToolSchemaDirectoryPromptChars);
+      expect(directory).toContain("- fake_calendar (fake-catalog): Schedule a calendar event");
+      expect(directory).toContain("- fake_weather (fake-catalog): Read current weather");
+      expect(directory.indexOf("- fake_calendar")).toBeLessThan(
+        directory.indexOf("- fake_weather"),
+      );
+      expect(directory).toContain(expectedGuidance);
+      if (expectedDeferredGuidance) {
+        expect(directory).toContain(expectedDeferredGuidance);
+      }
+      expect(directory).toContain("apply_patch");
+      expect(directory).toContain("process");
+      expect(directory).toContain("Policy-approved MCP and client tools");
+      expect(directory).not.toContain("Control a desktop");
+      expect(directory).not.toContain('"properties"');
+      expect(directory.length).toBeLessThanOrEqual(testing.maxToolSchemaDirectoryPromptChars);
     },
   );
 
@@ -1278,7 +1280,9 @@ describe("Tool Search", () => {
     expect(catalogRef.current?.directCoreToolNames).toEqual(["read"]);
 
     const runtime = new ToolSearchRuntime({ catalogRef, config }, resolveToolSearchConfig(config));
-    await expect(runtime.call("exec", { command: "true" })).rejects.toThrow("Unknown tool id: exec");
+    await expect(runtime.call("exec", { command: "true" })).rejects.toThrow(
+      "Unknown tool id: exec",
+    );
     expect(execTool.execute).not.toHaveBeenCalled();
 
     policy.apply();
