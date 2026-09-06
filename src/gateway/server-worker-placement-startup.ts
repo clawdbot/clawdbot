@@ -694,12 +694,6 @@ export function createGatewayWorkerPlacementRuntime(
       throw error;
     }
   };
-  const repositoryWorkspaceMutationService = createRepositoryWorkspaceMutationService({
-    placements: params.placements,
-    environments: params.environments,
-    workspaceOperations,
-    resolveWorkspace,
-  });
   return {
     dispatchService,
     admissionProvider,
@@ -707,7 +701,12 @@ export function createGatewayWorkerPlacementRuntime(
     runnerAvailability,
     placements: params.placements,
     githubPublication,
-    repositoryWorkspaceMutationService,
+    repositoryWorkspaceMutationService: createRepositoryWorkspaceMutationService({
+      placements: params.placements,
+      environments: params.environments,
+      workspaceOperations,
+      resolveWorkspace,
+    }),
     resolveNodeWorkspaceBinding,
     bindNodeWorkerSupervisorTransport: (transport: NodeWorkerSupervisorTransport) => {
       nodeWorkerSupervisorTransport = transport;
