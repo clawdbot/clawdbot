@@ -4296,6 +4296,39 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("does not silently skip unclaimed due cron-expression siblings when a batch sibling fails (#139215)", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      ...createCronConfig("server-cron-cron-expression-batch-sibling-failure"),
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    } as OpenClawConfig;
+    const state = loadCronService(cfg);
+    try {
+      await state.cron.start();
+      const names = ["batch-job-a", "batch-job-b", "batch-job-c"];
+      for (const name of names) {
+        await addAgentTurnJob(state, name, `run ${name}`, {
+          schedule: { kind: "cron", expr: "* * * * *" },
+        });
+      }
+      // The first activated run fails hard; its unclaimed siblings must still run.
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+        throw new Error("boom: first sibling execution failure");
+      });
+
+      // Cross the minute boundary so all three cron-expression jobs come due
+      // in the same timer tick.
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      // All three isolated runs must have been attempted: the failed sibling
+      // must not silently swallow its unclaimed peers (#139215).
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(3);
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("fireOnExitJob (on-exit fire routing)", () => {
