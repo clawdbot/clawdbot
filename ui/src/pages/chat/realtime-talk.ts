@@ -68,11 +68,13 @@ export async function switchActiveRealtimeTalkCameras(
 }
 
 type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
+type RealtimeTalkCatalog = TalkCatalogResult["realtime"];
 
 type RealtimeTalkConfigResult = {
   config?: {
     talk?: {
       realtime?: {
+        provider?: string;
         transport?: unknown;
         providers?: Record<string, { authMethod?: unknown }>;
       };
@@ -146,7 +148,10 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
-      const providerVideoCapable = await this.resolveVideoCapability();
+      const catalog = await this.loadRealtimeCatalog();
+      const providerVideoCapable =
+        Boolean(this.callbacks.onVideoCapability) &&
+        this.resolveProvider(catalog, this.options.provider)?.supportsVideoFrames === true;
       if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
         return;
       }
@@ -175,7 +180,7 @@ export class RealtimeTalkSession {
       if (providerVideoCapable) {
         capabilities.push("camera-frame");
       }
-      const session = await this.createSession({ ...this.options, capabilities });
+      const session = await this.createSession({ ...this.options, capabilities }, catalog);
       const transport = resolveRealtimeTalkTransport(session);
       // Managed-room stays unsupported here and carries no voice bookkeeping;
       // reject it before the voice-session requirement produces a misleading error.
@@ -314,37 +319,33 @@ export class RealtimeTalkSession {
     }
   }
 
-  private async resolveVideoCapability(): Promise<boolean> {
-    if (!this.callbacks.onVideoCapability) {
-      return false;
-    }
+  private async loadRealtimeCatalog(): Promise<RealtimeTalkCatalog | undefined> {
     try {
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
         {},
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
-      const selectedProvider = this.options.provider ?? catalog.realtime.activeProvider;
-      if (!selectedProvider) {
-        return false;
-      }
-      return (
-        catalog.realtime.providers.find(
-          (provider) =>
-            provider.id === selectedProvider || provider.aliases?.includes(selectedProvider),
-        )?.supportsVideoFrames === true
-      );
+      return catalog.realtime;
     } catch {
-      return false;
+      return undefined;
     }
   }
 
+  private resolveProvider(catalog: RealtimeTalkCatalog | undefined, providerId?: string) {
+    const selected = (providerId?.trim() || catalog?.activeProvider)?.toLowerCase();
+    return selected
+      ? (catalog?.providers.find((provider) => provider.id === selected) ??
+          catalog?.providers.find((provider) => provider.aliases?.includes(selected)))
+      : undefined;
+  }
+
   private async createSession(
-    options: RealtimeTalkLaunchOptions & {
+    launchOptions: RealtimeTalkLaunchOptions & {
       capabilities?: Array<"camera-frame" | "voice-transcript">;
     },
+    catalog: RealtimeTalkCatalog | undefined,
   ): Promise<RealtimeTalkSessionResult> {
-    const launchOptions = { ...options };
     try {
       return await this.client.request<RealtimeTalkSessionResult>(
         "talk.client.create",
@@ -372,23 +373,20 @@ export class RealtimeTalkSession {
         }
         const configuredRealtime = result.config?.talk?.realtime;
         const configuredTransport = configuredRealtime?.transport;
-        if (configuredTransport !== undefined) {
-          transport = normalizeLaunchTransport(configuredTransport);
-          if (!transport) {
-            throw error;
-          }
-        }
-        // A deliberate strict auth selection is fail-closed; legacy Auto keeps the
-        // prior relay recovery so a failed client call can still use Gateway relay.
-        const strictAuthSelected = Object.values(configuredRealtime?.providers ?? {}).some(
-          (provider) => provider.authMethod !== undefined,
+        // Scope strict auth to this call's canonical provider, not inactive legacy
+        // rows. Unknown selection stays fail-closed; resolved Auto can recover.
+        const provider = this.resolveProvider(
+          catalog,
+          launchOptions.provider?.trim() || configuredRealtime?.provider,
         );
-        if (strictAuthSelected && transport !== "gateway-relay") {
-          throw error;
-        }
-        if (!transport) {
-          transport = "gateway-relay";
-        }
+        const providers = configuredRealtime?.providers ?? {};
+        const strictAuthSelected = provider
+          ? providers[provider.id]?.authMethod !== undefined
+          : Object.values(providers).some((entry) => entry.authMethod !== undefined);
+        transport =
+          configuredTransport === undefined && !strictAuthSelected
+            ? "gateway-relay"
+            : normalizeLaunchTransport(configuredTransport);
       }
       // A failed client-owned call is terminal unless the Gateway explicitly selected a relay.
       if (transport !== "gateway-relay") {
@@ -403,7 +401,7 @@ export class RealtimeTalkSession {
             sessionKey: this.sessionKey,
             ...gatewayOptions,
             mode: "realtime",
-            transport: transport ?? "gateway-relay",
+            transport,
             brain: "agent-consult",
           }),
           { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },

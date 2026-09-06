@@ -296,8 +296,8 @@ export function buildTalkRealtimeConfig(
   const configuredProvider =
     explicitProvider ?? singleConfiguredProvider ?? voiceCallRealtime.provider;
   const selectedProvider = configuredProvider ?? singleConfiguredProvider;
-  // Talk-local realtime config wins over the legacy voice-call plugin config,
-  // while the legacy config remains a bridge for existing installations.
+  // Talk-local rows replace legacy rows. Model locks and session resolution use
+  // this same merged map so canonical/alias inheritance cannot diverge.
   const providerConfigs = {
     ...voiceCallRealtime.providers,
     ...talkRealtimeProviderConfigs,
@@ -317,7 +317,7 @@ export function buildTalkRealtimeConfig(
   const providerModel = provider
     ? normalizeOptionalString(
         resolveProviderRawConfig({
-          providerConfigs: talkRealtimeProviderConfigs ?? {},
+          providerConfigs,
           providerId: selected?.id ?? provider,
           providerAliases: selected?.aliases,
           configuredProviderId: provider,

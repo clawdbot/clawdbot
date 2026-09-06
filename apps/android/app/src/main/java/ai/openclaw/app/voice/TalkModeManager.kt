@@ -315,7 +315,6 @@ class TalkModeManager internal constructor(
   private val interruptOnSpeech get() = configCache.get().value.interruptOnSpeech ?: false
   private var mainSessionKey: String = "main"
   private val speechLocale get() = configCache.get().value.speechLocale
-  private val realtimeTransport get() = configCache.get().value.realtimeTransport
 
   @Volatile private var realtimeClient: TalkRealtimeClient? = null
 
@@ -506,8 +505,8 @@ class TalkModeManager internal constructor(
   )
 
   private data class RealtimeCapturePause(
-    // Null while relay creation is still in flight. Keeping the PTT turn here
-    // prevents a late relay response from opening a second microphone capture.
+    // Null during transport creation or retirement. The PTT reservation outlives
+    // transport replacement and ends only when its own turn stops or resumes Talk.
     val sessionId: String?,
     val pttCaptureId: String,
     val restartRelay: Boolean = false,
@@ -957,7 +956,10 @@ class TalkModeManager internal constructor(
       if (playbackEnabled == enabled) return
       playbackEnabled = enabled
     }
-    realtimeClient?.let { client -> scope.launch { client.setPlaybackEnabled(enabled) } }
+    scope.launch(Dispatchers.Main.immediate) {
+      val allowed = synchronized(playbackLock) { playbackEnabled } && !isRealtimeCapturePaused()
+      realtimeClient?.setPlaybackEnabled(allowed)
+    }
     if (!enabled) {
       stopRealtimePlayback()
       cancelActivePlayback()
@@ -1008,20 +1010,19 @@ class TalkModeManager internal constructor(
         }
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
-        if (configCache.get().value.realtimeMode == "stt-tts") {
+        val config = configCache.get().value
+        if (config.realtimeMode == "stt-tts") {
           startNativeTalk(generation)
         } else {
-          val configured = realtimeTransport
+          val configured = config.realtimeTransport
           val catalog = if (configured == null) json.parseToJsonElement(requestGateway("talk.catalog", "{}")).asObjectOrNull() else null
-          val strictAuthSelected = configCache.get().value.strictAuthSelected
-          when (resolveAndroidRealtimeTransport(configured, catalog)) {
-            "webrtc" -> {
+          when (val route = resolveAndroidRealtimeRoute(configured, catalog, config.strictAuthProviders)) {
+            AndroidRealtimeRoute.WebRtc, AndroidRealtimeRoute.WebRtcWithRelayRecovery -> {
               try {
                 startRealtimeClient(generation)
               } catch (err: Throwable) {
-                // Only omitted/Auto transport with omitted auth keeps legacy relay recovery;
-                // any explicit transport or strict auth selection stays fail-closed.
-                if (strictAuthSelected || configured != null || err is CancellationException) throw err
+                // The selected route owns recovery permission; inactive provider auth cannot override it.
+                if (route != AndroidRealtimeRoute.WebRtcWithRelayRecovery || err is CancellationException) throw err
                 Log.w(tag, "client realtime unavailable; recovering with gateway relay")
                 synchronized(realtimeCapturePauseLock) {
                   if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) {
@@ -1034,7 +1035,7 @@ class TalkModeManager internal constructor(
               }
             }
 
-            "gateway-relay" -> {
+            AndroidRealtimeRoute.GatewayRelay -> {
               startRealtimeRelay(generation)
             }
           }
@@ -1053,6 +1054,7 @@ class TalkModeManager internal constructor(
         stopRequested = true
         listeningMode = false
         activePttCaptureId = null
+        realtimeCapturePause = null
         startGeneration.incrementAndGet()
         val jobs =
           listOfNotNull(
@@ -1298,7 +1300,7 @@ class TalkModeManager internal constructor(
             false
           } else {
             realtimeClient = client
-            retireRecognizer()
+            if (activePttCaptureId == null) retireRecognizer()
             setStatus(nativeText("Connecting…"), awaitingAgent = true)
             true
           }
@@ -1742,8 +1744,8 @@ class TalkModeManager internal constructor(
     realtimeCaptureJob = null
     realtimeAppendJob?.cancel()
     realtimeAppendJob = null
-    realtimeCapturePause = null
-    realtimeOutputSuppressed = false
+    realtimeCapturePause = realtimeCapturePause?.copy(sessionId = null)
+    realtimeOutputSuppressed = realtimeCapturePause != null
     realtimeOutputTurn = null
     pendingRealtimeOutputClear?.cancel()
     pendingRealtimeOutputClear = null
@@ -1760,6 +1762,7 @@ class TalkModeManager internal constructor(
     }
   }
 
+  /** PTT setup holds [realtimeCapturePauseLock] here and rechecks admission after the returned action. */
   internal fun prepareRealtimeCapturePause(
     captureId: String,
     lease: GatewaySession.RequestLease?,
@@ -1833,7 +1836,8 @@ class TalkModeManager internal constructor(
         realtimeClient?.let { client ->
           realtimeCapturePause = null
           listeningMode = true
-          scope.launch {
+          // PTT admission and native enablement share Main, not a pre-dispatch IO check.
+          scope.launch(Dispatchers.Main.immediate) {
             if (realtimeClient === client && activePttCaptureId == null && !stopRequested) {
               client.setPlaybackEnabled(playbackEnabled)
               client.setCaptureEnabled(true)

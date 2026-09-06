@@ -9,6 +9,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../talk/agent-consult-tool.js";
@@ -18,6 +19,7 @@ import {
 } from "../../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voice-confirmation.test-support.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
+import type { ResolveConfiguredRealtimeVoiceProviderParams } from "../../talk/provider-resolver.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
@@ -1293,6 +1295,40 @@ describe("talk.config handler", () => {
     const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
     expectRecordFields(response.config?.talk?.realtime, {
       transport: "provider-websocket",
+    });
+  });
+
+  it("projects inactive legacy auth without locking the active Auto Talk provider", async () => {
+    const config: OpenClawConfig = {
+      talk: { realtime: { provider: "openai", providers: { openai: {} } } },
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: { realtime: { providers: { google: { authMethod: "api-key" } } } },
+          },
+        },
+      },
+    };
+    mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+    mocks.readConfigFileSnapshot.mockResolvedValue({ valid: true, config });
+    // This is a valid legacy provider-owned row, not a conflicting Talk-local selection.
+    expect(buildTalkRealtimeConfig(config, "google").provider).toBe("google");
+    const respond = vi.fn();
+    await callTalkHandler("talk.config", {
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } },
+      respond,
+      context: { getRuntimeConfig: () => config },
+    });
+    expect(expectRespondOk(respond)).toEqual({
+      config: {
+        talk: {
+          realtime: {
+            provider: "openai",
+            providers: { google: { authMethod: "api-key" }, openai: {} },
+          },
+        },
+      },
     });
   });
 
@@ -3395,6 +3431,138 @@ describe("talk.client.create handler", () => {
         },
       } as OpenClawConfig),
     ).toThrow("Talk strict authentication conflicts with the selected provider");
+  });
+
+  it.each<{
+    name: string;
+    key?: string;
+    legacyId?: string;
+    localModel?: string;
+    topModel?: string;
+    agentModel?: string;
+    expectedModel: string;
+  }>([
+    { name: "legacy canonical model through a selected alias", expectedModel: "legacy-model" },
+    { name: "canonical Talk row replacement", key: "acme", expectedModel: "provider-default" },
+    { name: "Talk alias model override", localModel: "talk-model", expectedModel: "talk-model" },
+    {
+      name: "top-level model override",
+      localModel: "talk-model",
+      topModel: "top-model",
+      expectedModel: "top-model",
+    },
+    {
+      name: "merged provider model before agent defaults",
+      agentModel: "agent-default",
+      expectedModel: "legacy-model",
+    },
+    { name: "unrelated legacy provider", legacyId: "other", expectedModel: "provider-default" },
+  ])("preserves merged provider-model precedence: $name", async (row) => {
+    const key = row.key ?? "acme-alias";
+    const config: OpenClawConfig = {
+      ...(row.agentModel
+        ? { agents: { defaults: { voiceModel: { primary: "acme/" + row.agentModel } } } }
+        : {}),
+      talk: {
+        realtime: {
+          providers: {
+            [key]: { authMethod: "api-key", ...(row.localModel ? { model: row.localModel } : {}) },
+          },
+          ...(row.topModel ? { model: row.topModel } : {}),
+        },
+      },
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: { providers: { [row.legacyId ?? "acme"]: { model: "legacy-model" } } },
+            },
+          },
+        },
+      },
+    };
+    const createBrowserSession = vi.fn(async (input: { model?: string }) => ({
+      provider: "acme",
+      transport: "webrtc" as const,
+      clientSecret: "synthetic-offer",
+      model: input.model,
+    }));
+    const provider = {
+      id: "acme",
+      aliases: ["acme-alias"],
+      label: "Acme",
+      defaultModel: "provider-default",
+      models: ["provider-default", "legacy-model", "talk-model", "top-model", "agent-default"],
+      isConfigured: () => true,
+      resolveConfig: ({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    await mocks.listRealtimeVoiceProviders.withImplementation(
+      () => [provider] as never,
+      async () => {
+        await mocks.resolveConfiguredRealtimeVoiceProvider.withImplementation(
+          (input: ResolveConfiguredRealtimeVoiceProviderParams) => ({
+            provider,
+            providerConfig: {
+              ...resolveProviderRawConfig({
+                providerId: provider.id,
+                providerAliases: provider.aliases,
+                configuredProviderId: input.configuredProviderId,
+                providerConfigs: input.providerConfigs,
+              }),
+              ...input.providerConfigOverrides,
+            },
+          }),
+          async () => {
+            const context = { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } };
+            const catalogRespond = vi.fn();
+            await callTalkHandler("talk.catalog", { params: {}, respond: catalogRespond, context });
+            expect(expectRespondOk(catalogRespond)).toMatchObject({
+              realtime: { providers: [{ id: "acme", effectiveModel: row.expectedModel }] },
+            });
+            const createRespond = vi.fn();
+            await callTalkHandler("talk.client.create", {
+              params: { sessionKey: "main", model: row.expectedModel },
+              respond: createRespond,
+              context,
+            });
+            expect(expectRespondOk(createRespond)).toMatchObject({ model: row.expectedModel });
+            expect(mockCallArg(createBrowserSession)).toMatchObject({
+              model: row.expectedModel,
+              providerConfig: { model: row.expectedModel, authMethod: "api-key" },
+            });
+            mocks.createTalkRealtimeRelaySession.mockImplementationOnce(
+              (input: { model?: string }) => ({
+                provider: "acme",
+                relaySessionId: "synthetic-model-relay",
+                transport: "gateway-relay",
+                model: input.model,
+              }),
+            );
+            const relayRespond = vi.fn();
+            await callTalkHandler("talk.session.create", {
+              params: { sessionKey: "main", transport: "gateway-relay", model: row.expectedModel },
+              respond: relayRespond,
+              context,
+            });
+            expectRespondOk(relayRespond);
+            expect(mocks.createTalkRealtimeRelaySession).toHaveBeenLastCalledWith(
+              expect.objectContaining({
+                model: row.expectedModel,
+                providerConfig: expect.objectContaining({ model: row.expectedModel }),
+              }),
+            );
+            if (key === "acme") {
+              // Same-key Talk rows replace legacy rows; the fix must not invent a deep merge.
+              expect(buildTalkRealtimeConfig(config).providers.acme).toEqual({
+                authMethod: "api-key",
+              });
+            }
+          },
+        );
+      },
+    );
   });
 
   it("builds realtime launch defaults from talk.realtime", () => {

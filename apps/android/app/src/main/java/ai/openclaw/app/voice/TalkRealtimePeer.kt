@@ -183,7 +183,8 @@ internal class TalkRealtimePeer(
 
   suspend fun setCaptureEnabled(enabled: Boolean) =
     withContext(Dispatchers.Main.immediate) {
-      if (closed) return@withContext
+      // Disabling capture is a physical handoff even when close already owns cleanup.
+      closing?.let { return@withContext if (enabled) Unit else it.await() }
       updateAudioState {
         captureEnabled = enabled
         // Muting samples alone leaves AudioRecord alive and races PTT microphone ownership.

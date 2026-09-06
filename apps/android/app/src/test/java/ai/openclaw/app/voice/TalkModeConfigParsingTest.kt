@@ -3,14 +3,11 @@ package ai.openclaw.app.voice
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -109,14 +106,35 @@ class TalkModeConfigParsingTest {
   @Test
   fun selectsOnlySupportedTransportsFromGatewayCapabilities() {
     fun catalog(transports: String) = json.parseToJsonElement("""{"realtime":{"activeProvider":"example","providers":[{"id":"example","transports":[$transports]}]}}""").jsonObject
-    assertEquals("webrtc", resolveAndroidRealtimeTransport(null, catalog("\"webrtc\",\"gateway-relay\"")))
-    assertEquals("gateway-relay", resolveAndroidRealtimeTransport(null, catalog("\"provider-websocket\",\"gateway-relay\"")))
-    assertEquals("gateway-relay", resolveAndroidRealtimeTransport("provider-websocket", null))
-    assertEquals("gateway-relay", resolveAndroidRealtimeTransport("gateway-relay", null))
-    assertEquals("webrtc", resolveAndroidRealtimeTransport("webrtc", null))
-    assertEquals(true, runCatching { resolveAndroidRealtimeTransport("managed-room", null) }.isFailure)
-    assertEquals(true, runCatching { resolveAndroidRealtimeTransport(null, catalog("\"provider-websocket\"")) }.isFailure)
-    assertEquals(true, runCatching { resolveAndroidRealtimeTransport(null, null) }.isFailure)
+    assertEquals(AndroidRealtimeRoute.WebRtcWithRelayRecovery, resolveAndroidRealtimeRoute(null, catalog("\"webrtc\",\"gateway-relay\""), emptySet()))
+    assertEquals(AndroidRealtimeRoute.GatewayRelay, resolveAndroidRealtimeRoute(null, catalog("\"provider-websocket\",\"gateway-relay\""), emptySet()))
+    assertEquals(AndroidRealtimeRoute.GatewayRelay, resolveAndroidRealtimeRoute("provider-websocket", null, emptySet()))
+    assertEquals(AndroidRealtimeRoute.GatewayRelay, resolveAndroidRealtimeRoute("gateway-relay", null, emptySet()))
+    assertEquals(AndroidRealtimeRoute.WebRtc, resolveAndroidRealtimeRoute("webrtc", null, emptySet()))
+    assertEquals(true, runCatching { resolveAndroidRealtimeRoute("managed-room", null, emptySet()) }.isFailure)
+    assertEquals(true, runCatching { resolveAndroidRealtimeRoute(null, catalog("\"provider-websocket\""), emptySet()) }.isFailure)
+    assertEquals(true, runCatching { resolveAndroidRealtimeRoute(null, null, emptySet()) }.isFailure)
+    for (routing in listOf(null, "provider-direct", "force-agent-consult")) {
+      for ((transport, expected) in listOf(null to AndroidRealtimeRoute.WebRtcWithRelayRecovery, "webrtc" to AndroidRealtimeRoute.WebRtc, "gateway-relay" to AndroidRealtimeRoute.GatewayRelay, "provider-websocket" to AndroidRealtimeRoute.GatewayRelay)) {
+        val parsed =
+          parseTalkConfig(
+            buildJsonObject {
+              put(
+                "realtime",
+                buildJsonObject {
+                  transport?.let { put("transport", it) }
+                  routing?.let { put("consultRouting", it) }
+                },
+              )
+            },
+          )
+        assertEquals(
+          "routing=$routing, transport=$transport",
+          if (routing == "force-agent-consult") AndroidRealtimeRoute.GatewayRelay else expected,
+          resolveAndroidRealtimeRoute(parsed.realtimeTransport, catalog("\"webrtc\",\"gateway-relay\""), parsed.strictAuthProviders),
+        )
+      }
+    }
   }
 
   @Test
@@ -148,22 +166,39 @@ class TalkModeConfigParsingTest {
   }
 
   @Test
-  fun strictAuthFlagFollowsOnlyDeliberateProviderSelections() {
-    assertFalse(parseTalkConfig(buildJsonObject { put("realtime", buildJsonObject {}) }).strictAuthSelected)
-    assertFalse(
-      parseTalkConfig(
-        buildJsonObject {
-          put("realtime", buildJsonObject { put("providers", buildJsonObject { put("openai", buildJsonObject { put("model", JsonPrimitive("gpt-realtime-2.1")) }) }) })
-        },
-      ).strictAuthSelected,
-    )
-    assertTrue(
-      parseTalkConfig(
-        buildJsonObject {
-          put("realtime", buildJsonObject { put("providers", buildJsonObject { put("openai", buildJsonObject { put("authMethod", JsonPrimitive("oauth")) }) }) })
-        },
-      ).strictAuthSelected,
-    )
+  fun authScopeFollowsTheSelectedProviderAndAliases() {
+    val catalog = json.parseToJsonElement("""{"realtime":{"activeProvider":"example-alias","providers":[{"id":"example","aliases":["example-alias"],"transports":["webrtc","gateway-relay"]}]}}""").jsonObject
+    // Providerless legacy projections and normalized provider selections both use
+    // the catalog's active row; unrelated inherited rows never choose auth policy.
+    for (provider in listOf(null, "example")) {
+      for (auth in listOf("oauth", "api-key")) {
+        for (strictProvider in listOf(null, "inactive", "example")) {
+          val parsed =
+            parseTalkConfig(
+              buildJsonObject {
+                put(
+                  "realtime",
+                  buildJsonObject {
+                    provider?.let { put("provider", it) }
+                    put(
+                      "providers",
+                      buildJsonObject {
+                        put("example", buildJsonObject { put("model", "synthetic-realtime") })
+                        strictProvider?.let { put(it, buildJsonObject { put("authMethod", auth) }) }
+                      },
+                    )
+                  },
+                )
+              },
+            )
+          assertEquals(
+            "provider=$provider, strictProvider=$strictProvider, auth=$auth",
+            if (strictProvider == "example") AndroidRealtimeRoute.WebRtc else AndroidRealtimeRoute.WebRtcWithRelayRecovery,
+            resolveAndroidRealtimeRoute(parsed.realtimeTransport, catalog, parsed.strictAuthProviders),
+          )
+        }
+      }
+    }
   }
 
   private fun parseTalkConfig(talk: JsonObject): TalkModeGatewayConfigState = TalkModeGatewayConfigParser.parse(buildJsonObject { put("talk", talk) })

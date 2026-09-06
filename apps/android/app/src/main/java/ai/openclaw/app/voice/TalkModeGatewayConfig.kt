@@ -16,27 +16,28 @@ internal data class TalkModeGatewayConfigState(
   val silenceTimeoutMs: Long,
   val realtimeTransport: String?,
   val realtimeMode: String?,
-  val strictAuthSelected: Boolean,
+  val strictAuthProviders: Set<String>,
 )
 
 internal object TalkModeGatewayConfigParser {
-  /** Reads gateway talk/session config into the runtime state TalkMode needs. */
+  /** Resolves runtime routing; only the Gateway relay enforces forced transcript consultations. */
   fun parse(config: JsonObject?): TalkModeGatewayConfigState {
     val talk = config?.get("talk").asObjectOrNull()
     val realtime = talk?.get("realtime").asObjectOrNull()
+    val requiresGatewayRelay = realtime?.get("consultRouting").asStringOrNull() == "force-agent-consult"
     val sessionCfg = config?.get("session").asObjectOrNull()
     return TalkModeGatewayConfigState(
       mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
       speechLocale = normalizeSpeechLocaleTag(talk?.get("speechLocale").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
-      realtimeTransport = realtime?.get("transport").asStringOrNull(),
+      realtimeTransport = if (requiresGatewayRelay) "gateway-relay" else realtime?.get("transport").asStringOrNull(),
       realtimeMode = realtime?.get("mode").asStringOrNull(),
-      // Legacy Auto keeps relay recovery; only a deliberate strict auth choice is fail-closed.
-      strictAuthSelected =
+      strictAuthProviders =
         (realtime?.get("providers") as? JsonObject)
-          ?.values
-          ?.any { provider -> provider.asObjectOrNull()?.containsKey("authMethod") == true } == true,
+          .orEmpty()
+          .mapNotNull { (id, provider) -> id.lowercase(Locale.ROOT).takeIf { provider.asObjectOrNull()?.containsKey("authMethod") == true } }
+          .toSet(),
     )
   }
 
@@ -53,25 +54,23 @@ internal object TalkModeGatewayConfigParser {
   }
 }
 
-/** OpenAI uses WebRTC; other providers retain Android's advertised Gateway relay path. */
-internal fun resolveAndroidRealtimeTransport(
+internal enum class AndroidRealtimeRoute {
+  WebRtc,
+  WebRtcWithRelayRecovery,
+  GatewayRelay,
+}
+
+/** Select transport and recovery together from the same authoritative provider row. */
+internal fun resolveAndroidRealtimeRoute(
   configured: String?,
   catalog: JsonObject?,
-): String {
+  strictAuthProviders: Set<String>,
+): AndroidRealtimeRoute {
   when (configured) {
-    "webrtc" -> {
-      return "webrtc"
-    }
-
-    "gateway-relay", "provider-websocket" -> {
-      return "gateway-relay"
-    }
-
-    null -> {}
-
-    else -> {
-      error("Configured Talk transport is not supported on Android")
-    }
+    "webrtc" -> return AndroidRealtimeRoute.WebRtc
+    "gateway-relay", "provider-websocket" -> return AndroidRealtimeRoute.GatewayRelay
+    null -> Unit
+    else -> error("Configured Talk transport is not supported on Android")
   }
   val group = catalog?.get("realtime").asObjectOrNull() ?: error("Gateway did not return realtime Talk capabilities")
   val active = group["activeProvider"].asStringOrNull() ?: error("No realtime Talk provider is selected")
@@ -80,10 +79,13 @@ internal fun resolveAndroidRealtimeTransport(
     providers.firstOrNull { it["id"].asStringOrNull() == active }
       ?: providers.firstOrNull { provider -> (provider["aliases"] as? JsonArray)?.any { it.asStringOrNull() == active } == true }
       ?: error("Gateway selected an unavailable Talk provider")
+  val providerId = selected["id"].asStringOrNull() ?: error("Gateway selected a Talk provider without identity")
+  // talk.config canonicalizes provider keys but retains inactive legacy rows.
+  val strictAuthSelected = providerId.lowercase(Locale.ROOT) in strictAuthProviders
   val transports = (selected["transports"] as? JsonArray)?.mapNotNull { it.asStringOrNull() }.orEmpty()
   return when {
-    "webrtc" in transports -> "webrtc"
-    "gateway-relay" in transports -> "gateway-relay"
+    "webrtc" in transports -> if (strictAuthSelected) AndroidRealtimeRoute.WebRtc else AndroidRealtimeRoute.WebRtcWithRelayRecovery
+    "gateway-relay" in transports -> AndroidRealtimeRoute.GatewayRelay
     else -> error("Selected Talk provider has no supported Android transport")
   }
 }

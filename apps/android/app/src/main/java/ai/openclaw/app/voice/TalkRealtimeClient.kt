@@ -9,6 +9,7 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -47,7 +48,7 @@ internal class TalkRealtimeClient(
   private val scope = CoroutineScope(scope.coroutineContext + Dispatchers.Main.immediate)
   private val json = Json { ignoreUnknownKeys = true }
   private var closed = false
-  private var retiring = false
+  private var closing: Deferred<Unit>? = null
   private var started = false
   private val responseState = TalkRealtimeResponseState()
   private var voiceSessionId: String? = null
@@ -183,7 +184,7 @@ internal class TalkRealtimeClient(
   }
 
   private fun handleProviderEvent(payload: String) {
-    if (closed && !retiring) return
+    if (closed && closing?.isCompleted != false) return
     val event = runCatching { json.parseToJsonElement(payload) as? JsonObject }.getOrNull() ?: return fail("Invalid realtime event")
     if (event.string("response_id") in cancelledResponses && event.string("type")?.contains("transcript") == true) return
     val itemId = event.string("item_id")
@@ -503,7 +504,13 @@ internal class TalkRealtimeClient(
     }
   }
 
-  suspend fun setCaptureEnabled(enabled: Boolean) = peer.setCaptureEnabled(enabled)
+  suspend fun setCaptureEnabled(enabled: Boolean) =
+    withContext(Dispatchers.Main.immediate) {
+      peer.setCaptureEnabled(enabled)
+      if (enabled && !closed) {
+        if (started) publishResponseStatus() else onStatus("Connecting")
+      }
+    }
 
   suspend fun setPlaybackEnabled(enabled: Boolean) = peer.setPlaybackEnabled(enabled)
 
@@ -523,36 +530,38 @@ internal class TalkRealtimeClient(
 
   suspend fun close() =
     withContext(NonCancellable + Dispatchers.Main.immediate) {
-      if (retiring) return@withContext
-      retiring = true
-      closed = true
-      snapshot = null
-      agent.endSession()
-      try {
-        peer.close()
-      } finally {
-        transcriptOrder.close()
-        retiring = false
-      }
-      val voiceId = voiceSessionId ?: return@withContext
-      voiceSessionId = null
-      try {
-        // Persistence failures already report through fail(); retirement still owns
-        // the logical close and must not rethrow the completed tail failure.
-        runCatching { transcriptTail.await() }
-      } finally {
-        runCatching {
-          lease.request(
-            "talk.client.close",
-            buildJsonObject {
-              put("sessionKey", sessionKey)
-              put("voiceSessionId", voiceId)
-            }.toString(),
-            5_000,
-          )
-        }.onFailure { onFailure("Realtime session close could not be confirmed") }
-      }
-      Unit
+      // Concurrent callers join physical retirement and the same logical ACK.
+      // A create accepted before Stop can return a late allocation after cleanup.
+      val cleanup =
+        closing?.takeUnless { it.isCompleted && voiceSessionId != null } ?: async<Unit>(start = CoroutineStart.LAZY) {
+          closed = true
+          snapshot = null
+          agent.endSession()
+          try {
+            peer.close()
+          } finally {
+            transcriptOrder.close()
+          }
+          val voiceId = voiceSessionId ?: return@async
+          voiceSessionId = null
+          try {
+            // Persistence failures already report through fail(); retirement still owns
+            // the logical close and must not rethrow the completed tail failure.
+            runCatching { transcriptTail.await() }
+          } finally {
+            runCatching {
+              lease.request(
+                "talk.client.close",
+                buildJsonObject {
+                  put("sessionKey", sessionKey)
+                  put("voiceSessionId", voiceId)
+                }.toString(),
+                5_000,
+              )
+            }.onFailure { onFailure("Realtime session close could not be confirmed") }
+          }
+        }.also { closing = it }
+      cleanup.await()
     }
 
   private fun reportTranscriptFailure() {

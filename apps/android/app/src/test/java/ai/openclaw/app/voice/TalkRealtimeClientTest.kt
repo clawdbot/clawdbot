@@ -5,6 +5,7 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -29,6 +30,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.util.concurrent.locks.Condition
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -260,6 +264,46 @@ class TalkRealtimeClientTest {
   }
 
   @Test
+  fun captureResumptionPublishesCurrentStateWithoutWaitingForAnotherProviderEvent() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      val states = mutableListOf<String>()
+      val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, GatewaySession.RequestLease("fixture", requestImpl = { _, _, _, _ -> "{}" }), "main", { states.add(it) }, { _, _, _ -> }, {})
+      try {
+        client.setCaptureEnabled(true)
+        assertEquals(listOf("Connecting"), states)
+        // Resume behavior is isolated from allocation; seed the paired ready facts.
+        client.javaClass
+          .getDeclaredField("started")
+          .apply { isAccessible = true }
+          .setBoolean(client, true)
+        client.javaClass
+          .getDeclaredField("snapshot")
+          .apply { isAccessible = true }
+          .set(client, TalkRealtimeSnapshot("example", "synthetic-model", "api-key", "voice", "webrtc"))
+        val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
+        for ((payload, expected) in listOf(
+          """{"type":"response.created","response":{"id":"response"}}""" to "Thinking",
+          """{"type":"response.done","response":{"id":"response","status":"completed","output":[]}}""" to "Listening",
+          """{"type":"output_audio_buffer.started","response_id":"output"}""" to "Speaking",
+        )) {
+          event.invoke(client, payload)
+          client.setCaptureEnabled(false)
+          states.clear()
+          client.setCaptureEnabled(true)
+          assertEquals(listOf(expected), states)
+        }
+        client.close()
+        states.clear()
+        client.setCaptureEnabled(true)
+        assertTrue(states.isEmpty())
+      } finally {
+        client.close()
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun providerEventErrorsRemainRecoverableUntilATerminalSignal() =
     runTest {
       Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
@@ -295,6 +339,37 @@ class TalkRealtimeClientTest {
     }
 
   @Test
+  fun failedVadResponsesEndWithAVisibleFailureInsteadOfRemainingBusy() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        for (status in listOf("failed", "incomplete")) {
+          val failures = mutableListOf<String>()
+          val lease = GatewaySession.RequestLease("fixture", requestImpl = { _, _, _, _ -> "{}" })
+          val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", {}, { _, _, _ -> }, { failures.add(it) })
+          try {
+            val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
+            event.invoke(client, """{"type":"input_audio_buffer.speech_stopped"}""")
+            event.invoke(client, """{"type":"response.created","response":{"id":"automatic-response"}}""")
+            event.invoke(client, """{"type":"response.done","response":{"id":"automatic-response","status":"$status","output":[]}}""")
+            assertEquals(listOf("Realtime response failed or incomplete"), failures)
+            assertTrue(
+              client.javaClass
+                .getDeclaredField("closed")
+                .apply { isAccessible = true }
+                .getBoolean(client),
+            )
+            runCurrent()
+          } finally {
+            client.close()
+          }
+        }
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun providerVadCompletionArmsCancellationBeforeTheResponseIdArrives() =
     runTest {
       Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
@@ -310,6 +385,10 @@ class TalkRealtimeClientTest {
             .get(client) as TalkRealtimeResponseState
         assertTrue(state.createInFlight)
         assertNull(state.cancel())
+        // A client event without its own event_id produces an uncorrelated error.
+        // It cannot revoke cancellation of a separate VAD response still awaiting its id.
+        event.invoke(client, """{"type":"error","event_id":"server-error","error":{"type":"invalid_request_error","code":"synthetic_cancel_error","param":"response_id","message":"Late cancellation request rejected"}}""")
+        assertTrue(state.createInFlight)
         assertEquals("automatic-response", state.created("automatic-response"))
         assertNull(state.cancel())
       } finally {
@@ -347,6 +426,84 @@ class TalkRealtimeClientTest {
         assertFalse(params.containsKey("authMethod"))
         assertFalse(params.getValue("capabilities").toString().contains("gateway-control-v1"))
       } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun concurrentCloseWaitsForCallbackDrainAndSingleLogicalAcknowledgement() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      val closeRequested = CompletableDeferred<Unit>()
+      val acknowledgeClose = CompletableDeferred<Unit>()
+      var closeRequests = 0
+      val lease =
+        GatewaySession.RequestLease("fixture", requestImpl = { method, _, _, _ ->
+          if (method == "talk.client.close") {
+            closeRequests++
+            closeRequested.complete(Unit)
+            acknowledgeClose.await()
+          }
+          "{}"
+        })
+      val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", {}, { _, _, _ -> }, {})
+      client.javaClass
+        .getDeclaredField("voiceSessionId")
+        .apply { isAccessible = true }
+        .set(client, "voice-retirement")
+      val peer =
+        client.javaClass
+          .getDeclaredField("peer")
+          .apply { isAccessible = true }
+          .get(client) as TalkRealtimePeer
+      val callbackLock =
+        peer.javaClass
+          .getDeclaredField("callbackLock")
+          .apply { isAccessible = true }
+          .get(peer) as ReentrantLock
+      val callbacksDrained =
+        peer.javaClass
+          .getDeclaredField("callbacksDrained")
+          .apply { isAccessible = true }
+          .get(peer) as Condition
+      val callbacksInFlight = peer.javaClass.getDeclaredField("callbacksInFlight").apply { isAccessible = true }
+      // Hold the real JNI callback-drain boundary without loading native WebRTC.
+      callbackLock.withLock { callbacksInFlight.setInt(peer, 1) }
+      val first = async { client.close() }
+      var second: Deferred<Unit>? = null
+      var paused: Deferred<Unit>? = null
+      try {
+        runCurrent()
+        assertFalse(first.isCompleted)
+        second = async { client.close() }
+        runCurrent()
+        assertFalse("A second close must not finish while the native callback is still owned", second.isCompleted)
+        paused = async { client.setCaptureEnabled(false) }
+        runCurrent()
+        assertFalse("Microphone handoff must await a peer already closing", paused.isCompleted)
+        callbackLock.withLock {
+          callbacksInFlight.setInt(peer, 0)
+          callbacksDrained.signalAll()
+        }
+        closeRequested.await()
+        // Physical handoff need not wait for the later logical Gateway ACK.
+        paused.await()
+        assertFalse(first.isCompleted)
+        assertFalse("Every close also waits for the one logical acknowledgement", second.isCompleted)
+        acknowledgeClose.complete(Unit)
+        first.await()
+        second.await()
+        assertEquals(1, closeRequests)
+      } finally {
+        callbackLock.withLock {
+          callbacksInFlight.setInt(peer, 0)
+          callbacksDrained.signalAll()
+        }
+        acknowledgeClose.complete(Unit)
+        first.await()
+        second?.await()
+        paused?.await()
+        client.close()
         Dispatchers.resetMain()
       }
     }
