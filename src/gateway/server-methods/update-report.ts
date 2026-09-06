@@ -163,6 +163,7 @@ function hasUpdateReportOwnerAuthority(
 
 export const updateReportHandler: GatewayRequestHandlers["update.report"] = async ({
   client,
+  context,
   hasCurrentClientAuthority,
   params,
   respond,
@@ -185,9 +186,13 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     return;
   }
   // Unlike ordinary admitted RPCs, report consent ends with its originating connection.
+  // A delegated caller must also retain its run claim through the final effect.
+  const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
   const hasCurrentReportAuthority = () =>
     !client?.connectionSignal?.aborted &&
     hasCurrentClientAuthority() &&
+    (!runtimeIdentity ||
+      context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) === true) &&
     hasUpdateReportOwnerAuthority(client);
   if (!hasCurrentReportAuthority()) {
     return;

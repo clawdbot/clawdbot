@@ -5,10 +5,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/users.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
 import type { RunGithubCli } from "../../../infra/github-issue.js";
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-identity-token.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -115,6 +120,9 @@ function createReportHarness(params: { getGeneration: () => string }) {
   };
   const harness = createDispatchTestHarness({
     extraHandlers: { "update.report": handler },
+    buildRequestContext: () => ({
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    }),
     getRequiredSharedGatewaySessionGeneration: params.getGeneration,
   });
   return { harness, waitForNextHandler: () => nextFinished.promise };
@@ -245,6 +253,97 @@ describe("update report live authority boundary", () => {
           url: "https://github.com/openclaw/openclaw/issues/999999",
         },
       });
+    },
+  );
+
+  it.each([
+    { authority: "gateway-owner", retire: true },
+    { authority: "system-admin", retire: true },
+    { authority: "gateway-owner", retire: false },
+    { authority: "system-admin", retire: false },
+  ] as const)(
+    "revalidates delegated $authority authority after GitHub auth, retired=$retire",
+    async ({ authority, retire }) => {
+      const transport = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
+        "../../../infra/github-issue.js",
+      );
+      const client = createOperatorWsClient({ connId: `report-runtime-${authority}-${retire}` });
+      grantReportAuthority(client, authority);
+      const claim = claimAgentRunDelegatedAuthority({
+        instanceId: client.connId,
+        runId: client.connId,
+      });
+      const identity = {
+        kind: "agentRuntime" as const,
+        agentId: "main",
+        sessionKey: "agent:main:report-authority",
+        operationalRunInstance: claim.operationalRunInstance,
+        delegatedAuthority: { ...claim, kind: "local" as const },
+      };
+      client.internal = { ...client.internal, agentRuntimeIdentity: identity };
+      const validateAuthority = createAgentRuntimeApprovalAuthorityValidator();
+      const { harness, waitForNextHandler } = createReportHarness({
+        getGeneration: () => "current",
+      });
+      const entered = createDeferredCore();
+      const released = createDeferredCore();
+      const runGh = vi.fn<RunGithubCli>(async (args) => {
+        if (args[0] === "auth") {
+          entered.resolve();
+          await released.promise;
+          return { started: true, status: 0, stdout: Buffer.alloc(0) };
+        }
+        expect(args).toContain("POST");
+        return {
+          started: true,
+          status: 0,
+          stdout: Buffer.from(
+            "HTTP/2.0 201 Created\nhttps://github.com/openclaw/openclaw/issues/999999\n",
+          ),
+        };
+      });
+      mocks.submitGithubIssue.mockImplementationOnce((issue, _runGh, hooks) =>
+        transport.submitGithubIssue(issue, runGh, hooks),
+      );
+      try {
+        expect(validateAuthority(identity)).toBe(true);
+        const previewDigest = await dispatchPreview({ client, harness, id: "runtime-preview" });
+        const finished = waitForNextHandler();
+        const dispatch = dispatchSubmit({ client, harness, id: "runtime-submit", previewDigest });
+        await entered.promise;
+        if (retire) {
+          expect(releaseAgentRunDelegatedAuthority(claim)).toBe(true);
+        }
+        expect(validateAuthority(identity)).toBe(!retire);
+        expect(client.invalidated).not.toBe(true);
+        expect(client.connectionSignal?.aborted).not.toBe(true);
+        released.resolve();
+        await finished;
+        await dispatch;
+
+        expect
+          .soft(runGh.mock.calls.map(([args]) => args[0]))
+          .toEqual(retire ? ["auth"] : ["auth", "api"]);
+        expect.soft(countReportReceipts()).toBe(retire ? 0 : 1);
+        expect(await countReportFiles()).toBe(0);
+        const response = await harness.awaitResponseFrame("runtime-submit");
+        if (retire) {
+          expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+          expect(harness.close).toHaveBeenCalledWith(4001, "agent runtime authority closed");
+        } else {
+          expect(response).toMatchObject({
+            ok: true,
+            payload: {
+              status: "created",
+              url: "https://github.com/openclaw/openclaw/issues/999999",
+            },
+          });
+          expect(harness.close).not.toHaveBeenCalled();
+        }
+      } finally {
+        released.resolve();
+        releaseAgentRunDelegatedAuthority(claim);
+      }
     },
   );
 

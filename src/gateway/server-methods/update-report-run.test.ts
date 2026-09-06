@@ -17,6 +17,8 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -78,9 +80,9 @@ async function invoke(
       ...authority,
     },
     isWebchatConnect: () => false,
-    get context(): GatewayRequestHandlerOptions["context"] {
-      throw new Error("Report must use its canonical ledger/receipt owners, not request context");
-    },
+    context: createDirectChatContext({
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    }),
   };
   await updateReportHandler(options);
   return respond;

@@ -199,6 +199,63 @@ describe("update report shared transport boundary", () => {
   );
 
   it.each([
+    { label: "retired", retire: true },
+    { label: "live", retire: false },
+  ])(
+    "checks $label authority at the pending commit after attempt validation",
+    async ({ retire }) => {
+      const fixture = await setup();
+      let current = true;
+      let insidePreCreate = false;
+      let retireAfterValidation = false;
+      let receiptAtRetirement: string | undefined;
+      const result = await fixture
+        .submit({
+          createIssue: (issue, hooks) =>
+            submitGithubIssue(issue, fixture.runGh, {
+              ...hooks,
+              beforeIssueCreate: () => {
+                insidePreCreate = true;
+                return hooks.beforeIssueCreate?.();
+              },
+            }),
+          validateCurrentAttempt: () => {
+            retireAfterValidation = insidePreCreate && retire;
+            return true;
+          },
+          hasCurrentAuthority: () => {
+            if (retireAfterValidation) {
+              retireAfterValidation = false;
+              queueMicrotask(() => {
+                receiptAtRetirement = fixture.receipt()?.status;
+                current = false;
+              });
+            }
+            return current;
+          },
+        })
+        .catch((error: unknown) => error);
+      if (retire) {
+        expect(receiptAtRetirement).toBe("prepared");
+        expect({
+          rejected: result instanceof Error,
+          invocations: fixture.runGh.mock.calls.map(([args]) => args[0]),
+          creates: fixture.createCalls.length,
+          receipt: fixture.receipt(),
+        }).toEqual({ rejected: true, invocations: ["auth"], creates: 0, receipt: null });
+        await expect(fs.stat(`${fixture.stateDir}/update-reports`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } else {
+        expect(result).toMatchObject({ status: "created", url: issueUrl });
+        expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
+        expect(fixture.createCalls).toHaveLength(1);
+        expect(fixture.runGh).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it.each([
     { label: "missing", errorCode: "ENOENT", started: false, status: null },
     { label: "unauthenticated", started: true, status: 1 },
     { label: "preflight timeout", errorCode: "ETIMEDOUT", started: true, status: null },

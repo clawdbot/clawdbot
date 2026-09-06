@@ -514,6 +514,13 @@ export async function submitUpdateFailureReport(
   const afterAuthPreflight = assertCurrentPreCreateState;
   const beforeIssueCreate = async () => {
     await assertCurrentPreCreateState();
+    // Do not yield between the live authority check and the pending reservation commit.
+    if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
+      throw new UpdateReportPreCreateGuardError(
+        "Update report submission requires a current authenticated client.",
+        "authority",
+      );
+    }
     const markPending = options.markPending ?? markUpdateFailureReportReceiptPending;
     if (!markPending(prepared.attemptId, reservationId, prepared.previewDigest, stateEnv)) {
       throw new UpdateReportPreCreateGuardError(
