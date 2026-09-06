@@ -46,7 +46,11 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => {
       const reason: unknown = signal.reason;
-      reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")));
+      reject(
+        reason instanceof Error
+          ? reason
+          : new Error(typeof reason === "string" ? reason : "Team Reports run aborted"),
+      );
     };
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) {
