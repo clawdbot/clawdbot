@@ -110,7 +110,7 @@ vi.mock("node:fs/promises", async () => {
           return contents;
         }
       }
-      return actual.readFile(filePath, encoding);
+      return actual.readFile(filePath, { encoding });
     }),
   };
   return {

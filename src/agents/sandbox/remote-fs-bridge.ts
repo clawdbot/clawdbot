@@ -4,7 +4,7 @@
  * Resolves sandbox paths against uploaded remote mounts and performs guarded operations through backend shell commands.
  */
 import path from "node:path";
-import { isPathInside } from "../../infra/path-guards.js";
+import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
@@ -29,8 +29,8 @@ import {
 } from "./remote-fs-bridge-canonical-path.js";
 import {
   buildRemoteProtectedSkillRoots,
-  compareRemoteMountsByContainerPath,
-  compareRemoteMountsByLocalPath,
+  resolveRemoteMountByContainerPath,
+  resolveRemoteMountByLocalPath,
   normalizeContainerPath,
   type RemoteMountInfo,
   toPosixRelative,
@@ -131,6 +131,26 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       );
     }
     return result.stdout;
+  }
+
+  async readDirectory(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<DirectoryEntry[]> {
+    const target = this.resolveTarget(params);
+    const pinned = await this.resolvePinnedTarget({
+      containerPath: target.containerPath,
+      mountRootPath: target.mountRootPath,
+      action: "list directories",
+      directory: true,
+      signal: params.signal,
+    });
+    const result = await this.runMutation({
+      args: ["readdir", pinned.mountRootPath, pinned.relativeParentPath],
+      signal: params.signal,
+    });
+    return parseDirectoryEntries(result.stdout.toString("utf8"));
   }
 
   async copyFile(params: {
@@ -455,7 +475,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const input = params.filePath.trim();
     const inputPosix = input.replace(/\\/g, "/");
     const maybeContainerMount = path.posix.isAbsolute(inputPosix)
-      ? this.resolveMountByContainerPath(mounts, normalizeContainerPath(inputPosix))
+      ? resolveRemoteMountByContainerPath(mounts, normalizeContainerPath(inputPosix))
       : null;
     if (maybeContainerMount) {
       return this.toResolvedPath({
@@ -468,7 +488,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const hostCandidate = path.isAbsolute(input)
       ? path.resolve(input)
       : path.resolve(hostCwd, input);
-    const hostMount = this.resolveMountByLocalPath(mounts, hostCandidate);
+    const hostMount = resolveRemoteMountByLocalPath(mounts, hostCandidate);
     if (hostMount) {
       const relative = toPosixRelative(hostMount.localRoot, hostCandidate);
       return this.toResolvedPath({
@@ -483,12 +503,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       const cwdPosix = params.cwd.replace(/\\/g, "/");
       if (path.posix.isAbsolute(cwdPosix)) {
         const cwdContainer = normalizeContainerPath(cwdPosix);
-        const cwdMount = this.resolveMountByContainerPath(mounts, cwdContainer);
+        const cwdMount = resolveRemoteMountByContainerPath(mounts, cwdContainer);
         if (cwdMount) {
           const containerPath = normalizeContainerPath(
             path.posix.resolve(cwdContainer, inputPosix),
           );
-          const targetMount = this.resolveMountByContainerPath(mounts, containerPath) ?? cwdMount;
+          const targetMount = resolveRemoteMountByContainerPath(mounts, containerPath) ?? cwdMount;
           return this.toResolvedPath({
             mount: targetMount,
             containerPath,
@@ -524,32 +544,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       mountRootPath: params.mount.containerRoot,
       source: params.mount.source,
     };
-  }
-
-  private resolveMountByContainerPath(
-    mounts: RemoteMountInfo[],
-    containerPath: string,
-  ): RemoteMountInfo | null {
-    const ordered = [...mounts].toSorted(compareRemoteMountsByContainerPath);
-    for (const mount of ordered) {
-      if (isPathInsideContainerRoot(mount.containerRoot, containerPath)) {
-        return mount;
-      }
-    }
-    return null;
-  }
-
-  private resolveMountByLocalPath(
-    mounts: RemoteMountInfo[],
-    localPath: string,
-  ): RemoteMountInfo | null {
-    const ordered = [...mounts].toSorted(compareRemoteMountsByLocalPath);
-    for (const mount of ordered) {
-      if (isPathInside(mount.localRoot, localPath)) {
-        return mount;
-      }
-    }
-    return null;
   }
 
   private ensureWritable(target: ResolvedRemotePath, action: string) {
@@ -681,7 +675,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
       signal: params.signal,
     });
-    const mount = this.resolveMountByContainerPath(this.getMounts(), logicalPath);
+    const mount = resolveRemoteMountByContainerPath(this.getMounts(), logicalPath);
     if (!mount) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,

@@ -1,10 +1,9 @@
 // Control UI chat module implements chat avatar behavior.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
-import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
+import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
@@ -13,6 +12,7 @@ import {
 import { icons } from "../../components/icons.ts";
 import {
   identityAvatarClass,
+  identityAvatarImage,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
   type IdentityAvatarView,
@@ -30,7 +30,7 @@ import {
 } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -44,7 +44,6 @@ export function renderChatAvatar(
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   user?: { name?: string | null; avatar?: string | null },
   resourceBasePath?: string,
-  authToken?: string | null,
   sender?: SenderIdentity | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
@@ -63,7 +62,6 @@ export function renderChatAvatar(
         src=${assistantAvatarFallbackUrl(resourceBasePath ?? "")}
         alt=${name}
       />`,
-      authToken,
     );
   }
   const userName = resolveLocalUserName(user);
@@ -108,6 +106,7 @@ export function renderChatAvatar(
       {
         fallback: resolveAvatarInitials({ name: userName }),
         imageUrl,
+        sourceUrl: userAvatarUrl.startsWith("/") ? userAvatarUrl : undefined,
         pending: typeof imageUrl !== "string",
       },
       userName,
@@ -127,14 +126,14 @@ function renderAgentAvatar(
   name: string,
   avatar: string | null | undefined,
   fallback: TemplateResult,
-  authToken?: string | null,
 ) {
   const value = avatar?.trim() || "";
   if (isAvatarUrl(value)) {
-    // Authenticated local routes must finish the blob fetch before becoming an img src.
-    return authToken?.trim() && value.startsWith("/")
-      ? fallback
-      : html`<img class="chat-avatar assistant" src=${value} alt=${name} />`;
+    return html`<img
+      class="chat-avatar assistant"
+      src=${identityAvatarImage(value)}
+      alt=${name}
+    />`;
   }
   const text = resolveAssistantTextAvatar(value);
   return text
@@ -149,7 +148,6 @@ type ForwardedAvatarOptions = {
   assistantName?: string;
   assistantAvatar?: string | null;
   resourceBasePath?: string;
-  assistantAttachmentAuthToken?: string | null;
 };
 
 export function renderForwardedAvatar(agentId: string | undefined, opts: ForwardedAvatarOptions) {
@@ -163,7 +161,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
       { name: opts.assistantName ?? "Assistant", avatar: opts.assistantAvatar ?? null },
       undefined,
       opts.resourceBasePath,
-      opts.assistantAttachmentAuthToken,
     );
   }
   const agent = agentId ? opts.agents?.find((candidate) => candidate.id === agentId) : undefined;
@@ -181,7 +178,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
       name,
       "assistant",
     ),
-    opts.assistantAttachmentAuthToken,
   );
 }
 
@@ -238,7 +234,7 @@ type ChatAvatarHost = {
 
 const chatAvatarRequestVersions = new WeakMap<object, number>();
 const chatAvatarDisplayedAgents = new WeakMap<object, string>();
-const senderAvatarRequestVersions = new WeakMap<object, number>();
+const senderAvatarRequests = new WeakMap<object, object>();
 const senderAvatarInputs = new WeakMap<object, unknown[]>();
 
 type ChatAvatarSnapshot = {
@@ -246,26 +242,15 @@ type ChatAvatarSnapshot = {
   source: string | null;
   status: "none" | "local" | "remote" | "data" | null;
   url: string | null;
+  release: () => void;
 };
-
-type ChatAvatarSnapshotEntry = {
-  kind: "snapshot";
-  snapshot: ChatAvatarSnapshot;
-  cachedAt: number;
-  retired?: ChatAvatarSnapshot[];
-};
-
-type ChatAvatarCacheEntry =
-  | {
-      kind: "pending";
-      pending: Promise<ChatAvatarSnapshot | null>;
-      stale?: ChatAvatarSnapshotEntry;
-    }
-  | ChatAvatarSnapshotEntry;
 
 const CHAT_AVATAR_CACHE_LIMIT = 24;
-const CHAT_AVATAR_CACHE_TTL_MS = 60_000;
-const chatAvatarCaches = new WeakMap<object, Map<string, ChatAvatarCacheEntry>>();
+const currentAvatarReference = Symbol("current-chat-avatar");
+const chatAvatarReferences = new WeakMap<
+  object,
+  Map<string | typeof currentAvatarReference, () => void>
+>();
 
 function readHelloDefaultAgentId(host: Pick<ChatAvatarHost, "hello">): string | undefined {
   const snapshot = host.hello?.snapshot as
@@ -307,11 +292,10 @@ function shouldApplyChatAvatarResult(
   );
 }
 
-function buildAvatarMetaUrl(resourceBasePath: string, agentId: string): string {
-  return `${buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)}?meta=1`;
-}
-
 function clearChatAvatarState(host: ChatAvatarHost) {
+  const references = chatAvatarReferences.get(host);
+  references?.get(currentAvatarReference)?.();
+  references?.delete(currentAvatarReference);
   host.chatAvatarUrl = null;
   host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
@@ -330,223 +314,78 @@ function applyChatAvatarSnapshot(
   chatAvatarDisplayedAgents.set(host as object, agentId);
 }
 
-function revokeChatAvatarEntry(entry: ChatAvatarCacheEntry | undefined): void {
-  const snapshots =
-    entry?.kind === "snapshot"
-      ? [entry.snapshot, ...(entry.retired ?? [])]
-      : entry?.stale
-        ? [entry.stale.snapshot, ...(entry.stale.retired ?? [])]
-        : [];
-  for (const snapshot of snapshots) {
-    if (snapshot.url?.startsWith("blob:")) {
-      URL.revokeObjectURL(snapshot.url);
-    }
+function rememberChatAvatarReference(
+  host: ChatAvatarHost,
+  key: string | typeof currentAvatarReference,
+  release: () => void,
+) {
+  let references = chatAvatarReferences.get(host);
+  if (!references) {
+    references = new Map();
+    chatAvatarReferences.set(host, references);
   }
-}
-
-function revokeRetiredChatAvatarSnapshots(entry: ChatAvatarSnapshotEntry): void {
-  for (const snapshot of entry.retired ?? []) {
-    if (snapshot.url?.startsWith("blob:")) {
-      URL.revokeObjectURL(snapshot.url);
-    }
-  }
-  entry.retired = undefined;
-}
-
-function isFreshChatAvatarEntry(entry: ChatAvatarSnapshotEntry): boolean {
-  return Date.now() - entry.cachedAt < CHAT_AVATAR_CACHE_TTL_MS;
-}
-
-function clearChatAvatarCache(host: ChatAvatarHost): void {
-  const key = host as object;
-  const cache = chatAvatarCaches.get(key);
-  if (cache) {
-    for (const entry of cache.values()) {
-      revokeChatAvatarEntry(entry);
-    }
-    chatAvatarCaches.delete(key);
-  }
-  chatAvatarDisplayedAgents.delete(key);
-  senderAvatarRequestVersions.delete(key);
-  senderAvatarInputs.delete(key);
-  host.senderAgentAvatars = undefined;
+  references.get(key)?.();
+  references.set(key, release);
 }
 
 export function invalidateChatAvatarCache(host: ChatAvatarHost): void {
   beginChatAvatarRequest(host);
-  clearChatAvatarCache(host);
+  for (const release of chatAvatarReferences.get(host)?.values() ?? []) {
+    release();
+  }
+  chatAvatarReferences.delete(host);
+  chatAvatarDisplayedAgents.delete(host);
+  senderAvatarRequests.delete(host);
+  senderAvatarInputs.delete(host);
+  host.senderAgentAvatars = undefined;
   clearChatAvatarState(host);
 }
 
-function chatAvatarCacheFor(host: ChatAvatarHost): Map<string, ChatAvatarCacheEntry> {
-  const key = host as object;
-  const current = chatAvatarCaches.get(key);
-  if (current) {
-    return current;
-  }
-  const entries = new Map<string, ChatAvatarCacheEntry>();
-  chatAvatarCaches.set(key, entries);
-  return entries;
-}
-
-function rememberChatAvatarEntry(
-  cache: Map<string, ChatAvatarCacheEntry>,
-  agentId: string,
-  entry: ChatAvatarCacheEntry,
-): void {
-  cache.delete(agentId);
-  cache.set(agentId, entry);
-  while (cache.size > CHAT_AVATAR_CACHE_LIMIT) {
-    const oldestAgentId = cache.keys().next().value;
-    if (typeof oldestAgentId !== "string") {
-      break;
-    }
-    const oldest = cache.get(oldestAgentId);
-    cache.delete(oldestAgentId);
-    revokeChatAvatarEntry(oldest);
-  }
-}
-
-function loadChatAvatarSnapshot(
-  host: ChatAvatarHost,
-  cache: Map<string, ChatAvatarCacheEntry>,
-  agentId: string,
-): Promise<ChatAvatarSnapshot | null> {
-  const cached = cache.get(agentId);
-  if (cached?.kind === "snapshot" && isFreshChatAvatarEntry(cached)) {
-    rememberChatAvatarEntry(cache, agentId, cached);
-    return Promise.resolve(cached.snapshot);
-  }
-  if (cached?.kind === "pending") {
-    return cached.pending;
-  }
-  const stale = cached?.kind === "snapshot" ? cached : undefined;
-  const pending = fetchChatAvatarSnapshot(host, agentId).then((snapshot) => {
-    const current = cache.get(agentId);
-    if (
-      chatAvatarCaches.get(host as object) === cache &&
-      current?.kind === "pending" &&
-      current.pending === pending
-    ) {
-      if (snapshot) {
-        rememberChatAvatarEntry(cache, agentId, {
-          kind: "snapshot",
-          snapshot,
-          cachedAt: Date.now(),
-          ...(stale && stale.snapshot.url !== snapshot.url
-            ? { retired: [stale.snapshot, ...(stale.retired ?? [])] }
-            : {}),
-        });
-      } else if (stale) {
-        rememberChatAvatarEntry(cache, agentId, stale);
-      } else {
-        cache.delete(agentId);
-      }
-    } else if (snapshot?.url?.startsWith("blob:")) {
-      URL.revokeObjectURL(snapshot.url);
-    }
-    return snapshot ?? stale?.snapshot ?? null;
-  });
-  rememberChatAvatarEntry(cache, agentId, { kind: "pending", pending, stale });
-  return pending;
-}
-
-function buildControlUiAuthHeaders(authHeader: string | null): Record<string, string> | undefined {
-  return authHeader ? { Authorization: authHeader } : undefined;
-}
-
-function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
-  return avatarUrl.startsWith("/");
-}
-
-/** Give each sequential fetch a full budget; sharing one can starve the image request. */
-const CHAT_AVATAR_FETCH_TIMEOUT_MS = 30_000;
-
-function scheduleChatAvatarFetchTimeout(controller: AbortController, label: string) {
-  return setTimeout(
-    () => controller.abort(new DOMException(`${label} timed out`, "TimeoutError")),
-    CHAT_AVATAR_FETCH_TIMEOUT_MS,
-  );
-}
-
-async function fetchChatAvatarSnapshot(
+async function loadChatAvatarSnapshot(
   host: ChatAvatarHost,
   agentId: string,
 ): Promise<ChatAvatarSnapshot | null> {
+  const client = host.client;
+  const epoch = host.connectionEpoch;
   const sessionAgentId = resolveAgentIdForSession(host);
-  const authHeader = resolveControlUiAuthHeader(host);
-  const headers = buildControlUiAuthHeaders(authHeader);
-  const url = buildAvatarMetaUrl(host.resourceBasePath, agentId);
-  const metaController = new AbortController();
-  const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
-  let data: {
-    avatarUrl?: unknown;
-    avatarSource?: unknown;
-    avatarStatus?: unknown;
-    avatarReason?: unknown;
-  };
+  if (!client || !host.connected) {
+    return null;
+  }
+  let release: () => void = () => undefined;
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      ...(headers ? { headers } : {}),
-      signal: metaController.signal,
-    });
-    if (!res.ok) {
+    const identity = await fetchAssistantIdentity(client, agentId);
+    if (
+      !identity ||
+      !host.connected ||
+      host.client !== client ||
+      host.connectionEpoch !== epoch ||
+      resolveAgentIdForSession(host) !== sessionAgentId
+    ) {
       return null;
     }
-    data = (await res.json()) as typeof data;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(metaTimeout);
-  }
-
-  const status =
-    data.avatarStatus === "none" ||
-    data.avatarStatus === "local" ||
-    data.avatarStatus === "remote" ||
-    data.avatarStatus === "data"
-      ? data.avatarStatus
-      : null;
-  const snapshot: ChatAvatarSnapshot = {
-    source:
-      typeof data.avatarSource === "string" && data.avatarSource.trim()
-        ? data.avatarSource.trim()
-        : null,
-    status,
-    reason:
-      typeof data.avatarReason === "string" && data.avatarReason.trim()
-        ? data.avatarReason.trim()
-        : null,
-    url: null,
-  };
-  const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
-  if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
-    return snapshot;
-  }
-  if (!isLocalControlUiAvatarUrl(avatarUrl)) {
-    return { ...snapshot, url: avatarUrl };
-  }
-  if (!host.connected || resolveAgentIdForSession(host) !== sessionAgentId) {
-    return null;
-  }
-
-  const avatarController = new AbortController();
-  const avatarTimeout = scheduleChatAvatarFetchTimeout(avatarController, "chat avatar image fetch");
-  try {
-    const avatarRes = await fetch(avatarUrl, {
-      method: "GET",
-      ...(headers ? { headers } : {}),
-      signal: avatarController.signal,
-    });
-    if (!avatarRes.ok) {
+    const avatar = identity.avatar?.trim() ?? "";
+    const imageUrl = avatar.startsWith("/")
+      ? resolveAvatarImageUrl(avatar)
+      : isRenderableControlUiAvatarUrl(avatar)
+        ? avatar
+        : null;
+    release = retainAvatarImageUrl(imageUrl);
+    const url = await imageUrl;
+    // A failed replacement keeps the displayed image; empty/text identities clear it.
+    if (imageUrl !== null && url === null) {
+      release();
       return null;
     }
-    return { ...snapshot, url: URL.createObjectURL(await avatarRes.blob()) };
+    return {
+      release,
+      source: identity.avatarSource ?? null,
+      status: identity.avatarStatus ?? null,
+      reason: identity.avatarReason ?? null,
+      url,
+    };
   } catch {
+    release();
     return null;
-  } finally {
-    clearTimeout(avatarTimeout);
   }
 }
 
@@ -582,97 +421,96 @@ export async function refreshSenderAgentAvatars(
 }
 
 async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly string[]) {
-  const version = (senderAvatarRequestVersions.get(host) ?? 0) + 1;
-  senderAvatarRequestVersions.set(host, version);
+  // A unique token keeps a batch retired by invalidation from becoming current again.
+  const request = {};
+  senderAvatarRequests.set(host, request);
   const sessionKey = host.sessionKey;
   const agentId = resolveAgentIdForSession(host);
   const client = host.client;
   const epoch = host.connectionEpoch;
   const agents = host.agentsList?.agents;
   const roster = new Set(agents?.map((agent) => agent.id));
-  // Reserve one LRU slot for the current agent; never publish URLs the cache evicted/revoked.
+  // Bound forwarded-agent work independently of transcript size.
   const ids = [...new Set(agentIds)]
-    .filter((id) => id !== agentId && roster.has(id))
+    .filter((id) => host.connected && id !== agentId && roster.has(id))
     .slice(0, CHAT_AVATAR_CACHE_LIMIT - 1);
-  if (!host.connected || ids.length === 0) {
-    if (host.senderAgentAvatars?.size) {
-      host.senderAgentAvatars = new Map();
-      host.requestUpdate?.();
+  const previousAvatars = host.senderAgentAvatars;
+  // Empty/disconnected batches clear synchronously; only awaited loads need the stale fence.
+  const snapshots = ids.length
+    ? await Promise.all(ids.map((id) => loadChatAvatarSnapshot(host, id)))
+    : [];
+  if (
+    ids.length &&
+    (!host.connected ||
+      host.client !== client ||
+      host.connectionEpoch !== epoch ||
+      host.agentsList?.agents !== agents ||
+      host.sessionKey !== sessionKey ||
+      resolveAgentIdForSession(host) !== agentId ||
+      senderAvatarRequests.get(host) !== request)
+  ) {
+    for (const snapshot of snapshots) {
+      snapshot?.release();
     }
     return;
   }
-  host.senderAgentAvatars = new Map();
-  const cache = chatAvatarCacheFor(host);
-  const current = cache.get(agentId ?? "");
-  if (current && agentId) {
-    rememberChatAvatarEntry(cache, agentId, current);
+  const references = chatAvatarReferences.get(host);
+  for (const [key, release] of references ?? []) {
+    if (key !== currentAvatarReference && !ids.includes(key)) {
+      release();
+      references?.delete(key);
+    }
   }
-  const snapshots = await Promise.all(ids.map((id) => loadChatAvatarSnapshot(host, cache, id)));
-  if (
-    !host.connected ||
-    host.client !== client ||
-    host.connectionEpoch !== epoch ||
-    host.agentsList?.agents !== agents ||
-    host.sessionKey !== sessionKey ||
-    resolveAgentIdForSession(host) !== agentId ||
-    senderAvatarRequestVersions.get(host) !== version ||
-    chatAvatarCaches.get(host) !== cache
-  ) {
-    return;
-  }
-  host.senderAgentAvatars = new Map(
+  const avatars = new Map(
     ids.map((id, index) => {
-      const entry = cache.get(id);
       const snapshot = snapshots[index];
-      const retained = entry?.kind === "snapshot" && entry.snapshot === snapshot;
-      if (retained) {
-        revokeRetiredChatAvatarSnapshots(entry);
+      if (snapshot) {
+        rememberChatAvatarReference(host, id, snapshot.release);
       }
-      return [id, retained ? snapshot.url : null];
+      return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
   );
-  host.requestUpdate?.();
+  // Leases and identity TTL refresh independently; unchanged URLs keep settled rows memoized.
+  if (
+    avatars.size !== (previousAvatars?.size ?? 0) ||
+    [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)
+  ) {
+    host.senderAgentAvatars = avatars;
+    host.requestUpdate?.();
+  }
 }
 
 export async function refreshChatAvatar(host: ChatAvatarHost) {
   if (!host.connected) {
-    clearChatAvatarCache(host);
-    clearChatAvatarState(host);
+    invalidateChatAvatarCache(host);
     return;
   }
   const sessionKey = host.sessionKey;
+  const client = host.client;
+  const epoch = host.connectionEpoch;
   const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      clearChatAvatarState(host);
-    }
+    clearChatAvatarState(host);
     return;
   }
-  const cache = chatAvatarCacheFor(host);
-  const cached = cache.get(agentId);
-  if (cached?.kind === "snapshot") {
-    rememberChatAvatarEntry(cache, agentId, cached);
-    applyChatAvatarSnapshot(host, agentId, cached.snapshot);
-    revokeRetiredChatAvatarSnapshots(cached);
-    if (isFreshChatAvatarEntry(cached)) {
-      return;
-    }
-  }
-  const showingSameAgent = chatAvatarDisplayedAgents.get(host as object) === agentId;
+  const showingSameAgent = chatAvatarDisplayedAgents.get(host) === agentId;
   if (!showingSameAgent) {
     clearChatAvatarState(host);
   }
-  const snapshot = await loadChatAvatarSnapshot(host, cache, agentId);
-  if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+  const snapshot = await loadChatAvatarSnapshot(host, agentId);
+  if (
+    !host.connected ||
+    host.client !== client ||
+    host.connectionEpoch !== epoch ||
+    !shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)
+  ) {
+    snapshot?.release();
     return;
   }
   if (snapshot) {
+    rememberChatAvatarReference(host, currentAvatarReference, snapshot.release);
     applyChatAvatarSnapshot(host, agentId, snapshot);
-    const current = cache.get(agentId);
-    if (current?.kind === "snapshot" && current.snapshot === snapshot) {
-      revokeRetiredChatAvatarSnapshots(current);
-    }
   } else if (!showingSameAgent) {
     clearChatAvatarState(host);
   }

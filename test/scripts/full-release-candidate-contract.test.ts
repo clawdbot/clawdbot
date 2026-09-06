@@ -75,10 +75,11 @@ describe("full release candidate contract", () => {
     expect(request.upgradeSurvivorScenarios).toContain("acpx-openclaw-tools-bridge");
     expect(request.upgradeSurvivorScenarios).not.toContain("prerelease-plugin-registry");
     expect(request.upgradeSurvivorScenarios).not.toContain("sqlite-volume");
+    expect(request.packagePublished).toBe(false);
     expect(canonicalTestJson(request)).toBe(canonicalTestJson(reorderedRequest));
     expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reorderedRequest));
     expect(canonicalTestSha256(request)).toBe(
-      "9431d1fddd030c460f27294665f526838c7df69c826e59e5c6cf045b4d6a90a0",
+      "9410dbc917e769b2a7719a4d2e7a52f654535a91d239911ad0461b55234b29b2",
     );
   });
 
@@ -110,6 +111,7 @@ describe("full release candidate contract", () => {
     ["survivor scenarios", { upgradeSurvivorScenarios: "base" }],
     ["frozen omissions", { allowFrozenTargetScenarioOmissions: true }],
     ["changelog policy", { allowUnreleasedChangelog: true }],
+    ["package provenance", { packagePublished: true }],
     ["shared image policy", { sharedImagePolicy: "existing-only" }],
   ])("changes the request digest when %s changes", (_label, overrides) => {
     const baseline = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
@@ -122,6 +124,12 @@ describe("full release candidate contract", () => {
     expect(() => validateFullReleaseCandidateRequest({ ...request, ignored: true })).toThrow(
       "keys must be exactly",
     );
+    expect(() =>
+      validateFullReleaseCandidateRequest({
+        ...request,
+        packagePublished: "true",
+      }),
+    ).toThrow("packagePublished must be boolean");
     expect(() =>
       validateFullReleaseCandidateRequest({
         ...request,
@@ -172,7 +180,7 @@ describe("full release candidate contract", () => {
     const requestValue = JSON.parse(readFileSync(requestOutputPath, "utf8"));
     expect(JSON.parse(requestResult.stdout)).toEqual({
       requestJson: canonicalTestJson(requestValue).trimEnd(),
-      requestSha256: "9431d1fddd030c460f27294665f526838c7df69c826e59e5c6cf045b4d6a90a0",
+      requestSha256: "9410dbc917e769b2a7719a4d2e7a52f654535a91d239911ad0461b55234b29b2",
     });
 
     const manifestInputPath = join(root, "manifest-input.json");

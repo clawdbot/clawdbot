@@ -70,6 +70,43 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
+  it("restores selected recipients and gives same-text recipient changes their own revision", () => {
+    const first = [{ profileId: "alex-one", start: 0, end: 5 }];
+    const second = [{ profileId: "alex-two", start: 0, end: 5 }];
+    const state = createState({ chatMessage: "@Alex", chatMentions: first });
+    expect(persistChatComposerState(state, state.sessionKey, { draftRevision: 10 })).toBe(true);
+    const queued = reconnectItem("keep-draft-mentions", 1);
+    expect(
+      admitStoredChatComposerQueueItem(
+        state,
+        captureChatOutboxAdmission(state, state.sessionKey),
+        queued,
+      ),
+    ).toBe(true);
+    expect(removeStoredChatComposerQueueItem(state, state.sessionKey, queued.id)).toBe(true);
+    const restored = createState();
+    expect(restoreChatComposerState(restored)).toBe(true);
+    expect(restored.chatMentions).toEqual(first);
+    expect(
+      persistChatComposerState(state, state.sessionKey, { draftRevision: 10, mentions: second }),
+    ).toBe(false);
+
+    const persistence = new ChatComposerPersistence(() => state);
+    persistence.start();
+    state.chatMentions = second;
+    persistence.schedule();
+    persistence.persistNow();
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.mentions).toEqual(second);
+    expect(loadChatComposerDraftRevision(state, state.sessionKey)).toBeGreaterThan(10);
+    state.chatMentions = [];
+    persistence.schedule();
+    persistence.stop();
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toEqual({
+      draft: "@Alex",
+      queue: [],
+    });
+  });
+
   it.each<ChatGoalDraftMode>([
     { action: "start", sessionId: "session-a" },
     {

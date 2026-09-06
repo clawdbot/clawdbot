@@ -6,6 +6,7 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getLoadedChannelPluginById,
+  getLoadedChannelPluginForRead,
   listLoadedChannelPlugins,
 } from "../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -127,7 +128,7 @@ function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig) {
   const candidates: ProviderResolution[] = [];
   for (const plugin of listLoadedChannelPlugins()) {
     const resolved = resolveProviderAllowFrom({
-      plugin: plugin as ChannelPlugin,
+      plugin,
       cfg,
       accountId: ctx.AccountId,
     });
@@ -476,9 +477,7 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     ctx,
     cfg,
   );
-  const plugin = providerId
-    ? ((getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined) ?? undefined)
-    : undefined;
+  const plugin = providerId ? getLoadedChannelPluginById(providerId) : undefined;
   const from = normalizeOptionalString(ctx.From) ?? "";
   const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
@@ -543,15 +542,20 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     : ownerAllowlistConfigured
       ? senderIsOwner
       : senderIsOwnerByScope || Boolean(matchedCommandOwner);
-  const access = resolveCommandSenderAuthorization({
-    commandAuthorized,
-    enforceOwnerForCommands: enforceOwner,
-    isOwnerForCommands,
-    senderCandidates,
-    commandsAllowFromList,
-    providerResolutionError,
-    commandsAllowFromConfigured,
-  });
+  // Literal turns cannot regain command access through an allowlist; inline
+  // command consumers must preserve their text while owner facts remain intact.
+  const access =
+    ctx.CommandInterpretationSuppressed === true
+      ? "denied"
+      : resolveCommandSenderAuthorization({
+          commandAuthorized,
+          enforceOwnerForCommands: enforceOwner,
+          isOwnerForCommands,
+          senderCandidates,
+          commandsAllowFromList,
+          providerResolutionError,
+          commandsAllowFromConfigured,
+        });
 
   return {
     authorization: {
@@ -571,6 +575,20 @@ export function resolveCommandAuthorization(
   params: CommandAuthorizationParams,
 ): CommandAuthorization {
   return resolveCommandAuthorizationState(params).authorization;
+}
+
+/** Recheck admitted sender identity against the current global owner list. */
+export function isConfiguredCommandOwner(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string; senderId?: string },
+): boolean {
+  const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
+  const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
+  const params = { cfg, plugin, providerId, accountId: requester.accountId };
+  const owners = stripWildcardAllowFrom(resolveOwnerAllowFromList(params));
+  return resolveSenderCandidates({ ...params, senderId: requester.senderId }).some((sender) =>
+    owners.includes(sender),
+  );
 }
 
 /** Resolves reset admission without granting other command or owner authority. */

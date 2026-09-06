@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 describe("resolveRuntimeWorkerUrl", () => {
@@ -19,6 +19,7 @@ describe("resolveRuntimeWorkerUrl", () => {
     for (const currentModuleUrl of [
       pathToFileURL(path.join(root, "dist/agents/code-mode.js")).href,
       pathToFileURL(path.join(root, "dist/selection-abc123.js")).href,
+      pathToFileURL(path.join(root, "dist/selection-abc123.mjs")).href,
     ]) {
       expect(
         fileURLToPath(
@@ -29,6 +30,17 @@ describe("resolveRuntimeWorkerUrl", () => {
           }),
         ),
       ).toBe(path.join(root, "dist/agents/code-mode.worker.js"));
+      const candidateRoot = path.join(root, "candidate");
+      expect(
+        fileURLToPath(
+          resolveRuntimeWorkerUrl({
+            currentModuleUrl,
+            sourceWorkerName: "code-mode.worker",
+            distWorkerPath: "agents/code-mode.worker.js",
+            root: candidateRoot,
+          }),
+        ),
+      ).toBe(path.join(candidateRoot, "dist/agents/code-mode.worker.js"));
     }
   });
 });
@@ -44,6 +56,27 @@ describe("resolveRuntimeWorkerArgv", () => {
       const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
       const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", "tsx"] : [];
       expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+    }
+  });
+});
+
+describe("resolveRuntimeProcessEntrypointUrl", () => {
+  it("uses canonical launchers unless the sealed bundle registers a sibling", async () => {
+    vi.resetModules();
+    try {
+      const { registerSealedRuntimeProcessEntrypoint, resolveRuntimeProcessEntrypointUrl } =
+        await import("./runtime-process-url.js");
+      const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
+      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(
+        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.githubExec),
+      );
+      const sqliteUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
+      const sealedUrl = new URL("file:///worker-bundle/github-exec-launcher.mjs");
+      registerSealedRuntimeProcessEntrypoint("githubExec", sealedUrl);
+      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(sealedUrl);
+      expect(resolveRuntimeProcessEntrypointUrl("sqliteReadOnly")).toEqual(sqliteUrl);
+    } finally {
+      vi.resetModules();
     }
   });
 });

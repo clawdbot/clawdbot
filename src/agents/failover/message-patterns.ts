@@ -35,8 +35,12 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 
 // First-party model transports use these terminal-contract forms when EOF arrives
 // before a response is complete; keep non-model stream lifecycle errors out.
+// The completions transport throws `Stream ended without finish_reason` (no
+// "terminal" wording); Mistral/Google keep the longer form. Plugin lifecycle
+// strings such as `opencode-go stream ended without a terminal event` must not
+// match — those are not assistant-stream contracts.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
-  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without a terminal finish reason)[.!]?$/i;
+  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)[.!]?$/i;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -103,9 +107,6 @@ const BILLING_ERROR_HARD_402_RE =
 // standalone status token, HTTP/status context, or a structured status/code shape.
 const RATE_LIMIT_429_RE =
   /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
-// Catches provider "model X not found" wording; the legacy provider table
-// only covers Groq's deactivated-model forms.
-export const GENERIC_MODEL_NOT_FOUND_RE = /\bmodel\b.{0,60}?\bnot (?:found|available)\b/i;
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
   ZAI_AUTH_CODE_1113_RE,

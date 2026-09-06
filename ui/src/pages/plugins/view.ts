@@ -412,67 +412,75 @@ function renderRowMessage(
           </span>
           <div>
             <strong>${t("pluginsPage.policyReviewTitle")}</strong>
-            ${findings.length > 0
-              ? html`<span class="plugins-policy-review__reason"
-                  >${formatUiExternalText(details.reason)}</span
-                >`
-              : nothing}
+            ${
+              findings.length > 0
+                ? html`<span class="plugins-policy-review__reason"
+                    >${formatUiExternalText(details.reason)}</span
+                  >`
+                : nothing
+            }
             <span>${reviewBody}</span>
           </div>
         </div>
-        ${findings.length > 0
-          ? html`
-              <section class="plugins-policy-review__findings-panel">
-                <strong class="plugins-policy-review__findings-heading"
-                  >${t("pluginsPage.policyReviewFindings")}</strong
-                >
-                <ul class="plugins-policy-review__findings">
-                  ${findings.map(
-                    (finding) => html`
-                      <li>
-                        <span class="plugins-policy-review__finding-content">
-                          <span
-                            class="plugins-policy-review__severity plugins-policy-review__severity--${finding.severity}"
-                            >${policyFindingSeverityLabel(finding.severity)}</span
-                          >
-                          <span>${formatUiExternalText(finding.message)}</span>
-                        </span>
-                      </li>
-                    `,
-                  )}
-                </ul>
-              </section>
-            `
-          : nothing}
-        ${findings.length > 0
-          ? html`
-              <details class="plugins-policy-review__details">
-                <summary>
-                  <span class="plugins-policy-review__details-chevron" aria-hidden="true"
-                    >${icons.chevronRight}</span
+        ${
+          findings.length > 0
+            ? html`
+                <section class="plugins-policy-review__findings-panel">
+                  <strong class="plugins-policy-review__findings-heading"
+                    >${t("pluginsPage.policyReviewFindings")}</strong
                   >
-                  <span>${t("pluginsPage.policyReviewTechnicalDetails")}</span>
-                </summary>
-                <div class="plugins-policy-review__details-body">
-                  <ul>
+                  <ul class="plugins-policy-review__findings">
                     ${findings.map(
                       (finding) => html`
                         <li>
-                          <code>${finding.ruleId}</code>
-                          ${finding.file
-                            ? html`<code
-                                >${finding.file}${finding.line ? `:${finding.line}` : ""}</code
-                              >`
-                            : nothing}
-                          ${finding.evidence ? html`<span>${finding.evidence}</span>` : nothing}
+                          <span class="plugins-policy-review__finding-content">
+                            <span
+                              class="plugins-policy-review__severity plugins-policy-review__severity--${finding.severity}"
+                              >${policyFindingSeverityLabel(finding.severity)}</span
+                            >
+                            <span>${formatUiExternalText(finding.message)}</span>
+                          </span>
                         </li>
                       `,
                     )}
                   </ul>
-                </div>
-              </details>
-            `
-          : nothing}
+                </section>
+              `
+            : nothing
+        }
+        ${
+          findings.length > 0
+            ? html`
+                <details class="plugins-policy-review__details">
+                  <summary>
+                    <span class="plugins-policy-review__details-chevron" aria-hidden="true"
+                      >${icons.chevronRight}</span
+                    >
+                    <span>${t("pluginsPage.policyReviewTechnicalDetails")}</span>
+                  </summary>
+                  <div class="plugins-policy-review__details-body">
+                    <ul>
+                      ${findings.map(
+                        (finding) => html`
+                          <li>
+                            <code>${finding.ruleId}</code>
+                            ${
+                              finding.file
+                                ? html`<code
+                                    >${finding.file}${finding.line ? `:${finding.line}` : ""}</code
+                                  >`
+                                : nothing
+                            }
+                            ${finding.evidence ? html`<span>${finding.evidence}</span>` : nothing}
+                          </li>
+                        `,
+                      )}
+                    </ul>
+                  </div>
+                </details>
+              `
+            : nothing
+        }
         <p class="plugins-policy-review__scope">${t("pluginsPage.policyReviewScope")}</p>
         <div class="plugins-policy-review__actions">
           <button
@@ -640,9 +648,11 @@ function renderCatalogActions(
       enabled: plugin.enabled,
       onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, rowKey),
     })}
-    ${plugin.removable
-      ? renderRemoveButton(props, busy, plugin.name, () => props.onUninstall(plugin.id, rowKey))
-      : nothing}
+    ${
+      plugin.removable
+        ? renderRemoveButton(props, busy, plugin.name, () => props.onUninstall(plugin.id, rowKey))
+        : nothing
+    }
   `;
 }
 
@@ -677,21 +687,23 @@ function renderPluginHeading(params: {
 }): TemplateResult {
   return html`
     <h3 class="settings-row__title">
-      ${params.onShowDetails
-        ? html`
-            <button
-              type="button"
-              class="plugins-item__detail-button"
-              aria-label=${params.name}
-              @click=${(event: Event) => {
-                event.stopPropagation();
-                params.onShowDetails?.();
-              }}
-            >
-              ${params.content}
-            </button>
-          `
-        : params.content}
+      ${
+        params.onShowDetails
+          ? html`
+              <button
+                type="button"
+                class="plugins-item__detail-button"
+                aria-label=${params.name}
+                @click=${(event: Event) => {
+                  event.stopPropagation();
+                  params.onShowDetails?.();
+                }}
+              >
+                ${params.content}
+              </button>
+            `
+          : params.content
+      }
     </h3>
   `;
 }
@@ -727,11 +739,13 @@ function renderPluginRow(
           name: plugin.name,
           content: html`
             ${plugin.name}
-            ${plugin.version
-              ? includePackageName
-                ? html`<span class="plugins-version">v${plugin.version}</span>`
-                : html`<span class="plugins-version">v${plugin.version}</span>`
-              : nothing}
+            ${
+              plugin.version
+                ? includePackageName
+                  ? html`<span class="plugins-version">v${plugin.version}</span>`
+                  : html`<span class="plugins-version">v${plugin.version}</span>`
+                : nothing
+            }
           `,
           onShowDetails: () => props.onShowDetails(plugin.id),
         })}
@@ -749,11 +763,13 @@ function renderPluginRow(
         ${plugin.installed ? rowStateStatus(plugin) : nothing}
         ${renderCatalogActions(plugin, props, busy, key)}
       </div>
-      ${plugin.error
-        ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-            ${formatUiExternalText(plugin.error)}
-          </div>`
-        : nothing}
+      ${
+        plugin.error
+          ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
+              ${formatUiExternalText(plugin.error)}
+            </div>`
+          : nothing
+      }
       ${renderRowMessage(key, props.messages[key], busy, props, installIdentity)}
     </article>
   `;
@@ -797,24 +813,29 @@ function renderMcpSection(props: PluginsViewProps) {
       `,
     },
     html`
-      ${props.mcpFormOpen
-        ? renderMcpServerForm({
-            busy: props.mcpBusy,
-            disabled: !props.canMutate,
-            blockedReason: props.mutationBlockedReason,
-            onSubmit: props.onMcpAdd,
-            onCancel: () => props.onMcpFormToggle(false),
-          })
-        : nothing}
-      ${props.mcpMessage
-        ? html`<div
-            class="plugins-row-message plugins-row-message--${props.mcpMessage
-              .kind} plugins-group-message"
-            role=${props.mcpMessage.kind === "error" ? "alert" : "status"}
-          >
-            <span>${props.mcpMessage.text}</span>
-          </div>`
-        : nothing}
+      ${
+        props.mcpFormOpen
+          ? renderMcpServerForm({
+              busy: props.mcpBusy,
+              disabled: !props.canMutate,
+              blockedReason: props.mutationBlockedReason,
+              onSubmit: props.onMcpAdd,
+              onCancel: () => props.onMcpFormToggle(false),
+            })
+          : nothing
+      }
+      ${
+        props.mcpMessage
+          ? html`<div
+              class="plugins-row-message plugins-row-message--${
+                props.mcpMessage.kind
+              } plugins-group-message"
+              role=${props.mcpMessage.kind === "error" ? "alert" : "status"}
+            >
+              <span>${props.mcpMessage.text}</span>
+            </div>`
+          : nothing
+      }
       ${body}
     `,
   );
@@ -853,22 +874,24 @@ function renderInstalled(props: PluginsViewProps) {
   const groups = groupInstalledByCategory(plugins);
   const filtered = Boolean(props.query || props.installedFilter !== "all");
   return html`
-    ${groups.length === 0
-      ? renderEmpty(
-          filtered ? t("pluginsPage.noInstalledMatchTitle") : t("pluginsPage.noInstalledTitle"),
-          filtered ? t("pluginsPage.noMatchBody") : t("pluginsPage.noInstalledBody"),
-          filtered ? "curious" : "sleepy",
-        )
-      : groups.map((group) =>
-          renderSettingsSection(
-            { title: group.label, count: group.plugins.length },
-            repeat(
-              group.plugins,
-              (plugin) => plugin.id,
-              (plugin) => renderPluginRow(plugin, props, true),
+    ${
+      groups.length === 0
+        ? renderEmpty(
+            filtered ? t("pluginsPage.noInstalledMatchTitle") : t("pluginsPage.noInstalledTitle"),
+            filtered ? t("pluginsPage.noMatchBody") : t("pluginsPage.noInstalledBody"),
+            filtered ? "curious" : "sleepy",
+          )
+        : groups.map((group) =>
+            renderSettingsSection(
+              { title: group.label, count: group.plugins.length },
+              repeat(
+                group.plugins,
+                (plugin) => plugin.id,
+                (plugin) => renderPluginRow(plugin, props, true),
+              ),
             ),
-          ),
-        )}
+          )
+    }
     ${renderMcpSection(props)}
   `;
 }
@@ -907,27 +930,29 @@ function renderConnectorRow(
         )}
       </div>
       <div class="settings-row__control">
-        ${isMcp
-          ? installed
-            ? renderSettingsStatus({ kind: "ok", label: t("pluginsPage.connectorAdded") })
-            : renderMutationButton(props, {
-                busy,
-                className: "btn btn--sm",
-                label: busy ? t("mcpServers.adding") : t("pluginsPage.connectorAdd"),
-                onClick: () => props.onAddConnector(connector),
-              })
-          : html`
-              <button
-                type="button"
-                class="btn btn--sm"
-                @click=${() =>
-                  connector.action.kind === "clawhub" &&
-                  props.onSearchClawHub(connector.action.query)}
-              >
-                <span aria-hidden="true">${icons.search}</span>
-                ${t("pluginsPage.connectorSearch")}
-              </button>
-            `}
+        ${
+          isMcp
+            ? installed
+              ? renderSettingsStatus({ kind: "ok", label: t("pluginsPage.connectorAdded") })
+              : renderMutationButton(props, {
+                  busy,
+                  className: "btn btn--sm",
+                  label: busy ? t("mcpServers.adding") : t("pluginsPage.connectorAdd"),
+                  onClick: () => props.onAddConnector(connector),
+                })
+            : html`
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  @click=${() =>
+                    connector.action.kind === "clawhub" &&
+                    props.onSearchClawHub(connector.action.query)}
+                >
+                  <span aria-hidden="true">${icons.search}</span>
+                  ${t("pluginsPage.connectorSearch")}
+                </button>
+              `
+        }
       </div>
       ${renderRowMessage(key, props.messages[key], busy, props)}
     </article>
@@ -981,9 +1006,11 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
           name: pkg.displayName,
           content: html`
             ${pkg.displayName}
-            ${pkg.latestVersion
-              ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
-              : nothing}
+            ${
+              pkg.latestVersion
+                ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
+                : nothing
+            }
           `,
           onShowDetails: installed ? () => props.onShowDetails(installed.id) : undefined,
         })}
@@ -1003,9 +1030,11 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
         ])}
       </div>
       <div class="settings-row__control">
-        ${installed
-          ? html`${rowStateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
-          : renderInstallButton(props, busy, pkg.displayName, installRequest, installIdentity)}
+        ${
+          installed
+            ? html`${rowStateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
+            : renderInstallButton(props, busy, pkg.displayName, installRequest, installIdentity)
+        }
       </div>
       ${renderRowMessage(key, props.messages[key], busy, props, installIdentity)}
     </article>
@@ -1033,22 +1062,28 @@ function renderClawHubGroup(props: PluginsViewProps) {
         role="status"
         aria-live="polite"
       >
-        ${searching
-          ? t("pluginsPage.searching")
-          : count === 0
-            ? t("pluginsPage.noClawHubResultsBody", { query })
-            : t(
-                count === 1 ? "pluginsPage.searchResultCountOne" : "pluginsPage.searchResultCount",
-                { count: String(count) },
-              )}
+        ${
+          searching
+            ? t("pluginsPage.searching")
+            : count === 0
+              ? t("pluginsPage.noClawHubResultsBody", { query })
+              : t(
+                  count === 1
+                    ? "pluginsPage.searchResultCountOne"
+                    : "pluginsPage.searchResultCount",
+                  { count: String(count) },
+                )
+        }
       </div>
-      ${searching
-        ? nothing
-        : repeat(
-            props.searchResults ?? [],
-            (item) => item.package.name,
-            (item) => renderClawHubResult(item, props),
-          )}
+      ${
+        searching
+          ? nothing
+          : repeat(
+              props.searchResults ?? [],
+              (item) => item.package.name,
+              (item) => renderClawHubResult(item, props),
+            )
+      }
     `;
   }
   return renderSettingsSection(
@@ -1078,13 +1113,15 @@ function renderDiscover(props: PluginsViewProps) {
   const clawHub = renderClawHubGroup(props);
   if (!featuredRows.length && !officialRows.length && !shelves.connectors.length) {
     return html`
-      ${clawHub === nothing
-        ? renderEmpty(
-            t("pluginsPage.noDiscoverMatchTitle"),
-            t("pluginsPage.noMatchBody"),
-            "curious",
-          )
-        : nothing}
+      ${
+        clawHub === nothing
+          ? renderEmpty(
+              t("pluginsPage.noDiscoverMatchTitle"),
+              t("pluginsPage.noMatchBody"),
+              "curious",
+            )
+          : nothing
+      }
       ${clawHub}
     `;
   }
@@ -1163,90 +1200,111 @@ function renderDetailOverlay(props: PluginsViewProps) {
         <div class="plugins-detail__body">
           <div class="plugins-detail__title">
             <h2>${plugin.name}</h2>
-            ${plugin.version
-              ? html`<span class="plugins-version">v${plugin.version}</span>`
-              : nothing}
+            ${
+              plugin.version
+                ? html`<span class="plugins-version">v${plugin.version}</span>`
+                : nothing
+            }
             ${stateStatus(plugin)}
           </div>
           <p class="plugins-detail__description">
             ${plugin.description || t("pluginsPage.optionalCapability")}
           </p>
           <div class="plugins-detail__actions">
-            ${plugin.installed
-              ? renderToggleButton(props, busy, {
-                  enabled: plugin.enabled,
-                  onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, key),
-                  className: `btn ${plugin.enabled ? "" : "primary"}`,
-                })
-              : plugin.install
-                ? renderInstallButton(
-                    props,
+            ${
+              plugin.installed
+                ? renderToggleButton(props, busy, {
+                    enabled: plugin.enabled,
+                    onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, key),
+                    className: `btn ${plugin.enabled ? "" : "primary"}`,
+                  })
+                : plugin.install
+                  ? renderInstallButton(
+                      props,
+                      busy,
+                      plugin.name,
+                      plugin.install,
+                      resolveInstallIdentity(props, plugin.install),
+                    )
+                  : nothing
+            }
+            ${
+              plugin.removable
+                ? renderMutationButton(props, {
                     busy,
-                    plugin.name,
-                    plugin.install,
-                    resolveInstallIdentity(props, plugin.install),
-                  )
-                : nothing}
-            ${plugin.removable
-              ? renderMutationButton(props, {
-                  busy,
-                  className: "btn plugins-detail__remove",
-                  label: html`<span aria-hidden="true">${icons.trash}</span> ${t(
-                      "pluginsPage.remove",
-                    )}`,
-                  onClick: () => props.onUninstall(plugin.id, key),
-                })
-              : nothing}
+                    className: "btn plugins-detail__remove",
+                    label: html`<span aria-hidden="true">${icons.trash}</span> ${t(
+                        "pluginsPage.remove",
+                      )}`,
+                    onClick: () => props.onUninstall(plugin.id, key),
+                  })
+                : nothing
+            }
           </div>
-          ${plugin.error
-            ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-                ${formatUiExternalText(plugin.error)}
-              </div>`
-            : nothing}
+          ${
+            plugin.error
+              ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
+                  ${formatUiExternalText(plugin.error)}
+                </div>`
+              : nothing
+          }
           ${renderRowMessage(key, props.messages[key], busy, props, installIdentity)}
           <div class="plugins-detail__meta">
-            ${plugin.origin
-              ? renderPluginMetaRow(t("pluginsPage.detailOrigin"), pluginOriginLabel(plugin.origin))
-              : nothing}
-            ${plugin.category
-              ? renderPluginMetaRow(
-                  t("pluginsPage.detailCategory"),
-                  pluginCategoryLabel(plugin.category),
-                )
-              : nothing}
-            ${plugin.packageName
-              ? renderPluginMetaRow(
-                  t("pluginsPage.detailPackage"),
-                  html`<code>${plugin.packageName}</code>`,
-                )
-              : nothing}
+            ${
+              plugin.origin
+                ? renderPluginMetaRow(
+                    t("pluginsPage.detailOrigin"),
+                    pluginOriginLabel(plugin.origin),
+                  )
+                : nothing
+            }
+            ${
+              plugin.category
+                ? renderPluginMetaRow(
+                    t("pluginsPage.detailCategory"),
+                    pluginCategoryLabel(plugin.category),
+                  )
+                : nothing
+            }
+            ${
+              plugin.packageName
+                ? renderPluginMetaRow(
+                    t("pluginsPage.detailPackage"),
+                    html`<code>${plugin.packageName}</code>`,
+                  )
+                : nothing
+            }
             ${renderPluginMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
           </div>
-          ${plugin.installed
-            ? html`<section class="plugins-detail__capabilities">
-                <h3>${t("pluginsPage.capabilities")}</h3>
-                ${props.detailInspectionError
-                  ? html`<div class="plugins-consent__error" role="alert">
-                      <span>${props.detailInspectionError}</span>
-                      <button
-                        type="button"
-                        class="btn btn--sm"
-                        @click=${() => props.onShowDetails(plugin.id)}
-                      >
-                        ${t("pluginsPage.tryAgain")}
-                      </button>
-                    </div>`
-                  : props.detailInspection
-                    ? html`
-                        ${renderPluginDeclaredCapabilities(props.detailInspection.declared)}
-                        ${renderPluginGrants(
-                          props.detailInspection.grants,
-                          props.detailInspection.plugin.origin,
-                        )}
-                      `
-                    : html`<p class="plugins-consent__hint">${t("pluginConsent.loading")}</p>`}
-              </section>`
-            : nothing}
+          ${
+            plugin.installed
+              ? html`<section class="plugins-detail__capabilities">
+                  <h3>${t("pluginsPage.capabilities")}</h3>
+                  ${
+                    props.detailInspectionError
+                      ? html`<div class="plugins-consent__error" role="alert">
+                          <span>${props.detailInspectionError}</span>
+                          <button
+                            type="button"
+                            class="btn btn--sm"
+                            @click=${() => props.onShowDetails(plugin.id)}
+                          >
+                            ${t("pluginsPage.tryAgain")}
+                          </button>
+                        </div>`
+                      : props.detailInspection
+                        ? html`
+                            ${renderPluginDeclaredCapabilities(props.detailInspection.declared)}
+                            ${renderPluginGrants(
+                              props.detailInspection.grants,
+                              props.detailInspection.plugin.origin,
+                            )}
+                          `
+                        : html`<p class="plugins-consent__hint">${t("pluginConsent.loading")}</p>`
+                  }
+                </section>`
+              : nothing
+          }
         </div>
       </section>
     </openclaw-modal-dialog>
@@ -1259,13 +1317,15 @@ function renderEmpty(title: string, body: string, mood?: "sleepy" | "curious") {
   return html`
     <div class="plugins-empty">
       <!-- Sleepy marks truly empty inventory; curious marks a filter/search miss. -->
-      ${mood
-        ? html`<openclaw-mascot
-            class="plugins-empty__mascot"
-            .mood=${mood}
-            .size=${84}
-          ></openclaw-mascot>`
-        : html`<span class="plugins-empty__icon" aria-hidden="true">${icons.puzzle}</span>`}
+      ${
+        mood
+          ? html`<openclaw-mascot
+              class="plugins-empty__mascot"
+              .mood=${mood}
+              .size=${84}
+            ></openclaw-mascot>`
+          : html`<span class="plugins-empty__icon" aria-hidden="true">${icons.puzzle}</span>`
+      }
       <h2>${title}</h2>
       <p>${body}</p>
     </div>
@@ -1308,9 +1368,11 @@ export function renderPlugins(props: PluginsViewProps) {
           @input=${(event: Event) =>
             props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
         />
-        ${props.activeTab === "installed" && panelState === "content"
-          ? renderInstalledFilter(props)
-          : nothing}
+        ${
+          props.activeTab === "installed" && panelState === "content"
+            ? renderInstalledFilter(props)
+            : nothing
+        }
         <button
           type="button"
           class="btn btn--sm btn--icon plugins-refresh"
@@ -1323,23 +1385,28 @@ export function renderPlugins(props: PluginsViewProps) {
         </button>
       </div>
 
-      ${props.error
-        ? html`<div class="plugins-page-error" role="alert">
-            <span>${props.error}</span>
-            <button type="button" class="btn btn--sm" @click=${props.onRefresh}>
-              ${t("pluginsPage.tryAgain")}
-            </button>
-          </div>`
-        : nothing}
-      ${props.pageNotice
-        ? html`<div
-            class="plugins-row-message plugins-row-message--${props.pageNotice
-              .kind} plugins-page-notice"
-            role=${props.pageNotice.kind === "error" ? "alert" : "status"}
-          >
-            <span>${props.pageNotice.text}</span>
-          </div>`
-        : nothing}
+      ${
+        props.error
+          ? html`<div class="plugins-page-error" role="alert">
+              <span>${props.error}</span>
+              <button type="button" class="btn btn--sm" @click=${props.onRefresh}>
+                ${t("pluginsPage.tryAgain")}
+              </button>
+            </div>`
+          : nothing
+      }
+      ${
+        props.pageNotice
+          ? html`<div
+              class="plugins-row-message plugins-row-message--${
+                props.pageNotice.kind
+              } plugins-page-notice"
+              role=${props.pageNotice.kind === "error" ? "alert" : "status"}
+            >
+              <span>${props.pageNotice.text}</span>
+            </div>`
+          : nothing
+      }
 
       <wa-tab-panel
         id="plugins-hub-panel"
@@ -1348,36 +1415,42 @@ export function renderPlugins(props: PluginsViewProps) {
         active
         aria-labelledby=${`plugins-tab-${props.activeTab}`}
       >
-        ${panelState === "loading"
-          ? renderSettingsGroup(renderSettingsLoadingSkeleton({ label: t("pluginsPage.loading") }))
-          : panelState === "error"
-            ? nothing
-            : panelState === "offline"
-              ? renderEmpty(t("pluginsPage.offlineTitle"), t("pluginsPage.offlineBody"))
-              : renderActivePanel(props)}
+        ${
+          panelState === "loading"
+            ? renderSettingsGroup(
+                renderSettingsLoadingSkeleton({ label: t("pluginsPage.loading") }),
+              )
+            : panelState === "error"
+              ? nothing
+              : panelState === "offline"
+                ? renderEmpty(t("pluginsPage.offlineTitle"), t("pluginsPage.offlineBody"))
+                : renderActivePanel(props)
+        }
       </wa-tab-panel>
       ${renderDetailOverlay(props)}
-      ${props.consent
-        ? renderPluginConsentDialog({
-            consent: props.consent,
-            inspection: props.consentInspection,
-            loading: props.consentInspectionLoading,
-            error: props.consentInspectionError,
-            iconUrl: props.consent.pluginId ? props.iconUrls[props.consent.pluginId] : undefined,
-            canMutate: props.canMutate,
-            mutationBlockedReason: props.mutationBlockedReason,
-            busy: Boolean(
-              props.busy[
-                props.consent.intent.kind === "install"
-                  ? props.consent.intent.installIdentity
-                  : props.consent.intent.rowKey
-              ],
-            ),
-            onCancel: props.onCancelConsent,
-            onConfirm: props.onConfirmConsent,
-            onRetry: props.onRetryConsentInspection,
-          })
-        : nothing}
+      ${
+        props.consent
+          ? renderPluginConsentDialog({
+              consent: props.consent,
+              inspection: props.consentInspection,
+              loading: props.consentInspectionLoading,
+              error: props.consentInspectionError,
+              iconUrl: props.consent.pluginId ? props.iconUrls[props.consent.pluginId] : undefined,
+              canMutate: props.canMutate,
+              mutationBlockedReason: props.mutationBlockedReason,
+              busy: Boolean(
+                props.busy[
+                  props.consent.intent.kind === "install"
+                    ? props.consent.intent.installIdentity
+                    : props.consent.intent.rowKey
+                ],
+              ),
+              onCancel: props.onCancelConsent,
+              onConfirm: props.onConfirmConsent,
+              onRetry: props.onRetryConsentInspection,
+            })
+          : nothing
+      }
     `,
     { wide: true },
   );

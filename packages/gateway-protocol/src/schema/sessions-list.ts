@@ -27,6 +27,8 @@ export const SessionsListParamsSchema = closedObject({
   label: Type.Optional(SessionLabelString),
   /** Limit rows to sessions with an explicitly stored Control UI face preference. */
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  /** Limit rows by whether a persisted session dashboard exists. */
+  hasBoard: Type.Optional(Type.Boolean()),
   /** Filter rows by their immutable creator provenance. */
   creatorId: Type.Optional(NonEmptyString),
   /** Filter rows by their current assignable owner identity. */

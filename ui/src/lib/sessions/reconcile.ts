@@ -12,6 +12,9 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
+  type UiSessionDefaultsHost,
 } from "./session-key.ts";
 
 export type SessionReconcileOptions = {
@@ -76,6 +79,7 @@ type SessionChangedEventInfo = {
   reason: string | null;
   sessionId?: string;
   updatedAt: number | null;
+  hasPermissionMode: boolean;
   thinkingLevel?: string | null;
   agentId: string | null;
   runId: string | null;
@@ -189,6 +193,37 @@ export function reconcileRosterPresentationMetadata(
     return reconciled;
   });
   return changed ? { ...incoming, sessions } : incoming;
+}
+
+export function preserveCurrentSessionRow(
+  result: SessionsListResult,
+  state: { result: SessionsListResult | null; agentId: string | null },
+  snapshot: UiSessionDefaultsHost & { sessionKey?: string },
+  backgroundHydrate: boolean,
+): SessionsListResult {
+  const currentKey = snapshot.sessionKey?.trim();
+  if (!currentKey) {
+    return result;
+  }
+  const parsedAgentId = parseAgentSessionKey(currentKey)?.agentId;
+  const currentAgentId = normalizeAgentId(
+    parsedAgentId ?? resolveUiSelectedGlobalAgentId(snapshot),
+  );
+  if (!parsedAgentId && normalizeAgentId(state.agentId ?? "") !== currentAgentId) {
+    return result;
+  }
+  const matchesCurrent = (row: GatewaySessionRow) =>
+    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey, row.agentId);
+  const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
+  if (
+    previousCurrentRow &&
+    (backgroundHydrate || previousCurrentRow.archived === true) &&
+    !result.sessions.some(matchesCurrent)
+  ) {
+    const sessions = [...result.sessions, previousCurrentRow];
+    return { ...result, count: sessions.length, sessions };
+  }
+  return result;
 }
 
 function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
@@ -327,6 +362,7 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
       reason,
       sessionId: stringValue(recordValue(source, "sessionId")),
       updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+      hasPermissionMode: Object.hasOwn(source, "permissionMode"),
       thinkingLevel:
         typeof thinkingLevel === "string"
           ? thinkingLevel

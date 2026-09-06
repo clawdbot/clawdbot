@@ -100,6 +100,56 @@ describe("cli json stdout contract", () => {
       human: true,
     },
     {
+      name: "bare list unknown agent",
+      args: ["sessions", "--agent", "unknown-agent", "--json"],
+      message:
+        'Unknown agent id "unknown-agent". Run openclaw agents list to see configured agents.',
+    },
+    {
+      name: "Commander list unknown agent through dual-TTY finalization",
+      args: ["sessions", "--json", "--agent", "unknown-agent"],
+      message:
+        'Unknown agent id "unknown-agent". Run openclaw agents list to see configured agents.',
+      commander: true,
+      tty: true,
+    },
+    {
+      name: "list alias blank store with inherited parent JSON",
+      args: ["sessions", "--json", "list", "--store", ""],
+      message: "--store must not be blank",
+    },
+    {
+      name: "bare list missing explicit store",
+      args: ["sessions", "--store", "$MISSING_STORE", "--json"],
+      message:
+        "Session store target does not exist: $MISSING_STORE. Pass a selector whose resolved SQLite target exists.",
+    },
+    {
+      name: "cleanup missing explicit store",
+      args: ["sessions", "cleanup", "--dry-run", "--store", "$MISSING_STORE", "--json"],
+      message:
+        "Session store target does not exist: $MISSING_STORE. Pass a selector whose resolved SQLite target exists.",
+    },
+    {
+      name: "list unknown agent in human mode",
+      args: ["sessions", "--agent", "unknown-agent"],
+      message:
+        'Unknown agent id "unknown-agent". Run openclaw agents list to see configured agents.',
+      human: true,
+    },
+    {
+      name: "tail blank explicit agent",
+      args: ["sessions", "tail", "--agent", ""],
+      message: "--agent must not be blank",
+      human: true,
+    },
+    {
+      name: "tail whitespace parent agent with a session key",
+      args: ["sessions", "--agent", "   ", "tail", "--session-key", "agent:main:test"],
+      message: "--agent must not be blank",
+      human: true,
+    },
+    {
       name: "cleanup inherited filter with leaf JSON",
       args: ["sessions", "--active", "5", "cleanup", "--json"],
       message:

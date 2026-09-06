@@ -99,6 +99,9 @@ export {
   isChannelProgressDraftWorkToolName,
   isPotentialTruncatedFinal,
   formatPlanChecklistLines,
+  selectPlanChecklistSteps,
+  compactChannelProgressDraftLine,
+  isChannelProgressAttentionLine,
   mergeChannelProgressDraftLine,
   normalizeAgentPlanSteps,
   normalizeChannelProgressDraftLineIdentity,
@@ -133,6 +136,7 @@ export {
   createChannelProgressDraftCompositor,
   createChannelProgressWorkCounter,
 } from "../channels/progress-draft-compositor.js";
+export { formatChannelProgressDraftDiffStat } from "../channels/progress-draft-diffstat.js";
 
 /** @deprecated The streaming.progress.render key was retired (#122927). */
 export type ChannelProgressDraftRenderMode = "rich" | "text";

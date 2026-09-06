@@ -1,7 +1,6 @@
-import {
-  consumeRootOptionToken,
-  getRootOptionAwareCommandPath,
-} from "../infra/cli-root-options.js";
+import type { Command } from "commander";
+import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
+import { hasCommanderOptionToken } from "./program/commander-parse-facts.js";
 
 export type MachineOutputResolverParams = {
   argv: readonly string[];
@@ -20,34 +19,20 @@ export function isMachineOutputStdoutTTY(
   return stdout.isTTY === true;
 }
 
-/** Locate the root command after supported root options without loading descriptor catalogs. */
-export function findMachineOutputRootCommandIndex(argv: readonly string[]): number | null {
-  const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    const consumed = consumeRootOptionToken(args, index);
-    if (consumed > 0) {
-      index += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return index + 2;
-  }
-  return null;
-}
-
 /** Read positional command tokens after supported root options, without importing CLI catalogs. */
 export function getMachineOutputCommandPath(argv: readonly string[], depth: number): string[] {
   return getRootOptionAwareCommandPath(argv, depth);
 }
 
-/** Match a boolean or value option before the argv terminator, including `--flag=value`. */
-export function hasMachineOutputOption(argv: readonly string[], flag: string): boolean {
+/** Prefer registered option roles; early discovery falls back to literal option spellings. */
+export function hasMachineOutputOption(
+  argv: readonly string[],
+  flag: string,
+  command?: Command,
+): boolean {
+  if (command) {
+    return hasCommanderOptionToken(command, argv, new Set([flag]), "flag");
+  }
   for (const arg of argv.slice(2)) {
     if (arg === "--") {
       return false;

@@ -56,14 +56,12 @@ async function invokeMemorySearch(params: unknown, cfg: OpenClawConfig) {
 function createStubManager() {
   return {
     search: vi.fn(async (): Promise<MemorySearchResult[]> => []),
-    status: vi.fn(
-      (): MemoryProviderStatus => ({
-        backend: "builtin" as const,
-        provider: "none",
-        dirty: false,
-        custom: { searchMode: "fts-only" },
-      }),
-    ),
+    status: vi.fn((): MemoryProviderStatus => ({
+      backend: "builtin" as const,
+      provider: "none",
+      dirty: false,
+      custom: { searchMode: "fts-only" },
+    })),
     close: vi.fn(async () => undefined),
   };
 }

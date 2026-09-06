@@ -2,10 +2,13 @@
 summary: "A2A v1.0 Agent-to-Agent protocol channel plugin."
 read_when:
   - You are installing, configuring, or auditing the a2a plugin
-title: "A2a plugin"
+title: "A2a plugin reference"
 ---
 
-# A2a plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -16,7 +19,7 @@ A2A v1.0 Agent-to-Agent protocol channel plugin.
 
 ## Surface
 
-channels: `a2a`
+- Channels: `a2a`
 
 ## Related docs
 

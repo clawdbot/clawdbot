@@ -382,7 +382,6 @@ private fun newCameraHandler(appContext: Context): CameraHandler =
     appContext = appContext,
     camera = CameraCaptureManager(appContext),
     setCameraAudioCaptureActive = { true },
-    showCameraHud = { _, _, _ -> },
     invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
   )
 
@@ -500,14 +499,14 @@ private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
 
   override suspend fun activity(
     context: Context,
-    request: MotionActivityRequest,
+    request: MotionRangeRequest,
   ): MotionActivityRecord {
     error("unused in InvokeDispatcherTest")
   }
 
   override suspend fun pedometer(
     context: Context,
-    request: MotionPedometerRequest,
+    request: MotionRangeRequest,
   ): PedometerRecord {
     error("unused in InvokeDispatcherTest")
   }

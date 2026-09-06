@@ -16,6 +16,10 @@ channels, session files, model selection, dynamic tools (bridged), approvals,
 media delivery, the visible chat transcript, `/btw` side questions (see
 [Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
 
+Direct bridged tools marked for sequential execution wait for earlier tool calls
+in the same attempt and delay later calls until they finish. Other tool calls
+can run concurrently.
+
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes).
 
@@ -327,19 +331,14 @@ that ever reaches `onPermissionRequest` — is the same safety net, and it
 never fires in practice because `overridesBuiltInTool: true` displaces every
 built-in.
 
-For the wrapped-tool layer to make policy decisions equivalent to PI, the
-harness forwards the full PI attempt-tool context to
-`createOpenClawCodingTools`: identity (`senderIsOwner`, `memberRoleIds`,
-`ownerOnlyToolAllowlist`, ...), channel/routing (`groupId`,
-`currentChannelId`, `replyToMode`, message-tool toggles), auth
-(`authProfileStore`), run identity (`sessionKey` / `runSessionKey` derived
-from `sandboxSessionKey`, `runId`), model context (`modelApi`,
-`modelContextWindowTokens`, `modelCompat`, `modelHasVision`), and run hooks
-(`onToolOutcome`, `onYield`). Without those fields, owner-only allowlists
-silently deny by default, plugin-trust policies cannot resolve to the right
-scope, and `session_status: "current"` resolves to a stale sandbox key. The
-bridge builder is `extensions/copilot/src/tool-bridge.ts`, mirroring the PI
-authoritative call at `src/agents/embedded-agent-runner/run/attempt.ts:1262`.
+The embedded, Codex, and Copilot harnesses share
+`buildEmbeddedAttemptToolRunContext` for originating client capabilities,
+tool bindings, sender and role identity, channel routing, task suggestions,
+and the device allowed to review approvals. This keeps those facts intact
+when selecting a backend or recovering a turn. The Copilot bridge in
+`extensions/copilot/src/tool-bridge.ts` adds its own session and workspace
+mapping, authentication, model context, and execution callbacks before
+calling `createOpenClawCodingTools`.
 `runAttempt` resolves sandbox context through the shared
 `resolveSandboxContext` seam, passes the SDK an effective working directory,
 and forwards `sandbox` plus the subagent-spawn workspace into the tool

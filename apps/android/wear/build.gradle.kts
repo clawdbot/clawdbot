@@ -8,17 +8,19 @@ plugins {
 }
 
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
+val openClawMobileCutterInstruction =
+  "Run scripts/mobile-release-version.ts --prepare, capture the iOS release plan, then run --finalize."
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. Run `pnpm android:version:sync`.")
+      error("Missing Android version properties. $openClawMobileCutterInstruction")
     }
     openClawAndroidVersionFile.inputStream().use(::load)
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
   openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+    ?: error("Missing $name in Config/Version.properties. $openClawMobileCutterInstruction")
 
 val openClawAndroidPhoneVersionCode = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toInt()
 val openClawAndroidBuildNumber = openClawAndroidPhoneVersionCode % 100
@@ -83,6 +85,12 @@ android {
   lint {
     lintConfig = rootProject.file("app/lint.xml")
     warningsAsErrors = true
+  }
+}
+
+androidComponents {
+  onVariants(selector().withBuildType("release")) { variant ->
+    variant.lifecycleTasks.registerPreBuild(":app:validateOpenClawReleaseSigning")
   }
 }
 

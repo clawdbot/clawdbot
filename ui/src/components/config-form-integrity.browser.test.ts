@@ -41,6 +41,11 @@ describe("config form integrity", () => {
               type: "string",
               minLength: 3,
             },
+            relayUrl: {
+              type: "string",
+              description: "Relay origin.",
+              format: "uri",
+            },
             explicitEmpty: {
               type: "string",
               minLength: 0,
@@ -85,6 +90,9 @@ describe("config form integrity", () => {
         },
       },
     });
+    // Zod emits `format` for .url()/.email(); the form must keep those fields
+    // editable instead of forcing the whole section into Raw mode.
+    expect(analysis.unsupportedPaths).toEqual([]);
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -94,6 +102,7 @@ describe("config form integrity", () => {
           laboratory: {
             endpoint: "local-api",
             optionalAlias: "main",
+            relayUrl: "https://relay.example",
             explicitEmpty: "present",
             glyph: "a",
             codes: [],
@@ -141,6 +150,19 @@ describe("config form integrity", () => {
     endpoint.value = "";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));
     expect(endpoint.getAttribute("aria-invalid")).toBe("true");
+
+    const relayUrl = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Relay Url']"),
+      "format-constrained string",
+    );
+    relayUrl.value = "relay.example";
+    relayUrl.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(relayUrl.getAttribute("aria-invalid")).toBe("true");
+    expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "relayUrl"], "relay.example");
+    relayUrl.value = "https://relay.example/";
+    relayUrl.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(relayUrl.getAttribute("aria-invalid")).toBe("false");
+    expect(onPatch).toHaveBeenCalledWith(["laboratory", "relayUrl"], "https://relay.example/");
 
     const optionalAlias = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Optional Alias']"),

@@ -8,6 +8,8 @@ export {
   finishFlow,
   getTaskFlowById,
   listTaskFlowRecords,
+  prepareTaskMirroredFlowSync,
+  publishTaskFlowAfterAtomicStore,
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,
   resolveTaskFlowForLookupToken,

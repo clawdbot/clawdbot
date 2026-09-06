@@ -240,11 +240,10 @@ describe("ApprovalPage", () => {
     { name: "reviewer", scopes: ["operator.approvals"] },
     { name: "administrator", scopes: ["operator.admin"] },
   ])("allows an authenticated $name to resolve a durable approval", async ({ scopes }) => {
-    const request = vi.fn(
-      async (method: string): Promise<unknown> =>
-        method === "approval.get"
-          ? ({ approval: pendingApproval() } satisfies ApprovalGetResult)
-          : ({ applied: true, approval: allowedApproval() } satisfies ApprovalResolveResult),
+    const request = vi.fn(async (method: string): Promise<unknown> =>
+      method === "approval.get"
+        ? ({ approval: pendingApproval() } satisfies ApprovalGetResult)
+        : ({ applied: true, approval: allowedApproval() } satisfies ApprovalResolveResult),
     );
     const { page } = createPage({
       client: { request } as unknown as GatewayBrowserClient,
@@ -268,11 +267,10 @@ describe("ApprovalPage", () => {
     const staleDecision = new Promise<ApprovalResolveResult>((resolve) => {
       resolveDecision = resolve;
     });
-    const request = vi.fn(
-      (method: string): Promise<unknown> =>
-        method === "approval.get"
-          ? Promise.resolve({ approval: pendingApproval() } satisfies ApprovalGetResult)
-          : staleDecision,
+    const request = vi.fn((method: string): Promise<unknown> =>
+      method === "approval.get"
+        ? Promise.resolve({ approval: pendingApproval() } satisfies ApprovalGetResult)
+        : staleDecision,
     );
     const { page, source } = createPage({
       client: { request } as unknown as GatewayBrowserClient,
@@ -518,11 +516,10 @@ describe("ApprovalPage", () => {
   it("shows the canonical winner when another surface resolves first", async () => {
     const pending = pendingApproval();
     const terminal = allowedApproval();
-    const request = vi.fn(
-      async (method: string): Promise<unknown> =>
-        method === "approval.get"
-          ? ({ approval: pending } satisfies ApprovalGetResult)
-          : ({ applied: false, approval: terminal } satisfies ApprovalResolveResult),
+    const request = vi.fn(async (method: string): Promise<unknown> =>
+      method === "approval.get"
+        ? ({ approval: pending } satisfies ApprovalGetResult)
+        : ({ applied: false, approval: terminal } satisfies ApprovalResolveResult),
     );
     const { page } = createPage({ client: { request } as unknown as GatewayBrowserClient });
     await settle(page);
@@ -537,11 +534,10 @@ describe("ApprovalPage", () => {
   it("renders a fail-closed timeout distinctly from another surface's decision", async () => {
     const pending = pendingApproval();
     const expired = expiredApproval();
-    const request = vi.fn(
-      async (method: string): Promise<unknown> =>
-        method === "approval.get"
-          ? ({ approval: pending } satisfies ApprovalGetResult)
-          : ({ applied: false, approval: expired } satisfies ApprovalResolveResult),
+    const request = vi.fn(async (method: string): Promise<unknown> =>
+      method === "approval.get"
+        ? ({ approval: pending } satisfies ApprovalGetResult)
+        : ({ applied: false, approval: expired } satisfies ApprovalResolveResult),
     );
     const { page } = createPage({ client: { request } as unknown as GatewayBrowserClient });
     await settle(page);

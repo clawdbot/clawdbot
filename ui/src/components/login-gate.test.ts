@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
+import { showToast } from "../lib/toast.ts";
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -46,6 +48,25 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  it("explains how to reconnect with a verified user identity", async () => {
+    const element = await mountFailure(
+      "operator role policies require a verified user identity for this authentication method",
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
+
+    expect(failure?.getAttribute("data-kind")).toBe("verified-user-required");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Verified identity required",
+    );
+    expect(steps).toMatch(/trusted proxy or Tailscale/iu);
+    expect(steps).toMatch(/shared Gateway token or password/iu);
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes",
+    );
+  });
+
   it.each([
     { name: "empty", token: "", password: "" },
     { name: "populated", token: "test-token", password: "test-password" },
@@ -132,6 +153,42 @@ describe("login gate failure recovery", () => {
 
     refresh?.click();
     expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("shows an explicit recovery choice when reconnect leaves unsaved starts behind the login gate", async () => {
+    const element = await mountFailure(
+      "protocol mismatch",
+      ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    );
+    const reload = vi.fn();
+    const discard = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    const release = registerControlUiReloadGuard(
+      () => false,
+      () => {
+        showToast({
+          message: "Recovery needs a reload. Unsaved starts will be lost.",
+          actionLabel: "Discard unsaved starts and reload",
+          onAction: discard,
+        });
+      },
+    );
+    try {
+      element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.click();
+      expect(reload).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(element.querySelector(".app-toast__message")?.textContent).toContain(
+          "Unsaved starts will be lost.",
+        );
+      });
+      const action = element.querySelector<HTMLButtonElement>(".app-toast__action");
+      expect(action?.textContent?.trim()).toBe("Discard unsaved starts and reload");
+      expect(discard).not.toHaveBeenCalled();
+      action?.click();
+      expect(discard).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
   });
 
   it.each([

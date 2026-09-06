@@ -10,7 +10,10 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSwarmProgressTest {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -22,6 +25,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             methods += method
@@ -48,6 +52,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, params ->
             requests += method to params
@@ -127,6 +132,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             when (method) {
@@ -174,6 +180,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             when (method) {
@@ -214,6 +221,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             when (method) {
@@ -252,6 +260,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, params ->
             when (method) {
@@ -290,6 +299,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             methods += method
@@ -312,6 +322,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, params ->
             when (method) {
@@ -354,6 +365,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             when (method) {
@@ -387,6 +399,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             when (method) {
@@ -432,6 +445,7 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             when (method) {
@@ -487,8 +501,9 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
-          requestGateway = { _, _ -> "{}" },
+          requestGateway = { method, _ -> emptyChatGatewayResponse(method) },
           requestGatewayForGateway = { gatewayId, method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -501,7 +516,7 @@ class ChatControllerSwarmProgressTest {
               }
 
               else -> {
-                "{}"
+                emptyChatGatewayResponse(method)
               }
             }
           },
@@ -544,8 +559,9 @@ class ChatControllerSwarmProgressTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
-          requestGateway = { _, _ -> "{}" },
+          requestGateway = { method, _ -> emptyChatGatewayResponse(method) },
           requestGatewayForGateway = { gatewayId, method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -571,7 +587,7 @@ class ChatControllerSwarmProgressTest {
               }
 
               else -> {
-                "{}"
+                emptyChatGatewayResponse(method)
               }
             }
           },

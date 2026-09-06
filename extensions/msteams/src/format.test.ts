@@ -1,6 +1,12 @@
+import { randomUUID } from "node:crypto";
 import MarkdownIt from "markdown-it";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatMSTeamsMarkdown } from "./format.js";
+
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
 
 describe("formatMSTeamsMarkdown", () => {
   const fixtures = [
@@ -88,6 +94,11 @@ describe("formatMSTeamsMarkdown", () => {
       name: "keeps surrounding blockquote text around inline code",
       before: "> Run `status` now.",
       after: "> Run `status` now.",
+    },
+    {
+      name: "keeps merged nested quotes aligned with Unicode styles and inline code",
+      before: "> > **😀** `one`\n> > `two` **tail**",
+      after: "> **😀** `one`\n> `two` **tail**",
     },
     {
       name: "keeps escaped markdown literal",
@@ -306,10 +317,33 @@ describe("formatMSTeamsMarkdown", () => {
     expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
   });
 
-  it("does not restore forged placeholders decoded from character references", () => {
-    const source = "&#xE000;msteamsformat&#xE001;m0&#xE002; @[Alice](29:abc)";
-    const output = formatMSTeamsMarkdown(source, "off");
-    expect(output.match(/@\[Alice\]/gu)).toHaveLength(1);
-    expect(output).toContain("&#xE000;msteamsformat&#xE001;m0&#xE002;");
+  const collisionUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const authoredToken = `\u{E000}msteamsformat-${collisionUuid}\u{E001}m0\u{E002}`;
+  const encodedToken = `&#xE000;msteamsformat-${collisionUuid}&#xE001;m0&#xE002;`;
+  const mention = "@[Alice](29:abc)";
+  it.each([
+    ["literal text", `${authoredToken} ${mention}`, `${authoredToken} ${mention}`],
+    [
+      "adjacent bold spans",
+      `**\u{E000}msteams**__format-${collisionUuid}\u{E001}m0\u{E002}__ ${mention}`,
+      `**${authoredToken}** ${mention}`,
+    ],
+    ["character references", `${encodedToken} ${mention}`, `${encodedToken} ${mention}`],
+  ])("preserves forged placeholders in %s", (_name, source, expected) => {
+    const entropy = vi
+      .mocked(randomUUID)
+      .mockClear()
+      .mockImplementation(() => {
+        throw new Error("unexpected extra entropy request");
+      });
+    entropy
+      .mockReturnValueOnce(collisionUuid)
+      .mockReturnValueOnce("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    try {
+      expect(formatMSTeamsMarkdown(source, "off")).toBe(expected);
+      expect(entropy).toHaveBeenCalledTimes(2);
+    } finally {
+      entropy.mockReset();
+    }
   });
 });

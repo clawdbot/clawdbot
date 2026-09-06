@@ -14,7 +14,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
+import { writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,

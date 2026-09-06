@@ -1,5 +1,6 @@
 import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "@awesome.me/webawesome/dist/components/popover/popover.js";
 import "./web-awesome.ts";
@@ -52,35 +53,11 @@ async function open(f: Fixture) {
   await expect.poll(() => count(f, "wa-after-show")).toBe(before + 1);
 }
 
-// Run in the animation-start task, not after a host RPC that can outlast the animation.
-async function duringElementAnimation(
-  element: HTMLElement,
+async function duringAnimation(
+  f: Fixture,
   state: "show" | "hide",
-  request: () => unknown,
-  action: () => void,
+  action: () => void | Promise<void>,
 ) {
-  let observed = false;
-  const listener = (event: AnimationEvent) => {
-    if (event.target !== element || !element.classList.contains(state)) {
-      return;
-    }
-    element.removeEventListener("animationstart", listener);
-    expect(element.getAnimations().some((animation) => animation.playState === "running")).toBe(
-      true,
-    );
-    observed = true;
-    action();
-  };
-  element.addEventListener("animationstart", listener);
-  try {
-    await request();
-    await expect.poll(() => observed).toBe(true);
-  } finally {
-    element.removeEventListener("animationstart", listener);
-  }
-}
-
-async function duringAnimation(f: Fixture, state: "show" | "hide", action: () => void) {
   await duringElementAnimation(f.menu, state, () => (f.dropdown.open = state === "show"), action);
 }
 
@@ -283,7 +260,8 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
   it("keeps a reopened submenu visible after its interrupted hide finishes", async () => {
     const f = await fixture();
     await open(f);
-    f.parent.submenuOpen = true;
+    // Focus precedes the opening animation; settle it before pausing the hide.
+    await f.parent.openSubmenu();
     await expect.poll(() => document.activeElement).toBe(f.nested);
     const submenu = f.parent.submenuElement;
     await duringElementAnimation(
@@ -427,16 +405,18 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       if (phase !== "show") {
         await open(f);
       }
-      const disconnect = () =>
-        requestAnimationFrame(() => {
-          expect(
-            f.menu.getAnimations().some((animation) => animation.playState === "running"),
-          ).toBe(true);
-          if (phase === "reopen") {
-            f.dropdown.open = true;
-          }
-          f.dropdown.remove();
-        });
+      const disconnect = async () => {
+        const animation = f.menu.getAnimations()[0]!;
+        const time = animation.currentTime;
+        await frame();
+        expect(animation.pending).toBe(false);
+        expect(animation.playState).toBe("running");
+        expect(animation.currentTime).toBe(time);
+        if (phase === "reopen") {
+          f.dropdown.open = true;
+        }
+        f.dropdown.remove();
+      };
       await duringAnimation(f, phase === "show" ? "show" : "hide", disconnect);
       await expect.poll(() => f.dropdown.isConnected).toBe(false);
       const completions = f.events.filter((event) => event.type.startsWith("wa-after"));
@@ -475,22 +455,17 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       f.host.append(surface);
       await surface.updateComplete;
       const popup = surface.shadowRoot!.querySelector("wa-popup")!;
-      let starts = 0;
       let shown = false;
       let hidden = false;
-      popup.popup.addEventListener(
-        "animationstart",
-        () => {
-          expect(shown).toBe(false);
-          starts++;
-        },
-        { once: true },
-      );
       surface.addEventListener("wa-after-show", () => (shown = true));
       surface.addEventListener("wa-after-hide", () => (hidden = true));
-      surface.open = true;
+      await duringElementAnimation(
+        popup.popup,
+        "show-with-scale",
+        () => (surface.open = true),
+        () => expect(shown).toBe(false),
+      );
       await expect.poll(() => shown).toBe(true);
-      expect(starts).toBe(1);
       surface.open = false;
       await expect.poll(() => hidden).toBe(true);
       expect(popup.active).toBe(false);

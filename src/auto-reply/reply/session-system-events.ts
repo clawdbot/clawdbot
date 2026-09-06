@@ -10,10 +10,7 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import {
-  isExecCompletionEvent,
-  isHeartbeatDeliveryAwarenessEvent,
-} from "../../infra/heartbeat-events-filter.js";
+import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 // Records system-level session events for restarts, forks, and resets.
 import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
@@ -23,26 +20,6 @@ import {
 } from "../../infra/system-events.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
-
-function isCronContextSystemEvent(event: SystemEvent): boolean {
-  return event.contextKey?.startsWith("cron:") ?? false;
-}
-
-function selectGenericSystemEvents(
-  events: readonly SystemEvent[],
-  options?: { suppressHeartbeatOwnedEvents?: boolean },
-): SystemEvent[] {
-  // Exec/cron events own dedicated heartbeat prompts. Heartbeat delivery
-  // awareness stays queued for the next ordinary target turn.
-  return events.filter(
-    (event) =>
-      !isExecCompletionEvent(event.text) &&
-      !(
-        options?.suppressHeartbeatOwnedEvents === true &&
-        (isCronContextSystemEvent(event) || isHeartbeatDeliveryAwarenessEvent(event))
-      ),
-  );
-}
 
 function compactSystemEvent(line: string): string | null {
   const trimmed = line.trim();
@@ -112,7 +89,7 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-  suppressHeartbeatOwnedEvents?: boolean;
+  events?: readonly SystemEvent[];
 }): Promise<string | undefined> {
   const summaryLines: string[] = [];
   const systemLines: string[] = [];
@@ -120,10 +97,10 @@ export async function drainFormattedSystemEvents(params: {
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
-    selectGenericSystemEvents(
-      selectAgentSystemEvents(peekSystemEventEntries(params.sessionKey), params.agentId),
-      { suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents },
-    ),
+    selectAgentSystemEvents(
+      params.events ?? peekSystemEventEntries(params.sessionKey),
+      params.agentId,
+    ).filter((event) => !isExecCompletionEvent(event.text)),
   );
   const sessionStateTargets = queued
     .map((event) =>

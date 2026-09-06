@@ -278,6 +278,7 @@ describe("Where chip", () => {
       },
       workerSlots: { total: 1, available: 0 },
       invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable" as const,
       disabled: false,
       label: "1 of 1 slots busy",
       tone: "warn",
@@ -290,6 +291,7 @@ describe("Where chip", () => {
       },
       workerSlots: undefined,
       invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable" as const,
       disabled: false,
       label: "Codex exec",
       tone: undefined,
@@ -299,8 +301,9 @@ describe("Where chip", () => {
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       workerSlots: { total: 1, available: 0 },
       invocableCommands: [],
+      commandState: undefined,
       disabled: true,
-      reason: /worker slots/i,
+      reason: "No worker slots are available. Wait for a slot or pick another device.",
       label: "Slot utilization unavailable",
       tone: "stale",
     },
@@ -312,14 +315,25 @@ describe("Where chip", () => {
       },
       workerSlots: { total: 1, available: 1 },
       invocableCommands: [],
+      commandState: "unauthorized" as const,
       disabled: true,
-      reason: /enable|approv/i,
+      reason:
+        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
       label: "Slot utilization unavailable",
       tone: "stale",
     },
   ])(
     "$name in the New Session picker",
-    ({ devicePlacement, workerSlots, invocableCommands, disabled, reason, label, tone }) => {
+    ({
+      devicePlacement,
+      workerSlots,
+      invocableCommands,
+      commandState,
+      disabled,
+      reason,
+      label,
+      tone,
+    }) => {
       const state = resolveWhereChip({
         environments: [
           {
@@ -331,6 +345,14 @@ describe("Where chip", () => {
             workerSlots,
             capabilities: ["codex.exec-server.stdio.v1"],
             invocableCommands,
+            ...(commandState
+              ? {
+                  requiredNodeCommand: {
+                    command: "codex.exec-server.stdio.v1",
+                    state: commandState,
+                  },
+                }
+              : {}),
           },
         ],
         cloudProfiles: [],
@@ -371,7 +393,7 @@ describe("Where chip", () => {
         expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
       }
       if (reason) {
-        expect(device?.title).toMatch(reason);
+        expect(device?.title).toBe(reason);
       }
     },
   );

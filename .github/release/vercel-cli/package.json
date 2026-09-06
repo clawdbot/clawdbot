@@ -9,6 +9,7 @@
   "overrides": {
     "@tootallnate/once@2.0.0": "2.0.1",
     "ajv@8.6.3": "8.20.0",
+    "fast-uri@3.1.6": "3.1.7",
     "js-yaml@4.1.1": "4.3.2",
     "minimatch@10.1.1": "10.2.6",
     "path-to-regexp@6.1.0": "6.3.0",

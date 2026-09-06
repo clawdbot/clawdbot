@@ -205,28 +205,41 @@ describe("Matrix automatic reply table presentation", () => {
     },
   );
 
-  it("preserves native thread fallback on every chunk with implicit replies disabled", async () => {
-    const { client, sendMessage } = createClient();
-    await deliverMatrixReplies({
-      cfg: defaultCfg,
-      replies: [{ text: "Thread paragraph. ".repeat(400) }],
-      roomId: "!room:example.org",
-      client,
-      runtime: runtimeEnv,
-      replyToMode: "off",
-      threadId: "$thread",
-      replyToId: "$incoming",
-    });
-    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
-    for (const [, content] of sendMessage.mock.calls) {
-      expect(content["m.relates_to"]).toEqual({
-        rel_type: "m.thread",
-        event_id: "$thread",
-        is_falling_back: true,
-        "m.in_reply_to": { event_id: "$incoming" },
+  it.each([false, true])(
+    "distinguishes thread fallback from selected replies on every chunk (explicit: %s)",
+    async (explicit) => {
+      const { client, sendMessage } = createClient();
+      const result = await deliverMatrixReplies({
+        cfg: defaultCfg,
+        replies: [
+          {
+            text: "Thread paragraph. ".repeat(400),
+            ...(explicit ? { replyToId: "$selected", replyToTag: true } : {}),
+          },
+        ],
+        roomId: "!room:example.org",
+        client,
+        runtime: runtimeEnv,
+        replyToMode: "off",
+        threadId: "$thread",
+        replyToId: "$incoming",
       });
-    }
-  });
+      expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+      for (const [, content] of sendMessage.mock.calls) {
+        expect(content["m.relates_to"]).toEqual({
+          rel_type: "m.thread",
+          event_id: "$thread",
+          ...(explicit ? {} : { is_falling_back: true }),
+          "m.in_reply_to": { event_id: explicit ? "$selected" : "$incoming" },
+        });
+      }
+      expect(
+        result.receipt?.parts.every(
+          (part) => part.replyToId === (explicit ? "$selected" : undefined),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("uses the account limit and canonical bullet fallback for an oversized native table", async () => {
     const rows = Array.from({ length: 40 }, (_, index) => `| Item${index} | Ready${index} |`);

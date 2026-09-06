@@ -24,8 +24,8 @@ import {
   type NavigationTargetOptions,
   reconcileRemoteDialogAfterActionSettled,
   resolveBoundedDelayMs,
+  runCancellablePageInteraction,
   throwIfInteractionAborted,
-  toFriendlyInteractionError,
 } from "./pw-tools-core.interactions.navigation.js";
 import { runPageEmulationTransition } from "./pw-tools-core.state.js";
 import {
@@ -73,6 +73,26 @@ function shouldUsePlaywrightFilePayloads(
   opts: Pick<NavigationTargetOptions, "browserFilesystemLocal" | "ssrfPolicy">,
 ): boolean {
   return Boolean(opts.ssrfPolicy) && opts.browserFilesystemLocal !== true;
+}
+
+async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
+  try {
+    return await awaitActionWithAbort(
+      (async () => {
+        const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+        if (!resolved.ok) {
+          throw new Error(resolved.error);
+        }
+        return shouldUsePlaywrightFilePayloads(opts)
+          ? await toPlaywrightFilePayloads(resolved.paths)
+          : resolved.paths;
+      })(),
+      abortPromise,
+    );
+  } finally {
+    cleanup();
+  }
 }
 
 type BrowserWaitPredicateState = {
@@ -434,17 +454,21 @@ async function screenshotWithLabelsOnPage(
 
   const refKeys = Object.keys(opts.refs ?? {});
   const inputs: RawAnnotationInput[] = [];
-  let bboxFailures = 0;
+  let skippedRefs = 0;
   for (const ref of refKeys) {
     const refInfo = opts.refs[ref];
     if (refInfo === undefined) {
       continue;
     }
-    const box = await refLocator(page, ref)
-      .boundingBox()
-      .catch(() => null);
+    const target = refLocator(page, ref);
+    // Full-page tail refs cannot contribute annotations after the label budget fills.
+    if (space === "fullpage" && inputs.length >= maxLabels) {
+      skippedRefs += 1;
+      continue;
+    }
+    const box = await target.boundingBox().catch(() => null);
     if (!box) {
-      bboxFailures += 1;
+      skippedRefs += 1;
       continue;
     }
     inputs.push({
@@ -482,7 +506,7 @@ async function screenshotWithLabelsOnPage(
       // `annotations` but not drawn, and are reflected in `skipped`.
       buffer,
       labels: plan.overlayItems.length,
-      skipped: plan.skipped + bboxFailures,
+      skipped: plan.skipped + skippedRefs,
       annotations: plan.annotations,
     };
   } finally {
@@ -491,35 +515,21 @@ async function screenshotWithLabelsOnPage(
 }
 
 export async function setFileChooserFilesViaPlaywright(
-  opts: NavigationTargetOptions & {
+  opts: GuardedInteractionOptions & {
     page: Page;
     fileChooser: FileChooser;
     paths: string[];
     timeoutMs: number;
   },
 ): Promise<void> {
-  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
-  if (!resolvedResult.ok) {
-    throw new Error(resolvedResult.error);
-  }
-  const resolvedPaths = resolvedResult.paths;
-  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
-    ? await toPlaywrightFilePayloads(resolvedPaths)
-    : resolvedPaths;
-
-  await awaitNavigationGuardedInteraction({
-    action: async () => {
-      await opts.fileChooser.setFiles(resolvedFiles, { timeout: opts.timeoutMs });
-    },
-    cdpUrl: opts.cdpUrl,
-    page: opts.page,
-    ...interactionNavigationPolicy(opts),
-    targetId: opts.targetId,
+  const resolvedFiles = await resolvePlaywrightUploadFiles(opts);
+  await runCancellablePageInteraction(opts.page, opts, async (signal) => {
+    await opts.fileChooser.setFiles(resolvedFiles, { timeout: opts.timeoutMs, signal });
   });
 }
 
 export async function setInputFilesViaPlaywright(
-  opts: NavigationTargetOptions & {
+  opts: GuardedInteractionOptions & {
     inputRef?: string;
     element?: string;
     paths: string[];
@@ -541,26 +551,11 @@ export async function setInputFilesViaPlaywright(
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
-  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
-  if (!resolvedResult.ok) {
-    throw new Error(resolvedResult.error);
-  }
-  const resolvedPaths = resolvedResult.paths;
-  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
-    ? await toPlaywrightFilePayloads(resolvedPaths)
-    : resolvedPaths;
-
-  try {
-    await awaitNavigationGuardedInteraction({
-      action: async () => {
-        await locator.setInputFiles(resolvedFiles);
-      },
-      cdpUrl: opts.cdpUrl,
-      page,
-      ...interactionNavigationPolicy(opts),
-      targetId: opts.targetId,
-    });
-  } catch (err) {
-    throw toFriendlyInteractionError(err, inputRef || element);
-  }
+  const resolvedFiles = await resolvePlaywrightUploadFiles(opts);
+  await runCancellablePageInteraction(
+    page,
+    opts,
+    async (signal) => await locator.setInputFiles(resolvedFiles, { signal }),
+    inputRef || element,
+  );
 }

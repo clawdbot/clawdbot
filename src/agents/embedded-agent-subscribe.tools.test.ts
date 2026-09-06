@@ -20,6 +20,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([sanitizeToolArgs, sanitizeToolResult])(
+  "%s preserves redacted own JSON fields",
+  (sanitize) => {
+    const input = JSON.parse(
+      '{"__proto__":{"label":"kept","token":"fixture-value"},"details":{"__proto__":null}}',
+    );
+    const before = JSON.stringify(input);
+    const result = sanitize(input) as Record<string, unknown>;
+
+    expect(JSON.stringify(result)).toBe(
+      '{"__proto__":{"label":"kept","token":"***"},"details":{"__proto__":null}}',
+    );
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(result.details)).toBe(Object.prototype);
+    expect(JSON.stringify(input)).toBe(before);
+  },
+);
+
 describe("extractToolErrorMessage", () => {
   it("ignores non-error status values", () => {
     expect(extractToolErrorMessage({ details: { status: "0" } })).toBeUndefined();
@@ -214,6 +232,23 @@ function getTextContent(result: unknown, index = 0): string {
 }
 
 describe("sanitizeToolResult", () => {
+  it.each(["text", "image"])("preserves own JSON fields when cleaning %s blocks", (type) => {
+    const input = JSON.parse(
+      '{"content":[{"__proto__":{"label":"kept","token":"fixture-value"},"text":"ordinary","data":"AA=="}]}',
+    );
+    input.content[0].type = type;
+    const before = JSON.stringify(input);
+    const result = sanitizeToolResult(input) as typeof input;
+
+    expect(Object.hasOwn(result.content[0], "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(result.content[0])).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(result.content[0], "__proto__")?.value).toEqual({
+      label: "kept",
+      token: "***",
+    });
+    expect(JSON.stringify(input)).toBe(before);
+  });
+
   it("redacts JSON-style apiKey fields in text content blocks", () => {
     const result = {
       content: [

@@ -19,6 +19,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { assertAccountSelectorForMutation } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
@@ -78,6 +79,7 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
+  assertAccountSelectorForMutation(opts.account);
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;

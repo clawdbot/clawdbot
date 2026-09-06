@@ -26,14 +26,16 @@ import {
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
-export const CHAT_HISTORY_REQUEST_LIMIT = 800;
+export const CHAT_HISTORY_REQUEST_LIMIT = 80;
+export const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
+const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
 // Back-scroll pages are larger than the startup tail: session open stays cheap
 // while older-history reads amortize round trips and prepend/re-anchor cycles.
 // The gateway independently bounds each response (entry cap + byte budget).
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 
-const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
+export const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   sourceCanonicalListRevision?: number;
@@ -78,25 +80,16 @@ function updateChatHistoryOwnerRequestCount(
   counts.set(requestKey, nextCount);
 }
 
-async function requestChatHistory(
+export async function requestChatHistory<T extends ChatHistoryResponse>(
   client: GatewayBrowserClient,
   method: "chat.history" | "chat.startup",
-  sessionKey: string,
-  requestAgentId: string | undefined,
+  params: Record<string, unknown>,
   shouldContinue: () => boolean,
   shouldRetry: () => boolean,
-  cursor?: string,
-  inputRunIds: string[] = [],
-): Promise<ChatHistoryResponse> {
+): Promise<T> {
   for (;;) {
     try {
-      return await client.request<ChatHistoryResponse>(method, {
-        sessionKey,
-        ...(requestAgentId ? { agentId: requestAgentId } : {}),
-        ...(cursor !== undefined ? { cursor } : {}),
-        limit: CHAT_HISTORY_REQUEST_LIMIT,
-        ...(inputRunIds.length ? { inputRunIds } : {}),
-      });
+      return await client.request<T>(method, params);
     } catch (err) {
       if (!shouldContinue()) {
         throw err;
@@ -123,7 +116,8 @@ export function requestSharedHistory(
   isCurrentConsumer: () => boolean,
   cursor?: string,
   sourceCanonicalListRevision?: number,
-  inputRunIds?: string[],
+  inputRunIds: string[] = [],
+  budget = { limit: CHAT_HISTORY_REQUEST_LIMIT, maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES },
 ): Promise<SharedChatHistoryResponse> {
   let registry = sharedChatHistoryRequests.get(client);
   if (!registry) {
@@ -138,7 +132,7 @@ export function requestSharedHistory(
   const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
   const consumer = {
     isCurrent: isCurrentConsumer,
-    retryDeadlineMs: Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS,
+    retryDeadlineMs: Date.now() + CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS,
   };
   if (!shared || existingOwner) {
     const consumers = new Set([consumer]);
@@ -150,12 +144,15 @@ export function requestSharedHistory(
     const promise = requestChatHistory(
       client,
       method,
-      sessionKey,
-      requestAgentId,
+      {
+        sessionKey,
+        ...(requestAgentId ? { agentId: requestAgentId } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...budget,
+        ...(inputRunIds.length ? { inputRunIds } : {}),
+      },
       shouldContinue,
       shouldRetry,
-      cursor,
-      inputRunIds,
     )
       .then((response) => ({ ...response, sourceCanonicalListRevision }))
       .finally(() => {
@@ -192,7 +189,7 @@ export async function requestChatSessionSnapshot(
 ): Promise<ChatSessionSnapshotRequestResult> {
   const method = "chat.history";
   const requestModeKey = cursor === undefined ? "page" : `cursor:${cursor}`;
-  const requestKey = `prefetch\u0000${method}\u0000${sessionKey}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}`;
+  const requestKey = `prefetch\u0000${method}\u0000${sessionKey}\u0000${requestModeKey}`;
   const result = await requestSharedHistory(
     client,
     requestKey,
@@ -202,6 +199,9 @@ export async function requestChatSessionSnapshot(
     consumerOwner,
     isCurrentConsumer,
     cursor,
+    undefined,
+    undefined,
+    CHAT_HISTORY_PREFETCH_BUDGET,
   );
   if (isHistoryCursor(result)) {
     return result;

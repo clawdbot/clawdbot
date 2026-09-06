@@ -24,6 +24,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
 import type { AgentTerminalSessionDrain } from "../terminal/session-manager.types.js";
 import {
   beginWorkerInferenceSessionDrain,
@@ -37,7 +38,6 @@ import {
 } from "../worker-environments/session-placement-lifecycle.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
-  createChatAbortOps,
   hasGatewaySessionAbortOwner,
 } from "./chat-abort-runtime.js";
 import type { GatewayRequestContext } from "./types.js";

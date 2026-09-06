@@ -1,6 +1,7 @@
 // Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
 import * as bundledChannelCatalog from "../channels/bundled-channel-catalog-read.js";
+import { resolvePolicyPluginActivationState } from "./config-policy.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -351,6 +352,47 @@ describe("resolveEffectiveEnableState", () => {
 
 describe("resolveEffectivePluginActivationState", () => {
   type ActivationParams = Parameters<typeof resolveEffectivePluginActivationState>[0];
+
+  it.each([
+    { alpha: false, beta: true, pluginEnabled: true, expected: true },
+    { alpha: false, beta: false, pluginEnabled: true, expected: false },
+    { alpha: false, beta: undefined, pluginEnabled: true, expected: true },
+    { alpha: undefined, beta: undefined, pluginEnabled: true, expected: true },
+    { alpha: false, beta: true, pluginEnabled: false, expected: false },
+    // The same-named built-in channel is not owned by these manifest channel IDs.
+    { id: "telegram", alpha: false, beta: false, pluginEnabled: true, expected: false },
+    { id: "telegram", alpha: undefined, beta: undefined, pluginEnabled: true, expected: true },
+  ])(
+    "keeps multi-channel activation independent of order: %j",
+    ({ id = "multi-channel", alpha, beta, pluginEnabled, expected }) => {
+      const rootConfig = {
+        plugins: { entries: { [id]: { enabled: pluginEnabled } } },
+        channels: {
+          alpha: { enabled: alpha },
+          beta: { enabled: beta },
+          telegram: { enabled: !expected },
+        },
+      };
+      for (const channelIds of [
+        ["alpha", "beta"],
+        ["beta", "alpha"],
+      ]) {
+        const params = {
+          id,
+          origin: "config" as const,
+          config: normalizePluginsConfig(rootConfig.plugins),
+          rootConfig,
+          channelIds,
+        };
+        for (const resolve of [
+          resolveEffectivePluginActivationState,
+          resolvePolicyPluginActivationState,
+        ]) {
+          expect(resolve(params)).toMatchObject({ enabled: expected, activated: expected });
+        }
+      }
+    },
+  );
 
   it.each<{
     name: string;

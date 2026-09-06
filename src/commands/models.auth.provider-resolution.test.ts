@@ -9,7 +9,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/r
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";

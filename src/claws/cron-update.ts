@@ -89,8 +89,16 @@ export async function applyClawCronUpdate(
   const undo: Array<() => Promise<void>> = [];
   const appliedIds: string[] = [];
   const nowMs = options.nowMs ?? Date.now();
+  let agentAvailable = false;
 
+  const waitForAgent = async () => {
+    if (!agentAvailable) {
+      await gateway.waitUntilAgentAvailable?.(updatePlan.agentId);
+      agentAvailable = true;
+    }
+  };
   const add = async (ref: PersistedClawCronRef): Promise<string> => {
+    await waitForAgent();
     let raw: unknown;
     try {
       raw = await gateway.add(clawCronGatewayInput(updatePlan.agentId, ref));
@@ -153,6 +161,8 @@ export async function applyClawCronUpdate(
           `Target cron declaration ${JSON.stringify(action.id)} is missing.`,
         );
       }
+      // A readiness failure must leave this declaration's ownership untouched.
+      await waitForAgent();
       const pending = targetRef({ agentId: updatePlan.agentId, job, previous, nowMs });
       upsertRef(pending, options);
       const schedulerJobId = await add(pending);

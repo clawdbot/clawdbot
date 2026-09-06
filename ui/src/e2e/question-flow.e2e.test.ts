@@ -168,13 +168,21 @@ function panelFor(page: Page, prompt: string) {
 
 async function expectQuestionAttention(page: Page, present: boolean): Promise<void> {
   const session = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
+  const questionAttention = session.locator('[data-session-attention="question"]');
   const expectedCount = present ? 1 : 0;
-  await expect
-    .poll(() => session.locator('[data-session-attention="question"]').count())
-    .toBe(expectedCount);
-  await expect
-    .poll(() => session.getByText("Waiting for your answer", { exact: true }).count())
-    .toBe(expectedCount);
+  await expect.poll(() => questionAttention.count()).toBe(expectedCount);
+  if (present) {
+    await expect
+      .poll(() =>
+        questionAttention.evaluate(
+          (element) =>
+            (element.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+              ?.content,
+        ),
+      )
+      .toBe("Waiting for your answer");
+    await expect.poll(() => session.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+  }
 }
 
 async function emitRequested(
@@ -414,6 +422,19 @@ suite.define(() => {
         };
       })
       .toEqual({ left: 0, width: 0 });
+    await page
+      .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
+      .hover();
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await page.mouse.move(400, 50);
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    await page
+      .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
+      .focus();
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await expect
+      .poll(() => page.locator('.session-progress-hovercard[data-open="true"]').count())
+      .toBe(0);
     await screenshot(page, "01-question-pending.png");
 
     await panel.locator(".chat-question-panel__collapse").click();

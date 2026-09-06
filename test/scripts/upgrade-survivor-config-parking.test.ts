@@ -371,42 +371,48 @@ ${conditional ? 'probe_status=0; phase preparation handler || probe_status=$?; e
     expect(existsSync(snapshotPath)).toBe(false);
   });
 
-  it("restores authored bytes and preserves the failing companion install status", () => {
-    const root = tempDirs.make("openclaw-companion-install-failure-");
-    const binDir = path.join(root, "bin");
-    const configPath = path.join(root, "openclaw.json");
-    const invocationPath = path.join(root, "openclaw-invocations");
-    const runnerPath = path.join(root, "run-companion-install.sh");
-    const authoredConfig =
-      '{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}\n';
-    mkdirSync(binDir);
-    writeFileSync(configPath, authoredConfig);
-    const survivorScript = readFileSync(SURVIVOR_SCRIPT_PATH, "utf8");
-    const functionStart = survivorScript.indexOf("install_companion_plugins() {");
-    const functionEnd = survivorScript.indexOf(
-      "\n}\n\nopenclaw_e2e_eval_test_state_from_b64",
-      functionStart,
-    );
-    expect(functionStart).toBeGreaterThan(-1);
-    expect(functionEnd).toBeGreaterThan(functionStart);
-    const functionSource = survivorScript.slice(functionStart, functionEnd + 2);
-    const e2eInstanceScript = readFileSync(E2E_INSTANCE_SCRIPT_PATH, "utf8");
-    const fixtureCommandStart = e2eInstanceScript.indexOf(
-      "openclaw_e2e_fixture_plugin_command() {",
-    );
-    const fixtureCommandEnd = e2eInstanceScript.indexOf(
-      "\n}\nopenclaw_e2e_enable_openclaw_cli_timeout",
-      fixtureCommandStart,
-    );
-    expect(fixtureCommandStart).toBeGreaterThan(-1);
-    expect(fixtureCommandEnd).toBeGreaterThan(fixtureCommandStart);
-    const fixtureCommandSource = e2eInstanceScript.slice(
-      fixtureCommandStart,
-      fixtureCommandEnd + 2,
-    );
-    writeFileSync(
-      path.join(binDir, "openclaw"),
-      `#!/usr/bin/env bash
+  it.each([
+    { installStatus: 0, inspectStatus: 0 },
+    { installStatus: 23, inspectStatus: 0 },
+    { installStatus: 0, inspectStatus: 29 },
+  ])(
+    "parks companion inspection and restores authored bytes (install=$installStatus, inspect=$inspectStatus)",
+    ({ installStatus, inspectStatus }) => {
+      const root = tempDirs.make("openclaw-companion-install-failure-");
+      const binDir = path.join(root, "bin");
+      const configPath = path.join(root, "openclaw.json");
+      const invocationPath = path.join(root, "openclaw-invocations");
+      const runnerPath = path.join(root, "run-companion-install.sh");
+      const authoredConfig =
+        '{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}\n';
+      mkdirSync(binDir);
+      writeFileSync(configPath, authoredConfig);
+      const survivorScript = readFileSync(SURVIVOR_SCRIPT_PATH, "utf8");
+      const functionStart = survivorScript.indexOf("install_companion_plugins() {");
+      const functionEnd = survivorScript.indexOf(
+        "\n}\n\nopenclaw_e2e_eval_test_state_from_b64",
+        functionStart,
+      );
+      expect(functionStart).toBeGreaterThan(-1);
+      expect(functionEnd).toBeGreaterThan(functionStart);
+      const functionSource = survivorScript.slice(functionStart, functionEnd + 2);
+      const e2eInstanceScript = readFileSync(E2E_INSTANCE_SCRIPT_PATH, "utf8");
+      const fixtureCommandStart = e2eInstanceScript.indexOf(
+        "openclaw_e2e_fixture_plugin_command() {",
+      );
+      const fixtureCommandEnd = e2eInstanceScript.indexOf(
+        "\n}\nopenclaw_e2e_enable_openclaw_cli_timeout",
+        fixtureCommandStart,
+      );
+      expect(fixtureCommandStart).toBeGreaterThan(-1);
+      expect(fixtureCommandEnd).toBeGreaterThan(fixtureCommandStart);
+      const fixtureCommandSource = e2eInstanceScript.slice(
+        fixtureCommandStart,
+        fixtureCommandEnd + 2,
+      );
+      writeFileSync(
+        path.join(binDir, "openclaw"),
+        `#!/usr/bin/env bash
 set -euo pipefail
 count=0
 if [ -f "$OPENCLAW_INVOCATION_PATH" ]; then
@@ -415,39 +421,66 @@ fi
 count=$((count + 1))
 printf '%s' "$count" >"$OPENCLAW_INVOCATION_PATH"
 if [ "$count" -eq 2 ]; then
-  exit 23
+  exit "$PROBE_INSTALL_STATUS"
 fi
 `,
-    );
-    chmodSync(path.join(binDir, "openclaw"), 0o755);
-    writeFileSync(
-      runnerPath,
-      `#!/usr/bin/env bash
+      );
+      chmodSync(path.join(binDir, "openclaw"), 0o755);
+      writeFileSync(
+        path.join(binDir, "node"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  scripts/e2e/lib/upgrade-survivor/assertions.mjs)
+    cp "$OPENCLAW_CONFIG_PATH" "$PROBE_INSPECT_CONFIG"
+    "$PROBE_NODE" -e 'const config = require(process.env.OPENCLAW_CONFIG_PATH); if (config.channels || config.plugins?.enabled !== false) process.exit(37);'
+    exit "$PROBE_INSPECT_STATUS" ;;
+  unused) exit 0 ;;
+  *) exec "$PROBE_NODE" "$@" ;;
+esac
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        runnerPath,
+        `#!/usr/bin/env bash
 set -euo pipefail
 ${fixtureCommandSource}
 ${functionSource}
 install_companion_plugins
 `,
-    );
+      );
 
-    const result = spawnSync("bash", [runnerPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_INVOCATION_PATH: invocationPath,
-        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root,
-        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER: SCRIPT_PATH,
-        OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER: "unused",
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        package_version: "2026.8.1",
-      },
-    });
+      const result = spawnSync("bash", [runnerPath], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_INVOCATION_PATH: invocationPath,
+          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root,
+          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER: SCRIPT_PATH,
+          OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER: "unused",
+          OPENCLAW_CLAWHUB_URL: "http://fixture.invalid",
+          OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED: "1",
+          PROBE_NODE: process.execPath,
+          PROBE_INSPECT_CONFIG: path.join(root, "inspect-config.json"),
+          PROBE_INSTALL_STATUS: String(installStatus),
+          PROBE_INSPECT_STATUS: String(inspectStatus),
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          package_version: "2026.8.1",
+        },
+      });
 
-    expect(result.status, result.stderr).toBe(23);
-    expect(readFileSync(configPath, "utf8")).toBe(authoredConfig);
-    expect(existsSync(path.join(root, "companion-install-authored.json"))).toBe(false);
-  });
+      expect(result.status, result.stderr).toBe(installStatus || inspectStatus);
+      if (!installStatus) {
+        expect(JSON.parse(readFileSync(path.join(root, "inspect-config.json"), "utf8"))).toEqual({
+          plugins: { enabled: false },
+        });
+      }
+      expect(readFileSync(configPath, "utf8")).toBe(authoredConfig);
+      expect(existsSync(path.join(root, "companion-install-authored.json"))).toBe(false);
+    },
+  );
 
   it("rejects malformed config without changing authored bytes", () => {
     const root = tempDirs.make("openclaw-invalid-config-parking-");

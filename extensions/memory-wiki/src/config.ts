@@ -1,4 +1,3 @@
-// Memory Wiki helper module supports config behavior.
 import os from "node:os";
 import path from "node:path";
 // agent-scope-runtime exports the same resolvers without memory-host-core's
@@ -23,93 +22,10 @@ type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
 export type WikiSearchBackend = (typeof WIKI_SEARCH_BACKENDS)[number];
 export type WikiSearchCorpus = (typeof WIKI_SEARCH_CORPORA)[number];
 
-export type MemoryWikiPluginConfig = {
-  vaultMode?: WikiVaultMode;
-  vault?: {
-    scope?: WikiVaultScope;
-    path?: string;
-    renderMode?: WikiRenderMode;
-  };
-  obsidian?: {
-    enabled?: boolean;
-    useOfficialCli?: boolean;
-    vaultName?: string;
-    openAfterWrites?: boolean;
-  };
-  bridge?: {
-    enabled?: boolean;
-    readMemoryArtifacts?: boolean;
-    indexDreamReports?: boolean;
-    indexDailyNotes?: boolean;
-    indexMemoryRoot?: boolean;
-    followMemoryEvents?: boolean;
-  };
-  unsafeLocal?: {
-    allowPrivateMemoryCoreAccess?: boolean;
-    paths?: string[];
-  };
-  ingest?: {
-    autoCompile?: boolean;
-    maxConcurrentJobs?: number;
-    allowUrlIngest?: boolean;
-  };
-  search?: {
-    backend?: WikiSearchBackend;
-    corpus?: WikiSearchCorpus;
-  };
-  context?: {
-    includeCompiledDigestPrompt?: boolean;
-  };
-  render?: {
-    preserveHumanBlocks?: boolean;
-    createBacklinks?: boolean;
-    createDashboards?: boolean;
-  };
-};
+export type MemoryWikiPluginConfig = z.infer<typeof MemoryWikiConfigSource>;
 
-export type ResolvedMemoryWikiConfig = {
+export type ResolvedMemoryWikiConfig = ReturnType<typeof resolveMemoryWikiConfig> & {
   agentId?: string;
-  vaultMode: WikiVaultMode;
-  vault: {
-    scope: WikiVaultScope;
-    path: string;
-    renderMode: WikiRenderMode;
-  };
-  obsidian: {
-    enabled: boolean;
-    useOfficialCli: boolean;
-    vaultName?: string;
-    openAfterWrites: boolean;
-  };
-  bridge: {
-    enabled: boolean;
-    readMemoryArtifacts: boolean;
-    indexDreamReports: boolean;
-    indexDailyNotes: boolean;
-    indexMemoryRoot: boolean;
-    followMemoryEvents: boolean;
-  };
-  unsafeLocal: {
-    allowPrivateMemoryCoreAccess: boolean;
-    paths: string[];
-  };
-  ingest: {
-    autoCompile: boolean;
-    maxConcurrentJobs: number;
-    allowUrlIngest: boolean;
-  };
-  search: {
-    backend: WikiSearchBackend;
-    corpus: WikiSearchCorpus;
-  };
-  context: {
-    includeCompiledDigestPrompt: boolean;
-  };
-  render: {
-    preserveHumanBlocks: boolean;
-    createBacklinks: boolean;
-    createDashboards: boolean;
-  };
 };
 
 export type MemoryWikiConfigResolver = (
@@ -213,7 +129,7 @@ function expandHomePath(inputPath: string, homedir: string): string {
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
   options?: { homedir?: string; env?: NodeJS.ProcessEnv },
-): ResolvedMemoryWikiConfig {
+) {
   const homedir = options?.homedir ?? os.homedir();
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});

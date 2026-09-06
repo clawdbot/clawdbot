@@ -140,6 +140,48 @@ describe("session sharing store", () => {
     });
   });
 
+  it.each([
+    ["identity without timestamps", "session-a", '{"sessionId":"session-a"}', true],
+    ["empty identity", "", '{"sessionId":""}', true],
+    ["opaque identity", " a\0🦞 ", JSON.stringify({ sessionId: " a\0🦞 " }), true],
+    ["mismatched node", "session-b", '{"sessionId":"session-a"}', false],
+    ["malformed JSON", "session-a", "{", false],
+    ["array JSON", "session-a", '[{"sessionId":"session-a"}]', false],
+    ["last duplicate wins", "session-a", '{"sessionId":false,"sessionId":"session-a"}', true],
+    ["last duplicate invalid", "session-a", '{"sessionId":"session-a","sessionId":false}', false],
+    ["literal NUL", "session-a", '{"sessionId":"session-a"}\0', false],
+  ] as const)(
+    "preserves membership identity checks for %s",
+    async (_, sessionId, entryJson, valid) => {
+      await withTestDir({ prefix: "openclaw-session-sharing-identity-" }, async (dir) => {
+        const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+        const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+        await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+        addSessionMember(scope, { identityId: "existing", addedBy: "owner", addedAt: 2 });
+        const database = openOpenClawAgentDatabase({ agentId: "main", env });
+        database.db
+          .prepare(
+            "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
+          )
+          .run(sessionId, entryJson, scope.sessionKey);
+
+        const add = () =>
+          addSessionMember(scope, { identityId: "new", addedBy: "owner", addedAt: 3 });
+        const remove = () => removeSessionMember(scope, "existing");
+        if (valid) {
+          expect(add().inserted).toBe(true);
+          expect(remove()).toEqual({ identityId: "existing", addedBy: "owner", addedAt: 2 });
+        } else {
+          expect(add).toThrow("session changed before sharing mutation");
+          expect(remove).toThrow("session changed before sharing mutation");
+          expect(listSessionMembers(scope)).toEqual([
+            { identityId: "existing", addedBy: "owner", addedAt: 2 },
+          ]);
+        }
+      });
+    },
+  );
+
   it("drops members when the session instance is replaced under the same key", async () => {
     await withTestDir({ prefix: "openclaw-session-sharing-recreate-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };

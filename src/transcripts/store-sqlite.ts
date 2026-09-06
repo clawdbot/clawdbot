@@ -7,7 +7,11 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+} from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 type MeetingTranscriptsDatabase = Pick<
@@ -37,6 +41,68 @@ export function meetingTranscriptSessionQuery(
     .selectFrom("meeting_transcript_sessions")
     .where("session_id", "=", session.sessionId)
     .where("started_at", "=", session.startedAt);
+}
+
+export function readTranscriptSummaryInputRevision(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).select([
+      "next_utterance_seq",
+      "title",
+      "source_json",
+      "metadata_json",
+      "stopped_at",
+    ]),
+  );
+  // Export bookkeeping is not summary input and must not invalidate a reader.
+  return row ? JSON.stringify(row) : undefined;
+}
+
+export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
+  const rows = executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_summaries")
+      .select(["session_id", "session_started_at"]),
+  ).rows;
+  return new Set(rows.map((row) => `${row.session_id}\0${row.session_started_at}`));
+}
+
+export function readRecentStoppedTranscriptSession(
+  database: DatabaseSync,
+  source: TranscriptSourceLocator,
+  stoppedAfter: string,
+  stoppedBefore: string,
+): TranscriptSessionDescriptor | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_sessions")
+      .selectAll()
+      .where("provider_id", "=", source.providerId)
+      .where("stopped_at", ">=", stoppedAfter)
+      .where("stopped_at", "<=", stoppedBefore)
+      .where((eb) =>
+        eb.and(
+          (["accountId", "guildId", "channelId", "meetingUrl", "threadTs", "fileId"] as const).map(
+            (key) =>
+              eb(
+                eb.fn<string | null>("json_extract", [eb.ref("source_json"), eb.val(`$.${key}`)]),
+                source[key] === undefined ? "is" : "=",
+                source[key] ?? null,
+              ),
+          ),
+        ),
+      )
+      .orderBy("stopped_at", "desc")
+      .orderBy("started_at", "desc")
+      .orderBy("session_id", "asc")
+      .limit(1),
+  );
+  return row ? sessionFromRow(row) : undefined;
 }
 
 export function meetingTranscriptUtteranceQuery(
@@ -135,7 +201,12 @@ function parseOptionalJsonRecord(value: string | null): Record<string, unknown> 
   return asOptionalRecord(JSON.parse(value));
 }
 
-export function sessionFromRow(row: MeetingTranscriptSessionRow): TranscriptSessionDescriptor {
+export function sessionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "session_id" | "source_json" | "metadata_json" | "started_at" | "title" | "stopped_at"
+  >,
+): TranscriptSessionDescriptor {
   const source = parseOptionalJsonRecord(row.source_json);
   const metadata = parseOptionalJsonRecord(row.metadata_json);
   if (!source || typeof source.providerId !== "string") {

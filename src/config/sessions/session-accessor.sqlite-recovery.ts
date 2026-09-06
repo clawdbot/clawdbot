@@ -175,6 +175,11 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
           },
         },
         archivedAt: source.archivedAt ?? now,
+        ...(source.archiveReason
+          ? { archiveReason: source.archiveReason }
+          : source.archivedAt === undefined
+            ? { archiveReason: "restart-recovery" as const }
+            : {}),
         ...(source.archivedBy === undefined && params.archivedBy
           ? { archivedBy: params.archivedBy }
           : {}),
@@ -200,6 +205,6 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
     }, toDatabaseOptions(resolved));
   });
 
-  emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+  emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
   return result;
 }

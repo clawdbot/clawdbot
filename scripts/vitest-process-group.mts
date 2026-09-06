@@ -22,7 +22,6 @@ type CleanupParams = ProcessGroupParams & {
   forceSignal?: VitestProcessSignal | null;
   forceSignalDelayMs?: number;
   forwardedSignals?: VitestProcessSignal[];
-  onSignal?: (signal: VitestProcessSignal) => void;
   processObject?: NodeJS.Process;
 };
 type DiagnosticsProbe = (
@@ -631,9 +630,10 @@ export function installVitestProcessGroupCleanup(params: CleanupParams) {
   const forceSignalDelayMs = params.forceSignalDelayMs ?? 0;
   const forwardedSignals = params.forwardedSignals ?? ["SIGINT", "SIGTERM"];
   const child = params.child;
-  const onSignal = params.onSignal;
 
   let active = true;
+  // Parent interruption remains authoritative after teardown; exit cleanup must not claim it.
+  let forwardedSignal: VitestProcessSignal | undefined;
 
   const forward = (signal: VitestProcessSignal) => {
     if (!active) {
@@ -650,7 +650,7 @@ export function installVitestProcessGroupCleanup(params: CleanupParams) {
   const signalHandlers = new Map<VitestProcessSignal, () => void>();
   for (const signal of forwardedSignals) {
     const handler = () => {
-      onSignal?.(signal);
+      forwardedSignal ??= signal;
       forward(signal);
       if (forceSignal) {
         if (forceSignalDelayMs > 0) {
@@ -671,14 +671,17 @@ export function installVitestProcessGroupCleanup(params: CleanupParams) {
   ensureProcessListenerCapacity(processObject, "exit");
   processObject.on("exit", exitHandler);
 
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    for (const [signal, handler] of signalHandlers) {
-      processObject.off(signal, handler);
-    }
-    processObject.off("exit", exitHandler);
+  return {
+    getForwardedSignal: () => forwardedSignal,
+    teardown: () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      for (const [signal, handler] of signalHandlers) {
+        processObject.off(signal, handler);
+      }
+      processObject.off("exit", exitHandler);
+    },
   };
 }

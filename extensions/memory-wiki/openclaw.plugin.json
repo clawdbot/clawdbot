@@ -2,7 +2,11 @@
   "id": "memory-wiki",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "memory-wiki-compiled-cache-file-cleanup" },
+      { "id": "memory-wiki-source-sync-json-to-plugin-state" },
+      { "id": "memory-wiki-import-runs-json-to-plugin-state" }
+    ]
   },
   "activation": {
     "onStartup": true

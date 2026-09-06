@@ -72,6 +72,7 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "prepare_only",
   "emit_candidate_evidence",
   "release_soak",
+  "package_published",
   "package_artifact_name",
   "prepared_npm_bundle_json",
   "package_artifact_id",
