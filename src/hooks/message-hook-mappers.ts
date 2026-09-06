@@ -707,7 +707,6 @@ export function toInternalMessageSentContext(
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
     messageId: canonical.messageId,
-    ...(canonical.runId ? { runId: canonical.runId } : {}),
     ...(canonical.isGroup != null ? { isGroup: canonical.isGroup } : {}),
     ...(canonical.groupId ? { groupId: canonical.groupId } : {}),
   };

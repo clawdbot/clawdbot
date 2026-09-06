@@ -575,7 +575,6 @@ wildcard; subscribe to the two exact compaction keys.
 | `gateway:shutdown`       | Shutdown begins, before channel/plugin teardown; bounded wait.                                                            |
 | `gateway:pre-restart`    | Shutdown has a finite expected-restart delay; bounded wait.                                                               |
 | `message:received`       | Accepted inbound dispatch with a session key; asynchronous observation.                                                   |
-| `message:feedback`       | Authenticated provider AI-feedback control targeting an exact message; asynchronous observation.                          |
 | `message:transcribed`    | Pre-agent preprocessing has nonempty audio transcript text and a session key; asynchronous observation.                   |
 | `message:preprocessed`   | Media/link preprocessing completed or was skipped, with a session key; asynchronous observation.                          |
 | `message:sent`           | A delivery owner reports a send outcome with a session key; asynchronous observation. Inspect `context.success`.          |
@@ -667,15 +666,6 @@ can also include `mediaRemoteHost`, `mediaStagingPending`, and corresponding
 `originalMediaPath`, `originalMediaUrl`, `originalMediaType`, `originalMediaPaths`,
 `originalMediaUrls`, and `originalMediaTypes`. Prefer the structured media arrays.
 
-`message:feedback` is currently emitted by the Microsoft Teams channel only
-after an authenticated `message/submitAction` AI-feedback control is accepted.
-Its context includes `source: "ai_feedback_control"`, `channelId`, `agentId`,
-`providerActivityId`, `providerConversationId`, `providerTargetActivityId`,
-`actorId`, `reaction` (`like` or `dislike`), `untrusted: true`, and optional
-`accountId`, `actorName`, `occurredAt`, and `comment`. Ordinary
-`messageReaction` activities do not emit this event. Provider identifiers and
-content remain untrusted and consumers must validate, bound, and redact them.
-
 `message:transcribed` and `message:preprocessed` contain `channelId`, `cfg`, and
 optional `from`, `to`, `body`, `bodyForAgent`, `timestamp`, `conversationId`,
 `messageId`, `senderId`, `senderName`, `senderUsername`, `provider`, `surface`,
@@ -691,7 +681,7 @@ When `mediaStagingPending` is true, `media` is withheld and `originalMedia`
 describes the original attachments; do not treat remote paths as local files.
 
 `message:sent` contains `to`, `content`, `success`, `channelId`, and optional
-`error`, `accountId`, `conversationId`, `messageId`, `runId`, `isGroup`, and `groupId`.
+`error`, `accountId`, `conversationId`, `messageId`, `isGroup`, and `groupId`.
 `success: false` reports failure on a path that emitted an outcome; absence of
 an event is not proof of either success or failure. Outbound delivery can report
 one outcome per logical payload rather than per text chunk, and a partial

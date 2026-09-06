@@ -99,34 +99,10 @@ export type MessageSentHookContext = {
   conversationId?: string;
   /** Message ID returned by the provider */
   messageId?: string;
-  /** Agent run identifier when delivery is bound to an inbound turn. */
-  runId?: string;
   /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier, if applicable */
   groupId?: string;
-};
-
-export type MessageFeedbackHookContext = {
-  channelId: string;
-  source: "ai_feedback_control";
-  accountId?: string;
-  agentId: string;
-  occurredAt?: string;
-  providerActivityId: string;
-  providerConversationId: string;
-  providerTargetActivityId: string;
-  actorId: string;
-  actorName?: string;
-  reaction: "like" | "dislike";
-  comment?: string;
-  untrusted: true;
-};
-
-export type MessageFeedbackHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "feedback";
-  context: MessageFeedbackHookContext;
 };
 
 type MessageEnrichedBodyHookContext = {

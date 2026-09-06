@@ -166,6 +166,8 @@ export type {
   PluginHookInboundMessageMetadata,
   PluginHookLocation,
   PluginHookMediaFact,
+  PluginHookMessageFeedbackContext,
+  PluginHookMessageFeedbackEvent,
   PluginHookMessageReceivedEvent,
   PluginHookProviderUpdate,
   PluginHookSkillArtifact,

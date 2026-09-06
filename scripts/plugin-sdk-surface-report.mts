@@ -349,7 +349,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: explicit native page history and query preservation options.
       // +4: observed session query, result, snapshot, and subscription contracts.
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
-      4428,
+      // +3: typed feedback event, message-hook event, and message-hook context contracts.
+      4431,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

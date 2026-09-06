@@ -145,6 +145,7 @@ type HookRunnerOptions = {
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
   channel_pairing_requested: 2_000,
+  message_feedback: 2_000,
   // Defensive default for the compaction lifecycle hooks. Without a budget an
   // unresponsive handler runs fully unbounded, and in the codex agent harness
   // these hooks fire on the serialized notification queue
@@ -1772,6 +1773,7 @@ export function createHookRunner(
     runReplyPayloadSending,
     runMessageSending,
     runMessageSent: bindVoidHook("message_sent"),
+    runMessageFeedback: bindVoidHook("message_feedback"),
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,

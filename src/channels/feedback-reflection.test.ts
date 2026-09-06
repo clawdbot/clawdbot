@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { recordChannelFeedbackEvent, runChannelFeedbackReflection } from "./feedback-reflection.js";
 import {
   configureChannelAdmissionEvidenceCollection,
@@ -177,4 +182,76 @@ describe("channel feedback reflection", () => {
       event,
     );
   });
+
+  it.each(["stored", "missing", "failed"] as const)(
+    "notifies a typed subscriber without waiting when transcript is %s",
+    async (outcome) => {
+      loadSessionEntry.mockReturnValue(
+        outcome === "missing" ? undefined : { sessionId: "session-1" },
+      );
+      resolveSessionTranscriptRuntimeTarget.mockResolvedValue({ sessionId: "session-1" });
+      if (outcome === "failed") {
+        appendTranscriptEvent.mockRejectedValueOnce(new Error("transcript unavailable"));
+      }
+      let release: () => void = () => {};
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const subscriber = vi.fn(() => pending);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "message_feedback", handler: subscriber }]),
+      );
+      try {
+        const params = {
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:msteams:feedback",
+          context: { channelId: "msteams", accountId: "default" },
+          event: {
+            type: "custom" as const,
+            event: "feedback" as const,
+            ts: 1,
+            messageId: "response-1",
+            value: "negative" as const,
+            comment: "Be concise",
+            senderId: "sender-1",
+            senderName: "Sender",
+            providerUpdate: { id: "invoke-1", kind: "message/submitAction" },
+            agentId: "main",
+            sessionKey: "agent:main:msteams:feedback",
+            conversationId: "conversation-1",
+          },
+        };
+        const result = recordChannelFeedbackEvent(params);
+        if (outcome === "failed") {
+          await expect(result).rejects.toThrow("transcript unavailable");
+        } else {
+          await expect(result).resolves.toBe(outcome === "stored");
+        }
+        expect(subscriber).toHaveBeenCalledExactlyOnceWith(
+          {
+            messageId: "response-1",
+            value: "negative",
+            timestamp: 1,
+            comment: "Be concise",
+            senderId: "sender-1",
+            senderName: "Sender",
+            providerUpdate: { id: "invoke-1", kind: "message/submitAction" },
+          },
+          {
+            channelId: "msteams",
+            accountId: "default",
+            agentId: "main",
+            sessionKey: params.sessionKey,
+            conversationId: "conversation-1",
+            messageId: "response-1",
+            senderId: "sender-1",
+          },
+        );
+      } finally {
+        release();
+        resetGlobalHookRunner();
+      }
+    },
+  );
 });

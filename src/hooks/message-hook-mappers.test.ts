@@ -816,7 +816,6 @@ describe("message hook mappers", () => {
       accountId: "acc-1",
       conversationId: "demo-chat:chat:456",
       messageId: "out-1",
-      runId: "run-out-1",
       isGroup: true,
       groupId: "demo-chat:chat:456",
     });

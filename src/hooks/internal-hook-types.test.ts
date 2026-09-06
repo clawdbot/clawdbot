@@ -13,7 +13,6 @@ describe("isKnownInternalHookEventKey", () => {
       "gateway:shutdown",
       "gateway:startup",
       "message:preprocessed",
-      "message:feedback",
       "message:received",
       "message:sent",
       "message:transcribed",
