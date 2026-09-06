@@ -282,7 +282,10 @@ export async function processResponsesStream<TApi extends Api>(
       if (tracked && !state) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
-      const validated = resolveCompletedResponsesToolCall(item, { name: state?.block.name });
+      const validated = resolveCompletedResponsesToolCall(item, {
+        name: state?.block.name,
+        arguments: state?.argumentStreamReliable ? state.block.partialJson : undefined,
+      });
       if (state) {
         recovered.push(state);
       }
@@ -655,7 +658,9 @@ export async function processResponsesStream<TApi extends Api>(
           }
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: completedArguments || streamingToolCall?.block.partialJson || "",
+            arguments: streamingToolCall?.argumentStreamReliable
+              ? streamingToolCall.block.partialJson
+              : undefined,
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
