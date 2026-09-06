@@ -203,10 +203,12 @@ export async function selectUsageSessions(params: {
   } = params;
   // Load session store for named sessions only on a result-cache miss.
   const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(
-    config,
-    sessionStoreOpts,
-  );
+  // Usage rows report systemPromptReport as context weight, so this is the one
+  // store-wide reader that needs the retained prompt payload.
+  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(config, {
+    ...sessionStoreOpts,
+    projection: "full",
+  });
   const scopedStore = Object.fromEntries(
     Object.entries(store).filter(
       ([key, entry]) =>

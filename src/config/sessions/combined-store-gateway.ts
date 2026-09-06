@@ -468,7 +468,10 @@ export function loadCombinedSessionStoreForGatewayCore(
   store: Record<string, SessionEntry>;
   targetsBySessionKey: GatewayStoredSessionTargets;
 } {
-  const projection = opts.projection ?? "full";
+  // Store-wide reads default to metadata only. "full" retains skillsSnapshot and
+  // systemPromptReport for every row, so a caller that reads one field would still
+  // materialize every saved prompt; callers that need those blobs opt in explicitly.
+  const projection = opts.projection ?? "list";
   // Count admission and projection share this exact target set. Otherwise an optional
   // prewarm can approve one database and synchronously materialize another.
   const {

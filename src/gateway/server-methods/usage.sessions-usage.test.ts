@@ -223,7 +223,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { agentId: "main" },
+      { agentId: "main", projection: "full" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
@@ -241,7 +241,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      {},
+      { projection: "full" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
     expect(
@@ -280,7 +280,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { agentId: "opus" },
+      { agentId: "opus", projection: "full" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
@@ -467,7 +467,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { agentId: "codex" },
+      { agentId: "codex", projection: "full" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
