@@ -1263,7 +1263,12 @@ fn main() {
         builder
     };
     let builder = notify::register(builder)
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                // Dashboard links use the native handler; its renderer has no opener IPC grant.
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(

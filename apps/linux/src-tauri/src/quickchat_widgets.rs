@@ -23,6 +23,50 @@ const QUICKCHAT_WIDGET_LABEL_PREFIX: &str = "quickchat-widget-";
 const QUICKCHAT_WIDGET_MAX_COUNT: usize = 32;
 const QUICKCHAT_WIDGET_MAX_URL_BYTES: usize = 4096;
 
+#[cfg(target_os = "linux")]
+mod compact_content {
+    use gtk::glib;
+    use gtk::subclass::prelude::*;
+
+    #[derive(Default)]
+    pub struct Content;
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for Content {
+        const NAME: &'static str = "OpenClawQuickChatContent";
+        type Type = super::QuickChatContent;
+        type ParentType = gtk::Box;
+    }
+
+    impl ObjectImpl for Content {}
+
+    impl WidgetImpl for Content {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            gtk::SizeRequestMode::ConstantSize
+        }
+
+        fn preferred_width(&self) -> (i32, i32) {
+            let width = super::QUICKCHAT_WIDTH as i32;
+            (width, width)
+        }
+
+        fn preferred_height(&self) -> (i32, i32) {
+            let height = super::QUICKCHAT_COMPACT_WINDOW_HEIGHT as i32;
+            (height, height)
+        }
+    }
+
+    impl ContainerImpl for Content {}
+    impl BoxImpl for Content {}
+}
+
+#[cfg(target_os = "linux")]
+gtk::glib::wrapper! {
+    pub struct QuickChatContent(ObjectSubclass<compact_content::Content>)
+        @extends gtk::Box, gtk::Container, gtk::Widget,
+        @implements gtk::Buildable, gtk::Orientable;
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickChatWidgetLayout {
@@ -107,7 +151,7 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
         let parent = primary
             .parent()
             .ok_or_else(|| "Quick Chat native view has no layout container.".to_string())?;
-        if parent.is::<gtk::Overlay>() {
+        if parent.is::<QuickChatContent>() {
             return Ok(());
         }
         let vbox = parent
@@ -115,15 +159,19 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
             .map_err(|_| "Quick Chat native layout container is unavailable.".to_string())?;
         let overlay = gtk::Overlay::new();
         let fixed = gtk::Fixed::new();
+        let content: QuickChatContent = gtk::glib::Object::new();
         vbox.remove(&primary);
-        // Overlay allocates the primary once at full size and ignores widget minimum sizes.
-        overlay.add(&primary);
+        // The app owns preferred size; WebKit's natural size must not raise compact-window hints.
+        content.set_orientation(gtk::Orientation::Vertical);
+        content.pack_start(&primary, true, true, 0);
+        overlay.add(&content);
         fixed.set_halign(gtk::Align::Fill);
         fixed.set_valign(gtk::Align::Fill);
         overlay.add_overlay(&fixed);
         // Only the overlay's wrapper passes input through; WebKit's own GdkWindows retain input.
         overlay.set_overlay_pass_through(&fixed, true);
         vbox.pack_start(&overlay, true, true, 0);
+        content.show();
         fixed.show();
         overlay.show();
         Ok(())
