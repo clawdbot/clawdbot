@@ -709,6 +709,12 @@ async function activateSetupInferenceUnredacted(
   } finally {
     verificationProgress?.stop();
     let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
+    if (params.surface === "cli" && codexProbePluginGeneration) {
+      // The CLI probe generation has no long-lived host to dispose its harnesses.
+      // Close them before removing their temporary agent home or the process survives setup.
+      const { disposeRegisteredAgentHarnesses } = await import("../agents/harness/registry.js");
+      await withProbePluginGeneration(disposeRegisteredAgentHarnesses);
+    }
     if (pendingCodexInstall && codexInstallOwnership !== "owned") {
       // Reassert after probing: a partial install-index commit may have cleared
       // the early marker even though the matching model route never committed.

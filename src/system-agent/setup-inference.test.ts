@@ -5082,6 +5082,7 @@ describe("activateSetupInference", () => {
       },
     };
     const stagedRegistry = createEmptyPluginRegistry();
+    const dispose = vi.fn(async () => undefined);
     stagedRegistry.agentHarnesses.push({
       pluginId: "codex",
       source: "test",
@@ -5092,6 +5093,7 @@ describe("activateSetupInference", () => {
         runAttempt: async () => {
           throw new Error("unused");
         },
+        dispose,
       },
     });
     const prepareProbeMetadata = (config: OpenClawConfig, workspaceDir: string) => {
@@ -5173,6 +5175,39 @@ describe("activateSetupInference", () => {
     expect(ownerArtifactRegistry).toBe(stagedRegistry);
     expect(captureSystemAgentOwnerPluginArtifacts).toHaveBeenCalledOnce();
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("disposes the private Codex probe generation after CLI activation", async () => {
+    const stagedRegistry = createEmptyPluginRegistry();
+    const dispose = vi.fn(async () => undefined);
+    stagedRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+        dispose,
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(stagedRegistry);
+    const configHarness = createPreRosterConfigTransformHarness();
+
+    const result = await activateCodexSetup({
+      surface: "cli",
+      workspace: "/tmp/work",
+      deps: {
+        readConfigFileSnapshot: configHarness.readSnapshot as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("commits only the refreshed codex record when authored install metadata is stale", async () => {
