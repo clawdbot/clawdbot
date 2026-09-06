@@ -139,6 +139,45 @@ describe("defaultPersistDigest tri-state contract", () => {
       expect(loadSessionEntryReadOnly({ sessionKey, agentId })?.observerDigest?.revision).toBe(0);
     });
   });
+
+  it.each([undefined, "lifecycle-a"])(
+    "rejects lifecycle %s after reset keeps the session id",
+    async (lifecycleRevision) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:persist-digest-reset";
+        const sessionId = "sess-1";
+        await upsertSessionEntryCore(
+          { sessionKey, agentId, env: process.env },
+          { sessionId, lifecycleRevision: "lifecycle-b", updatedAt: 1 },
+        );
+        const before = readSessionObserverDigestVersion();
+        const previousDigest = {
+          ...makeDigest(sessionKey, 10),
+          sessionId,
+          lifecycleRevision,
+        };
+
+        expect(
+          await defaultPersistDigest({ sessionKey, agentId, sessionId, digest: previousDigest }),
+        ).toBe(false);
+        expect(readSessionObserverDigestVersion()).toBe(before);
+        expect(loadSessionEntryReadOnly({ sessionKey, agentId })?.observerDigest).toBeUndefined();
+
+        const currentDigest = {
+          ...makeDigest(sessionKey, 1),
+          sessionId,
+          lifecycleRevision: "lifecycle-b",
+        };
+        expect(
+          await defaultPersistDigest({ sessionKey, agentId, sessionId, digest: currentDigest }),
+        ).toBe(true);
+        expect(readSessionObserverDigestVersion()).toBe(before + 1);
+        expect(loadSessionEntryReadOnly({ sessionKey, agentId })?.observerDigest).toEqual(
+          currentDigest,
+        );
+      });
+    },
+  );
 });
 
 describe("session observer digest fence", () => {
@@ -198,7 +237,7 @@ describe("session observer digest fence", () => {
             terminalHealth: "done",
           },
         },
-        readSession: () => undefined,
+        readSession: () => loadSessionEntryReadOnly({ sessionKey, agentId }),
         persistDigest: defaultPersistDigest,
         now: () => 1,
       });

@@ -6505,6 +6505,8 @@ public struct SessionObserverPlanProgress: Codable, Sendable {
 public struct SessionObserverDigest: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let sessionid: String?
+    public let lifecyclerevision: String?
     public let runid: String?
     public let revision: Int
     public let updatedat: Int
@@ -6516,6 +6518,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     public init(
         sessionkey: String,
         agentid: String? = nil,
+        sessionid: String? = nil,
+        lifecyclerevision: String? = nil,
         runid: String? = nil,
         revision: Int,
         updatedat: Int,
@@ -6526,6 +6530,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.sessionid = sessionid
+        self.lifecyclerevision = lifecyclerevision
         self.runid = runid
         self.revision = revision
         self.updatedat = updatedat
@@ -6538,6 +6544,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case sessionid = "sessionId"
+        case lifecyclerevision = "lifecycleRevision"
         case runid = "runId"
         case revision
         case updatedat = "updatedAt"
