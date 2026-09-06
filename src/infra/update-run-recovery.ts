@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
@@ -24,7 +23,10 @@ import {
   type UpdateRecoveryEffect,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
-import { digestUpdateRecoveryDatabase } from "./update-run-recovery-snapshot.js";
+import {
+  assertSeparateUpdateRecoveryDatabases,
+  digestUpdateRecoveryDatabase,
+} from "./update-run-recovery-snapshot.js";
 
 export {
   UpdateRecoveryConflictError,
@@ -649,16 +651,7 @@ export function prepareUpdateRecoveryCarryForward(params: {
 } {
   const { sourceDb, stagedDb, expected, fence } = params;
   fence.assertCurrent();
-  if (
-    sourceDb === stagedDb ||
-    sourceDb.isTransaction ||
-    stagedDb.isTransaction ||
-    (sourceDb.location() !== null &&
-      stagedDb.location() !== null &&
-      realpathSync(sourceDb.location()!) === realpathSync(stagedDb.location()!))
-  ) {
-    throw new Error("Recovery carry-forward requires separate idle source and staged databases");
-  }
+  assertSeparateUpdateRecoveryDatabases(sourceDb, stagedDb);
   // An absent old machine-state owner cannot be invented as a downgrade shim.
   if (!tableExists(stagedDb, "config_machine_state")) {
     throw new Error("Checkpoint schema cannot preserve update recovery state");

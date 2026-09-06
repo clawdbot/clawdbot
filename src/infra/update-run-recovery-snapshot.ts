@@ -1,5 +1,28 @@
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+
+/** Path spelling does not distinguish a disposable copy from a hard-linked live DB. */
+export function assertSeparateUpdateRecoveryDatabases(
+  sourceDb: DatabaseSync,
+  stagedDb: DatabaseSync,
+): void {
+  const message = "Recovery carry-forward requires separate idle source and staged databases";
+  if (sourceDb === stagedDb || sourceDb.isTransaction || stagedDb.isTransaction) {
+    throw new Error(message);
+  }
+  const sourcePath = sourceDb.location();
+  const stagedPath = stagedDb.location();
+  if (sourcePath !== null && stagedPath !== null) {
+    // stat follows symbolic links; device + inode also detects distinct hard-link paths.
+    // Use bigint to avoid rounding large file identifiers into false matches.
+    const source = statSync(sourcePath, { bigint: true });
+    const stage = statSync(stagedPath, { bigint: true });
+    if (source.dev === stage.dev && source.ino === stage.ino) {
+      throw new Error(message);
+    }
+  }
+}
 
 function quoteIdentifier(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;

@@ -95,6 +95,32 @@ afterEach(() => {
 });
 
 describe("recovery carry-forward", () => {
+  it.each(["symbolic link", "hard link"])(
+    "rejects a source alias through a %s before opening a write transaction",
+    async (aliasKind) => {
+      const f = await fixture();
+      f.sourceDb.close();
+      f.stagedDb.close();
+      const alias = path.join(f.root, "source-alias.sqlite");
+      if (aliasKind === "hard link") {
+        fs.linkSync(f.file, alias);
+      } else {
+        fs.symlinkSync(f.file, alias);
+      }
+      const sourceDb = open(f.file);
+      // An alias is not a disposable stage. Detection must precede even BEGIN,
+      // independently of whether this second handle permits writes.
+      const stagedDb = open(alias, true);
+      const before = readUpdateRecoveryDatabaseBinding(sourceDb, f.expected);
+      expect(() => prepareUpdateRecoveryCarryForward({ ...f.params, sourceDb, stagedDb })).toThrow(
+        "Recovery carry-forward requires separate idle source and staged databases",
+      );
+      expect(sourceDb.isTransaction).toBe(false);
+      expect(stagedDb.isTransaction).toBe(false);
+      expect(readUpdateRecoveryDatabaseBinding(sourceDb, f.expected)).toEqual(before);
+    },
+  );
+
   it.each(["initial observation", "skipped intent", "backward phase", "unsealed next resource"])(
     "rejects %s without changing either durable copy",
     async (change) => {
