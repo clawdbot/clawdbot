@@ -62,7 +62,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrashResult } from "./cleanup-utils.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 
 type AgentsDeleteOptions = {
   id: string;
@@ -133,12 +133,11 @@ export async function agentsDeleteCommand(
   opts: AgentsDeleteOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
-  const baseHash = configSnapshot.hash;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
 
   const input = opts.id?.trim();
   if (!input) {
@@ -293,9 +292,10 @@ export async function agentsDeleteCommand(
       await withAgentExecApprovalsRemoved(agentId, async () => {
         if (configured) {
           await replaceConfigFile({
-            nextConfig: result.config,
-            ...(baseHash !== undefined ? { baseHash } : {}),
+            ...writeSnapshot,
+            sourceConfig: result.config,
             writeOptions: {
+              ...writeSnapshot.writeOptions,
               allowedAgentRosterRemovals: [agentId],
               ...(opts.json ? { skipOutputLogs: true } : {}),
             },

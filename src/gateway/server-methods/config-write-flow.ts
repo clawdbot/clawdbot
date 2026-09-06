@@ -251,7 +251,7 @@ export async function commitGatewayConfigWrite(params: {
     : undefined;
   holdGatewayPolicyResponse(params.respond);
   const result = await replaceConfigFile({
-    nextConfig: params.nextConfig,
+    sourceConfig: params.nextConfig,
     // The early RPC hash check is only advisory until this lock-time CAS. Without
     // it, concurrent writers can both succeed and overwrite each other's config.
     baseHash: resolveConfigSnapshotHash(params.snapshot) ?? undefined,

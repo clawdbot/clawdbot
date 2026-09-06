@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   mutateConfigFileWithRetry,
+  readConfigFileSnapshotForWrite,
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
@@ -243,6 +244,49 @@ it("finishes creation bookkeeping when delegated authority closes after successf
   } finally {
     deletion.rollback();
     releaseAgentRunDelegatedAuthority(authority);
+    closeOpenClawStateDatabaseForTest();
+    await state.cleanup();
+  }
+});
+
+it("preserves env references from guided staging when preparation changes the environment", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    scenario: "minimal",
+    label: "guided-stage-env",
+  });
+  const oldToken = process.env.GUIDED_STAGE_TOKEN;
+  try {
+    process.env.GUIDED_STAGE_TOKEN = "synthetic-read-value";
+    const config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+    await state.writeConfig({
+      ...config,
+      gateway: { ...config.gateway, auth: { mode: "token", token: "${GUIDED_STAGE_TOKEN}" } },
+    });
+    const writeSnapshot = await readConfigFileSnapshotForWrite();
+    const staged = writeSnapshot.snapshot.sourceConfig;
+    expect(staged.gateway?.auth?.token).toBe("synthetic-read-value");
+    await Promise.resolve();
+    process.env.GUIDED_STAGE_TOKEN = "synthetic-after-guided-await";
+    const created = await createAgent({
+      name: "guided",
+      workspace: state.path("guided-workspace"),
+      stagedConfig: { config: staged, writeSnapshot },
+      prepareConfigCommit: async () => {
+        await Promise.resolve();
+        process.env.GUIDED_STAGE_TOKEN = "synthetic-after-preparation";
+      },
+    });
+    expect(created).toMatchObject({ status: "created", agentId: "guided" });
+    const saved = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+    expect(saved.gateway?.auth?.token).toBe("${GUIDED_STAGE_TOKEN}");
+    expect(saved.agents?.entries?.guided).toBeDefined();
+  } finally {
+    if (oldToken === undefined) {
+      delete process.env.GUIDED_STAGE_TOKEN;
+    } else {
+      process.env.GUIDED_STAGE_TOKEN = oldToken;
+    }
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   }

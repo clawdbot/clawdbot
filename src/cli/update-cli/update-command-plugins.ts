@@ -4,6 +4,7 @@ import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
@@ -101,6 +102,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  configWriteOptions: ConfigWriteOptions;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
   timeoutMs: number;
@@ -321,10 +323,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: { skipPluginValidation: true },
+      writeOptions: {
+        ...params.configWriteOptions,
+        inputBase: "source",
+        skipPluginValidation: true,
+      },
     });
     await refreshPluginRegistryAfterConfigMutation({
-      config: nextConfig,
+      configPath: params.configSnapshot.path,
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,

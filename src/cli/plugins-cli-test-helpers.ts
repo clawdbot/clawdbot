@@ -3,6 +3,8 @@ import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.types.js";
+import type { ConfigReplaceInput } from "../config/mutate.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -59,6 +61,7 @@ function createEmptyUninstallActions() {
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 let mockHookInstallRecords: Record<string, HookInstallRecord> = {};
 let mockInstalledPluginIndexRevision = 0;
+const mockPersistedConfigs = new Map<string, OpenClawConfig>();
 
 export function setHookInstallRecords(records: Record<string, HookInstallRecord>): void {
   mockHookInstallRecords = structuredClone(records);
@@ -276,6 +279,31 @@ vi.mock("./plugins-update-gateway-signal.js", () => ({
   notifyGatewayPluginMetadataChanged: (...args: unknown[]) =>
     notifyGatewayPluginMetadataChangedMock(...args),
 }));
+
+vi.mock("../config/io.factory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.factory.js")>();
+  return {
+    ...actual,
+    createConfigIO: (options: Parameters<typeof actual.createConfigIO>[0]) => ({
+      ...actual.createConfigIO(options),
+      readConfigFileSnapshot: async () => {
+        const snapshot = await invokeMock<
+          [],
+          ReturnType<ReturnType<typeof actual.createConfigIO>["readConfigFileSnapshot"]>
+        >(readConfigFileSnapshotMock);
+        const configPath = options?.configPath ?? snapshot.path;
+        const config = structuredClone(mockPersistedConfigs.get(configPath) ?? snapshot.config);
+        return {
+          ...snapshot,
+          path: configPath,
+          config,
+          runtimeConfig: config,
+          sourceConfig: config,
+        };
+      },
+    }),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: () => {
@@ -899,6 +927,7 @@ export function resetPluginsCliTestState() {
   recordPluginInstallMock.mockReset();
   mockInstalledPluginIndexInstallRecords = {};
   mockInstalledPluginIndexRevision = 0;
+  mockPersistedConfigs.clear();
   loadInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockReset();
@@ -968,10 +997,15 @@ export function resetPluginsCliTestState() {
     };
   });
   configWriteMock.mockResolvedValue(undefined);
-  replaceConfigFileMock.mockImplementation(
-    (async (params: { nextConfig: OpenClawConfig }) =>
-      await configWriteMock(params.nextConfig)) as (...args: unknown[]) => Promise<unknown>,
-  );
+  replaceConfigFileMock.mockImplementation((async (
+    params: ConfigReplaceInput & { writeOptions?: ConfigWriteOptions },
+  ) => {
+    const nextConfig = params.sourceConfig ?? params.nextConfig;
+    await configWriteMock(nextConfig);
+    const configPath = params.writeOptions?.ownedConfigPathForWrite ?? "/tmp/openclaw-config.json5";
+    mockPersistedConfigs.set(configPath, structuredClone(nextConfig));
+    return { path: configPath, nextConfig };
+  }) as (...args: unknown[]) => Promise<unknown>);
   resolveStateDir.mockReturnValue("/tmp/openclaw-state");
   resolveMarketplaceInstallShortcutMock.mockResolvedValue(null);
   installPluginFromMarketplaceMock.mockResolvedValue({

@@ -37,16 +37,16 @@ vi.mock("../../config/config.js", async () => {
     ...actual,
     createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
     writeConfigFile: writeConfigFileMock,
-    replaceConfigFile: async (params: { nextConfig: OpenClawConfig; writeOptions?: object }) => {
-      await writeConfigFileMock(params.nextConfig, params.writeOptions);
+    replaceConfigFile: async (params: { sourceConfig: OpenClawConfig; writeOptions?: object }) => {
+      await writeConfigFileMock(params.sourceConfig, params.writeOptions);
       if (params.writeOptions && runtimeApplication.claimed) {
         getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
       }
-      const persistedConfig = persistedConfigResultMock(params.nextConfig);
+      const persistedConfig = persistedConfigResultMock(params.sourceConfig);
       return {
         path: "/tmp/openclaw.json",
         previousHash: "base-hash",
-        snapshot: createConfigWriteSnapshot(params.nextConfig),
+        snapshot: createConfigWriteSnapshot(params.sourceConfig),
         nextConfig: persistedConfig,
         persistedHash: "next-hash",
         afterWrite: { mode: "auto" },

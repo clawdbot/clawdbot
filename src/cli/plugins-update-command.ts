@@ -610,7 +610,7 @@ async function runPluginUpdateCommandUnlocked(
       );
       if (pluginResult.changed) {
         await refreshPluginRegistryAfterConfigMutation({
-          config: nextConfig,
+          configPath: sourceSnapshot?.writeOptions.ownedConfigPathForWrite,
           reason: "source-changed",
           installRecords: nextPluginInstallRecords,
           invalidateRuntimeCache: false,

@@ -47,7 +47,7 @@ import { applyAgentBindings, buildChannelBindings, describeBinding } from "./age
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -111,12 +111,11 @@ export async function agentsAddCommand(
     );
   }
 
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
-  const baseHash = configSnapshot.hash;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -507,8 +506,9 @@ export async function agentsAddCommand(
       try {
         nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
           const committed = await commitConfigWithPendingPluginInstalls({
-            nextConfig: configToCommit,
-            ...(baseHash !== undefined ? { baseHash } : {}),
+            sourceConfig: configToCommit,
+            writeOptions: writeSnapshot.writeOptions,
+            baseHash: writeSnapshot.snapshot.hash,
           });
           return committed.config;
         });
@@ -529,8 +529,7 @@ export async function agentsAddCommand(
       const created = await withPluginLifecycleLease({}, async () => {
         return await createAgent({
           entry: { ...stagedEntry, id: agentId },
-          expectedConfigHash: baseHash ?? null,
-          stagedConfig: nextConfig,
+          stagedConfig: { config: nextConfig, writeSnapshot },
           transformConfig: transformConfigWithPendingPluginInstalls,
           ...(stagedAuthBatch
             ? {

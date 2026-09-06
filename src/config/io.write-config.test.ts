@@ -2574,6 +2574,118 @@ describe("config io write", () => {
   });
 
   it.each([
+    { layout: "root", caller: "transform", canonicalPresent: false },
+    { layout: "include", caller: "transform", canonicalPresent: false },
+    { layout: "root", caller: "replacement", canonicalPresent: false },
+    { layout: "include", caller: "replacement", canonicalPresent: false },
+    { layout: "root", caller: "transform", canonicalPresent: true },
+    { layout: "include", caller: "transform", canonicalPresent: true },
+    { layout: "root", caller: "replacement", canonicalPresent: true },
+    { layout: "include", caller: "replacement", canonicalPresent: true },
+  ] as const)(
+    "persists source model renames when active runtime is already canonical ($layout $caller, canonicalPresent: $canonicalPresent)",
+    async ({ layout, caller, canonicalPresent }) => {
+      await withSuiteHome(async (home) => {
+        const entry = { alias: "friendly", params: { temperature: 0.2 } };
+        const canonicalEntry = canonicalPresent ? { params: { temperature: 0.7 } } : entry;
+        const legacy = "openrouter/openrouter/hunter-alpha";
+        const canonical = "openrouter/hunter-alpha";
+        const agents = {
+          entries: { main: {} },
+          defaults: {
+            models: {
+              [legacy]: entry,
+              ...(canonicalPresent ? { [canonical]: canonicalEntry } : {}),
+            },
+          },
+        };
+        const { configPath } = await writeConfigFixture(home, {
+          gateway: { mode: "local" },
+          agents: layout === "root" ? agents : { $include: "agents.json" },
+        });
+        const agentsPath = path.join(path.dirname(configPath), "agents.json");
+        if (layout === "include") {
+          await writeConfigJson(agentsPath, agents);
+        }
+        const originalRoot = await fs.readFile(configPath, "utf8");
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+          const snapshot = await createHomeConfigIO(home, { configPath }).readConfigFileSnapshot();
+          // Exercise the reader's real normalization, not only a manually changed active snapshot.
+          expect(Object.keys(snapshot.runtimeConfig.agents?.defaults?.models ?? {})).toEqual([
+            canonical,
+          ]);
+          setRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
+
+          const renameModels = (config: OpenClawConfig): OpenClawConfig => ({
+            ...config,
+            agents: { ...config.agents, defaults: { models: { [canonical]: canonicalEntry } } },
+          });
+          const result =
+            caller === "transform"
+              ? await transformConfigFile({
+                  base: "source",
+                  transform: (config) => ({ nextConfig: renameModels(config) }),
+                })
+              : await replaceConfigFile({
+                  sourceConfig: renameModels(snapshot.sourceConfig),
+                  baseHash: snapshot.hash,
+                });
+
+          const persisted = await readPersistedConfig(configPath);
+          const savedAgents: OpenClawConfig["agents"] =
+            layout === "root"
+              ? persisted.agents
+              : JSON.parse(await fs.readFile(agentsPath, "utf8"));
+          expect(savedAgents?.defaults?.models).toStrictEqual({ [canonical]: canonicalEntry });
+          expect(result.nextConfig.agents?.defaults?.models).toStrictEqual({
+            [canonical]: canonicalEntry,
+          });
+          expect(getRuntimeConfigSourceSnapshot()?.agents?.defaults?.models).toStrictEqual({
+            [canonical]: canonicalEntry,
+          });
+          if (layout === "include") {
+            expect(await fs.readFile(configPath, "utf8")).toBe(originalRoot);
+          }
+        });
+      });
+    },
+  );
+
+  it.each(["models", "params"] as const)(
+    "persists source omission of default %s",
+    async (field) => {
+      await withSuiteHome(async (home) => {
+        const { configPath } = await writeConfigFixture(home, {
+          gateway: { mode: "local" },
+          agents: {
+            entries: { main: {} },
+            defaults: {
+              params: { temperature: 0.7 },
+              models: { "openrouter/openrouter/hunter-alpha": { params: { temperature: 0.2 } } },
+            },
+          },
+        });
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+          const snapshot = await createHomeConfigIO(home, { configPath }).readConfigFileSnapshot();
+          setRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
+          const defaults = { ...snapshot.sourceConfig.agents?.defaults };
+          delete defaults[field];
+          await replaceConfigFile({
+            sourceConfig: {
+              ...snapshot.sourceConfig,
+              agents: { ...snapshot.sourceConfig.agents, defaults },
+            },
+            baseHash: snapshot.hash,
+          });
+          expect((await readPersistedConfig(configPath)).agents?.defaults).not.toHaveProperty(
+            field,
+          );
+        });
+      });
+    },
+  );
+
+  it.each([
     { caller: "snapshot-runtime", pluginEntry: "absent" },
     { caller: "snapshot-runtime", pluginEntry: "authored-empty" },
     { caller: "snapshot-source", pluginEntry: "absent" },
@@ -2582,6 +2694,14 @@ describe("config io write", () => {
     { caller: "live-direct", pluginEntry: "authored-empty" },
     { caller: "live-replacement", pluginEntry: "absent" },
     { caller: "live-replacement", pluginEntry: "authored-empty" },
+    { caller: "transform-source", pluginEntry: "absent" },
+    { caller: "transform-source", pluginEntry: "authored-empty" },
+    { caller: "transform-runtime", pluginEntry: "absent" },
+    { caller: "transform-runtime", pluginEntry: "authored-empty" },
+    { caller: "mcp-source", pluginEntry: "absent" },
+    { caller: "mcp-source", pluginEntry: "authored-empty" },
+    { caller: "chat-source", pluginEntry: "absent" },
+    { caller: "chat-source", pluginEntry: "authored-empty" },
   ] as const)(
     "preserves $pluginEntry plugin source through two $caller writes and runtime activation",
     async ({ caller, pluginEntry }) => {
@@ -2646,7 +2766,30 @@ describe("config io write", () => {
                 ...base,
                 tools: { ...base.tools, swarm },
               };
-              if (caller === "snapshot-runtime" || caller === "snapshot-source") {
+              if (caller === "mcp-source") {
+                const { mcpConfigInternal } = await import("./mcp-config.js");
+                const changed = await mcpConfigInternal.set({
+                  name: "docs",
+                  server: {
+                    command: "node",
+                    args: [swarm.enabled === false ? "first.mjs" : "second.mjs"],
+                  },
+                });
+                expect(changed.ok).toBe(true);
+                if (changed.ok) {
+                  expect(changed.config).toEqual(await readPersistedConfig(configPath));
+                }
+              } else if (caller === "chat-source") {
+                const { setConfigPath } = await import("../auto-reply/reply/config-mutations.js");
+                await setConfigPath(["tools", "swarm"], swarm);
+              } else if (caller === "transform-source" || caller === "transform-runtime") {
+                await transformConfigFile({
+                  base: caller === "transform-source" ? "source" : "runtime",
+                  transform: (config) => ({
+                    nextConfig: { ...config, tools: { ...config.tools, swarm } },
+                  }),
+                });
+              } else if (caller === "snapshot-runtime" || caller === "snapshot-source") {
                 await replaceConfigFile({
                   nextConfig,
                   snapshot: prepared.snapshot,
@@ -2667,7 +2810,9 @@ describe("config io write", () => {
                 id: "OPENAI_API_KEY",
               });
               expect(persisted.plugins).toStrictEqual(initialConfig.plugins);
-              expect(persisted.tools).toStrictEqual({ ...initialConfig.tools, swarm });
+              expect(persisted.tools).toStrictEqual(
+                caller === "mcp-source" ? initialConfig.tools : { ...initialConfig.tools, swarm },
+              );
               prepared = await io.readConfigFileSnapshotForWrite();
               expect(prepared.snapshot.valid).toBe(true);
               expect(prepared.snapshot.sourceConfig.plugins).toStrictEqual(initialConfig.plugins);
@@ -2694,6 +2839,67 @@ describe("config io write", () => {
       });
     },
   );
+
+  itWithHome("preserves model-command env refs across an awaited mutation", async (home) => {
+    const { configPath } = await writeConfigFixture(home, {
+      gateway: { mode: "local", auth: { mode: "token", token: "${MODEL_MUTATION_TOKEN}" } },
+    });
+    await withEnvAsync(
+      { OPENCLAW_CONFIG_PATH: configPath, MODEL_MUTATION_TOKEN: "synthetic-before-mutation" },
+      async () => {
+        const { updateConfig } = await import("../commands/models/shared.js");
+        const updated = await updateConfig(async (config) => {
+          expect(config.gateway?.auth?.token).toBe("synthetic-before-mutation");
+          await Promise.resolve();
+          process.env.MODEL_MUTATION_TOKEN = "synthetic-after-mutation";
+          return { ...config, gateway: { ...config.gateway, port: 19002 } };
+        });
+
+        expect(updated.gateway?.auth?.token).toBe("synthetic-before-mutation");
+        const saved = await readPersistedConfig(configPath);
+        expect(saved.gateway?.auth?.token).toBe("${MODEL_MUTATION_TOKEN}");
+        expect(saved.gateway?.port).toBe(19002);
+      },
+    );
+  });
+
+  itWithHome("preserves fresh source env refs in runtime-based transforms", async (home) => {
+    const { configPath } = await writeConfigFixture(home, {
+      gateway: { mode: "local", auth: { mode: "token", token: "${TOKEN_B}" } },
+    });
+    await withEnvAsync(
+      {
+        OPENCLAW_CONFIG_PATH: configPath,
+        TOKEN_A: "synthetic-same-token",
+        TOKEN_B: "synthetic-same-token",
+      },
+      async () => {
+        const snapshot = await createHomeConfigIO(home, {
+          configPath,
+          env: process.env,
+        }).readConfigFileSnapshot();
+        expect(snapshot.runtimeConfig.gateway?.auth?.token).toBe("synthetic-same-token");
+        setRuntimeConfigSnapshot(snapshot.runtimeConfig, {
+          ...snapshot.sourceConfig,
+          gateway: {
+            ...snapshot.sourceConfig.gateway,
+            auth: { mode: "token", token: "${TOKEN_A}" },
+          },
+        });
+
+        await transformConfigFile({
+          base: "runtime",
+          transform: (config) => ({
+            nextConfig: { ...config, gateway: { ...config.gateway, port: 19002 } },
+          }),
+        });
+
+        const saved = await readPersistedConfig(configPath);
+        expect(saved.gateway?.auth?.token).toBe("${TOKEN_B}");
+        expect(saved.gateway?.port).toBe(19002);
+      },
+    );
+  });
 
   it.each(["snapshot-source", "snapshot-runtime"] as const)(
     "preserves an intentional %s edit equal to a stale active source value",

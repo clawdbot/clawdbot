@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../config/config.js";
 import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -53,8 +53,10 @@ describe("Doctor gateway bind persistence", () => {
           await fs.writeFile(includePath, JSON.stringify(diagnostics));
         }
         const before = await fs.readFile(configPath, "utf8");
+        const prepared = await readConfigFileSnapshotForWrite();
         const result = await repairLegacyConfigForUpdateChannel({
-          configSnapshot: await readConfigFileSnapshot(),
+          configSnapshot: prepared.snapshot,
+          configWriteOptions: prepared.writeOptions,
           jsonMode: true,
         });
         if (scenario === "invalid") {

@@ -79,7 +79,7 @@ describe("plugins cli uninstall", () => {
         (typeof import("../config/config.js"))["replaceConfigFile"]
       >[0];
       params.writeOptions?.assertConfigPathForWrite?.();
-      await configWriteMock(params.nextConfig);
+      await configWriteMock(params.sourceConfig ?? params.nextConfig);
     });
   });
 

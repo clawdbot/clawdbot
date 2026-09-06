@@ -1021,14 +1021,19 @@ function resolveConfigWriteResult(
   return { persistedHash: null, persistedConfig: fallbackConfig };
 }
 
-export async function replaceConfigFile(params: {
-  nextConfig: OpenClawConfig;
+export type ConfigReplaceInput =
+  | { sourceConfig: OpenClawConfig; nextConfig?: never }
+  | { nextConfig: OpenClawConfig; sourceConfig?: never };
+
+type ConfigReplaceParams = ConfigReplaceInput & {
   baseHash?: string;
   snapshot?: ConfigFileSnapshot;
   afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
-}): Promise<ConfigReplaceResult> {
+};
+
+export async function replaceConfigFile(params: ConfigReplaceParams): Promise<ConfigReplaceResult> {
   if (!params.snapshot && !params.io) {
     return await withConfigMutationSnapshotLock(
       { writeOptions: params.writeOptions },
@@ -1046,14 +1051,10 @@ export async function replaceConfigFile(params: {
   );
 }
 
-async function replaceConfigFileUnlocked(params: {
-  nextConfig: OpenClawConfig;
-  baseHash?: string;
-  snapshot?: ConfigFileSnapshot;
-  afterWrite?: ConfigWriteOptions["afterWrite"];
-  writeOptions?: ConfigWriteOptions;
-  io?: ConfigMutationIO;
-}): Promise<ConfigReplaceResult> {
+async function replaceConfigFileUnlocked(
+  params: ConfigReplaceParams,
+): Promise<ConfigReplaceResult> {
+  const nextConfig = params.sourceConfig ?? params.nextConfig;
   const prepared = params.snapshot
     ? { snapshot: params.snapshot, writeOptions: params.writeOptions ?? {} }
     : await readConfigSnapshotForMutation({
@@ -1062,6 +1063,7 @@ async function replaceConfigFileUnlocked(params: {
       });
   const { snapshot, writeOptions } = prepared;
   const mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
+  mergedWriteOptions.inputBase = params.sourceConfig ? "source" : mergedWriteOptions.inputBase;
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
@@ -1072,7 +1074,7 @@ async function replaceConfigFileUnlocked(params: {
   );
   let writeResult = await tryWriteSingleTopLevelIncludeMutation({
     snapshot,
-    nextConfig: params.nextConfig,
+    nextConfig,
     afterWrite,
     writeOptions: mergedWriteOptions,
     io: params.io,
@@ -1105,11 +1107,8 @@ async function replaceConfigFileUnlocked(params: {
       };
     }
     writeResult = resolveConfigWriteResult(
-      await (params.io?.writeConfigFile ?? writeConfigFile)(
-        params.nextConfig,
-        fallbackWriteOptions,
-      ),
-      params.nextConfig,
+      await (params.io?.writeConfigFile ?? writeConfigFile)(nextConfig, fallbackWriteOptions),
+      nextConfig,
     );
   }
   return {
@@ -1184,6 +1183,7 @@ async function transformConfigFileAttempt<T>(
   markActiveConfigMutationPath(snapshot.path);
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const baseConfig = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;
+  mergedWriteOptions.inputBase = params.base ?? "source";
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
   );
@@ -1281,14 +1281,13 @@ export async function transformConfigFileWithRetry<T = void>(
   return await withConfigMutationLock({ io: params.io }, async () => await runWithPrepared());
 }
 
-export async function mutateConfigFile<T = void>(params: {
-  base?: ConfigMutationBase;
-  baseHash?: string;
-  afterWrite?: ConfigWriteOptions["afterWrite"];
-  writeOptions?: ConfigWriteOptions;
-  io?: ConfigMutationIO;
+type MutateConfigFileParams<T> = Omit<TransformConfigFileParams<T>, "transform" | "commit"> & {
   mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
-}): Promise<ConfigMutationResult<T>> {
+};
+
+export async function mutateConfigFile<T = void>(
+  params: MutateConfigFileParams<T>,
+): Promise<ConfigMutationResult<T>> {
   return await transformConfigFile<T>({
     base: params.base,
     baseHash: params.baseHash,
@@ -1303,15 +1302,9 @@ export async function mutateConfigFile<T = void>(params: {
   });
 }
 
-export async function mutateConfigFileWithRetry<T = void>(params: {
-  base?: ConfigMutationBase;
-  baseHash?: string;
-  maxAttempts?: number;
-  afterWrite?: ConfigWriteOptions["afterWrite"];
-  writeOptions?: ConfigWriteOptions;
-  io?: ConfigMutationIO;
-  mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
-}): Promise<ConfigMutationResult<T>> {
+export async function mutateConfigFileWithRetry<T = void>(
+  params: MutateConfigFileParams<T> & { maxAttempts?: number },
+): Promise<ConfigMutationResult<T>> {
   return await transformConfigFileWithRetry<T>({
     base: params.base,
     baseHash: params.baseHash,

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
@@ -12,7 +13,7 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, transformConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
@@ -190,58 +191,57 @@ async function runOneShotHooksCliAction(
   requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
 async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
-  const snapshot = await readConfigFileSnapshot();
-  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const hook = resolveHookSelection(
-    buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
-    hookName,
-  );
-  if (!hook) {
-    throw new Error(
-      `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
-    );
-  }
-  if (hook.managedByPlugin) {
-    throw new Error(
-      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-    );
-  }
-  if (enabled && !hook.requirementsSatisfied) {
-    const missing = formatHookMissingSummary(hook, 3);
-    const installHint = hook.install.length
-      ? ` Install options: ${summarizeStringEntries({
-          entries: hook.install.map((option) => option.label),
-          limit: 3,
-        })}.`
-      : "";
-    throw new Error(
-      `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
-    );
-  }
-  const entries = { ...config.hooks?.internal?.entries };
-  entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
-  const nextConfig: OpenClawConfig = {
-    ...config,
-    hooks: {
-      ...config.hooks,
-      internal: {
-        ...config.hooks?.internal,
-        ...(enabled ? { enabled: true } : {}),
-        entries,
-      },
+  const committed = await transformConfigFile({
+    transform: (config) => {
+      const hook = resolveHookSelection(
+        buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
+        hookName,
+      );
+      if (!hook) {
+        throw new Error(
+          `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+        );
+      }
+      if (hook.managedByPlugin) {
+        throw new Error(
+          `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+        );
+      }
+      if (enabled && !hook.requirementsSatisfied) {
+        const missing = formatHookMissingSummary(hook, 3);
+        const installHint = hook.install.length
+          ? ` Install options: ${summarizeStringEntries({
+              entries: hook.install.map((option) => option.label),
+              limit: 3,
+            })}.`
+          : "";
+        throw new Error(
+          `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
+        );
+      }
+      const entries = { ...config.hooks?.internal?.entries };
+      entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
+      const nextConfig: OpenClawConfig = {
+        ...config,
+        hooks: {
+          ...config.hooks,
+          internal: {
+            ...config.hooks?.internal,
+            ...(enabled ? { enabled: true } : {}),
+            entries,
+          },
+        },
+      };
+      return { nextConfig, result: hook };
     },
-  };
-
-  await replaceConfigFile({
-    nextConfig,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
+  const selectedHook = expectDefined(committed.result, "hook mutation result");
   const prefix = enabled
     ? `${theme.success("✓")} Enabled hook:`
     : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
-  const name = hook.emoji
-    ? `${hook.emoji} ${theme.command(hook.name)}`
-    : decorativePrefix("🔗", theme.command(hook.name));
+  const name = selectedHook.emoji
+    ? `${selectedHook.emoji} ${theme.command(selectedHook.name)}`
+    : decorativePrefix("🔗", theme.command(selectedHook.name));
   defaultRuntime.log(`${prefix} ${name}`);
 }
 

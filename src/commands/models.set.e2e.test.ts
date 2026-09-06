@@ -2,8 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { registerModelsCli } from "../cli/models-cli.js";
+import type {
+  ConfigFileSnapshot,
+  OpenClawConfig,
+  TransformConfigFileParams,
+} from "../config/config.js";
 import { stampConfigWriteMetadata } from "../config/io.meta.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 
@@ -14,17 +18,36 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    readConfigFileSnapshot: async () => ({
+  const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
+    const config = structuredClone(mocks.currentConfig);
+    return {
+      path: "/tmp/openclaw-models-set-fixture.json",
+      exists: true,
+      raw: JSON.stringify(config),
+      parsed: config,
       valid: true,
       hash: "config-hash",
-      sourceConfig: structuredClone(mocks.currentConfig),
-      runtimeConfig: structuredClone(mocks.currentConfig),
-      config: structuredClone(mocks.currentConfig),
-    }),
-    replaceConfigFile: async ({ nextConfig }: { nextConfig: Record<string, unknown> }) => {
+      sourceConfig: config,
+      resolved: config,
+      runtimeConfig: structuredClone(config),
+      config: structuredClone(config),
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+  };
+  return {
+    ...actual,
+    readConfigFileSnapshot,
+    transformConfigFile: async ({ base, transform }: TransformConfigFileParams<unknown>) => {
+      const snapshot = await readConfigFileSnapshot();
+      const { nextConfig, result } = await transform(
+        base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig,
+        { snapshot, previousHash: snapshot.hash ?? null, attempt: 0 },
+        {},
+      );
       mocks.writtenConfig = nextConfig;
+      return { nextConfig, result };
     },
   };
 });

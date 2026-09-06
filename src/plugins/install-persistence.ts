@@ -92,6 +92,7 @@ export type ConfigSnapshotForInstallPersist = {
   baseHash: string | undefined;
   writeOptions: Pick<
     ConfigWriteOptions,
+    | "inputBase"
     | "auditOrigin"
     | "assertConfigPathForWrite"
     | "expectedConfigPath"
@@ -297,10 +298,9 @@ export function selectInstallMutationWriteOptions(
   // Install work may outlive its config read. Keep only mutation-start ownership
   // and conflict facts; plugin metadata must come from the commit-time read.
   return {
+    inputBase: "source",
     auditOrigin: "plugin-install",
-    ...(writeOptions.assertConfigPathForWrite
-      ? { assertConfigPathForWrite: writeOptions.assertConfigPathForWrite }
-      : {}),
+    assertConfigPathForWrite: writeOptions.assertConfigPathForWrite,
     expectedConfigPath: writeOptions.expectedConfigPath,
     ownedConfigPathForWrite: writeOptions.ownedConfigPathForWrite,
     envSnapshotForRestore: writeOptions.envSnapshotForRestore,
@@ -688,7 +688,7 @@ export async function persistPluginInstall(params: {
         }
       }
       await refreshPluginRegistryAfterConfigMutation({
-        config: next,
+        configPath: params.snapshot.writeOptions.ownedConfigPathForWrite,
         reason: "source-changed",
         installRecords: nextInstallRecords,
         invalidateRuntimeCache: params.invalidateRuntimeCache,

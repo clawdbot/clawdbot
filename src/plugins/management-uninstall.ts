@@ -271,7 +271,7 @@ export async function uninstallPluginWithPolicy(
         // Remove owned aliases while their realpath still exists; failed deletion remains retryable.
         await runUninstallPhase(params, "config disable", () =>
           replaceConfigFile({
-            nextConfig: prepareConfigForDisabledPluginSet(
+            sourceConfig: prepareConfigForDisabledPluginSet(
               snapshot.config,
               policyPluginIds,
               plan.config,
@@ -336,7 +336,7 @@ export async function uninstallPluginWithPolicy(
         ...directoryResult.warnings,
       ];
       await refreshPluginRegistryAfterConfigMutation({
-        config: nextConfig,
+        configPath: snapshot.writeOptions.ownedConfigPathForWrite,
         env,
         reason: "source-changed",
         installRecords: nextInstallRecords,

@@ -7,7 +7,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
+import { refreshPluginRegistryForPreparedConfig } from "../plugins/registry-refresh.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -73,7 +73,7 @@ describe("revalidateSetupInferenceOwner", () => {
             configSchema: { type: "object" },
           });
           await state.writeText("plugin/index.js", 'throw new Error("metadata must not execute");');
-          await refreshPluginRegistryAfterConfigMutation({
+          await refreshPluginRegistryForPreparedConfig({
             config,
             workspaceDir: state.workspaceDir,
             reason: "source-changed",

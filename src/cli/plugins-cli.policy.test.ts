@@ -181,11 +181,11 @@ describe("plugins cli policy mutations", () => {
     await runPluginsCommand(["plugins", "enable", "alpha"]);
 
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig: enabledConfig,
+      sourceConfig: enabledConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
     expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
@@ -403,11 +403,11 @@ describe("plugins cli policy mutations", () => {
     const entries = requirePluginEntries(nextConfig);
     expect(entries.alpha).toEqual({ enabled: false });
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig,
+      sourceConfig: nextConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -437,11 +437,11 @@ describe("plugins cli policy mutations", () => {
       await runPluginsCommand(["plugins", "enable", alias]);
 
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
-        nextConfig: enabledConfig,
+        sourceConfig: enabledConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
       expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     },
@@ -466,11 +466,11 @@ describe("plugins cli policy mutations", () => {
       expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
-        nextConfig,
+        sourceConfig: nextConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
     },
   );

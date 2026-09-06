@@ -30,9 +30,9 @@ const replaceConfigFileMock = vi.hoisted(() =>
 const createAgentMock = vi.hoisted(() => vi.fn());
 const checkAgentCreationGateMock = vi.hoisted(() => vi.fn());
 const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
-  vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
-    await writeConfigFileMock(params.nextConfig);
-    return { config: params.nextConfig };
+  vi.fn(async (params: { sourceConfig: Record<string, unknown> }) => {
+    await writeConfigFileMock(params.sourceConfig);
+    return { config: params.sourceConfig };
   }),
 );
 const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
@@ -118,6 +118,13 @@ const onboardHelpersMocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: readConfigFileSnapshotMock,
+  readConfigFileSnapshotForWrite: async () => {
+    const snapshot = await readConfigFileSnapshotMock();
+    return {
+      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
+      writeOptions: {},
+    };
+  },
   writeConfigFile: writeConfigFileMock,
   replaceConfigFile: replaceConfigFileMock,
 }));
@@ -209,7 +216,7 @@ describe("agents add command", () => {
         workspace?: string;
         entry?: { id: string; name?: string; workspace?: string; agentDir?: string };
         bindingSpecs?: string[];
-        stagedConfig?: Record<string, unknown>;
+        stagedConfig?: { config: Record<string, unknown> };
         prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
       }) => {
         const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
@@ -232,7 +239,7 @@ describe("agents add command", () => {
           workspace: params.workspace ?? params.entry?.workspace ?? `/tmp/workspace-${agentId}`,
           agentDir: params.entry?.agentDir ?? `/tmp/agent-${agentId}`,
           bootstrapPending: true,
-          config: params.stagedConfig ?? {},
+          config: params.stagedConfig?.config ?? {},
           ...(binding
             ? {
                 bindingResult: {
@@ -792,25 +799,12 @@ describe("agents add command", () => {
       setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
       useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
       stageGuidedAuth();
-      createAgentMock.mockImplementationOnce(
-        async (params: {
-          stagedConfig?: Record<string, unknown>;
-          prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
-        }) => {
-          expect(pluginLifecycleMocks.state.active).toBe(true);
-          expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
-          await params.prepareConfigCommit?.();
-          return {
-            status: "created" as const,
-            agentId: "work",
-            name: "work",
-            workspace: workspaceDir,
-            agentDir,
-            bootstrapPending: true,
-            config: params.stagedConfig ?? {},
-          };
-        },
-      );
+      const create = createAgentMock.getMockImplementation()!;
+      createAgentMock.mockImplementationOnce(async (params) => {
+        expect(pluginLifecycleMocks.state.active).toBe(true);
+        expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
+        return await create(params);
+      });
 
       await agentsAddCommand({}, runtime);
 
@@ -827,7 +821,10 @@ describe("agents add command", () => {
       );
       expect(createAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          stagedConfig: expect.objectContaining({ auth: expect.any(Object) }),
+          stagedConfig: expect.objectContaining({
+            config: expect.objectContaining({ auth: expect.any(Object) }),
+            writeSnapshot: expect.any(Object),
+          }),
           prepareConfigCommit: expect.any(Function),
         }),
       );
@@ -884,7 +881,7 @@ describe("agents add command", () => {
       });
       expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          nextConfig: expect.objectContaining({ auth: expect.any(Object) }),
+          sourceConfig: expect.objectContaining({ auth: expect.any(Object) }),
         }),
       );
       expect(createAgentMock).not.toHaveBeenCalled();

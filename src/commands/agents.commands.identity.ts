@@ -27,7 +27,7 @@ import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 
 type AgentsSetIdentityOptions = {
   agent?: string;
@@ -67,14 +67,12 @@ export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = migratePersistedImplicitMainRoster(
-    configSnapshot.sourceConfig ?? configSnapshot.config,
-  ).config as OpenClawConfig;
-  const baseHash = configSnapshot.hash;
+  const cfg = migratePersistedImplicitMainRoster(writeSnapshot.snapshot.sourceConfig)
+    .config as OpenClawConfig;
 
   const nameRaw = normalizeOptionalString(opts.name);
   const emojiRaw = normalizeOptionalString(opts.emoji);
@@ -165,8 +163,8 @@ export async function agentsSetIdentityCommand(
     identity: incomingIdentity,
   });
   const committed = await replaceConfigFile({
-    nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
+    ...writeSnapshot,
+    sourceConfig: nextConfig,
   });
 
   const committedEntry = expectDefined(

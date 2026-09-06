@@ -51,6 +51,7 @@ import {
 } from "./io.read-helpers.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
+  ConfigWriteInputBasis,
   ConfigWriteOptions,
   InternalConfigWriteResult,
   ReadConfigFileSnapshotInternalResult,
@@ -97,6 +98,10 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
+  const inputBasis: ConfigWriteInputBasis = {
+    kind: options.inputBase ?? "runtime",
+    config: options.inputBase === "source" ? snapshot.sourceConfig : snapshot.runtimeConfig,
+  };
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
@@ -127,7 +132,7 @@ export async function writeConfigFileFromContext(
   let persistCandidate: unknown = nextConfig;
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
-  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
+  collectChangedPaths(inputBasis.config, nextConfig, "", changedPaths);
   for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
@@ -141,6 +146,7 @@ export async function writeConfigFileFromContext(
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
     persistCandidate = resolvePersistCandidateForWrite({
+      inputBasis,
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
       sourceConfigValid: snapshot.valid,

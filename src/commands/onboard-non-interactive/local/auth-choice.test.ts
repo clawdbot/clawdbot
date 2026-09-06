@@ -337,6 +337,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(result).not.toBeNull();
     await commitNonInteractiveOnboardConfig({
       nextConfig: result!,
+      baseConfig: nextConfig,
     });
 
     const persistedConfig = writeWizardConfigFile.mock.calls.at(-1)?.[0];

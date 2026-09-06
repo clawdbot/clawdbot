@@ -29,9 +29,9 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   persistRequestedUpdateChannel,
+  preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
-  restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
@@ -227,15 +227,11 @@ async function updateFinalizeCommandInternal(
       },
     });
     return await withPluginLifecycleLease({}, async () => {
-      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-      if (requestedChannel) {
-        configSnapshot = await persistRequestedUpdateChannel({
-          configSnapshot,
-          requestedChannel,
-        });
-      }
-      const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-      configSnapshot = restoredConfig.snapshot;
+      const preparedConfig = await preparePostCorePluginConfig({
+        requestedChannel,
+        preUpdateConfig: preFinalizeConfig,
+      });
+      configSnapshot = preparedConfig.configSnapshot;
       const postDoctorStoredChannel = configSnapshot.valid
         ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
         : null;
@@ -254,9 +250,7 @@ async function updateFinalizeCommandInternal(
           await updatePluginsAfterCoreUpdate({
             root,
             channel: postDoctorChannel,
-            configSnapshot,
-            configChanged: restoredConfig.changed,
-            restoredAuthoredChannels: restoredConfig.authoredChannels,
+            ...preparedConfig,
             json: opts.json,
             acceptCapabilities: opts.acceptCapabilities,
             timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,

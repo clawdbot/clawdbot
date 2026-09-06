@@ -173,7 +173,7 @@ describe("persistPluginInstall", () => {
       refreshPluginRegistryMock,
       "refreshPluginRegistryMock",
     );
-    expect(refreshParams.config).toBe(enabledConfig);
+    expect(refreshParams.config).toEqual(enabledConfig);
     expect(refreshParams.reason).toBe("source-changed");
     expect((refreshParams.installRecords as Record<string, unknown>).alpha).toEqual({
       source: "npm",

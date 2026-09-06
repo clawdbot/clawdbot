@@ -64,6 +64,13 @@ const wizardMocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite: async () => {
+    const snapshot = await configMocks.readConfigFileSnapshot();
+    return {
+      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
+      writeOptions: {},
+    };
+  },
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
@@ -517,13 +524,15 @@ describe("agents delete command", () => {
         "talk.agentId",
       ]);
       const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ nextConfig: OpenClawConfig }]
+        [{ sourceConfig: OpenClawConfig }]
       >;
-      expect(replaceConfigFileCalls[0]?.[0].nextConfig.agents?.defaults?.heartbeat).toBeUndefined();
       expect(
-        replaceConfigFileCalls[0]?.[0].nextConfig.agents?.defaults?.systemAgent,
+        replaceConfigFileCalls[0]?.[0].sourceConfig.agents?.defaults?.heartbeat,
       ).toBeUndefined();
-      expect(replaceConfigFileCalls[0]?.[0].nextConfig.talk).toEqual({
+      expect(
+        replaceConfigFileCalls[0]?.[0].sourceConfig.agents?.defaults?.systemAgent,
+      ).toBeUndefined();
+      expect(replaceConfigFileCalls[0]?.[0].sourceConfig.talk).toEqual({
         provider: "test-provider",
       });
     });
@@ -556,9 +565,9 @@ describe("agents delete command", () => {
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
       const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ nextConfig: OpenClawConfig }]
+        [{ sourceConfig: OpenClawConfig }]
       >;
-      expect(replaceConfigFileCalls[0]?.[0].nextConfig).toEqual({
+      expect(replaceConfigFileCalls[0]?.[0].sourceConfig).toEqual({
         agents: {
           defaults: undefined,
           entries: {
@@ -757,10 +766,10 @@ describe("agents delete command", () => {
       expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).toContain("ops");
 
       const writeCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ nextConfig?: OpenClawConfig }]
+        [{ sourceConfig?: OpenClawConfig }]
       >;
       const firstWrite = writeCalls[0]?.[0];
-      const nextConfig = firstWrite?.nextConfig;
+      const nextConfig = firstWrite?.sourceConfig;
       expect(nextConfig).toBeDefined();
       configMocks.readConfigFileSnapshot.mockResolvedValue({
         ...baseConfigSnapshot,

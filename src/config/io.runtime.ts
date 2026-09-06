@@ -325,7 +325,8 @@ export async function writeConfigFile(
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
-  if (hadBothSnapshots) {
+  // Snapshot-based inputs retain their own source/runtime basis in the file writer.
+  if (hadBothSnapshots && options.inputBase === undefined) {
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
     // Removing a runtime-only field must not mint empty source parents. Keep
     // explicitly submitted empty objects and the separate file-default projection.

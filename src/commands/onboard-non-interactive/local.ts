@@ -275,6 +275,7 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
+    baseConfig: created.configBase,
     baseHash: effectiveBaseHash,
     reset: opts.reset,
   });

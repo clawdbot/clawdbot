@@ -1,8 +1,13 @@
 // Hooks CLI tests cover hook command registration and output behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withContendedConfigMutation } from "../../test/helpers/config-mutation-lock.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.format.js";
 import { registerHooksCli } from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
@@ -297,4 +302,65 @@ describe("hooks cli formatting", () => {
       opts: expect.objectContaining({ acknowledgeInstallPolicyWarning: true }),
     });
   });
+});
+
+describe("hooks config write ownership", () => {
+  it.each(["enable", "disable"])(
+    "preserves env references while %s waits for the write lock",
+    async (action) => {
+      await withOpenClawTestState(
+        {
+          label: "hook-write-env",
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_TEST_HOOK_PREFIX: "before-lock" },
+        },
+        async (state) => {
+          const hookDir = path.join(state.workspaceDir, "hooks", "fixture-hook");
+          await fs.mkdir(hookDir, { recursive: true });
+          await fs.writeFile(
+            path.join(hookDir, "HOOK.md"),
+            '---\nname: fixture-hook\ndescription: Fixture hook\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n',
+          );
+          await fs.writeFile(
+            path.join(hookDir, "handler.js"),
+            "export default async function () {}\n",
+          );
+          await state.writeConfig({
+            messages: { responsePrefix: "${OPENCLAW_TEST_HOOK_PREFIX}" },
+            agents: {
+              ownership: "explicit",
+              entries: { fixture: { workspace: state.workspaceDir } },
+              defaults: { systemAgent: { agentId: "fixture" } },
+            },
+            hooks: {
+              internal: {
+                enabled: true,
+                entries: { "fixture-hook": { enabled: action === "disable" } },
+              },
+            },
+          });
+          const raw = await fs.readFile(state.configPath, "utf8");
+          const program = new Command().enablePositionalOptions();
+          registerHooksCli(program);
+          await withContendedConfigMutation(
+            state.configPath,
+            () =>
+              program.parseAsync(["hooks", action, "fixture-hook", "--agent", "fixture"], {
+                from: "user",
+              }),
+            async () => {
+              expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
+              process.env.OPENCLAW_TEST_HOOK_PREFIX = "after-lock";
+            },
+          );
+          expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+            messages: { responsePrefix: "${OPENCLAW_TEST_HOOK_PREFIX}" },
+            hooks: { internal: { entries: { "fixture-hook": { enabled: action === "enable" } } } },
+          });
+          const fresh = await readConfigFileSnapshot();
+          expect(fresh.valid).toBe(true);
+          expect(fresh.sourceConfig.messages?.responsePrefix).toBe("after-lock");
+        },
+      );
+    },
+  );
 });

@@ -17,7 +17,10 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => fixture.config }));
 vi.mock("../commands/config-validation.js", () => ({
-  requireValidConfigFileSnapshot: async () => ({ sourceConfig: fixture.config, hash: "fixture" }),
+  requireValidConfigForWrite: async () => ({
+    snapshot: { sourceConfig: fixture.config, hash: "fixture" },
+    writeOptions: {},
+  }),
 }));
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config }: { config: OpenClawConfig }) => ({ config, changes: [] }),

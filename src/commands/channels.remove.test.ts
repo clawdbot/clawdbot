@@ -83,8 +83,8 @@ describe("channelsRemoveCommand", () => {
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
       .mockReset()
-      .mockImplementation(async (params: { nextConfig: unknown }) => {
-        await configMocks.writeConfigFile(params.nextConfig);
+      .mockImplementation(async (params: { sourceConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.sourceConfig);
       });
     runtime.log.mockClear();
     runtime.error.mockClear();

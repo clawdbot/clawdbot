@@ -21,12 +21,14 @@ describe("commitNonInteractiveOnboardConfig", () => {
     await expect(
       commitNonInteractiveOnboardConfig({
         nextConfig,
+        baseConfig: {},
         baseHash: "verified-config-hash",
       }),
     ).resolves.toBe(nextConfig);
 
     expect(writeWizardConfigFile).toHaveBeenCalledWith(nextConfig, {
       allowConfigSizeDrop: false,
+      mergeBase: {},
       baseHash: "verified-config-hash",
     });
   });
@@ -36,11 +38,13 @@ describe("commitNonInteractiveOnboardConfig", () => {
 
     await commitNonInteractiveOnboardConfig({
       nextConfig,
+      baseConfig: {},
       reset: true,
     });
 
     expect(writeWizardConfigFile).toHaveBeenCalledWith(nextConfig, {
       allowConfigSizeDrop: true,
+      mergeBase: {},
     });
   });
 });

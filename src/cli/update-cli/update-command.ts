@@ -2,7 +2,7 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { createConfigIO } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -194,13 +194,15 @@ async function updateCommandInternal(
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: true,
+  const preparedConfig = await createConfigIO({
+    pluginValidation: "skip",
     observe: false,
-  });
+  }).readConfigFileSnapshotForWrite();
+  let configSnapshot = preparedConfig.snapshot;
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
+      configWriteOptions: preparedConfig.writeOptions,
       jsonMode: Boolean(opts.json),
     });
   }

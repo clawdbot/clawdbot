@@ -550,10 +550,11 @@ async function runSetupWizardOnce(
     config: gateway.nextConfig,
     workspace: workspaceDir,
     preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
-    baseConfig,
+    baseConfig: setupConfigMergeBase,
     ...(firstAgent ? { firstAgent } : {}),
   });
   nextConfig = onboardingAgent.config;
+  setupConfigMergeBase = structuredClone(onboardingAgent.configBase);
   const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
   await firstAgentOnboarding.showSessionMigrationWarnings(prompter, migrationWarnings);
 

@@ -15,6 +15,7 @@ import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import { coerceConfig } from "./io.read-helpers.js";
+import type { ConfigWriteInputBasis } from "./io.types.js";
 import { parseLegacyAgentRoster, projectLegacyAgentRosterEntries } from "./legacy.roster.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
@@ -24,7 +25,6 @@ import {
   hasUnresolvedConfigPath,
   hasUnresolvedConfigPathInSubtree,
 } from "./resolution-facts.js";
-import { projectSourceOntoRuntimeShape } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -1536,6 +1536,7 @@ export function projectAuthoredAgentRosterForWrite(params: {
 }
 
 export function resolvePersistCandidateForWrite(params: {
+  inputBasis?: ConfigWriteInputBasis;
   runtimeConfig: unknown;
   sourceConfig: unknown;
   sourceConfigValid?: boolean;
@@ -1551,13 +1552,17 @@ export function resolvePersistCandidateForWrite(params: {
   allowIncludeAncestorExplicitSetPaths?: boolean;
   preserveLegacyAgentRoster?: boolean;
 }): unknown {
-  const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
-  const projectedSource = normalizeTouchedAgentModelMapEntries({
-    projectedSource: projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig),
-    patch,
-    explicitSetPaths: params.explicitSetPaths,
-    explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
-  });
+  const inputBasis = params.inputBasis ?? { kind: "runtime", config: params.runtimeConfig };
+  const patch = createMergePatch(inputBasis.config, params.nextConfig);
+  const projectedSource =
+    inputBasis.kind === "source"
+      ? structuredClone(inputBasis.config)
+      : normalizeTouchedAgentModelMapEntries({
+          projectedSource: structuredClone(params.sourceConfig),
+          patch,
+          explicitSetPaths: params.explicitSetPaths,
+          explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
+        });
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
   const persistCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
   const includeOwnsRoster =
@@ -1618,7 +1623,7 @@ export function resolvePersistCandidateForWrite(params: {
     }
   }
   const withPreservedIncludes = preserveUntouchedIncludes({
-    runtimeConfig: params.runtimeConfig,
+    runtimeConfig: inputBasis.config,
     sourceConfig: params.sourceConfig,
     sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
     nextConfig: params.nextConfig,
@@ -1629,7 +1634,7 @@ export function resolvePersistCandidateForWrite(params: {
   const persisted = injectExplicitlySetPaths({
     valueSource: explicitSetValueSource,
     persistedCandidate: withPreservedIncludes,
-    runtimeConfig: params.runtimeConfig,
+    runtimeConfig: inputBasis.config,
     sourceConfig: params.sourceConfig,
     sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
     explicitSetPaths,
@@ -1658,8 +1663,8 @@ export function resolvePersistCandidateForWrite(params: {
     nextConfig: params.nextConfig,
     persistedCandidate: withAuthoredRoster,
   });
-  // Invalid snapshots are complete repairs; omitted params must stay omitted.
-  return params.sourceConfigValid === false
+  // Source edits and invalid-config repairs own omitted params as well as explicit values.
+  return params.sourceConfigValid === false || inputBasis.kind === "source"
     ? withSchema
     : preserveAuthoredAgentParams({
         sourceConfig: params.sourceConfig,
