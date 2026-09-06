@@ -457,7 +457,9 @@ describe("xai provider plugin", () => {
     });
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
     expect(
-      fetchMock.mock.calls.every(([url]) => url.startsWith("https://cli-chat-proxy.grok.com/")),
+      fetchMock.mock.calls.every(([url]) =>
+        String(url).startsWith("https://cli-chat-proxy.grok.com/"),
+      ),
     ).toBe(true);
   });
 
