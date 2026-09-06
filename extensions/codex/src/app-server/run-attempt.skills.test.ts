@@ -172,4 +172,67 @@ describe("Codex app-server skill catalog delivery", () => {
       expectRestored(injected[injected.length - 1] ?? "");
     },
   );
+
+  it("re-delivers the catalog on the next turn when the post-compaction restore fails", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-skill-restore-failure";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
+    let failNextInject = false;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/inject_items" && failNextInject) {
+        failNextInject = false;
+        throw new Error("inject_items unavailable");
+      }
+      return undefined;
+    });
+    const sessionFile = path.join(tempDir, "incognito-restore-failure-session.jsonl");
+    const workspaceDir = path.join(tempDir, "incognito-restore-failure-workspace");
+    const injectCount = () =>
+      harness.requests.filter(({ method }) => method === "thread/inject_items").length;
+    const turnStarts = () =>
+      harness.requests.filter(({ method }) => method === "turn/start").length;
+    const runTurn = async (runId: string, catalog: string, options: { compact?: boolean } = {}) => {
+      const params = createParams(sessionFile, workspaceDir, { sessionKey, runId });
+      params.skillsSnapshot = { prompt: catalog, skills: [] };
+      const turnStartsBefore = turnStarts();
+      const run = runCodexAppServerAttempt(params);
+      await Promise.race([
+        vi.waitFor(() => expect(turnStarts()).toBe(turnStartsBefore + 1), {
+          interval: 1,
+          timeout: 10_000,
+        }),
+        run.then(() => {
+          throw new Error(`Codex attempt ${runId} completed before requesting a turn`);
+        }),
+      ]);
+      if (options.compact) {
+        for (const method of ["item/started", "item/completed"]) {
+          await harness.notify({
+            method,
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { type: "contextCompaction", id: "compact-1" },
+            },
+          } as Parameters<typeof harness.notify>[0]);
+        }
+      }
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    };
+
+    await runTurn("run-1", FIRST_CATALOG);
+    await runTurn("run-2", SECOND_CATALOG);
+    expect(injectCount()).toBe(1);
+
+    // A failed restore leaves the thread on the creation-time catalog. Recording
+    // the refresh as still delivered would strand it there for the whole session.
+    failNextInject = true;
+    await runTurn("run-3", SECOND_CATALOG, { compact: true });
+    expect(injectCount()).toBe(2);
+
+    await runTurn("run-4", SECOND_CATALOG);
+    const injected = harness.requests.filter(({ method }) => method === "thread/inject_items");
+    expect(injected).toHaveLength(3);
+    expect(JSON.stringify(injected[2]?.params)).toContain(SECOND_CATALOG);
+  });
 });
