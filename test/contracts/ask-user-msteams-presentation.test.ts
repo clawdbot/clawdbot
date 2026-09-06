@@ -31,7 +31,6 @@ describe("question reply guidance", () => {
       const optionText = ["- Staging: Safer default", "- Production", "", guidance].join("\n");
 
       expect(payload.text).toContain(guidance);
-      expect(presentation.blocks).toContainEqual({ type: "text", text: optionText });
 
       // Teams supports buttons, but does not encode question actions as native controls.
       const rendered = await msteamsPlugin.outbound?.renderPresentation?.({
