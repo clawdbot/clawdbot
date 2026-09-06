@@ -135,7 +135,12 @@ describe("OpenAI Responses provider", () => {
     }).result();
 
     expect(result.stopReason).toBe("error");
-    expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
+    // store's value is this model's own explicitStore policy (native OpenAI
+    // is continuation-eligible), unrelated to this test's own token-clamping/
+    // retry-disabling scenario and already covered by resolveOpenAIResponses
+    // PayloadPolicy's own dedicated suite (openai-responses-payload-policy
+    // .test.ts) -- assert only what this test is actually about.
+    expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16 });
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 
