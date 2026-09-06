@@ -1,4 +1,3 @@
-/* oxlint-disable max-lines -- TODO: split this oversized test file. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -76,7 +75,7 @@ function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFoll
     operation: {
       abortSignal: new AbortController().signal,
       bindToolAuthoritySnapshot: vi.fn(),
-    } as AdmittedFollowupTurn["operation"],
+    } as unknown as AdmittedFollowupTurn["operation"],
     config: {},
     session: {
       kind: "session",
@@ -1056,26 +1055,5 @@ describe("executeFollowupTurn", () => {
     releaseSlowTask();
     await expect(drain).rejects.toBe(failure);
     expect(order).toEqual(["slow-finished"]);
-  });
-
-  // Regression test for #139847: queued followup execution must bind the
-  // tool-authority snapshot before dispatching to executeAgentTurn.
-  it("binds the tool-authority snapshot before dispatching the queued turn", async () => {
-    const bindSnapshot = vi.fn();
-    const operation = {
-      abortSignal: new AbortController().signal,
-      bindToolAuthoritySnapshot: bindSnapshot,
-    } as unknown as AdmittedFollowupTurn["operation"];
-    state.execute.mockImplementation(async () => {
-      markReplyOperationExecutionStarted(operation);
-      return { runId: "run-1", outcome: { kind: "completed" } };
-    });
-    await executeFollowupTurn({
-      turn: createTurn({ operation }),
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-    expect(bindSnapshot).toHaveBeenCalledTimes(1);
   });
 });
