@@ -494,7 +494,12 @@ export async function killSubagentRunAdmin(
   if (!entry) {
     return publish({ found: false as const, killed: false as const });
   }
-  if (params.expectedRunId?.trim() && entry.runId !== params.expectedRunId.trim()) {
+  const expectedRunId = params.expectedRunId?.trim();
+  const expectedTaskRunId = params.expectedTaskRunId?.trim();
+  if (
+    (expectedRunId && entry.runId !== expectedRunId) ||
+    (expectedTaskRunId && (entry.taskRunId ?? entry.runId) !== expectedTaskRunId)
+  ) {
     return publish({ found: false as const, killed: false as const });
   }
   if (
@@ -517,7 +522,8 @@ export async function killSubagentRunAdmin(
         tree,
         scope,
         beforeSessionKill: control?.beforeSessionKill,
-        expectedRunId: params.expectedRunId?.trim() || undefined,
+        // Resolve stable task identity once; a later replacement must not inherit this Stop.
+        expectedRunId: expectedRunId || (expectedTaskRunId ? entry.runId : undefined),
         expectedGeneration: params.expectedGeneration,
         expectedOwnerKey: params.expectedOwnerKey?.trim() || undefined,
       });
