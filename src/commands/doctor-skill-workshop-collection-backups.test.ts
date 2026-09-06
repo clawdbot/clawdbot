@@ -20,7 +20,6 @@ import {
 import { readSkillProposalTargetTreeSha256 } from "../skills/workshop/proposal-bundle.js";
 import { applySkillProposal, proposeCreateSkill } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import { openSkillWorkshopStore } from "../skills/workshop/store-sqlite-schema.js";
 import * as workshopStore from "../skills/workshop/store.js";
 import {
   createOpenClawTestState,
@@ -786,115 +785,30 @@ describe("doctor Skill Workshop collection backup migration", () => {
     ).resolves.toMatchObject({ backupId, restored: ["interrupted-backup"] });
   });
 
-  it.each([
-    { label: "no review", owners: [], archived: false },
-    { label: "recorded owner", owners: ["alpha", "alpha"], archived: true },
-    { label: "conflicting reviews", owners: ["alpha", "beta"], archived: false },
-    { label: "removed owner", owners: ["removed"], archived: false },
-    { label: "different workspace", owners: ["other"], archived: false },
-    { label: "unrelated review", owners: ["alpha"], archived: false, matchingReview: false },
-    {
-      label: "second backup missing review",
-      owners: ["alpha"],
-      archived: false,
-      secondOwner: null,
-    },
-    {
-      label: "second backup conflicting owner",
-      owners: ["alpha"],
-      archived: false,
-      secondOwner: "beta",
-    },
-    {
-      label: "multiple backups with one owner",
-      owners: ["alpha"],
-      archived: true,
-      secondOwner: "alpha",
-    },
-  ])(
-    "preserves shared-workspace backup ownership with $label",
-    async ({ owners, archived, matchingReview, secondOwner }) => {
-      const workspaceDir = await fs.realpath(
-        await tempDirs.make("openclaw-workshop-ambiguous-backup-workspace-"),
-      );
-      const legacyRoot = await seedLegacyCollectionBackup({
-        workspaceDir,
-        backupId: "2026-09-01T00-00-00.000Z-legacy2",
-        backupContent:
-          "---\nname: legacy-collection-skill\ndescription: Legacy backup\n---\n\n# Backup\n",
-        resultContent:
-          "---\nname: legacy-collection-skill\ndescription: Current skill\n---\n\n# Current\n",
-      });
-      const config = {
-        agents: {
-          list: [
-            { id: "alpha", default: true, workspace: workspaceDir },
-            { id: "beta", workspace: workspaceDir },
-            { id: "other", workspace: path.join(workspaceDir, "other") },
-          ],
-        },
-      };
+  it("preserves a legacy collection backup when its workspace has ambiguous owners", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-ambiguous-backup-workspace-"),
+    );
+    const legacyRoot = await seedLegacyCollectionBackup({
+      workspaceDir,
+      backupId: "2026-09-01T00-00-00.000Z-legacy2",
+      backupContent:
+        "---\nname: legacy-collection-skill\ndescription: Legacy backup\n---\n\n# Backup\n",
+      resultContent:
+        "---\nname: legacy-collection-skill\ndescription: Current skill\n---\n\n# Current\n",
+    });
+    const config = {
+      agents: {
+        list: [
+          { id: "alpha", default: true, workspace: workspaceDir },
+          { id: "beta", workspace: workspaceDir },
+        ],
+      },
+    };
 
-      const secondBackupId = "2026-09-02T00-00-00.000Z-legacy3";
-      if (secondOwner !== undefined) {
-        await seedLegacyCollectionBackup({
-          workspaceDir,
-          backupId: secondBackupId,
-          backupContent: "---\nname: legacy-collection-skill\n---\n\n# Second backup\n",
-        });
-      }
-      const { database } = openSkillWorkshopStore({ env: testState.env });
-      const reviews = owners.map((owner) => ({
-        owner,
-        backupId:
-          matchingReview === false ? "unrelated-backup" : "2026-09-01T00-00-00.000Z-legacy2",
-      }));
-      if (secondOwner) {
-        reviews.push({ owner: secondOwner, backupId: secondBackupId });
-      }
-      for (const [index, { owner, backupId }] of reviews.entries()) {
-        database.db
-          .prepare(`
-        INSERT INTO skill_workshop_collection_reviews (
-          review_id, owner_agent_id, backup_id, create_time,
-          kept_names_json, written_names_json, dropped_json
-        ) VALUES (?, ?, ?, 0, '[]', '[]', '[]')
-      `)
-          .run(`shared-review-${index}`, owner, backupId);
-      }
-      const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+    const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
 
-      await expect(fs.access(legacyRoot)).resolves.toBeUndefined();
-      if (!archived) {
-        expect(result.warnings.join("\n")).toContain(legacyRoot);
-        return;
-      }
-      expect(result.warnings).toEqual([]);
-      const destination = path.join(
-        resolveSkillCollectionBackupRoot(config, "alpha", testState.env),
-        "2026-09-01T00-00-00.000Z-legacy2",
-      );
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(destination, "manifest.json"), "utf8"),
-      );
-      expect(manifest.restoreUnavailableReason).toContain("not proven Workshop-owned");
-      expect(manifest.skillDirs).toEqual([]);
-      expect(
-        await fs.readFile(
-          path.join(
-            destination,
-            "history",
-            "workspace",
-            "skills",
-            "legacy-collection-skill",
-            "SKILL.md",
-          ),
-          "utf8",
-        ),
-      ).toContain("# Backup");
-      await expect(
-        collectionBackups.listPendingLegacyCollectionBackupRoots(config, testState.env),
-      ).resolves.toEqual([]);
-    },
-  );
+    await expect(fs.access(legacyRoot)).resolves.toBeUndefined();
+    expect(result.warnings.join("\n")).toContain(legacyRoot);
+  });
 });

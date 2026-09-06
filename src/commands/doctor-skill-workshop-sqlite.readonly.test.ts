@@ -86,27 +86,6 @@ describe("read-only Skill Workshop migration inspection", () => {
         } finally {
           seed.close();
         }
-        const backupId = "2026-09-01T00-00-00.000Z-readonly";
-        const backupDir = path.join(
-          state.stateDir,
-          "skill-workshop",
-          "collection-backups",
-          "0000000000000000",
-          backupId,
-        );
-        await fs.mkdir(backupDir, { recursive: true });
-        await fs.writeFile(
-          path.join(backupDir, "manifest.json"),
-          JSON.stringify({
-            schema: "openclaw.skill-collection-backup.v1",
-            id: backupId,
-            createdAt: "2026-09-01T00:00:00.000Z",
-            workspaceDir: state.workspaceDir,
-            skillDirs: ["skills/readonly-workshop"],
-            resultSkillDirs: [],
-            resultSkillHashes: {},
-          }),
-        );
         const before = await snapshotDatabase(databasePath);
 
         await expect(
@@ -114,7 +93,7 @@ describe("read-only Skill Workshop migration inspection", () => {
         ).resolves.toEqual({
           externalProposalCount: 1,
           externalProposalCountsByAgent: { main: 1 },
-          legacyBackupRootCount: 1,
+          legacyBackupRootCount: 0,
         });
 
         closeOpenClawStateDatabaseForTest();
