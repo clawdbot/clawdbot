@@ -712,6 +712,11 @@ not mutate `tts` or global Talk provider defaults.
 
 ## Model-driven directives
 
+Automatic voice replies can use plain text. If a model wraps prose in
+`[[tts:...]]` without a `key=value` directive token, OpenClaw keeps that prose visible and speaks
+it. The reserved `[[tts:text]]` form stays audio-only, and tags inside Markdown
+code stay literal.
+
 By default, the assistant **can** emit `[[tts:...]]` directives to override
 voice, model, or speed for a single reply, plus an optional
 `[[tts:text]]...[[/tts:text]]` block for expressive cues that should appear in

@@ -10,12 +10,15 @@ export async function flushDispatchDeferredFinalText(params: {
   state: PrepareDispatchExecutionReadyState;
 }): Promise<boolean> {
   try {
-    if (!params.deferFinalTtsText || params.isHeartbeat) {
+    if (params.isHeartbeat) {
       return false;
     }
-    const deferredVisibleText = params.state.cleanBlockTtsDirectiveText
-      ? cleanDeferredFinalText(params.state.progressState.accumulatedBlockTtsText)
-      : params.state.progressState.accumulatedBlockText;
+    const bufferedText = params.state.cleanBlockTtsDirectiveText?.flush();
+    const deferredVisibleText = params.deferFinalTtsText
+      ? params.state.cleanBlockTtsDirectiveText
+        ? cleanDeferredFinalText(params.state.cleanBlockTtsDirectiveText.getSourceText())
+        : params.state.progressState.accumulatedBlockText
+      : (bufferedText ?? "");
     if (!deferredVisibleText.trim()) {
       return false;
     }
@@ -28,6 +31,7 @@ export async function flushDispatchDeferredFinalText(params: {
     }
     params.state.progressState.accumulatedBlockText = "";
     params.state.progressState.accumulatedBlockTtsText = "";
+    params.state.cleanBlockTtsDirectiveText?.clear();
     return true;
   } catch (error) {
     // Recovery must not replace the original resolver or cancellation outcome.

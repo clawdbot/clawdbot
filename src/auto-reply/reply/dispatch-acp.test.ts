@@ -3978,7 +3978,7 @@ describe("tryDispatchAcpReplyCore", () => {
       audioAsVoice: true,
       spokenText: "Yes—I understand you clearly now.",
       ttsSupplement: { spokenText: "Yes—I understand you clearly now." },
-    } as MockTtsReply);
+    });
     mockVisibleTextTurn("[[tts:Yes—I understand you clearly now.]]");
     const { dispatcher } = createDispatcher();
 
@@ -3999,6 +3999,32 @@ describe("tryDispatchAcpReplyCore", () => {
       audioAsVoice: true,
     });
   });
+
+  it.each(["all", "final"] as const)(
+    "delivers buffered TTS code once without caption deferral (mode=%s)",
+    async (mode) => {
+      setReadyAcpResolution();
+      const text = "Literal `[[tts:Keep this example.]]` code.";
+      mockVisibleTextTurn(text);
+      const { dispatcher } = createDispatcher();
+      await runDispatch({
+        bodyForAgent: "reply",
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "always", mode },
+        }),
+        dispatcher,
+        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+      });
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+      expect(dispatcherCall(dispatcher.sendFinalReply)).toMatchObject({ text });
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledOnce();
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ finalText: text }),
+      );
+    },
+  );
 
   it("keeps cross-block ACP TTS-only text out of the Telegram caption", async () => {
     setReadyAcpResolution();
@@ -4453,32 +4479,48 @@ describe("tryDispatchAcpReplyCore", () => {
     });
   });
 
-  it("delivers deferred Telegram ACP text when the runtime is cancelled", async () => {
-    setReadyAcpResolution();
-    ttsCapabilityMocks.captionedFinalText = true;
-    managerMocks.runTurn.mockImplementation(
-      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({
-          type: "text_delta",
-          text: "Partial reply before cancellation.",
-          tag: "agent_message_chunk",
-        });
-        await onEvent({ type: "done", status: "cancelled" });
-      },
-    );
-    const { dispatcher } = createDispatcher();
+  it.each([
+    { text: "Partial reply before cancellation.", captioned: true },
+    { text: "Literal `[[tts:Keep this example.]]` code.", captioned: true },
+    { text: "Literal `[[tts:Keep this example.]]` code.", captioned: false },
+  ])(
+    "delivers pending ACP text on cancellation (captioned=$captioned): $text",
+    async ({ text, captioned }) => {
+      setReadyAcpResolution();
+      ttsCapabilityMocks.captionedFinalText = captioned;
+      managerMocks.runTurn.mockImplementation(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({
+            type: "text_delta",
+            text,
+            tag: "agent_message_chunk",
+          });
+          await onEvent({ type: "done", status: "cancelled" });
+        },
+      );
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload);
+          return { visibleReplySent: true };
+        },
+      });
 
-    await runDispatch({
-      bodyForAgent: "reply",
-      dispatcher,
-      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
-    });
+      await runDispatch({
+        bodyForAgent: "reply",
+        cfg: createAcpTestConfig({ tts: { auto: "always", mode: "final" } }),
+        dispatcher,
+        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+      });
 
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcherCall(dispatcher.sendFinalReply)).toEqual({
-      text: "Partial reply before cancellation.",
-    });
-  });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([{ text }]);
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ finalText: text }),
+      );
+    },
+  );
 
   it.each(["direct", "routed"] as const)(
     "never leaks a marked private inbound prompt across ACP live text deltas via %s delivery",

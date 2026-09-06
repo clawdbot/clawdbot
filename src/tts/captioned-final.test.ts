@@ -14,6 +14,15 @@ describe("mergeDeferredFinalText", () => {
 });
 
 describe("cleanDeferredFinalText", () => {
+  it.each([
+    "Literal `[[tts:Yes—I understand you clearly now.]]` code.",
+    "```text\n[[tts:text]]private example[[/tts:text]]\n[[tts:voice=alice]]\n```",
+    "    [[tts:Yes—I understand you clearly now.]]",
+    "```text\n[[tts:text]]unfinished code example",
+  ])("preserves literal code in the caption: %s", (input) => {
+    expect(cleanDeferredFinalText(input)).toBe(input);
+  });
+
   it("keeps TTS-only text out of the visible final", () => {
     expect(cleanDeferredFinalText("Visible. [[tts:text]]Private speech.[[/tts:text]] Done.")).toBe(
       "Visible.  Done.",

@@ -322,6 +322,7 @@ async function finalizeAcpTurnOutput(params: {
     channelId: params.ttsChannel,
     accountId: params.ttsAccountId,
   });
+  const bufferedTtsText = params.delivery.flushBlockTtsText();
   const accumulatedBlockTtsText = params.delivery.getAccumulatedBlockTtsText();
   const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
@@ -338,6 +339,16 @@ async function finalizeAcpTurnOutput(params: {
     ttsMode === "final" &&
     hasAccumulatedBlockText &&
     canAttemptFinalTts;
+  const deliveredBufferedTtsText =
+    !shouldDeferVisibleTextForTts &&
+    !params.delivery.hasDeliveredAnswerFinalToUser() &&
+    Boolean(bufferedTtsText?.trim())
+      ? await params.delivery.deliver(
+          "final",
+          { text: bufferedTtsText },
+          { skipTts: ttsMode === "final", transcriptSource: { kind: "blocks" } },
+        )
+      : false;
   const accumulatedVisibleBlockText = shouldDeferVisibleTextForTts
     ? cleanDeferredFinalText(accumulatedBlockTtsText)
     : params.delivery.getAccumulatedVisibleBlockText();
@@ -345,6 +356,7 @@ async function finalizeAcpTurnOutput(params: {
     await params.delivery.settleVisibleText();
   }
   let queuedFinal =
+    deliveredBufferedTtsText ||
     params.delivery.hasPendingAnswerDelivery() ||
     params.delivery.hasPendingFinalTtsMedia() ||
     (params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery());
@@ -651,17 +663,17 @@ export async function tryDispatchAcpReplyCore(params: {
     return { queuedFinal: queuedNotice, counts };
   }
   const deliverDeferredTextFallback = async (): Promise<boolean> => {
-    if (!shouldDeferVisibleTextForTts) {
-      return false;
-    }
-    const text = delivery.getBlockTextForFallback();
+    const bufferedText = delivery.flushBlockTtsText();
+    const text = shouldDeferVisibleTextForTts
+      ? delivery.getBlockTextForFallback()
+      : (bufferedText ?? "");
     return text.trim()
       ? await delivery.deliver(
           "final",
           { text },
           {
             skipTts: true,
-            transcriptSource: { kind: "fallback" },
+            transcriptSource: { kind: "blocks" },
           },
         )
       : false;

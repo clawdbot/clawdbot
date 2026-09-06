@@ -62,7 +62,35 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
-  const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+  const replies = replyResult
+    ? Array.isArray(replyResult)
+      ? [...replyResult]
+      : [replyResult]
+    : [];
+  if (state.bufferedTtsReply) {
+    const sourceIndex = getReplyPayloadMetadata(state.bufferedTtsReply)?.assistantMessageIndex;
+    const bufferedText = state.bufferedTtsReply.text?.trim() ?? "";
+    const bufferedSourceText = cleanDeferredFinalText(state.bufferedTtsSourceText).trim();
+    const hasFinalForSource = replies.some((reply) => {
+      if (!isReplyPayloadTerminalContent(reply) || reply.isError) {
+        return false;
+      }
+      const finalIndex = getReplyPayloadMetadata(reply)?.assistantMessageIndex;
+      if (sourceIndex !== undefined && finalIndex !== undefined && finalIndex !== sourceIndex) {
+        return false;
+      }
+      const finalText = cleanDeferredFinalText(reply.text);
+      // A terminal reply must contain the withheld text. Missing source metadata
+      // alone cannot establish coverage; inferred block newlines are not source bytes.
+      return (
+        (bufferedText.length > 0 && finalText.includes(bufferedText)) ||
+        (bufferedSourceText.length > 0 && finalText.includes(bufferedSourceText))
+      );
+    });
+    if (!hasFinalForSource) {
+      replies.unshift(state.bufferedTtsReply);
+    }
+  }
   const pendingFinalDeliveryIdentity = replies
     .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion)
     .find((completion) => completion !== undefined);

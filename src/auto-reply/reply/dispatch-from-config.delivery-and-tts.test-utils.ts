@@ -2024,6 +2024,77 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
   });
 
+  it.each([false, true])(
+    "delivers buffered TTS code once when a source final is returned=%s",
+    async (returnsFinal) => {
+      setNoAbort();
+      const text = "Literal `[[tts:Keep this example.]]` code.";
+      const payload: ReplyPayload = { text };
+      setReplyPayloadMetadata(payload, {
+        assistantMessageIndex: 0,
+        assistantTranscriptOwned: true,
+      });
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (reply) => {
+          if (reply.text) delivered.push(reply.text);
+          return { visibleReplySent: true };
+        },
+      });
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "whatsapp" }),
+        cfg: { tts: { auto: "always", mode: "all" } },
+        dispatcher,
+        replyResolver: async (_ctx, options) => {
+          await options?.onBlockReply?.(payload);
+          return returnsFinal ? payload : undefined;
+        },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([text]);
+    },
+  );
+
+  it.each(["none", "covering", "unrelated", "error"] as const)(
+    "delivers a buffered TTS code tail once (returned final=%s)",
+    async (finalKind) => {
+      setNoAbort();
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (reply) => {
+          if (reply.text) delivered.push(reply.text);
+          return { visibleReplySent: true };
+        },
+      });
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "whatsapp" }),
+        cfg: { tts: { auto: "always", mode: "all" } },
+        dispatcher,
+        replyResolver: async (_ctx, options) => {
+          await options?.onBlockReply?.({ text: "Before." });
+          await options?.onBlockReply?.({ text: "Literal `[[tts:" });
+          await options?.onBlockReply?.({ text: "Keep this example.]]` code." });
+          if (finalKind === "covering") {
+            return { text: "Before.\nLiteral `[[tts:Keep this example.]]` code." };
+          }
+          return finalKind === "none"
+            ? undefined
+            : { text: "A separate final reply.", isError: finalKind === "error" };
+        },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([
+        "Before.",
+        finalKind === "covering"
+          ? "Before.\nLiteral `[[tts:Keep this example.]]` code."
+          : "Literal `[[tts:\nKeep this example.]]` code.",
+        ...(finalKind === "unrelated" || finalKind === "error" ? ["A separate final reply."] : []),
+      ]);
+    },
+  );
+
   it("forwards generated-media block replies in WhatsApp group sessions", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
@@ -2864,14 +2935,22 @@ describe("dispatchReplyFromConfig", () => {
     ).toEqual(["Partial useful answer.", expect.stringContaining("Something went wrong")]);
   });
 
-  it.each([
-    { resolverOutcome: "throws", shouldThrow: true },
-    { resolverOutcome: "returns", shouldThrow: false },
-  ])(
-    "delivers deferred Telegram text when the run aborts and the resolver $resolverOutcome",
-    async ({ shouldThrow }) => {
+  it.each(
+    [
+      { text: "Partial answer before cancellation.", captioned: true },
+      { text: "Literal `[[tts:Keep this example.]]` code.", captioned: true },
+      { text: "Literal `[[tts:Keep this example.]]` code.", captioned: false },
+    ].flatMap((scenario) => [
+      { ...scenario, resolverOutcome: "throws", shouldThrow: true },
+      { ...scenario, resolverOutcome: "returns", shouldThrow: false },
+    ]),
+  )(
+    "delivers pending text when the run aborts ($resolverOutcome, captioned=$captioned): $text",
+    async ({ shouldThrow, text, captioned }) => {
       setNoAbort();
-      installCaptionedVoiceTestPlugin("telegram");
+      if (captioned) {
+        installCaptionedVoiceTestPlugin("telegram");
+      }
       const abortController = new AbortController();
       const dispatcher = createDispatcher();
       const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
@@ -2879,7 +2958,7 @@ describe("dispatchReplyFromConfig", () => {
         _ctx: MsgContext,
         opts?: GetReplyOptions,
       ): Promise<ReplyPayload | undefined> => {
-        await opts?.onBlockReply?.({ text: "Partial answer before cancellation." });
+        await opts?.onBlockReply?.({ text });
         abortController.abort();
         if (shouldThrow) {
           throw new Error("run cancelled");
@@ -2889,7 +2968,7 @@ describe("dispatchReplyFromConfig", () => {
 
       await dispatchReplyFromConfig({
         ctx,
-        cfg: emptyConfig,
+        cfg: { tts: { auto: "always", mode: "final" } },
         dispatcher,
         replyOptions: { abortSignal: abortController.signal },
         replyResolver,
@@ -2899,7 +2978,7 @@ describe("dispatchReplyFromConfig", () => {
 
       expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
       expect(firstFinalReplyPayload(dispatcher)).toEqual({
-        text: "Partial answer before cancellation.",
+        text,
       });
     },
   );

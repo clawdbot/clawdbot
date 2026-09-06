@@ -1,18 +1,37 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { replaceOutsideCodeRegions } from "../utils/directive-tags.js";
 
-/**
- * A directive tag body declares speech overrides only when it carries a
- * whitespace token shaped `key=value`. A colon-form tag whose body has none is
- * free prose the model wrapped in the tag by mistake; both parsed and streamed
- * cleaners preserve it as reply text instead of discarding it.
- */
-export function bodyHasTtsDirectiveKeyValue(body: string): boolean {
-  return body
-    .split(/\s+/)
-    .filter(Boolean)
-    .some((token) => token.includes("="));
+type TtsDirectiveBody =
+  | { kind: "text"; text: string }
+  | { kind: "directive"; directive: NonNullable<AssistantDeliveryTtsFacts["directives"]>[number] }
+  | { kind: "reserved" };
+
+/** Classify once so persisted facts and streamed text agree on valid directive tokens. */
+export function parseTtsDirectiveBody(body: string): TtsDirectiveBody {
+  const text = body.trim();
+  if (!text || text.toLowerCase() === "text") {
+    return { kind: "reserved" };
+  }
+  let provider: string | undefined;
+  const values: Record<string, string> = {};
+  for (const token of text.split(/\s+/)) {
+    const eqIndex = token.indexOf("=");
+    if (eqIndex <= 0 || eqIndex === token.length - 1) {
+      continue;
+    }
+    const key = normalizeLowercaseStringOrEmpty(token.slice(0, eqIndex));
+    const value = token.slice(eqIndex + 1);
+    if (key === "provider") {
+      provider = normalizeLowercaseStringOrEmpty(value);
+    } else {
+      values[key] = value;
+    }
+  }
+  return provider || Object.keys(values).length > 0
+    ? { kind: "directive", directive: { ...(provider ? { provider } : {}), values } }
+    : { kind: "text", text };
 }
 
 /** Extract final-text TTS syntax into persisted facts, leaving markdown code spans unchanged. */
@@ -30,66 +49,42 @@ export function extractTtsDirectiveFacts(text: string): {
     return facts;
   };
 
-  const blockRegex = /\[\[\s*tts\s*:\s*text\s*\]\]([\s\S]*?)\[\[\s*\/\s*tts\s*:\s*text\s*\]\]/gi;
-  cleanedText = replaceOutsideCodeRegions(cleanedText, blockRegex, (_match, [inner]) => {
-    const next = markTagged();
-    if (next.text == null) {
-      next.text = String(inner).trim();
+  for (const [tags, hidden] of [
+    [/\[\[\s*(\/\s*)?tts\s*:\s*text\s*\]\]/gi, true],
+    [/\[\[\s*(\/\s*)?tts\s*\]\]/gi, false],
+  ] as const) {
+    const regions = findCodeRegions(cleanedText);
+    const parts: string[] = [];
+    let cursor = 0;
+    let opener: { start: number; end: number } | undefined;
+    for (const match of cleanedText.matchAll(tags)) {
+      if (isInsideCode(match.index, regions)) {
+        continue;
+      }
+      if (!match[1]) {
+        opener ??= { start: match.index, end: match.index + match[0].length };
+      } else if (opener) {
+        const inner = cleanedText.slice(opener.end, match.index).trim();
+        const next = markTagged();
+        next.text ??= inner;
+        parts.push(cleanedText.slice(cursor, opener.start), hidden ? "" : inner);
+        cursor = match.index + match[0].length;
+        opener = undefined;
+      }
     }
-    return "";
-  });
-
-  const plainBlockRegex = /\[\[\s*tts\s*\]\]([\s\S]*?)\[\[\s*\/\s*tts\s*\]\]/gi;
-  cleanedText = replaceOutsideCodeRegions(cleanedText, plainBlockRegex, (_match, [inner]) => {
-    const next = markTagged();
-    const visible = String(inner).trim();
-    if (next.text == null) {
-      next.text = visible;
-    }
-    return visible;
-  });
+    cleanedText = parts.join("") + cleanedText.slice(cursor);
+  }
 
   const directiveRegex = /\[\[\s*tts\s*:\s*([^\]]+)\]\]/gi;
   cleanedText = replaceOutsideCodeRegions(cleanedText, directiveRegex, (_match, [body]) => {
     const next = markTagged();
-    const tokens = String(body).split(/\s+/).filter(Boolean);
-    let provider: string | undefined;
-    const values: Record<string, string> = {};
-    for (const token of tokens) {
-      const eqIndex = token.indexOf("=");
-      if (eqIndex === -1) {
-        continue;
-      }
-      const rawKey = token.slice(0, eqIndex).trim();
-      const rawValue = token.slice(eqIndex + 1).trim();
-      if (!rawKey || !rawValue) {
-        continue;
-      }
-      const key = normalizeLowercaseStringOrEmpty(rawKey);
-      if (key === "provider") {
-        provider = normalizeLowercaseStringOrEmpty(rawValue) || undefined;
-        continue;
-      }
-      values[key] = rawValue;
-    }
-    if (provider || Object.keys(values).length > 0) {
+    const parsed = parseTtsDirectiveBody(String(body));
+    if (parsed.kind === "directive") {
       next.directives ??= [];
-      next.directives.push({ ...(provider ? { provider } : {}), values });
-    } else if (
-      !bodyHasTtsDirectiveKeyValue(body) &&
-      normalizeLowercaseStringOrEmpty(body.trim()) !== "text"
-    ) {
-      // No parseable directive and no key=value shaped token means the model
-      // wrapped its spoken reply in [[tts:<free text>]] by mistake. Keep that
-      // prose as visible reply text so delivery does not collapse to the
-      // empty-reply fallback. Mixed values deliberately keep existing
-      // behavior, and the reserved [[tts:text]] marker stays audio-only (never
-      // surfaced as literal speech) to match the streaming/caption cleaner.
-      const spoken = body.trim();
-      if (spoken) {
-        next.text ??= spoken;
-        return spoken;
-      }
+      next.directives.push(parsed.directive);
+    } else if (parsed.kind === "text") {
+      // Recovered prose uses the visible-text speech input; it is not a private override.
+      return parsed.text;
     }
     return "";
   });

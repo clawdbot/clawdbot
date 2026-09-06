@@ -371,6 +371,249 @@ describe("parseTtsDirectives provider-aware routing", () => {
 });
 
 describe("createTtsDirectiveTextStreamCleaner", () => {
+  it.each([
+    {
+      input: "Before [[tts:Yes—I understand you clearly now.]] after",
+      visible: "Before Yes—I understand you clearly now. after",
+    },
+    { input: "Before [[tts:voice=alice]] after", visible: "Before  after" },
+    { input: "Before [[tts:text]]private[[/tts:text]] after", visible: "Before  after" },
+    {
+      input: "Before [[tts:text]]private `[[/tts:text]]` still private[[/tts:text]] after",
+      visible: "Before  after",
+    },
+    { input: "Before [[tts: 2 + 2 = 4 ]] after", visible: "Before 2 + 2 = 4 after" },
+    { input: "Before [[tts:voice=]] after", visible: "Before voice= after" },
+    { input: "Before [[tts:te\nxt]] after", visible: "Before te\nxt after" },
+    { input: "Before [[tts:hello voice=alice]] after", visible: "Before  after" },
+    {
+      input: "Before [[ tts : text ]]private[[ / tts : text ]] after",
+      visible: "Before  after",
+    },
+  ])("preserves the visible reply at every split in $input", ({ input, visible }) => {
+    for (let split = 1; split < input.length; split++) {
+      const cleaner = createTtsDirectiveTextStreamCleaner();
+      const output = cleaner.push(input.slice(0, split)) + cleaner.push(input.slice(split));
+      expect(output + cleaner.flush(), `split at ${split}`).toBe(visible);
+    }
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    const output = Array.from(input, (char) => cleaner.push(char)).join("");
+    expect(output + cleaner.flush(), "one character per chunk").toBe(visible);
+  });
+
+  const codeExample = "[[tts:literal words]] [[tts:voice=alice]] [[tts:text]]private[[/tts:text]]";
+  it.each([
+    { name: "inline code", code: `\`${codeExample}\`` },
+    { name: "multiline inline code", code: `\`first\n${codeExample}\nlast\`` },
+    { name: "a backtick fence", code: `\`\`\`md\n${codeExample}\n\`\`\`` },
+    { name: "a tilde fence", code: `~~~md\n${codeExample}\n~~~` },
+    {
+      name: "a false closing fence",
+      code: `\`\`\`md\n\`\`\` not a close\n${codeExample}\n\`\`\``,
+    },
+    {
+      name: "a longer enclosing fence",
+      code: `\`\`\`\`md\n\`\`\`\n${codeExample}\n\`\`\`\n\`\`\`\``,
+    },
+    { name: "a quoted fence", code: `> \`\`\`md\n> ${codeExample}\n> \`\`\`` },
+    { name: "indented code", code: `    ${codeExample}` },
+    { name: "tab-indented code", code: `\t${codeExample}` },
+  ])("keeps literal TTS examples in $name across every chunk boundary", ({ code }) => {
+    const input = `[[tts:Before]]\n\n${code}\n\n[[tts:After]]`;
+    const visible = `Before\n\n${code}\n\nAfter`;
+    for (let split = 1; split < input.length; split++) {
+      const cleaner = createTtsDirectiveTextStreamCleaner();
+      const output = cleaner.push(input.slice(0, split)) + cleaner.push(input.slice(split));
+      expect(output + cleaner.flush(), `split at ${split}`).toBe(visible);
+    }
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    const output = Array.from(input, (char) => cleaner.push(char)).join("");
+    expect(output + cleaner.flush(), "one character per chunk").toBe(visible);
+  });
+
+  it.each([
+    { input: "```md\n[[tts:literal words]]", visible: "```md\n[[tts:literal words]]" },
+    { input: "Use `unclosed [[tts:visible words]]", visible: "Use `unclosed visible words" },
+    { input: "Use \\`escaped [[tts:visible words]]", visible: "Use \\`escaped visible words" },
+    {
+      input: "A paragraph\n    [[tts:visible words]]",
+      visible: "A paragraph\n    visible words",
+    },
+  ])("uses final Markdown ownership for $input", ({ input, visible }) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    const output = Array.from(input, (char) => cleaner.push(char)).join("");
+    expect(output + cleaner.flush()).toBe(visible);
+  });
+
+  it("emits ordinary text and complete prose tags without waiting for flush", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("Hello ")).toBe("Hello ");
+    expect(cleaner.push("[[tts:there]]")).toBe("there");
+    expect(cleaner.push("!\nNext line.")).toBe("!\nNext line.");
+  });
+
+  it("keeps separators in the speech source without adding them to separate payloads", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.pushBlock("First reply.")).toBe("First reply.");
+    expect(cleaner.pushBlock("[[tts:Second reply.]]")).toBe("Second reply.");
+    expect(cleaner.pushBlock("Literal `code`.")).toBe("");
+    expect(cleaner.pushBlock("Last reply.")).toBe("");
+    expect(cleaner.flush()).toBe("Literal `code`.\nLast reply.");
+    expect(cleaner.getSourceText()).toBe(
+      "First reply.\n[[tts:Second reply.]]\nLiteral `code`.\nLast reply.",
+    );
+  });
+
+  it.each([
+    {
+      blocks: ["First [", "second"],
+      source: "First [\nsecond",
+      visible: "First [\nsecond",
+    },
+    {
+      blocks: ["First [[note", "second]]"],
+      source: "First [[note\nsecond]]",
+      visible: "First [[note\nsecond]]",
+    },
+    {
+      blocks: ["First [[unfinished", "second"],
+      source: "First [[unfinished\nsecond",
+      visible: "First [[unfinished\nsecond",
+    },
+    {
+      blocks: ["First [[tts:hello", " world]]"],
+      source: "First [[tts:hello world]]",
+      visible: "First hello world",
+    },
+    {
+      blocks: ["Literal `code`.", "Next paragraph."],
+      source: "Literal `code`.\nNext paragraph.",
+      visible: "Literal `code`.\nNext paragraph.",
+    },
+    {
+      blocks: ["Use `[[tts:text]]`.", "Next paragraph."],
+      source: "Use `[[tts:text]]`.\nNext paragraph.",
+      visible: "Use `[[tts:text]]`.\nNext paragraph.",
+    },
+    {
+      blocks: ["```", "[[tts:literal words]]", "```", "Next paragraph."],
+      source: "```\n[[tts:literal words]]\n```\nNext paragraph.",
+      visible: "```\n[[tts:literal words]]\n```\nNext paragraph.",
+    },
+    {
+      blocks: ["```\n[[tts:text]]", "still code\n```", "Next paragraph."],
+      source: "```\n[[tts:text]]\nstill code\n```\nNext paragraph.",
+      visible: "```\n[[tts:text]]\nstill code\n```\nNext paragraph.",
+    },
+    {
+      blocks: ["Literal `code`.", "[[tts:text]]pri", "vate[[/tts:text]]", "Next paragraph."],
+      source: "Literal `code`.\n[[tts:text]]private[[/tts:text]]\nNext paragraph.",
+      visible: "Literal `code`.\n\nNext paragraph.",
+    },
+    {
+      blocks: ["Literal `code`.", "[[tts:hello", " world]]", "Next paragraph."],
+      source: "Literal `code`.\n[[tts:hello world]]\nNext paragraph.",
+      visible: "Literal `code`.\nhello world\nNext paragraph.",
+    },
+    {
+      blocks: [
+        "Literal `code`.",
+        "[[tts:hi",
+        "```]]",
+        "[[tts:text]]pri",
+        "vate[[/tts:text]]",
+        "After.",
+      ],
+      source: "Literal `code`.\n[[tts:hi```]]\n[[tts:text]]private[[/tts:text]]\nAfter.",
+      visible: "Literal `code`.\nhi```\n\nAfter.",
+    },
+  ])("preserves independent block boundaries in $source", ({ blocks, source, visible }) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    const output = blocks.map((block) => cleaner.pushBlock(block)).join("");
+
+    expect(output + cleaner.flush()).toBe(visible);
+    expect(cleaner.getSourceText()).toBe(source);
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it.each([
+    { tag: "[[tts:hello world]]", visible: "hello world" },
+    { tag: "[[tts:voice=alice]]", visible: "" },
+    { tag: "[[tts:text]]private[[/tts:text]]", visible: "" },
+  ])("joins TTS continuations after Markdown at every split in $tag", ({ tag, visible }) => {
+    for (let split = 1; split < tag.length; split++) {
+      const cleaner = createTtsDirectiveTextStreamCleaner();
+      const output = ["Literal `code`.", tag.slice(0, split), tag.slice(split), "Next paragraph."]
+        .map((block) => cleaner.pushBlock(block))
+        .join("");
+
+      expect(output + cleaner.flush(), `visible split at ${split}`).toBe(
+        `Literal \`code\`.\n${visible}\nNext paragraph.`,
+      );
+      expect(cleaner.getSourceText(), `speech split at ${split}`).toBe(
+        `Literal \`code\`.\n${tag}\nNext paragraph.`,
+      );
+    }
+  });
+
+  it("takes a speech-source snapshot without consuming pending visible text", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    expect(cleaner.pushBlock("Literal `code`.")).toBe("");
+    expect(cleaner.pushBlock("[[tts:hello")).toBe("");
+    expect(cleaner.getSourceText()).toBe("Literal `code`.\n[[tts:hello");
+
+    expect(cleaner.pushBlock(" world]]")).toBe("");
+    expect(cleaner.getSourceText()).toBe("Literal `code`.\n[[tts:hello world]]");
+    expect(cleaner.flush()).toBe("Literal `code`.\nhello world");
+  });
+
+  it("resolves a chain of inferred fences before joining the final private body", () => {
+    const steps = Array.from({ length: 12 }, (_, index) => `step ${index}`);
+    const blocks = [
+      "Literal `code`.",
+      ...steps.flatMap((step) => [`[[tts:${step}`, "~~~]]"]),
+      "[[tts:text]]pri",
+      "vate[[/tts:text]]",
+      "After.",
+    ];
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    const output = blocks.map((block) => cleaner.pushBlock(block)).join("");
+
+    expect(output + cleaner.flush()).toBe(
+      ["Literal `code`.", ...steps.map((step) => `${step}~~~`), "", "After."].join("\n"),
+    );
+    expect(cleaner.getSourceText()).toBe(
+      [
+        "Literal `code`.",
+        ...steps.map((step) => `[[tts:${step}~~~]]`),
+        "[[tts:text]]private[[/tts:text]]",
+        "After.",
+      ].join("\n"),
+    );
+  });
+
+  it.each([
+    { blocks: ["Literal `code`.", "[[tts:unfinished"] },
+    { blocks: ["Visible [[tts:text]]private"] },
+    { blocks: ["A delivered answer."] },
+  ])("does not restore delivered text after clear for $blocks", ({ blocks }) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    for (const block of blocks) {
+      cleaner.pushBlock(block);
+    }
+    expect(cleaner.getSourceText()).not.toBe("");
+
+    cleaner.clear();
+
+    expect(cleaner.getSourceText()).toBe("");
+    expect(cleaner.flush()).toBe("");
+    expect(cleaner.pushBlock("A new answer.")).toBe("A new answer.");
+    expect(cleaner.getSourceText()).toBe("A new answer.");
+    expect(cleaner.flush()).toBe("");
+  });
+
   it("strips directive tags split across streamed chunks", () => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
 

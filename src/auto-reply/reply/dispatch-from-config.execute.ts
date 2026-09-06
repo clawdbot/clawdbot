@@ -13,6 +13,7 @@ import {
   isCommandReplyForDelivery,
   isReplyPayloadStatusNotice,
   readAskUserQuestionId,
+  type ReplyPayload,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
@@ -86,6 +87,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     await settlement?.settle(false);
   };
   let didDeliverVisiblePartialReply = false;
+  let lastBlockTtsPayload: ReplyPayload | undefined;
   const flushDeferredFinalText = async () => {
     const delivered = await flushDispatchDeferredFinalText({
       deferFinalTtsText,
@@ -468,16 +470,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       payload.isReasoning !== true &&
                       payload.isCommentary !== true;
                     if (payload.text && contributesToFinalReply) {
-                      const joinsBufferedTtsDirective =
-                        cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
+                      lastBlockTtsPayload = payload;
                       if (state.progressState.accumulatedBlockText.length > 0) {
                         state.progressState.accumulatedBlockText += "\n";
                       }
                       state.progressState.accumulatedBlockText += payload.text;
-                      if (
-                        state.progressState.accumulatedBlockTtsText.length > 0 &&
-                        !joinsBufferedTtsDirective
-                      ) {
+                      if (state.progressState.accumulatedBlockTtsText.length > 0) {
                         state.progressState.accumulatedBlockTtsText += "\n";
                       }
                       state.progressState.accumulatedBlockTtsText += payload.text;
@@ -486,7 +484,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     let visiblePayload =
                       payload.text && cleanBlockTtsDirectiveText && contributesToFinalReply
                         ? (() => {
-                            const text = cleanBlockTtsDirectiveText.push(payload.text);
+                            const text = cleanBlockTtsDirectiveText.pushBlock(payload.text);
                             return copyReplyPayloadMetadata(payload, {
                               ...payload,
                               text: text.trim() ? text : undefined,
@@ -662,11 +660,31 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     if (acpTailResult) {
       return acpTailResult;
     }
+    if (state.preserveProgressCallbackStartOrder) {
+      await state.progressState.progressCallbackStartTail;
+    }
+    const bufferedTtsSourceText = cleanBlockTtsDirectiveText?.getPendingSourceText();
+    const bufferedTtsText = cleanBlockTtsDirectiveText?.flush();
+    if (cleanBlockTtsDirectiveText) {
+      state.progressState.accumulatedBlockTtsText = cleanBlockTtsDirectiveText.getSourceText();
+    }
+    const bufferedTtsReply =
+      !deferFinalTtsText && bufferedTtsText?.trim() && lastBlockTtsPayload
+        ? copyReplyPayloadMetadata(lastBlockTtsPayload, {
+            text: bufferedTtsText,
+            delivery: lastBlockTtsPayload.delivery,
+            replyToId: lastBlockTtsPayload.replyToId,
+            replyToTag: lastBlockTtsPayload.replyToTag,
+            replyToCurrent: lastBlockTtsPayload.replyToCurrent,
+          })
+        : undefined;
     const nextState = extendPreparedDispatchState(state, {
       deliberateSilentTerminalReply,
       pendingContinuation,
       pendingContinuationSettlement,
       replyResult,
+      bufferedTtsReply,
+      bufferedTtsSourceText,
     });
     // Finalization now owns the exact settlement; earlier returns and throws release it here.
     pendingContinuationSettlement = undefined;

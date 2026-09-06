@@ -362,17 +362,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     const rawBlockText = isStatusNotice ? undefined : rawBlockPayloadText;
     let blockText: AcpBlockText | undefined;
     if (rawBlockPayloadText) {
-      const joinsBufferedTtsDirective =
-        state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
       if (rawBlockText) {
-        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+        if (state.accumulatedBlockTtsText.length > 0) {
           state.accumulatedBlockTtsText += "\n";
         }
         state.accumulatedBlockTtsText += rawBlockText;
       }
 
       if (state.cleanBlockTtsDirectiveText && rawBlockText) {
-        const text = state.cleanBlockTtsDirectiveText.push(rawBlockPayloadText);
+        const text = state.cleanBlockTtsDirectiveText.pushBlock(rawBlockPayloadText);
         visiblePayload = copyReplyPayloadMetadata(visiblePayload, {
           ...visiblePayload,
           text: text.trim() ? text : undefined,
@@ -449,7 +447,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       kind === "final" && params.suppressBlockUserDelivery && state.cleanBlockTtsDirectiveText
         ? meta?.skipTts || visiblePayload.isError || isReplyPayloadTtsSupplement(visiblePayload)
           ? visiblePayload.text
-          : mergeDeferredFinalText(state.accumulatedBlockTtsText, visiblePayload.text)
+          : mergeDeferredFinalText(
+              state.cleanBlockTtsDirectiveText.getSourceText(),
+              visiblePayload.text,
+            )
         : undefined;
     const ttsPayload =
       finalVisibleTextSource !== undefined
@@ -687,15 +688,30 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
 
   const getBlockTranscriptText = (confirmedOnly = false) =>
-    state.blockTexts
-      .flatMap((block) =>
-        block.transcriptText && (!confirmedOnly || block.delivered) ? [block.transcriptText] : [],
-      )
-      .join("\n");
+    !confirmedOnly && state.cleanBlockTtsDirectiveText
+      ? state.cleanBlockTtsDirectiveText.getSourceText()
+      : state.blockTexts
+          .flatMap((block) =>
+            block.transcriptText && (!confirmedOnly || block.delivered)
+              ? [block.transcriptText]
+              : [],
+          )
+          .join("\n");
 
   return {
     startReplyLifecycle: startReplyLifecycleOnce,
     deliver,
+    flushBlockTtsText: () => {
+      const text = state.cleanBlockTtsDirectiveText?.flush();
+      if (state.cleanBlockTtsDirectiveText) {
+        state.accumulatedBlockTtsText = state.cleanBlockTtsDirectiveText.getSourceText();
+      }
+      if (text?.trim()) {
+        // This is pending presentation of existing blocks, not another transcript message.
+        state.blockTexts.push({ text, needsFinalDelivery: true });
+      }
+      return text;
+    },
     getAccumulatedVisibleBlockText: () =>
       state.blockTexts.flatMap((block) => (block.text ? [block.text] : [])).join("\n"),
     getBlockTextForFallback: () => {
@@ -714,7 +730,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         ? cleanDeferredFinalText(state.accumulatedBlockTtsText)
         : blocks.map((block) => block.text).join("\n");
     },
-    getAccumulatedBlockTtsText: () => state.accumulatedBlockTtsText,
+    getAccumulatedBlockTtsText: () =>
+      state.cleanBlockTtsDirectiveText
+        ? state.cleanBlockTtsDirectiveText.getSourceText()
+        : state.accumulatedBlockTtsText,
     getAccumulatedTranscriptText: () => state.accumulatedFinalText || getBlockTranscriptText(),
     resolveAccumulatedDeliveredTranscriptText: async () => {
       await Promise.all(state.pendingTranscriptOutcomes.splice(0));

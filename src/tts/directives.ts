@@ -3,7 +3,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../config/types.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { bodyHasTtsDirectiveKeyValue, extractTtsDirectiveFacts } from "./directive-facts.js";
+import { findCodeRegions, type CodeRegion } from "../shared/text/code-regions.js";
+import { extractTtsDirectiveFacts, parseTtsDirectiveBody } from "./directive-facts.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
@@ -27,9 +28,18 @@ type ParseTtsDirectiveOptions = {
 // when the visibleReplies default flips to "message_tool".
 /** Streaming cleaner used to strip TTS tags before final text parsing is available. */
 type TtsDirectiveTextStreamCleaner = {
+  /** Append token chunks without introducing a logical block boundary. */
   push: (text: string) => string;
+  /** Append a reply block, preserving its boundary unless TTS syntax continues. */
+  pushBlock: (text: string) => string;
+  /** Finish the stream and emit any suffix awaiting final Markdown ownership. */
   flush: () => string;
-  hasBufferedDirectiveText: () => boolean;
+  /** Resolve the accumulated speech source at the end of block delivery. */
+  getSourceText: () => string;
+  /** Original buffered bytes, without inferred block separators, for final coverage. */
+  getPendingSourceText: () => string;
+  /** Release text after another delivery path has accepted ownership of it. */
+  clear: () => void;
 };
 
 function resolveDirectiveProviders(options?: ParseTtsDirectiveOptions): SpeechProviderPlugin[] {
@@ -106,115 +116,231 @@ function parseGenericSpeakerDirective(params: {
   }
 }
 
-function normalizeTtsTagBody(body: string): string {
-  return body.trim().replace(/\s+/g, "").toLowerCase();
+function parseTtsTag(body: string) {
+  if (/^\s*tts\s*:\s*text\s*$/i.test(body)) {
+    return { kind: "hidden-open" } as const;
+  }
+  if (/^\s*\/\s*tts\s*:\s*text\s*$/i.test(body)) {
+    return { kind: "hidden-close" } as const;
+  }
+  if (/^\s*tts\s*$/i.test(body) || /^\s*\/\s*tts(?:\s*:[\s\S]*)?$/i.test(body)) {
+    return { kind: "marker" } as const;
+  }
+  const directiveBody = /^\s*tts\s*:([^\]]+)$/i.exec(body)?.[1];
+  return directiveBody === undefined
+    ? ({ kind: "literal" } as const)
+    : parseTtsDirectiveBody(directiveBody);
 }
 
-function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
-  const normalized = normalizeTtsTagBody(body);
-  if (normalized === "tts:text") {
-    return "hidden-open";
+function joinTtsBlocks(source: string, boundaries: number[]): string {
+  // Logical blocks initially own a newline. TTS syntax may consume that boundary,
+  // but literal examples inside canonical Markdown code must retain it.
+  const joined = new Set<number>();
+  for (;;) {
+    const remaining = boundaries.filter((boundary) => !joined.has(boundary));
+    if (remaining.length === 0) {
+      return source;
+    }
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const boundary of remaining) {
+      parts.push(source.slice(cursor, boundary), "\n");
+      cursor = boundary;
+    }
+    parts.push(source.slice(cursor));
+    const text = parts.join("");
+    const regions = findCodeRegions(text);
+    const previouslyJoined = joined.size;
+    let boundaryIndex = 0;
+    let regionIndex = 0;
+    let hidden = false;
+    let tagCursor = 0;
+    while (tagCursor < source.length) {
+      const start = source.indexOf("[[", tagCursor);
+      if (start === -1) {
+        break;
+      }
+      const close = source.indexOf("]]", start + 2);
+      if (close === -1) {
+        break;
+      }
+      tagCursor = close + 2;
+      let boundary = remaining[boundaryIndex];
+      while (boundary !== undefined && boundary <= start) {
+        if (hidden) {
+          joined.add(boundary);
+        }
+        boundary = remaining[++boundaryIndex];
+      }
+      const offset = start + boundaryIndex;
+      let region = regions[regionIndex];
+      while (region && region.end <= offset) {
+        region = regions[++regionIndex];
+      }
+      const insideCode = region !== undefined && region.start <= offset;
+      const tag = parseTtsTag(source.slice(start + 2, close));
+      const directive = !insideCode && tag.kind !== "literal";
+      while (boundary !== undefined && boundary < tagCursor) {
+        if (hidden || directive) {
+          joined.add(boundary);
+        }
+        boundary = remaining[++boundaryIndex];
+      }
+      if (directive) {
+        if (tag.kind === "hidden-open") {
+          hidden = true;
+        } else if (tag.kind === "hidden-close") {
+          hidden = false;
+        }
+      }
+    }
+    if (hidden) {
+      for (const boundary of remaining.slice(boundaryIndex)) {
+        joined.add(boundary);
+      }
+    }
+    if (joined.size === previouslyJoined) {
+      return text;
+    }
+    // Removing an inferred newline can change later code ownership. Each repeat
+    // removes at least one recorded boundary: at most B + 1 full Markdown parses
+    // for B boundaries, with worst-case terminal work proportional to B times
+    // the document parse cost. Token arrival never runs this normalization.
   }
-  if (normalized === "/tts:text") {
-    return "hidden-close";
-  }
-  if (
-    normalized === "tts" ||
-    normalized.startsWith("tts:") ||
-    normalized === "/tts" ||
-    normalized.startsWith("/tts:")
-  ) {
-    return "tts";
-  }
-  return "other";
-}
-
-/**
- * A single colon tag `[[tts:<prose>]]` without any `key=value` token carries the
- * model's wrapped spoken reply, not directives. Returns that prose so streaming
- * and caption cleaners keep it visible; returns null for bare delimiters
- * (`[[tts]]`, closers) and real directive bodies.
- */
-function resolveFreeTextTtsBody(bracketBody: string): string | null {
-  // Match the final parser's colon-tag grammar: any whitespace (including a
-  // line break) around `tts:` and after the colon is accepted, then the body is
-  // trimmed like the parser's spoken value. `[[tts:\nhello]]` therefore yields
-  // `hello` and a multi-line interior stays intact.
-  const colonMatch = /^[\s]*tts[\s]*:([\s\S]*)$/i.exec(bracketBody);
-  if (!colonMatch) {
-    return null;
-  }
-  const captured = colonMatch[1];
-  if (captured === undefined) {
-    return null;
-  }
-  const prose = captured.trim();
-  if (!prose || bodyHasTtsDirectiveKeyValue(prose)) {
-    return null;
-  }
-  return prose;
 }
 
 /** Create an incremental cleaner for hiding [[tts:*]] directive text while streaming. */
 export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
-  let pending = "";
+  const sourceChunks: string[] = [];
+  const blockBoundaries: number[] = [];
+  let sourceLength = 0;
+  let resolvedSource: string | undefined;
+  let consumed = 0;
+  let markdownTail = "";
+  let deferredSource = false;
+  let pending: string[] = [];
+  let pendingInsideCode = false;
   let insideHiddenTextBlock = false;
 
-  return {
-    push(text: string): string {
-      const input = pending + text;
-      pending = "";
-      let output = "";
-      let index = 0;
+  const consume = (input: string, regions: CodeRegion[] = []): string => {
+    const output: string[] = [];
+    let regionIndex = 0;
+    const emit = (text: string) => {
+      if (!insideHiddenTextBlock) {
+        output.push(text);
+      }
+    };
 
-      while (index < input.length) {
-        const tagStart = input.indexOf("[[", index);
-        if (tagStart === -1) {
-          if (!insideHiddenTextBlock) {
-            output += input.slice(index);
-          }
-          break;
+    for (let index = 0; index < input.length; index++) {
+      const char = input.charAt(index);
+      if (pending.length === 1 && char !== "[") {
+        emit("[");
+        pending = [];
+      }
+      if (pending.length === 0) {
+        if (char !== "[") {
+          emit(char);
+          continue;
         }
-
-        if (!insideHiddenTextBlock) {
-          output += input.slice(index, tagStart);
+        const offset = consumed + index;
+        let region = regions[regionIndex];
+        while (region && region.end <= offset) {
+          regionIndex++;
+          region = regions[regionIndex];
         }
-
-        const tagEnd = input.indexOf("]]", tagStart + 2);
-        if (tagEnd === -1) {
-          // Directive delimiters can cross chunk boundaries; buffer from the
-          // opener so a partial tag never leaks to a streamed client.
-          pending = input.slice(tagStart);
-          break;
-        }
-
-        const rawTag = input.slice(tagStart, tagEnd + 2);
-        const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
-        if (tag === "hidden-open") {
-          insideHiddenTextBlock = true;
-        } else if (tag === "hidden-close") {
-          insideHiddenTextBlock = false;
-        } else if (tag === "other" && !insideHiddenTextBlock) {
-          output += rawTag;
-        } else if (tag === "tts" && !insideHiddenTextBlock) {
-          const freeText = resolveFreeTextTtsBody(input.slice(tagStart + 2, tagEnd));
-          if (freeText) {
-            output += freeText;
-          }
-        }
-
-        index = tagEnd + 2;
+        pendingInsideCode = region !== undefined && region.start <= offset;
+      }
+      pending.push(char);
+      if (pending.length < 4 || char !== "]" || pending.at(-2) !== "]") {
+        continue;
       }
 
-      return output;
+      const rawTag = pending.join("");
+      pending = [];
+      if (pendingInsideCode) {
+        emit(rawTag);
+        continue;
+      }
+      const tag = parseTtsTag(rawTag.slice(2, -2));
+      if (tag.kind === "hidden-open") {
+        insideHiddenTextBlock = true;
+      } else if (tag.kind === "hidden-close") {
+        insideHiddenTextBlock = false;
+      } else if (tag.kind === "literal") {
+        emit(rawTag);
+      } else if (tag.kind === "text") {
+        emit(tag.text);
+      }
+    }
+    consumed += input.length;
+    return output.join("");
+  };
+
+  const push = (text: string): string => {
+    sourceChunks.push(text);
+    sourceLength += text.length;
+    resolvedSource = undefined;
+    if (!deferredSource) {
+      // Code ownership can change with a later closing backtick or block line.
+      // Resolve the buffered suffix only at termination, not on every chunk.
+      deferredSource = /[`~\t]| {4}/u.test(markdownTail + text);
+      markdownTail = (markdownTail + text).slice(-3);
+    }
+    return deferredSource ? "" : consume(text);
+  };
+  const getSourceText = () =>
+    (resolvedSource ??= joinTtsBlocks(sourceChunks.join(""), blockBoundaries));
+
+  return {
+    push,
+    pushBlock(text: string): string {
+      if (sourceLength === 0 || !text) {
+        return push(text);
+      }
+      if (pending.length > 0 && !deferredSource) {
+        // An incomplete bracket may be ordinary text. Resolve its block boundary
+        // with the complete syntax before deciding whether TTS consumes it.
+        consumed -= pending.length;
+        pending = [];
+        deferredSource = true;
+      }
+      if (deferredSource) {
+        blockBoundaries.push(sourceLength);
+        return push(text);
+      }
+      if (!insideHiddenTextBlock) {
+        // Separate payloads own their presentation boundary. Retain it only in
+        // the complete source used to resolve Markdown and speech at termination.
+        sourceChunks.push("\n");
+        sourceLength++;
+        consumed++;
+        markdownTail = (markdownTail + "\n").slice(-3);
+      }
+      return push(text);
     },
     flush(): string {
-      const tail = pending;
-      pending = "";
-      return insideHiddenTextBlock ? "" : tail;
+      let output = "";
+      if (consumed < sourceLength) {
+        const source = getSourceText();
+        output = consume(source.slice(consumed), findCodeRegions(source));
+      }
+      const tail = pending.join("");
+      pending = [];
+      return output + (insideHiddenTextBlock ? "" : tail);
     },
-    hasBufferedDirectiveText(): boolean {
-      return pending.length > 0 || insideHiddenTextBlock;
+    getSourceText,
+    getPendingSourceText: () => sourceChunks.join("").slice(consumed - pending.length),
+    clear(): void {
+      sourceChunks.length = 0;
+      blockBoundaries.length = 0;
+      sourceLength = 0;
+      resolvedSource = undefined;
+      consumed = 0;
+      markdownTail = "";
+      deferredSource = false;
+      pending = [];
+      pendingInsideCode = false;
+      insideHiddenTextBlock = false;
     },
   };
 }
