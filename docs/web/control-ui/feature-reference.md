@@ -94,6 +94,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
     - Debug: status/health/models snapshots, event log, manual RPC calls, and a System busyness overlay with live CPU, memory, event-loop delay, and per-disk free-space graphs (`status`, `health`, `models.list`, `system.info`). Connection also shows each mounted local storage volume separately, labeled by its mount path. Disk snapshots refresh every ten seconds; memory-backed filesystems and hidden macOS system volumes are excluded.
     - Lane tables omit disabled, empty lanes, including `hook-dispatch` when HTTP hooks are off. Disabled lanes remain visible while work is running or queued.
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
+    - Diagnostic event history belongs to the selected Gateway and authentication context. Applying a different Gateway URL or credential clears the previous history immediately, even if the new connection fails. A reconnect authenticated as a different account also clears it. Reconnects with unchanged authentication preserve history for troubleshooting.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update plus restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
 
