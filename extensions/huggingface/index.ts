@@ -42,7 +42,7 @@ export default defineSingleProviderPluginEntry({
         }
         const run = async () => ({
           provider: {
-            ...(await buildHuggingfaceProvider(discoveryApiKey)),
+            ...(await buildHuggingfaceProvider(discoveryApiKey, { discoveryMode: "strict" })),
             apiKey,
           },
         });

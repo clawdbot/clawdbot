@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   }),
 }));
 
+import { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./api.js";
 import {
   discoverKilocodeModels,
   KILOCODE_DEFAULT_COST,
@@ -133,6 +134,20 @@ afterAll(() => {
 });
 
 describe("discoverKilocodeModels (fetch path)", () => {
+  it.each([503, 200])(
+    "preserves the public advisory builder for HTTP %s with no rows",
+    async (status) => {
+      await withFetchPathTest(
+        vi.fn(async () => jsonResponse({ data: [] }, { status })),
+        async () => {
+          await expect(buildKilocodeProviderWithDiscovery()).resolves.toEqual(
+            buildKilocodeProvider(),
+          );
+        },
+      );
+    },
+  );
+
   it("parses gateway models with correct pricing conversion", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -246,7 +261,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
   it("propagates network errors", async () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
     await withFetchPathTest(mockFetch, async () => {
-      await expect(discoverKilocodeModels()).rejects.toThrow("network error");
+      await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
+        "network error",
+      );
     });
   });
 
@@ -256,7 +273,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
     const mockFetch = vi.fn().mockResolvedValue(response);
 
     const release = await withFetchPathTest(mockFetch, async () => {
-      await expect(discoverKilocodeModels()).rejects.toMatchObject({ status: 500 });
+      await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toMatchObject({
+        status: 500,
+      });
     });
 
     expect(cancelSpy).toHaveBeenCalledOnce();
@@ -267,7 +286,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     for (const payload of [[], { data: {} }]) {
       const mockFetch = vi.fn().mockResolvedValue(jsonResponse(payload));
       await withFetchPathTest(mockFetch, async () => {
-        await expect(discoverKilocodeModels()).rejects.toThrow(
+        await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
           "Kilocode model list: malformed JSON response",
         );
       });
@@ -279,7 +298,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     async (payload) => {
       const mockFetch = vi.fn().mockResolvedValue(jsonResponse(payload));
       await withFetchPathTest(mockFetch, async () => {
-        await expect(discoverKilocodeModels()).resolves.toEqual([]);
+        await expect(discoverKilocodeModels({ discoveryMode: "strict" })).resolves.toEqual([]);
       });
     },
   );

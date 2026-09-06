@@ -288,6 +288,12 @@ catalog, API-key auth, and dynamic model resolution.
     The returned provider configuration still retains its inference credential.
 
     External calls that omit `discoveryMode` retain the advisory contract above.
+    The public Chutes, Hugging Face, KiloCode, and Vercel AI Gateway discovery
+    functions and builders also retain that default. Their bundled catalog hooks
+    pass `{ discoveryMode: "strict" }` explicitly; Hugging Face discovery accepts
+    this options object after its existing timeout argument. The Chutes public
+    default retains its anonymous retry after HTTP 401; strict calls never retry
+    without the selected credential.
     The strict and advisory paths share the same guarded transport and cache.
     Custom live builders can use `runLiveProviderCatalog` at their catalog hook
     to convert acquisition errors into outcomes. Keep metadata-feed fallback

@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildHuggingfaceProvider,
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
@@ -18,6 +19,19 @@ afterEach(() => {
 });
 
 describe("huggingface models", () => {
+  it.each([503, 200])(
+    "preserves the public advisory builder for HTTP %s with no rows",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ data: [] }, { status })),
+      );
+      await expect(buildHuggingfaceProvider("synthetic-key")).resolves.toMatchObject({
+        models: HUGGINGFACE_MODEL_CATALOG,
+      });
+    },
+  );
+
   it("does not advertise the retired Llama 3.3 Turbo route", () => {
     expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
       "meta-llama/Llama-3.3-70B-Instruct-Turbo",
@@ -213,7 +227,9 @@ describe("huggingface models", () => {
       ),
     );
 
-    await expect(discoverHuggingfaceModels("hf_test_token")).rejects.toMatchObject({ status: 500 });
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
+    ).rejects.toMatchObject({ status: 500 });
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
@@ -227,7 +243,9 @@ describe("huggingface models", () => {
       ),
     );
 
-    await expect(discoverHuggingfaceModels("hf_test_token", 25_000)).rejects.toMatchObject({
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", 25_000, { discoveryMode: "strict" }),
+    ).rejects.toMatchObject({
       status: 500,
     });
 
@@ -245,7 +263,9 @@ describe("huggingface models", () => {
     );
 
     await expect(
-      discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER),
+      discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER, {
+        discoveryMode: "strict",
+      }),
     ).rejects.toMatchObject({ status: 500 });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
@@ -260,7 +280,9 @@ describe("huggingface models", () => {
       vi.fn(async () => response),
     );
 
-    await expect(discoverHuggingfaceModels("hf_test_token")).rejects.toMatchObject({ status: 503 });
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
+    ).rejects.toMatchObject({ status: 503 });
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
@@ -279,9 +301,9 @@ describe("huggingface models", () => {
       vi.fn(async () => response),
     );
 
-    await expect(discoverHuggingfaceModels("hf_test_token")).rejects.toThrow(
-      "Live model catalog response exceeded",
-    );
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
+    ).rejects.toThrow("Live model catalog response exceeded");
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(response.body?.locked).toBe(false);
     expect(response.bodyUsed).toBe(true);

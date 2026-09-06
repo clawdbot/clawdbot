@@ -99,10 +99,12 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
   return models;
 }
 
-/** Discovers Chutes models without substituting public rows after authenticated rejection. */
-export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
+export async function discoverChutesModels(
+  accessToken?: string,
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
-    discoveryMode: "strict",
+    ...options,
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,
     providerConfig: { baseUrl: CHUTES_BASE_URL, api: "openai-completions" },
@@ -117,6 +119,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
     auditContext: "chutes-model-discovery",
     fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+    fallbackToAnonymousOnUnauthorized: true,
     projectRows: projectChutesModels,
   });
   return provider.models;

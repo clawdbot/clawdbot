@@ -190,9 +190,11 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
   return models;
 }
 
-export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
+export async function discoverKilocodeModels(
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
-    discoveryMode: "strict",
+    ...options,
     providerId: "kilocode",
     endpoint: KILOCODE_MODELS_URL,
     providerConfig: { baseUrl: KILOCODE_BASE_URL, api: "openai-completions" },

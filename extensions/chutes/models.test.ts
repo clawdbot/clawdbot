@@ -1,7 +1,7 @@
 // Chutes tests cover models plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
+import { buildChutesProvider, CHUTES_DEFAULT_MODEL_ID } from "./api.js";
 import { CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
 import {
   applyChutesConfig,
@@ -353,11 +353,13 @@ describe("chutes-models", () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
 
     await withLiveChutesDiscovery(mockFetch, async () => {
-      await expect(discoverChutesModels("chutes-fallback-token")).rejects.toMatchObject({
+      await expect(
+        discoverChutesModels("chutes-fallback-token", { discoveryMode: "strict" }),
+      ).rejects.toMatchObject({
         status: 503,
       });
-      await expect(discoverChutesModels("chutes-fallback-token")).rejects.toMatchObject({
-        status: 503,
+      await expect(buildChutesProvider("chutes-fallback-token")).resolves.toMatchObject({
+        models: CHUTES_MODEL_CATALOG,
       });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
@@ -409,13 +411,18 @@ describe("chutes-models", () => {
       );
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
-      await expect(discoverChutesModels("failed-token")).rejects.toMatchObject({ status: 401 });
-      await expect(discoverChutesModels("failed-token")).rejects.toMatchObject({ status: 401 });
+      await expect(
+        discoverChutesModels("failed-token", { discoveryMode: "strict" }),
+      ).rejects.toMatchObject({ status: 401 });
+      await expect(buildChutesProvider("failed-token")).resolves.toMatchObject({
+        models: [{ id: "public/model" }],
+      });
       expect(mockFetch.mock.calls.map(([, init]) => readAuthorizationHeader(init))).toEqual([
         "Bearer failed-token",
         "Bearer failed-token",
+        "",
       ]);
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
   });
 });
