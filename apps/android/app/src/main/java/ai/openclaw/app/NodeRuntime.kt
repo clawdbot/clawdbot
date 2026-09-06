@@ -2956,7 +2956,7 @@ class NodeRuntime private constructor(
 
   /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean =
-    gatewayLifecycleIntentSeq.incrementAndGet().let { intent ->
+    advanceGatewayLifecycleIntent().let { intent ->
       gatewaySwitchMutex.withLock {
         if (intent != gatewayLifecycleIntentSeq.get()) false else resetGatewaySetupAuthLocked(stableId)
       }
@@ -4545,9 +4545,13 @@ class NodeRuntime private constructor(
       if (!isCurrent()) return@synchronized null
       preferredGatewayReconnectSuppressed = false
       secondaryGatewayConnectionsEnabled = true
-      gatewayLifecycleIntent(gatewayLifecycleIntentSeq.incrementAndGet(), isCurrent).also {
-        requestBackgroundGatewayReconciliation()
-      }
+      gatewayLifecycleIntent(advanceGatewayLifecycleIntent(), isCurrent)
+    }
+
+  // Queued callers can exit before cleanup, so generation changes must request reconciliation.
+  private fun advanceGatewayLifecycleIntent(): Long =
+    gatewayLifecycleIntentSeq.incrementAndGet().also {
+      requestBackgroundGatewayReconciliation()
     }
 
   private fun gatewayLifecycleIntent(
@@ -4826,7 +4830,7 @@ class NodeRuntime private constructor(
       normalizeGatewayTlsFingerprintInput(
         prompt.fingerprintSha256 ?: manualFingerprint ?: return,
       ) ?: return
-    val intent = gatewayLifecycleIntent(gatewayLifecycleIntentSeq.incrementAndGet())
+    val intent = gatewayLifecycleIntent(advanceGatewayLifecycleIntent())
     launchGatewayLifecycle(intent) {
       if (_pendingGatewayTrust.value != prompt) return@launchGatewayLifecycle
       _pendingGatewayTrust.value = null
@@ -4839,7 +4843,7 @@ class NodeRuntime private constructor(
   fun useSystemGatewayTrustPrompt() {
     val prompt = _pendingGatewayTrust.value ?: return
     if (!prompt.systemTrustAvailable) return
-    val intent = gatewayLifecycleIntent(gatewayLifecycleIntentSeq.incrementAndGet())
+    val intent = gatewayLifecycleIntent(advanceGatewayLifecycleIntent())
     launchGatewayLifecycle(intent) {
       if (_pendingGatewayTrust.value != prompt) return@launchGatewayLifecycle
       _pendingGatewayTrust.value = null
@@ -4850,7 +4854,7 @@ class NodeRuntime private constructor(
   }
 
   fun declineGatewayTrustPrompt() {
-    val intent = gatewayLifecycleIntent(gatewayLifecycleIntentSeq.incrementAndGet())
+    val intent = gatewayLifecycleIntent(advanceGatewayLifecycleIntent())
     launchGatewayLifecycle(intent) {
       _pendingGatewayTrust.value = null
       connectingEndpointStableId = null
@@ -4940,7 +4944,7 @@ class NodeRuntime private constructor(
     synchronized(gatewayLifecycleIntentLock) {
       preferredGatewayReconnectSuppressed = true
       secondaryGatewayConnectionsEnabled = false
-      gatewayLifecycleIntentSeq.incrementAndGet()
+      advanceGatewayLifecycleIntent()
       disconnectSecondaryGatewayConnections()
       disconnect(retireRunState)
       requestBackgroundGatewayReconciliation()
@@ -4976,7 +4980,7 @@ class NodeRuntime private constructor(
     val intent =
       synchronized(gatewayLifecycleIntentLock) {
         if (!isCurrent()) return false
-        gatewayLifecycleIntent(gatewayLifecycleIntentSeq.incrementAndGet(), isCurrent)
+        gatewayLifecycleIntent(advanceGatewayLifecycleIntent(), isCurrent)
       }
     return gatewaySwitchMutex.withLock {
       if (!intent()) false else forgetGatewayLocked(stableId)
