@@ -1532,14 +1532,10 @@ describe("modelsStatusCommand auth overview", () => {
     expect(upperInputs.length).toBeGreaterThan(0);
     expect(lowerInputs.length).toBeGreaterThan(0);
     for (const input of upperInputs) {
-      expect(input.observedRoutes).toEqual([
-        { api: upperRoute.api, baseUrl: upperRoute.baseUrl },
-      ]);
+      expect(input.observedRoutes).toEqual([{ api: upperRoute.api, baseUrl: upperRoute.baseUrl }]);
     }
     for (const input of lowerInputs) {
-      expect(input.observedRoutes).toEqual([
-        { api: lowerRoute.api, baseUrl: lowerRoute.baseUrl },
-      ]);
+      expect(input.observedRoutes).toEqual([{ api: lowerRoute.api, baseUrl: lowerRoute.baseUrl }]);
     }
   });
 

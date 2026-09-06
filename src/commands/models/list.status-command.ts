@@ -650,11 +650,22 @@ export async function modelsStatusCommand(
       string,
       Array<{ api?: (typeof catalog.routeVariants)[number]["api"]; baseUrl?: string }>
     >();
+    const resolveStatusRouteIdentityKey = (entry: { provider: string; id: string }) => {
+      const provider = normalizeProviderId(entry.provider);
+      const key = modelKey(provider, entry.id);
+      const providerPrefix = `${provider}/`;
+      // Physical catalog rows may repeat their provider in the model id.
+      // Collapse only that prefix; the remaining model id stays case-sensitive.
+      const id = key.toLowerCase().startsWith(providerPrefix)
+        ? key.slice(providerPrefix.length)
+        : key;
+      return resolveModelCatalogIdentityKey({ provider, id });
+    };
     for (const entry of catalog.routeVariants) {
       if (entry.api === undefined && entry.baseUrl === undefined) {
         continue;
       }
-      const key = resolveModelCatalogIdentityKey(entry);
+      const key = resolveStatusRouteIdentityKey(entry);
       const sources = routeSourcesByModel.get(key) ?? [];
       sources.push({ api: entry.api, baseUrl: entry.baseUrl });
       routeSourcesByModel.set(key, sources);
@@ -665,7 +676,7 @@ export async function modelsStatusCommand(
       await Promise.all(
         providerUseRefs.map(async (usage) => {
           const observedRoutes = routeSourcesByModel.get(
-            resolveModelCatalogIdentityKey({ provider: usage.provider, id: usage.model }),
+            resolveStatusRouteIdentityKey({ provider: usage.provider, id: usage.model }),
           );
           const ref = {
             modelId: usage.model,
