@@ -200,7 +200,10 @@ describe("createChatSendMessageInjectionStarter", () => {
         queueMessage: vi.fn(async () => {}),
       },
     });
-    const target = expectDefined(replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey));
+    const target = expectDefined(
+      replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey),
+      "Expected the running test operation to accept steering",
+    );
 
     return {
       target,
