@@ -73,6 +73,9 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (!assistant || assistant.stopReason !== "error" || isTerminalAssistantError(assistant)) {
     return false;
   }
+  if (assistant.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal")) {
+    return false;
+  }
 
   const content = (assistant as { content?: unknown }).content;
   if (!Array.isArray(content)) {
