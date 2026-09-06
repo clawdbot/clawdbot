@@ -115,12 +115,8 @@ enum DeviceSettingsPermissionStatus: String, Encodable {
     }
 
     init(automation state: AppleEventPermissionState) {
-        switch state {
-        case .authorized: self = .granted
-        case .notDetermined: self = .notDetermined
-        case .denied: self = .denied
-        case .targetNotRunning, .targetNotAccessible, .failed: self = .unavailable
-        }
+        self = state == .notDetermined ? .notDetermined :
+            Self(TerminalAutomationPermission.authorizationStatus(for: state))
     }
 }
 
