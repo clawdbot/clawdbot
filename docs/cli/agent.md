@@ -157,10 +157,14 @@ This is evaluation-only evidence, not a CI or release gate. Results do not chang
 - `--timeout <seconds>`: override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours.
 - `--json`: output JSON
 
-Post-turn memory flushing and compaction share the time remaining after the
-foreground run. If that maintenance allowance expires, OpenClaw cancels and
-settles maintenance before returning the completed reply. Caller cancellation,
-restart, and session ownership changes still prevent stale delivery.
+Gateway commands using OpenClaw's managed agent loop return their completed reply before optional memory
+flushing and compaction. That work has its own session owner and uses the command's
+remaining time. A new turn in the same session cancels and settles it before
+starting inference. One-shot `--local` commands skip optional post-turn work;
+required checkpointing and compaction still happen before inference in that loop. Generic CLI
+backends retain their existing host compaction before the command returns; native
+backends retain their own compaction policy. Cancellation,
+restart, and session ownership changes continue to fence active writers.
 
 ## Examples
 

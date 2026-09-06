@@ -1,5 +1,4 @@
 import type {
-  AssistantMessage,
   AssistantMessageEvent,
   Context,
   Model,
@@ -64,6 +63,7 @@ import {
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import {
   buildGuardedModelFetch,
   resolveProviderEndpoint,
@@ -72,7 +72,6 @@ import {
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   copyProviderAcceptanceObserver,
-  createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
@@ -740,16 +739,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: "anthropic-messages",
-        provider: model.provider,
-        model: model.id,
-        usage: createEmptyTransportUsage(),
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      const output = createAssistantOutput(model, "anthropic-messages");
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)

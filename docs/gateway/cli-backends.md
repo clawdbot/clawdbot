@@ -230,6 +230,9 @@ OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths a
 - `output: "jsonl"` parses a JSONL stream and extracts the final agent message plus session identifiers when present.
 - For Gemini CLI JSON output, OpenClaw reads reply text from `response` and usage from `stats` when `usage` is missing or empty. The bundled Gemini CLI adapter uses `stream-json`.
 
+JSON examples inside double-quoted banner text are not treated as response or error records.
+For JSONL, banner scanning starts fresh on each line.
+
 Input modes:
 
 - `input: "arg"` (default) passes the prompt as the last CLI arg.

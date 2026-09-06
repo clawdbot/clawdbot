@@ -262,9 +262,6 @@ export function createChatSendReplyDispatch(params: {
       mediaMessage?.transcriptText ??
       extractAssistantDisplayTextFromContent(assistantContent) ??
       buildTranscriptReplyText([transcriptPayload]);
-    if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-      return;
-    }
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const sourceMediaUrls = Array.from(
       new Set(
@@ -383,7 +380,7 @@ export function createChatSendReplyDispatch(params: {
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,
       message: transcriptReply,
-      ...(persistedContentForAppend.length ? { content: persistedContentForAppend } : {}),
+      content: persistedContentForAppend,
       sessionId,
       storePath: latestStorePath,
       agentId,
@@ -461,25 +458,17 @@ export function createChatSendReplyDispatch(params: {
   };
   const finalizeAgentMediaTranscript = async () => {
     const latestPayloadByKey = new Map<string, ReplyPayload>();
-    const orderedKeys: string[] = [];
     for (const { payload } of deliveredReplies) {
       if (!needsAgentMediaTranscriptFinalization(payload)) {
         continue;
       }
-      const key = agentMediaTranscriptKey(payload);
-      if (!latestPayloadByKey.has(key)) {
-        orderedKeys.push(key);
-      }
-      latestPayloadByKey.set(key, payload);
+      latestPayloadByKey.set(agentMediaTranscriptKey(payload), payload);
     }
-    for (const key of orderedKeys) {
-      const payload = latestPayloadByKey.get(key);
-      if (payload) {
-        try {
-          await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-        } catch (error) {
-          logGateway.warn(`webchat media finalization failed: ${formatForLog(error)}`);
-        }
+    for (const payload of latestPayloadByKey.values()) {
+      try {
+        await appendWebchatAgentMediaTranscriptIfNeeded(payload);
+      } catch (error) {
+        logGateway.warn(`webchat media finalization failed: ${formatForLog(error)}`);
       }
     }
   };

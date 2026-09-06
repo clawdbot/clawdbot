@@ -32,6 +32,7 @@ const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
+const extractFileContentFromBufferMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.test-support.js").clearMediaUnderstandingBinaryCacheForTests;
@@ -40,6 +41,10 @@ const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
 const mockedConvertHeicToJpeg = convertHeicToJpegMock;
 const mockedRunExec = runExecMock;
+const mockedExtractFileContentFromBuffer = extractFileContentFromBufferMock;
+let actualExtractFileContentFromBuffer:
+  | typeof import("../media/input-files.js").extractFileContentFromBuffer
+  | undefined;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
@@ -354,6 +359,15 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+    vi.doMock("../media/input-files.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("../media/input-files.js")>("../media/input-files.js");
+      actualExtractFileContentFromBuffer = actual.extractFileContentFromBuffer;
+      return {
+        ...actual,
+        extractFileContentFromBuffer: extractFileContentFromBufferMock,
+      };
+    });
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
@@ -405,6 +419,12 @@ describe("applyMediaUnderstanding", () => {
     mockedConvertHeicToJpeg.mockReset();
     mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
+    // Extraction stays real unless a case overrides it; the mock exists so
+    // scanned-PDF render outcomes can be produced without the extract plugin.
+    mockedExtractFileContentFromBuffer.mockReset();
+    if (actualExtractFileContentFromBuffer) {
+      mockedExtractFileContentFromBuffer.mockImplementation(actualExtractFileContentFromBuffer);
+    }
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
@@ -2623,6 +2643,107 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("<file");
     expect(ctx.Body).toContain("vendor-json");
+  });
+
+  describe("renderInboundDocumentContext", () => {
+    it("renders a document attachment without mutating ctx", async () => {
+      const { renderInboundDocumentContext } = await import("./file-context.js");
+      const mediaPath = await createTempMediaFile({
+        fileName: "steer-note.txt",
+        content: "document body for the steered run",
+      });
+      const ctx: MsgContext = {
+        Body: "see attached",
+        media: [{ path: mediaPath, contentType: "text/plain" }],
+      };
+
+      const context = await renderInboundDocumentContext({ ctx, cfg: {} as OpenClawConfig });
+
+      expect(context?.text).toContain('<file name="steer-note.txt" mime="text/plain">');
+      expect(context?.text).toContain("document body for the steered run");
+      expect(context?.images).toEqual([]);
+      // Read-only on ctx: a rejected steer falls back to reply dispatch, which
+      // must extract exactly once through the full pipeline.
+      expect(ctx.Body).toBe("see attached");
+      expect(ctx.media?.[0]?.path).toBe(mediaPath);
+    });
+
+    it("returns empty for image attachments owned by the injected images channel", async () => {
+      const { renderInboundDocumentContext } = await import("./file-context.js");
+      const mediaPath = await createTempMediaFile({
+        fileName: "steer.png",
+        content: createSafeAudioFixtureBuffer(16),
+      });
+      const ctx: MsgContext = {
+        Body: "see attached",
+        media: [{ path: mediaPath, contentType: "image/png" }],
+      };
+
+      const context = await renderInboundDocumentContext({ ctx, cfg: {} as OpenClawConfig });
+
+      expect(context?.text).toBe("");
+      expect(context?.images).toEqual([]);
+      expect(ctx.Body).toBe("see attached");
+    });
+
+    it("returns empty context when the steer carries no attachments", async () => {
+      const { renderInboundDocumentContext } = await import("./file-context.js");
+      const context = await renderInboundDocumentContext({
+        ctx: { Body: "plain steer" } as MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+      expect(context).toEqual({ text: "", images: [] });
+    });
+
+    it("returns rendered PDF page images for a scanned document", async () => {
+      const { renderInboundDocumentContext } = await import("./file-context.js");
+      const mediaPath = await createTempMediaFile({
+        fileName: "scan.pdf",
+        content: Buffer.from("%PDF-1.4\n", "utf8"),
+      });
+      mockedExtractFileContentFromBuffer.mockResolvedValueOnce({
+        text: "",
+        images: [
+          { type: "image", data: "page-1-bytes", mimeType: "image/png" },
+          { type: "image", data: "page-2-bytes", mimeType: "image/png" },
+        ],
+      });
+      const ctx: MsgContext = {
+        Body: "see attached",
+        media: [{ path: mediaPath, contentType: "application/pdf" }],
+      };
+
+      const context = await renderInboundDocumentContext({ ctx, cfg: createMediaDisabledConfig() });
+
+      // The marker alone would tell the model the document exists while the
+      // injected images channel carries nothing; the pages must ride along.
+      expect(context?.text).toContain("[PDF content rendered to images]");
+      expect(context?.images).toEqual([
+        { type: "image", data: "page-1-bytes", mimeType: "image/png", attachmentIndex: 0 },
+        { type: "image", data: "page-2-bytes", mimeType: "image/png", attachmentIndex: 0 },
+      ]);
+    });
+
+    it("applies the skipped-attachment marker budget to steer blocks", async () => {
+      const { renderInboundDocumentContext } = await import("./file-context.js");
+      const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");
+      const media: { path: string; contentType: string }[] = [];
+      for (let i = 0; i < 7; i += 1) {
+        const filePath = await createTempMediaFile({
+          fileName: `legacy-${i}.doc`,
+          content: olePayload,
+        });
+        media.push({ path: filePath, contentType: "application/msword" });
+      }
+      const ctx: MsgContext = { Body: "see attached", media };
+
+      const context = await renderInboundDocumentContext({ ctx, cfg: createMediaDisabledConfig() });
+
+      const markerCount = context?.text.split("[Unsupported document format").length ?? 0;
+      expect(markerCount - 1).toBe(5);
+      expect(context?.text).toContain("[2 more attachments skipped]");
+      expect(context?.images).toEqual([]);
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

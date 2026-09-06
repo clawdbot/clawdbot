@@ -5,20 +5,31 @@ import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harn
 import type { AssistantMessage } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
+import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   calculateContextTokens,
+  buildSessionContext,
   compact,
   estimateContextTokens,
   prepareCompaction,
   shouldCompact,
   type CompactionPreparation,
   type CompactionResult,
+  type AgentMessage,
 } from "../runtime/index.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
+import {
+  createCompactionRequestBudget,
+  estimateCompactedRequestTokens,
+  estimateCompactionHistoryTokens,
+  resolveCompactionRetentionBudget,
+  type CompactionRequestBudget,
+  type CompactionRequestConstraints,
+} from "./compaction/request-budget.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -33,6 +44,7 @@ type CompactionWorkOutcome =
   | { status: "completed"; result: CompactionResult; tokensAfter: number }
   | { status: "aborted" }
   | { status: "skipped"; reason: string };
+type SettledCompactionWorkOutcome = Exclude<CompactionWorkOutcome, { status: "aborted" }>;
 
 function compactionErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -71,29 +83,28 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
-    return await this.compactWithPolicy(customInstructions, "none");
+    return await this.runWithSessionWriteSettlement(async () => {
+      const outcome = await this.compactWithSessionWriteSettlement(customInstructions, "none");
+      if (outcome.status === "skipped") {
+        throw new Error(outcome.reason);
+      }
+      return outcome.result;
+    });
   }
 
   async [agentSessionAutomaticCompaction](
     customInstructions?: string,
     requestState?: CompactionRequestState,
     summaryOutputPolicy: SummaryOutputPolicy = "retry-invalid-once",
-  ): Promise<CompactionResult> {
-    return await this.compactWithPolicy(customInstructions, summaryOutputPolicy, requestState);
-  }
-
-  private async compactWithPolicy(
-    customInstructions: string | undefined,
-    summaryOutputPolicy: SummaryOutputPolicy,
-    requestState?: CompactionRequestState,
-  ): Promise<CompactionResult> {
-    return await this.runWithSessionWriteSettlement(
-      async () =>
-        await this.compactWithSessionWriteSettlement(
-          customInstructions,
-          summaryOutputPolicy,
-          requestState,
-        ),
+    constraints?: CompactionRequestConstraints,
+  ): Promise<SettledCompactionWorkOutcome> {
+    return await this.runWithSessionWriteSettlement(() =>
+      this.compactWithSessionWriteSettlement(
+        customInstructions,
+        summaryOutputPolicy,
+        requestState,
+        constraints,
+      ),
     );
   }
 
@@ -101,7 +112,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string,
     summaryOutputPolicy: SummaryOutputPolicy = "none",
     requestState?: CompactionRequestState,
-  ): Promise<CompactionResult> {
+    constraints?: CompactionRequestConstraints,
+  ): Promise<SettledCompactionWorkOutcome> {
     this.disconnectFromAgent();
     await this.abort();
     const abortController = new AbortController();
@@ -119,6 +131,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           mode: "manual",
           summaryOutputPolicy,
           requestState,
+          ...constraints,
           settings,
           signal: abortController.signal,
         });
@@ -138,7 +151,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
       if (outcome.status === "skipped") {
         this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
-        throw new Error(outcome.reason);
+        return outcome;
       }
       if (outcome.status === "aborted") {
         this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
@@ -156,7 +169,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           willRetry: false,
         },
       });
-      return outcome.result;
+      return outcome;
     } finally {
       if (this.compactionAbortController === abortController) {
         this.compactionAbortController = undefined;
@@ -188,6 +201,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     mode: "manual" | "auto";
     requestState?: CompactionRequestState;
     summaryOutputPolicy: SummaryOutputPolicy;
+    requestBudget?: CompactionRequestBudget;
+    pendingUserEntryId?: string;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     if (!this.model) {
@@ -212,8 +227,34 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const pathEntries = this.sessionManager.getBranch();
+    const requestBudget = options.requestBudget;
+    const pendingUserIdempotencyKey = requestBudget?.pendingTokens
+      ? requestBudget.pendingUserIdempotencyKey
+      : undefined;
+    const pendingEntryIndex =
+      options.pendingUserEntryId || pendingUserIdempotencyKey
+        ? pathEntries.findLastIndex(
+            (entry) =>
+              entry.type === "message" &&
+              entry.message.role === "user" &&
+              (options.pendingUserEntryId
+                ? entry.id === options.pendingUserEntryId
+                : "idempotencyKey" in entry.message &&
+                  entry.message.idempotencyKey === pendingUserIdempotencyKey),
+          )
+        : -1;
+    if (options.pendingUserEntryId && pendingEntryIndex < 0) {
+      throw new Error("Compaction cannot find the admitted pending user request.");
+    }
+    const retention = requestBudget
+      ? resolveCompactionRetentionBudget(requestBudget, buildSessionContext(pathEntries).messages)
+      : undefined;
+    const requestTokenLimit =
+      requestBudget && retention
+        ? requestBudget.fixedTokens + requestBudget.pendingTokens + retention.maxTokens
+        : undefined;
     let preparation: CompactionPreparation | undefined;
-    if (isManual && !options.requestState) {
+    if (isManual && !options.requestState && !requestBudget && pendingEntryIndex < 0) {
       const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
       if (!manualPreflight.compactable) {
         throw new Error(manualPreflight.reason);
@@ -221,11 +262,53 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       preparation = manualPreflight.preparation;
     } else {
       preparation = unwrapCoreResult(
-        prepareCompaction(pathEntries, options.settings, options.requestState),
+        prepareCompaction(
+          pathEntries,
+          options.settings,
+          options.requestState,
+          requestBudget || pendingEntryIndex >= 0
+            ? {
+                preserveFromEntryId: pathEntries[pendingEntryIndex]?.id,
+                ...(requestBudget && retention
+                  ? {
+                      budget: {
+                        ...retention,
+                        estimateTokens: (message: AgentMessage) =>
+                          estimateCompactionHistoryTokens([message], requestBudget),
+                      },
+                    }
+                  : {}),
+              }
+            : undefined,
+        ),
       );
     }
     if (!preparation) {
       return { status: "skipped", reason: "Nothing to compact (session too small)" };
+    }
+
+    const projectReplacement = (
+      result: Pick<CompactionResult, "firstKeptEntryId" | "tokensBefore">,
+      summary: string,
+    ) =>
+      buildSessionContext([
+        ...pathEntries,
+        {
+          ...result,
+          type: "compaction",
+          id: options.itemId,
+          parentId: pathEntries.at(-1)?.id ?? null,
+          timestamp: new Date().toISOString(),
+          summary,
+        },
+      ]).messages;
+    if (requestBudget && requestTokenLimit !== undefined) {
+      const remaining =
+        requestTokenLimit -
+        estimateCompactedRequestTokens(projectReplacement(preparation, ""), requestBudget);
+      // Each producer fits its complete artifact before audit. Leave one token
+      // for independent rounding of the summary and complete request estimates.
+      preparation.summaryTokenBudget = Math.floor(remaining / SAFETY_MARGIN) - 1;
     }
 
     let compactionResult: CompactionResult | undefined;
@@ -313,6 +396,26 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       summary: capCompactionSummary(compactionResult.summary),
     };
 
+    // Custom hooks may choose a different retained boundary. Validate their
+    // complete result before commit, without modifying an already audited artifact.
+    const { firstKeptEntryId } = compactionResult;
+    const firstKeptIndex = pathEntries.findIndex((entry) => entry.id === firstKeptEntryId);
+    if (pendingEntryIndex >= 0 && (firstKeptIndex < 0 || firstKeptIndex > pendingEntryIndex)) {
+      throw new Error("Compaction must retain the unprocessed pending user request.");
+    }
+    if (
+      requestBudget &&
+      requestTokenLimit !== undefined &&
+      estimateCompactedRequestTokens(
+        projectReplacement(compactionResult, compactionResult.summary),
+        requestBudget,
+      ) > requestTokenLimit
+    ) {
+      throw new Error(
+        "The finalized compaction exceeds the foreground request budget. Reduce the request or select a larger context window.",
+      );
+    }
+
     // An in-memory transcript has no SQLite writer fence. Revalidate its
     // captured owner after summarization, immediately before replacing context.
     this.assertContextReplacementActive?.();
@@ -330,7 +433,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
     // Commit accounting and invalidation must precede awaited extension work;
     // cancellation there can prevent the public completed event from reaching its owner.
-    this.onContextReplaced?.(estimateContextTokens(this.agent.state.messages).tokens);
+    const tokensAfter = requestBudget
+      ? estimateCompactedRequestTokens(this.agent.state.messages, {
+          ...requestBudget,
+          pendingTokens: 0,
+        })
+      : estimateContextTokens(this.agent.state.messages).tokens;
+    this.onContextReplaced?.(tokensAfter);
 
     const savedCompactionEntry = this.sessionManager.getEntry(compactionEntryId);
     if (this.currentExtensionRunner && savedCompactionEntry?.type === "compaction") {
@@ -341,7 +450,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
     }
 
-    const tokensAfter = estimateContextTokens(this.agent.state.messages).tokens;
     return { status: "completed", result: compactionResult, tokensAfter };
   }
 
@@ -359,6 +467,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   protected async checkCompaction(
     assistantMessage: AssistantMessage,
     skipAbortedCheck = true,
+    requestBudget?: CompactionRequestBudget,
   ): Promise<boolean> {
     const settings = this.settingsManager.getCompactionSettings();
     if (!settings.enabled) {
@@ -420,7 +529,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (messages.at(-1)?.role === "assistant") {
         this.agent.state.messages = messages.slice(0, -1);
       }
-      return await this.runAutoCompaction("overflow", true);
+      return await this.runAutoCompaction("overflow", true, requestBudget);
     }
 
     // Case 2: Threshold - context is getting large
@@ -444,7 +553,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       contextTokens = calculateContextTokens(assistantMessage.usage);
     }
     if (shouldCompact(contextTokens, contextWindow, settings)) {
-      return await this.runAutoCompaction("threshold", false);
+      return await this.runAutoCompaction("threshold", false, requestBudget);
     }
     return false;
   }
@@ -455,8 +564,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   private async runAutoCompaction(
     reason: Exclude<CompactionReason, "manual">,
     willRetry: boolean,
+    requestBudget?: CompactionRequestBudget,
   ): Promise<boolean> {
     const settings = this.settingsManager.getCompactionSettings();
+    const contextWindow = this.model?.contextWindow;
 
     const itemId = generateSessionEntryId();
     this.emit({ type: "compaction_start", reason, itemId });
@@ -467,6 +578,16 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const outcome = await this.runCompactionWork({
         itemId,
         mode: "auto",
+        requestBudget:
+          requestBudget ??
+          (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
+            ? createCompactionRequestBudget({
+                contextWindow,
+                reserveTokens: settings.reserveTokens,
+                systemPrompt: this.agent.state.systemPrompt,
+                tools: this.agent.state.tools,
+              })
+            : undefined),
         ...(willRetry ? { requestState: "unresolved" as const } : {}),
         summaryOutputPolicy: "retry-invalid-once",
         settings,

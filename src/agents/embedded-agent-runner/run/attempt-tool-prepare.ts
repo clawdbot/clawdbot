@@ -177,10 +177,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     requireExplicitMessageTarget,
     config: toolSearchRuntimeConfig,
     sessionKey: params.setup.sandboxSessionKey,
-    runSessionKey:
-      attempt.sessionKey && attempt.sessionKey !== params.setup.sandboxSessionKey
-        ? attempt.sessionKey
-        : undefined,
+    runSessionKey: attempt.sessionKey?.trim() || attempt.sessionId,
     sessionId: attempt.sessionId,
     runId: attempt.runId,
     agentDir: params.agentDir,

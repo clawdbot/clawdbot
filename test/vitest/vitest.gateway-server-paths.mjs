@@ -12,6 +12,7 @@ export const gatewayServerBackedHttpTestFiles = [
 export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/agent.test.ts",
   "src/gateway/server-methods/board.runtime-boundaries.test.ts",
+  "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
   "src/gateway/server-methods/usage.test.ts",
   "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];

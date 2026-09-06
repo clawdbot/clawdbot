@@ -38,7 +38,11 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     hello: {
       type: "hello-ok",
       protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
+      auth: {
+        role: "operator",
+        scopes: ["operator.read", "operator.admin"],
+        recoveryScope: "synthetic-setup-owner",
+      },
       features: {
         methods: [
           "config.set",
@@ -165,4 +169,23 @@ export function requestParameters(params: unknown) {
     throw new Error("Expected Gateway request parameters.");
   }
   return params;
+}
+
+export async function clickCandidate(page: ModelSetupPage, kind: string) {
+  await waitForFast(() =>
+    expect(page.querySelector(`[data-candidate-kind="${kind}"] button`)).not.toBeNull(),
+  );
+  const button = page.querySelector<HTMLButtonElement>(`[data-candidate-kind="${kind}"] button`);
+  expect(button).not.toBeNull();
+  expect(button!.disabled).toBe(false);
+  button!.click();
+  await page.updateComplete;
+}
+
+export async function selectManualProvider(page: ModelSetupPage, providerId: string) {
+  const picker = page.querySelector(".model-setup-provider-select")!;
+  const item = picker.querySelector(`[data-manual-provider="${providerId}"]`);
+  expect(item).not.toBeNull();
+  picker.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+  await page.updateComplete;
 }

@@ -618,7 +618,13 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     api: attempt.model.api,
     boundaryCount: sessionManager.getBoundaryCount(),
     promptCacheKey: attempt.promptCacheKey,
-    sessionId: attempt.sessionId,
+    // A detached helper routes under its private identity but reads the caller's prompt bytes.
+    sessionId:
+      attempt.sessionPersistence === "detached" &&
+      attempt.sessionManager &&
+      !attempt.sessionManager.getSessionTarget()
+        ? attempt.sessionManager.getSessionId()
+        : attempt.sessionId,
   });
 
   await input.withOwnedTranscriptWrite(async () => {

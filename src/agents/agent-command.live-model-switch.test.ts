@@ -244,6 +244,9 @@ vi.mock("./command/cli-compaction.js", () => ({
 }));
 
 vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
+  // Model-switch fixtures have no context pressure; required preflight preserves their session.
+  runSessionCompactionIfNeeded: async (params: { sessionEntry?: SessionEntry }) =>
+    params.sessionEntry,
   runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
     state.runMemoryFlushIfNeededMock(params),
 }));
@@ -1839,10 +1842,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     ["restart abort", "agent run aborted for restart"],
     ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
   ] as const)(
-    "does not start memory maintenance when %s closes after persistence",
+    "does not run CLI compaction when %s closes after persistence",
     async (mode, error) => {
       setupSingleAttemptFallback();
-      setupStoredSession();
+      setupStoredSession({ contextTokens: 32_768 });
       const controller = new AbortController();
       const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
         typeof makeSuccessResult
@@ -1854,6 +1857,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         winnerModel: "gpt-5.4",
       };
       state.runAgentAttemptMock.mockResolvedValue(result);
+      const compact = vi.fn();
+      state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(
+        async (params: { sessionEntry?: SessionEntry }, host: { assertActive?: () => void }) => {
+          expectDefined(host.assertActive, "compaction authority")();
+          compact();
+          return params.sessionEntry;
+        },
+      );
       state.persistCliTurnTranscriptMock.mockImplementationOnce(
         async (params: { sessionEntry?: SessionEntry }) => {
           if (mode === "restart abort") {
@@ -1877,7 +1888,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
       expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledOnce();
       expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
-      expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+      expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+      expect(compact).not.toHaveBeenCalled();
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     },
   );
@@ -1885,9 +1897,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it.each([
     ["restart abort", "agent run aborted for restart"],
     ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
-  ] as const)("stops finalization when memory maintenance sees a %s", async (mode, error) => {
+  ] as const)("stops finalization when CLI compaction sees a %s", async (mode, error) => {
     setupSingleAttemptFallback();
     const { store } = setupStoredSession({
+      contextTokens: 32_768,
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     });
@@ -1902,7 +1915,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       winnerModel: "gpt-5.4",
     };
     state.runAgentAttemptMock.mockResolvedValue(result);
-    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
       if (mode === "restart abort") {
         controller.abort(createAgentRunRestartAbortError());
       } else {
@@ -1910,7 +1923,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           throw new Error(error);
         });
       }
-      return { sessionEntry: params.sessionEntry, outcome: "failed" as const };
+      return params.sessionEntry;
     });
 
     await expect(
@@ -1921,15 +1934,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     ).rejects.toThrow(error);
 
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-    const flushParams = state.runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as
-      | { followupRun?: { run?: Record<string, unknown> } }
-      | undefined;
-    const flushRun = flushParams?.followupRun?.run;
-    expect(flushRun).toBeDefined();
-    expect(flushRun).toMatchObject({
-      authProfileId: "openai:work",
-      authProfileIdSource: "user",
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+    const compactionParams = requireRecord(
+      mockCallArg(state.runCliTurnCompactionLifecycleMock),
+      "CLI compaction parameters",
+    );
+    expect(compactionParams.sessionEntry).toMatchObject({
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
     });
     for (const field of [
       "runtimePluginToolGrant",
@@ -1937,9 +1950,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "trustedInternalHandoff",
       "bashElevated",
     ]) {
-      expect(flushRun).not.toHaveProperty(field);
+      expect(compactionParams).not.toHaveProperty(field);
     }
-    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(store["agent:main:main"]?.pendingFinalDelivery).toBeUndefined();
   });

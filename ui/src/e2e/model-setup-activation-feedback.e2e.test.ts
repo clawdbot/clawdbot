@@ -191,6 +191,10 @@ suite.define(() => {
             page.locator(".content").evaluate((element) => {
               element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
             });
+          if (entry === "manual") {
+            await setup.locator(".model-setup-provider-select__trigger").click();
+            await setup.locator('[data-manual-provider="openai"]').click();
+          }
           await input.fill("invalid-test-key");
           const activate =
             entry === "manual"

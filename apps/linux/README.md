@@ -94,15 +94,36 @@ to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 
-After connecting, Model Setup checks existing credentials and verifies a real
-model response before continuing. If no existing credentials work, choose a
-provider and either sign in or enter an API key. The selected Gateway owns the
-provider credentials and model configuration. A working existing model opens
-the normal dashboard; newly configured AI access continues into guided
-onboarding. In-progress model setup and guided onboarding survive Gateway
-restarts. If the app closes while model activation is in progress, reopening it
-resumes the same Gateway, agent, and model without activating the provider
-twice.
+After connecting, Model Setup discovers AI access available to the selected
+Gateway and shows it as a choice. Discovery never imports or copies an account,
+and the companion never selects, tests, installs, or saves a provider until you
+click its action. The list includes supported installed providers and official
+provider plugins available from OpenClaw's managed plugin catalog. Installing a
+provider plugin shows its capabilities for review and continues directly to
+that provider's authentication form. Successful verification may require a
+Gateway restart before the new model becomes available.
+
+The custom endpoint option supports OpenAI- and Anthropic-compatible services.
+For a local Gateway, it opens the canonical guided endpoint setup. For a remote
+Gateway, run `openclaw onboard --auth-choice custom-api-key` on the Gateway host as directed by the setup
+message; custom-provider secrets must be entered on their owning host. The
+desktop companion does not copy remote provider secrets to this computer.
+
+On a fresh install, setup also asks whether existing native Claude and Codex
+conversations should appear in OpenClaw. This is discovery only, not an import
+or copy. The option starts unchecked; declining disables both native session
+catalogs. Existing installations keep their current catalog behavior during an
+upgrade.
+
+Once you choose AI access, Model Setup follows the provider's normal review and
+verification flow. A temporary connection loss resumes the admitted setup
+wizard on the same Gateway and account without repeating installation or the last answer.
+After a completed activation requests a restart, setup can resume verification
+of that same model. If an unfinished wizard is no longer available, setup shows
+a recovery message instead of repeating authentication automatically. **Check again**
+refreshes the current setup; if a model was saved, you can explicitly verify and use it. Gateway
+failures retain their detailed recovery message so setup can identify
+authentication, network, service, or restart problems.
 
 For OpenAI, **ChatGPT Login** uses a ChatGPT or Codex subscription, while
 **OpenAI API Key** uses API billing. When the Gateway runs on another host and

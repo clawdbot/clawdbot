@@ -54,6 +54,10 @@ import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js"
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
+import {
+  recordReplyPreRunRejection,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
 
@@ -336,6 +340,7 @@ export async function resolveReplyDirectives(params: {
   const elevatedFailures = elevated.failures;
   if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
     typing.cleanup();
+    recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "session-directive-rejected");
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg,
       agentId,
@@ -457,6 +462,9 @@ export async function resolveReplyDirectives(params: {
       throw error;
     }
     typing.cleanup();
+    if (error instanceof ModelSelectionLockedError) {
+      recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
+    }
     return { kind: "reply", reply: { text: error.message, isError: true } };
   }
   provider = modelState.provider;
@@ -521,6 +529,7 @@ export async function resolveReplyDirectives(params: {
     typing,
   });
   if (applyResult.kind === "reply") {
+    recordReplyPreRunRejection(resolveReplyOperationRunState(opts), applyResult.preRunRejection);
     return { kind: "reply", reply: markCommandReplyForDelivery(applyResult.reply) };
   }
   directives = applyResult.directives;
