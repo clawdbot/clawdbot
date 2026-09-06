@@ -1585,6 +1585,28 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
+          // Grouped rows list every striped test file. Current targets pack the
+          // projected runner contract; older targets retain the same projection
+          // as legacy JSON because their shard runner predates the codec.
+          const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
+          const nodeTestGroupsCodec =
+            rawNodeTestShards.some((shard) => shard.groups) &&
+            existsSync(nodeTestGroupsCodecPath)
+              ? await importTargetPlan(nodeTestGroupsCodecPath)
+              : null;
+          const encodeNodeTestGroups = (groups) => {
+            if (typeof nodeTestGroupsCodec?.encodeNodeTestGroups !== "function") {
+              throw new Error("CI target emits grouped Node test rows without scripts/lib/ci-node-test-groups-codec.mts");
+            }
+            return nodeTestGroupsCodec.encodeNodeTestGroups(groups);
+          };
+          const projectNodeTestGroup = ({
+            configs,
+            env,
+            includePatterns,
+            shard_name,
+            timing_key,
+          }) => ({ configs, env, includePatterns, shard_name, timing_key });
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1594,12 +1616,16 @@ jobs:
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
-            .map((shard) => ({
+            .map((shard) => {
+              const groups = shard.groups?.map(projectNodeTestGroup);
+              return {
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
-                groups: shard.groups,
+                groups_gzip_base64:
+                  groups && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined,
+                groups: groups && !nodeTestGroupsCodec ? groups : undefined,
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
@@ -1634,8 +1660,9 @@ jobs:
                       ) ||
                       (group.shard_name === "agentic-agents-support" &&
                         !group.includePatterns),
-                  ),
-              }));
+                   ),
+              };
+            });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
           const nodeMatrixLimit = compactPlanMode === "pull-request" ? 120 : 64;
@@ -2766,9 +2793,11 @@ jobs:
             ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
             ui/src/e2e/logs-lifecycle.e2e.test.ts \
             ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
+            ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
             ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
@@ -3401,6 +3430,7 @@ jobs:
           path: .ci-workflow
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
+            scripts/lib/ci-node-test-groups-codec.mts
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
             scripts/lib/numeric-options.mjs
@@ -3431,7 +3461,8 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ matrix.groups && toJson(matrix.groups) || '' }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
@@ -3452,7 +3483,7 @@ jobs:
             runner=".ci-workflow/${runner}"
             [[ -f "$runner" ]]
           fi
-          node --import tsx "$runner"
+          time -p node --import tsx "$runner"
 
       - &runner_memory_peak_step
         name: Record runner memory peak

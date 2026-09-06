@@ -1,7 +1,7 @@
 /**
  * Small shared normalization helpers for embedded-agent runner settings.
  */
-import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 
 export type ProviderThinkLevel = Exclude<ThinkLevel, "ultra">;
@@ -31,4 +31,4 @@ export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
   return providerLevel;
 }
 
-export type { ReasoningLevel, ThinkLevel };
+export type { ThinkLevel };

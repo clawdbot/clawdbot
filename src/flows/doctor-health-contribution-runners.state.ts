@@ -136,6 +136,16 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    ...(ctx.configResult.postSessionPluginMigration
+      ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
+      : {}),
+    ...(ctx.configResult.postSessionPluginMigrationPlanBound
+      ? { postSessionPluginMigrationPlanBound: true }
+      : {}),
+    onStepReceipt: (receipt) => {
+      ctx.configResult.stateMigrationStepReceipts ??= [];
+      ctx.configResult.stateMigrationStepReceipts.push(receipt);
+    },
   });
 }
 

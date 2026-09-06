@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { Context, Model } from "../llm/types.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 it.each([
@@ -23,14 +24,7 @@ it.each([
     model: "async-model",
     api: "openai-responses",
     timestamp: 0,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
   };
   const messages: Context["messages"] = [
     {

@@ -6,21 +6,21 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
-    private actor ProgressRequestRecorder {
-        var params: [Data] = []
+    private actor RequestRecorder {
+        var payloads: [Data] = []
 
         func append(_ data: Data) {
-            self.params.append(data)
+            self.payloads.append(data)
         }
 
         func snapshot() -> [Data] {
-            self.params
+            self.payloads
         }
     }
 
     @Test(arguments: [false, true, nil] as [Bool?])
     func `progress requests negotiate owner scope on the connected server`(supportsOwner: Bool?) async throws {
-        let recorder = ProgressRequestRecorder()
+        let recorder = RequestRecorder()
         let socketSession = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0 else { return }
@@ -88,6 +88,76 @@ struct MacGatewayChatTransportMappingTests {
                 ["sessionKey": "agent:research:global"],
                 ["sessionKey": "global", "agentId": "research"],
             ] : [["sessionKey": "agent:research:global"]]))
+            await gateway.shutdown()
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
+    @Test func `mutation lease resolves the current global agent for each request`() async throws {
+        let recorder = RequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let id = try #require(GatewayWebSocketTestSupport.requestID(from: message))
+                if GatewayWebSocketTestSupport.requestMethod(from: message)?.hasPrefix("sessions.") == true {
+                    let data: Data = switch message {
+                    case let .data(value): value
+                    case let .string(value): Data(value.utf8)
+                    @unknown default: throw URLError(.cannotParseResponse)
+                    }
+                    await recorder.append(data)
+                }
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["sessions.patch", "sessions.delete"],
+                    capabilities: ["session-unread-ack-contract"]))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        do {
+            _ = try await gateway.request(method: "health", params: nil)
+            let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "agent-a")
+            let lease = try #require(await transport.acquireSessionMutationRouteLease())
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                pinned: true,
+                archived: nil,
+                unread: nil)
+            let observerTransport = transport
+            observerTransport.updateDefaultGlobalAgentID(" Agent-B ")
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                color: .some(nil),
+                pinned: nil,
+                archived: nil,
+                unread: nil)
+            try await lease.deleteSession(key: "agent:agent-b:work")
+
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            let methods = frames.map { $0["method"] as? String }
+            try #require(methods == ["sessions.patch", "sessions.patch", "sessions.delete"])
+            let params = try frames.map { try #require($0["params"] as? [String: Any]) }
+            #expect(params[0]["key"] as? String == "global")
+            #expect(params[0]["agentId"] as? String == "agent-a")
+            #expect(params[1]["key"] as? String == "global")
+            #expect(params[1]["agentId"] as? String == "agent-b")
+            #expect(params[1]["color"] is NSNull)
+            #expect(params[2]["key"] as? String == "agent:agent-b:work")
+            #expect(params[2]["agentId"] == nil)
+            #expect(params[2]["deleteTranscript"] as? Bool == true)
             await gateway.shutdown()
         } catch {
             await gateway.shutdown()

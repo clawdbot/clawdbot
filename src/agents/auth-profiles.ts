@@ -107,7 +107,6 @@ export {
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
   markInlineProviderApiKeyFailure,
-  resolveInlineProviderApiKeyUnusableUntil,
   resolveInlineProviderApiKeyUsageId,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,

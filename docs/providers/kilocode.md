@@ -53,8 +53,8 @@ The default model is `kilocode/kilo-auto/balanced`, Kilo Gateway's balanced smar
 OpenClaw does not publish a task-to-upstream-model mapping for it; routing behind
 `kilo-auto/balanced` is owned by Kilo Gateway.
 
-At startup OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and merges discovered models
-ahead of a static fallback catalog. The static fallback contains only
+At startup OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and combines a nonempty public list
+with the static routing entry. The static catalog contains only
 `kilocode/kilo-auto/balanced` (`Auto Balanced`, `input: ["text", "image"]`, `reasoning: true`,
 `contextWindow: 1000000`, `maxTokens: 65536`).
 
@@ -101,7 +101,7 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo-auto/balanced`.
+    - If model discovery fails, OpenClaw reports an unavailable catalog refresh. It does not replace the failed request with static rows or turn an empty response into `kilocode/kilo-auto/balanced`.
     - Confirm your API key is valid and that your Kilo account has the desired models enabled.
     - When Gateway runs as a daemon, ensure `KILOCODE_API_KEY` is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 

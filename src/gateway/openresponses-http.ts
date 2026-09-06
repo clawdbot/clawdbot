@@ -463,6 +463,10 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
+  const abortController = new AbortController();
+  // The signal owns preparation; SSE installs presentation cleanup below.
+  let onDisconnect = () => {};
+  watchClientDisconnect(req, res, abortController, () => onDisconnect());
   const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
   if (!modelOverrideAuth.allowed) {
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
@@ -528,6 +532,7 @@ export async function handleOpenResponsesHttpRequest(
     }
   };
   try {
+    abortController.signal.throwIfAborted();
     if (Array.isArray(payload.input)) {
       for (const item of payload.input) {
         if (item.type === "message" && typeof item.content !== "string") {
@@ -551,7 +556,11 @@ export async function handleOpenResponsesHttpRequest(
                       data: source.data,
                       mediaType: source.media_type,
                     };
-              const image = await extractImageContentFromSource(imageSource, limits.images);
+              const image = await extractImageContentFromSource(
+                imageSource,
+                limits.images,
+                abortController.signal,
+              );
               images.push(image);
               continue;
             }
@@ -568,6 +577,7 @@ export async function handleOpenResponsesHttpRequest(
                       filename: source.filename,
                     },
               limits: limits.files,
+              signal: abortController.signal,
             });
             const rawText = file.text;
             if (rawText?.trim()) {
@@ -602,6 +612,9 @@ export async function handleOpenResponsesHttpRequest(
       }
     }
   } catch (err) {
+    if (abortController.signal.aborted) {
+      return true;
+    }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid request");
     return true;
@@ -707,7 +720,6 @@ export async function handleOpenResponsesHttpRequest(
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const abortController = new AbortController();
   const streamMaxTokens =
     typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
   const streamTemperature =
@@ -723,7 +735,6 @@ export async function handleOpenResponsesHttpRequest(
       : undefined;
 
   if (!stream) {
-    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -854,8 +865,6 @@ export async function handleOpenResponsesHttpRequest(
       }
       rememberResponseSession();
       sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
-    } finally {
-      stopWatchingDisconnect();
     }
     return true;
   }
@@ -874,7 +883,6 @@ export async function handleOpenResponsesHttpRequest(
   let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
-  let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; errorMessage?: string } | null =
     null;
@@ -926,7 +934,6 @@ export async function handleOpenResponsesHttpRequest(
       }
       streamedAssistantText = finalText;
       closed = true;
-      stopWatchingDisconnect();
       unsubscribe();
 
       writeSseEvent(res, {
@@ -1023,7 +1030,6 @@ export async function handleOpenResponsesHttpRequest(
     }
     // Failure is terminal even when an earlier lifecycle event is waiting for usage.
     closed = true;
-    stopWatchingDisconnect();
     unsubscribe();
     writeSseEvent(res, { type: "response.failed", response });
     writeDone(res);
@@ -1164,11 +1170,11 @@ export async function handleOpenResponsesHttpRequest(
   res.once("finish", releaseStreamRootWork);
   res.once("close", releaseStreamRootWork);
 
-  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+  onDisconnect = () => {
     closed = true;
     unsubscribe();
     releaseStreamRootWork();
-  });
+  };
 
   void (async () => {
     try {

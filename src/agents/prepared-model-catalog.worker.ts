@@ -285,7 +285,11 @@ export async function runPreparedModelCatalogWorkerRequest(
         value.preferBuiltPluginArtifacts,
       );
       pluginGenerationScope.pluginRegistry = catalogRegistry;
-      catalogGeneration = Object.freeze({ ...catalogGeneration, pluginRegistry: catalogRegistry });
+      catalogGeneration = Object.freeze({
+        ...catalogGeneration,
+        pluginRegistry: catalogRegistry,
+        providerStaticModels: undefined,
+      });
     }
     const source = await prepareAgentCatalogSource(
       exactAgentFacts,

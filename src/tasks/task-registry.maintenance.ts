@@ -60,6 +60,7 @@ import {
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
 import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
+import { getTaskRegistryMaintenanceSnapshot } from "./task-registry-maintenance-snapshot.js";
 import {
   configureTaskAuditTaskProvider,
   listTaskAuditFindings,
@@ -116,6 +117,7 @@ type TaskRegistryMaintenanceRuntime = {
   deleteTaskRecordById: typeof deleteTaskRecordById;
   ensureTaskRegistryReady: typeof ensureTaskRegistryReady;
   getTaskById: typeof getTaskById;
+  getTaskRegistryMaintenanceSnapshot: typeof getTaskRegistryMaintenanceSnapshot;
   listTaskRecords: typeof listTaskRecords;
   markTaskLostById: typeof markTaskLostById;
   markTaskTerminalById: typeof markTaskTerminalById;
@@ -157,6 +159,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
+  getTaskRegistryMaintenanceSnapshot,
   listTaskRecords,
   markTaskLostById,
   markTaskTerminalById,
@@ -1060,14 +1063,14 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let recovered = 0;
   let cleanupStamped = 0;
   let pruned = 0;
-  const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
-  const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
+  const { taskIds, cronHistoryOverflowTaskIds } =
+    taskRegistryMaintenanceRuntime.getTaskRegistryMaintenanceSnapshot();
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
   let processed = 0;
-  for (const task of tasks) {
-    const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
+  for (const taskId of taskIds) {
+    const current = taskRegistryMaintenanceRuntime.getTaskById(taskId);
     if (!current) {
       continue;
     }

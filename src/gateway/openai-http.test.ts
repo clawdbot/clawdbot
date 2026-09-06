@@ -34,8 +34,12 @@ import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  expectDeclaredHttpOwnerIdentity,
+  expectHttpForeignSessionAuthority,
+  expectSharedSecretHttpOwnerIdentity,
+} from "./http-authority.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -181,6 +185,127 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it.each(
+    (
+      [
+        { name: "empty string", result: { role: "tool", tool_call_id: "call_1", content: "" } },
+        { name: "whitespace", result: { role: "tool", tool_call_id: "call_1", content: " \n " } },
+        { name: "empty array", result: { role: "tool", tool_call_id: "call_1", content: [] } },
+        {
+          name: "empty text part",
+          result: { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "" }] },
+        },
+        { name: "legacy empty string", result: { role: "function", name: "lookup", content: "" } },
+        { name: "legacy null", result: { role: "function", name: "lookup", content: null } },
+      ] satisfies Array<{
+        name: string;
+        result: OpenAI.ChatCompletionToolMessageParam | OpenAI.ChatCompletionFunctionMessageParam;
+      }>
+    ).flatMap(({ name, result }) => [false, true].map((stream) => ({ name, result, stream }))),
+  )("continues a client tool result with $name (stream=$stream)", async ({ result, stream }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Lookup completed." }] } as never);
+    const client = createOpenAiChatClient(enabledPort);
+    const request = {
+      model: "openclaw",
+      messages: [
+        { role: "user", content: "Check the account." },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "lookup", arguments: "{}" },
+            },
+          ],
+        },
+        result,
+      ] satisfies OpenAI.ChatCompletionMessageParam[],
+    };
+    const response = stream
+      ? await client.chat.completions.stream(request).finalChatCompletion()
+      : await client.chat.completions.create(request);
+    expect(response.choices[0]?.message.content).toBe("Lookup completed.");
+    expect(response.choices[0]?.finish_reason).toBe("stop");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const message = firstAgentCommandOptions()?.message;
+    expect(message).toContain("tool_call id=call_1 name=lookup arguments={}");
+    expect(message?.split(CURRENT_MESSAGE_MARKER)[1]).toBe(
+      `\nTool:${result.role === "function" ? result.name : result.tool_call_id}: `,
+    );
+  });
+
+  it.each([false, true])(
+    "preserves each parallel client tool result (emptyFirst=%s)",
+    async (emptyFirst) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "Both lookups completed." }],
+      } as never);
+      const results: OpenAI.ChatCompletionToolMessageParam[] = [
+        { role: "tool", tool_call_id: "call_1", content: "" },
+        { role: "tool", tool_call_id: "call_2", content: "0" },
+      ];
+      const response = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        model: "openclaw",
+        messages: [
+          { role: "user", content: "Compare the accounts." },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: ["call_1", "call_2"].map((id) => ({
+              id,
+              type: "function",
+              function: { name: "lookup", arguments: "{}" },
+            })),
+          },
+          ...(emptyFirst ? results : results.toReversed()),
+        ],
+      });
+      expect(response.choices[0]?.message.content).toBe("Both lookups completed.");
+      const message = firstAgentCommandOptions()?.message;
+      expect(message).toContain("Tool:call_1: ");
+      expect(message).toContain("Tool:call_2: 0");
+      expect(message?.split(CURRENT_MESSAGE_MARKER)[1]).toBe(
+        emptyFirst ? "\nTool:call_2: 0" : "\nTool:call_1: ",
+      );
+    },
+  );
+
+  it.each([
+    { role: "tool", tool_call_id: "call_1" },
+    { role: "tool", tool_call_id: "call_1", content: null },
+    { role: "tool", tool_call_id: "call_1", content: 0 },
+    { role: "tool", tool_call_id: "call_1", content: {} },
+    { role: "tool", tool_call_id: "call_1", content: [null] },
+    { role: "tool", tool_call_id: "call_1", content: [{}] },
+    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: 0 }] },
+    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "" }, {}] },
+    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: " \n " }, {}] },
+    { role: "tool", content: "" },
+    { role: "tool", tool_call_id: " ", content: "" },
+    { role: "function", name: "lookup" },
+    { role: "function", name: "lookup", content: [] },
+    { role: "function", name: "lookup", content: [{ type: "text", text: "" }] },
+    { role: "function", content: null },
+    { role: "user", content: "" },
+    { role: "assistant", content: "" },
+  ])(
+    "does not invent a client tool result for malformed or missing content: %j",
+    async (message) => {
+      agentCommandMock.mockClear();
+      const response = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        messages: [message],
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
     const started = await startGatewayServerWithRetries({
       port: await getGatewayTestPort(),
@@ -4111,132 +4236,43 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
-    for (const stream of [false, true]) {
-      for (const { scopes, senderIsOwner } of [
-        { scopes: "operator.write", senderIsOwner: false },
-        { scopes: "operator.admin, operator.write", senderIsOwner: true },
-      ]) {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-
-        const res = await postChatCompletions(
+    await expectDeclaredHttpOwnerIdentity({
+      post: (stream, headers) =>
+        postChatCompletions(
           enabledPort,
-          {
-            stream,
-            model: "openclaw",
-            messages: [{ role: "user", content: "hi" }],
-          },
-          {
-            "x-openclaw-scopes": scopes,
-            "x-openclaw-sender-is-owner": "true",
-          },
-        );
-
-        expect(res.status).toBe(200);
-        await res.text();
-        expect(agentCommandMock).toHaveBeenCalledTimes(1);
-        expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
-      }
-    }
+          { stream, model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          headers,
+        ),
+      consume: (response) => response.text(),
+      senderIsOwner: () => firstAgentCommandOptions()?.senderIsOwner,
+    });
   });
 
   it.each(["trusted-proxy", "token"] as const)(
     "preserves %s authority when mutating another operator session",
     async (authMethod) => {
-      const sharedSecretOwner = authMethod === "token";
-      await withEnvAsync(
-        { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
-        async () => {
-          const port = await getGatewayTestPort();
-          let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-          const previousGatewayAuth = testState.gatewayAuth;
-          const trustedProxyAuth = {
-            mode: "trusted-proxy" as const,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              requiredHeaders: ["x-forwarded-proto"],
-              allowLoopback: true,
-            },
-          };
-          const requestAuth = sharedSecretOwner
-            ? { mode: "token" as const, token: "owner-secret" }
-            : trustedProxyAuth;
-          testState.gatewayAuth = requestAuth;
-          try {
-            await writeGatewayConfig({
-              gateway: {
-                auth: requestAuth,
-                trustedProxies: ["127.0.0.1"],
-                roles: {
-                  default: "guest",
-                  definitions: {
-                    guest: {
-                      agents: sharedSecretOwner ? [] : "*",
-                      scopes: ["operator.write"],
-                      sessions: { others: "view" },
-                    },
-                  },
-                },
-              },
-            });
-            resetConfigRuntimeState();
-            server = await startGatewayServer(port, {
-              host: "127.0.0.1",
-              auth: requestAuth,
-              controlUiEnabled: false,
-              openAiChatCompletionsEnabled: true,
-            });
-
-            const owner = ensureProfileForEmail("session-owner@example.test");
-            const sessionKey = "agent:main:foreign-openai-http";
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey },
-              {
-                sessionId: "foreign-openai-http",
-                updatedAt: 1,
-                visibility: "shared",
-                createdVia: "operator",
-                createdActor: { type: "human", source: "profile", id: owner.id },
-              },
-            );
-
-            agentCommandMock.mockClear();
-            agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-            const response = await postChatCompletions(
-              port,
-              {
-                model: "openclaw",
-                messages: [{ role: "user", content: "mutate foreign session" }],
-              },
-              {
-                ...(sharedSecretOwner
-                  ? { authorization: "Bearer owner-secret" }
-                  : {
-                      "x-forwarded-for": "198.51.100.42",
-                      "x-forwarded-proto": "https",
-                      "x-forwarded-user": "guest@example.test",
-                    }),
-                "x-openclaw-session-key": sessionKey,
-              },
-            );
-
-            expect(response.status).toBe(sharedSecretOwner ? 200 : 403);
-            if (sharedSecretOwner) {
-              expect(agentCommandMock).toHaveBeenCalledOnce();
-            } else {
-              expect(await response.json()).toMatchObject({
-                error: { type: "forbidden", message: expect.stringContaining("session is shared") },
-              });
-              expect(agentCommandMock).not.toHaveBeenCalled();
-            }
-          } finally {
-            await server?.close({ reason: "openai operator role session sharing test done" });
-            testState.gatewayAuth = previousGatewayAuth;
-            await writeGatewayConfig({});
-            resetConfigRuntimeState();
-          }
+      await expectHttpForeignSessionAuthority({
+        authMethod,
+        ownerEmail: "session-owner@example.test",
+        sessionKey: "agent:main:foreign-openai-http",
+        sessionId: "foreign-openai-http",
+        closeReason: "openai operator role session sharing test done",
+        startServer: async (port, auth) => {
+          return await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth,
+            controlUiEnabled: false,
+            openAiChatCompletionsEnabled: true,
+          });
         },
-      );
+        writeGatewayConfig,
+        post: (port, headers) =>
+          postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "mutate foreign session" }] },
+            headers,
+          ),
+      });
     },
   );
 
@@ -4381,39 +4417,20 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const port = await getGatewayTestPort();
       const server = await startSharedSecretServer(port, mode);
       try {
-        for (const stream of [false, true]) {
-          agentCommandMock.mockClear();
-          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-
-          const res = await postChatCompletions(
-            port,
-            {
-              stream,
-              model: "openclaw",
-              messages: [{ role: "user", content: "hi" }],
-            },
-            {
-              authorization: "Bearer secret",
-              "x-openclaw-scopes": "operator.approvals",
-              "x-openclaw-sender-is-owner": "false",
-            },
-          );
-
-          expect(res.status).toBe(200);
-          await res.text();
-          expect(agentCommandMock).toHaveBeenCalledTimes(1);
-          expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
-        }
-
-        agentCommandMock.mockClear();
-        const unauthorized = await postChatCompletions(
-          port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          { authorization: "Bearer wrong", "x-openclaw-sender-is-owner": "true" },
-        );
-        expect(unauthorized.status).toBe(401);
-        await unauthorized.text();
-        expect(agentCommandMock).not.toHaveBeenCalled();
+        await expectSharedSecretHttpOwnerIdentity({
+          post: (stream, headers) =>
+            postChatCompletions(
+              port,
+              {
+                ...(stream === undefined ? {} : { stream }),
+                model: "openclaw",
+                messages: [{ role: "user", content: "hi" }],
+              },
+              headers,
+            ),
+          consume: (response) => response.text(),
+          senderIsOwner: () => firstAgentCommandOptions()?.senderIsOwner,
+        });
       } finally {
         await server.close({ reason: `openai ${mode} auth owner test done` });
       }

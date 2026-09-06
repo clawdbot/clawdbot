@@ -268,7 +268,8 @@ describe("subtitleForRoute", () => {
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
-      "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
+      "skill-workshop":
+        "The skills your agent uses now, suggestions waiting for review, and past decisions.",
       devices: "Paired devices, pairing approvals, and exec bindings.",
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",

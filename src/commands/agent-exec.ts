@@ -5,6 +5,10 @@ import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
+import {
+  recordAgentCleanupFailure,
+  createAgentCleanupScope,
+} from "../agents/run-cleanup-timeout.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -222,7 +226,9 @@ export async function agentExecCommand(
   });
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   let processScopeKey: string | undefined;
+  let cleanupProcessScope: (() => Promise<void>) | undefined;
   let commandResult: AgentExecCommandResult;
+  const runtimeCleanup = createAgentCleanupScope();
   let temporaryStateDir: string | undefined;
   let restoreEnvironment: (() => void) | undefined;
   let restoreConfigEnvironment: (() => void) | undefined;
@@ -347,11 +353,17 @@ export async function agentExecCommand(
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
     runtimePaths = await import("../config/paths.js");
     const storedAuthStateDir = runtimePaths.resolveStateDir();
-    // Bounded runs own their process scope, including commands that yielded to background.
+    // Capture cleanup before a child can finish or lose its native owner.
     processScopeKey =
       deps.timeoutMs !== undefined || deps.maxToolCalls !== undefined
         ? `agent:${execAgentId}:agent-exec:${sessionId}`
         : undefined;
+    if (processScopeKey) {
+      const { getProcessSupervisor } = await import("../process/supervisor/index.js");
+      cleanupProcessScope = getProcessSupervisor().acquireScopeCleanup(processScopeKey, {
+        processTree: "required-all",
+      });
+    }
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths.pinRuntimePaths();
     if (opts.stateDir) {
@@ -450,10 +462,12 @@ export async function agentExecCommand(
             storedAuthStateDir,
             runWithPluginInstallRoots,
           );
-    const result = await toolBudget.run(() =>
-      withHostExecInheritedEnvOmitted(
-        listKnownProviderAuthEnvVarNames({ env: process.env }),
-        runWithAuthScope,
+    const result = await runtimeCleanup.run(() =>
+      toolBudget.run(() =>
+        withHostExecInheritedEnvOmitted(
+          listKnownProviderAuthEnvVarNames({ env: process.env }),
+          runWithAuthScope,
+        ),
       ),
     );
     signal.throwIfAborted();
@@ -478,23 +492,27 @@ export async function agentExecCommand(
     };
   }
 
-  let cleanupError: unknown;
+  let cleanupError: unknown =
+    runtimeCleanup.outcome === "uncertain"
+      ? new Error(
+          "Agent runtime cleanup did not settle; state ownership retained until this process exits",
+        )
+      : undefined;
   clearTimeout(timeoutTimer);
-  if (processScopeKey) {
+  if (cleanupProcessScope) {
     abortController.abort(new Error("Agent execution completed"));
     try {
-      const { getProcessSupervisor } = await import("../process/supervisor/index.js");
-      const supervisor = getProcessSupervisor();
-      supervisor.cancelScope(processScopeKey);
-      await supervisor.waitForScope?.(processScopeKey);
+      await cleanupProcessScope();
     } catch (error) {
       cleanupError = error;
     }
   }
   await stopLocalAuditWriter?.().catch(() => undefined);
-  await stateLock?.release().catch((error: unknown) => {
-    cleanupError ??= error;
-  });
+  if (!cleanupError) {
+    await stateLock?.release().catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
   const runCleanupStep = (step: () => void) => {
     try {
       step();
@@ -511,7 +529,7 @@ export async function agentExecCommand(
       : configIo?.clearRuntimeConfigSnapshot(),
   );
   runCleanupStep(() => runtimePaths?.pinRuntimePaths());
-  if (temporaryStateDir) {
+  if (temporaryStateDir && !cleanupError) {
     try {
       await fs.rm(temporaryStateDir, { recursive: true, force: true });
     } catch (error) {
@@ -519,6 +537,7 @@ export async function agentExecCommand(
     }
   }
   if (cleanupError) {
+    recordAgentCleanupFailure();
     const cleanupFailure = new Error(
       `Agent exec cleanup failed: ${formatErrorMessage(cleanupError)}`,
     );

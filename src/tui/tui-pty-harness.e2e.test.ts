@@ -655,10 +655,10 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "presents and starts a suggested task in the TUI",
+    "starts a suggested task in a new session from the TUI",
     async () => {
       await fixture.run.write("task suggestion proof\r");
-      await fixture.run.waitForOutput("Suggested follow-up: Remove stale adapter");
+      await fixture.run.waitForOutput("Start in a new session");
       await fixture.run.waitForOutput("Project: /repo/project");
       await fixture.run.waitForOutput("The adapter is unreachable and adds maintenance cost.");
 

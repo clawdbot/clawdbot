@@ -11,6 +11,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 import { loadGetReplyModuleForTest } from "./reply/get-reply.test-loader.js";
+import { createModelSelectionStateFixture } from "./reply/model-selection.test-support.js";
 import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
 
@@ -56,11 +57,14 @@ vi.mock("./reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
-    aliasIndex: new Map(),
+    aliasIndex: { byAlias: new Map(), byKey: new Map() },
   })),
 }));
-vi.mock("./reply/inbound-context.js", () => ({
-  finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
+vi.mock("./reply/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/model-selection.js")>()),
+  createModelSelectionState: vi.fn<
+    typeof import("./reply/model-selection.js").createModelSelectionState
+  >(async (params) => createModelSelectionStateFixture(params)),
 }));
 vi.mock("./reply/session-reset-model.runtime.js", () => ({
   applyResetModelOverride: vi.fn(async () => undefined),

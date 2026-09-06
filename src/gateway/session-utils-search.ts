@@ -132,7 +132,6 @@ function resolveSessionListSearchModelFields(params: {
   );
   const displayModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg: params.cfg,
-    agentId,
     provider: selectedModel.provider,
     model: selectedModel.model,
     rowContext: params.rowContext,

@@ -37,6 +37,7 @@ import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
@@ -389,7 +390,7 @@ function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
-export function buildGatewayTokenSecretRefUnavailableMessage(params: {
+function buildGatewayTokenSecretRefUnavailableMessage(params: {
   cfg: OpenClawConfig;
   ref: SecretRef;
   unresolvedRefReason?: string;
@@ -407,11 +408,80 @@ export function buildGatewayTokenSecretRefUnavailableMessage(params: {
   return "Gateway token is managed via SecretRef and is currently unavailable.";
 }
 
-export function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
+function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
   if (ref.source === "exec") {
     return "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.";
   }
   return "Resolve or rotate the external secret source, then rerun doctor.";
+}
+
+/** Shared auth diagnostics keep doctor's read-only and repair paths on the same policy. */
+export async function detectGatewayAuthHealth(
+  ctx: Pick<HealthCheckContext, "cfg" | "env" | "allowExecSecretRefs">,
+): Promise<HealthFinding[]> {
+  if (resolveDoctorMode(ctx.cfg) !== "local") {
+    return [];
+  }
+  const auth = resolveGatewayAuth({
+    authConfig: ctx.cfg.gateway?.auth,
+    tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
+    env: ctx.env,
+  });
+  if (auth.mode !== "token") {
+    return [];
+  }
+  const gatewayTokenRef = resolveSecretInputRef({
+    value: ctx.cfg.gateway?.auth?.token,
+    defaults: ctx.cfg.secrets?.defaults,
+  }).ref;
+  const invalidExecRef =
+    gatewayTokenRef?.source === "exec" &&
+    getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
+  if (gatewayTokenRef?.source === "exec" && ctx.allowExecSecretRefs !== true && !invalidExecRef) {
+    return [];
+  }
+  const resolved: Awaited<ReturnType<typeof resolveGatewayAuthToken>> = invalidExecRef
+    ? { secretRefConfigured: true }
+    : await resolveGatewayAuthToken({
+        cfg: ctx.cfg,
+        env: ctx.env ?? process.env,
+        unresolvedReasonStyle: "detailed",
+        ...(gatewayTokenRef ? { envFallback: "never" as const } : {}),
+      });
+  if (resolved.token && !isInvalidGatewayToken(resolved.token)) {
+    return [];
+  }
+  if (gatewayTokenRef) {
+    return [
+      {
+        checkId: "core/doctor/gateway-auth",
+        severity: "warning",
+        message: buildGatewayTokenSecretRefUnavailableMessage({
+          cfg: ctx.cfg,
+          ref: gatewayTokenRef,
+          unresolvedRefReason: isInvalidGatewayToken(resolved.token)
+            ? "the resolved token is blank or the literal string undefined/null"
+            : resolved.unresolvedRefReason,
+        }),
+        path: "gateway.auth.token",
+        fixHint: buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
+      },
+    ];
+  }
+  const invalid =
+    isInvalidGatewayToken(resolved.token) || isInvalidGatewayToken(ctx.cfg.gateway?.auth?.token);
+  return [
+    {
+      checkId: "core/doctor/gateway-auth",
+      severity: invalid ? "error" : "warning",
+      message: invalid
+        ? "Gateway token is blank or the literal string undefined/null, not a usable secret."
+        : "Gateway auth is off or missing a token.",
+      path: "gateway.auth.token",
+      fixHint:
+        "Run `openclaw doctor --fix --generate-gateway-token` to generate a token, then restart the Gateway.",
+    },
+  ];
 }
 
 const gatewayAuthCheck: HealthCheck = {
@@ -419,82 +489,7 @@ const gatewayAuthCheck: HealthCheck = {
   kind: "core",
   description: "Local Gateway auth mode has a usable token or another explicit auth mode.",
   source: "doctor",
-  async detect(ctx) {
-    if (resolveDoctorMode(ctx.cfg) !== "local") {
-      return [];
-    }
-    const gatewayTokenRef = resolveSecretInputRef({
-      value: ctx.cfg.gateway?.auth?.token,
-      defaults: ctx.cfg.secrets?.defaults,
-    }).ref;
-    const auth = resolveGatewayAuth({
-      authConfig: ctx.cfg.gateway?.auth,
-      tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
-    });
-    const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
-    const needsToken =
-      auth.mode !== "password" &&
-      auth.mode !== "none" &&
-      auth.mode !== "trusted-proxy" &&
-      (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
-    if (!needsToken) {
-      return [];
-    }
-    let unresolvedRefReason: string | undefined;
-    if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
-      const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
-      if (staticError) {
-        unresolvedRefReason = undefined;
-      } else if (ctx.allowExecSecretRefs !== true) {
-        return [];
-      } else {
-        const resolvedToken = await resolveGatewayAuthToken({
-          cfg: ctx.cfg,
-          env: process.env,
-          unresolvedReasonStyle: "detailed",
-          envFallback: "never",
-        });
-        if (resolvedToken.source === "secretRef") {
-          return [];
-        }
-        unresolvedRefReason = resolvedToken.unresolvedRefReason;
-      }
-    } else {
-      const resolvedToken = await resolveGatewayAuthToken({
-        cfg: ctx.cfg,
-        env: process.env,
-        unresolvedReasonStyle: "detailed",
-      });
-      if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
-        return [];
-      }
-      unresolvedRefReason = resolvedToken.unresolvedRefReason;
-    }
-    if (gatewayTokenRef) {
-      return [
-        {
-          checkId: "core/doctor/gateway-auth",
-          severity: "warning",
-          message: buildGatewayTokenSecretRefUnavailableMessage({
-            cfg: ctx.cfg,
-            ref: gatewayTokenRef,
-            unresolvedRefReason,
-          }),
-          path: "gateway.auth.token",
-          fixHint: buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
-        },
-      ];
-    }
-    return [
-      {
-        checkId: "core/doctor/gateway-auth",
-        severity: "warning",
-        message: "Gateway auth is off or missing a token.",
-        path: "gateway.auth",
-        fixHint: "Run `openclaw doctor --fix --generate-gateway-token` to generate a token.",
-      },
-    ];
-  },
+  detect: detectGatewayAuthHealth,
 };
 
 const hooksModelCheck: HealthCheck = {

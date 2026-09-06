@@ -909,6 +909,9 @@
       ],
       "openclaw/plugin-sdk/realtime-voice-provider": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-provider.d.ts"
+      ],
+      "openclaw/plugin-sdk/provider-thinking-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-thinking-runtime.d.ts"
       ]
     }
   }
