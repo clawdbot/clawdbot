@@ -517,6 +517,8 @@ async function run() {
     const config = telegramCandidateConfig(alias, credential.testerUserId, plan);
     const configPath = path.join(privateRoot, "candidate-config.json");
     await writeFile(configPath, JSON.stringify(config), { mode: 0o644 });
+    // The controller's private umask must not make this alias-only config root-only.
+    await chmod(configPath, 0o644);
     boxAttempted = true;
     quiescent = false;
     // Podman normalizes Config.Image to a canonical tag; Crabbox validates that
