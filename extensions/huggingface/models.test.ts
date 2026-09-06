@@ -213,8 +213,7 @@ describe("huggingface models", () => {
       ),
     );
 
-    await discoverHuggingfaceModels("hf_test_token");
-
+    await expect(discoverHuggingfaceModels("hf_test_token")).rejects.toMatchObject({ status: 500 });
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
@@ -228,7 +227,9 @@ describe("huggingface models", () => {
       ),
     );
 
-    await discoverHuggingfaceModels("hf_test_token", 25_000);
+    await expect(discoverHuggingfaceModels("hf_test_token", 25_000)).rejects.toMatchObject({
+      status: 500,
+    });
 
     expect(timeoutSpy).toHaveBeenCalledWith(25_000);
   });
@@ -243,12 +244,14 @@ describe("huggingface models", () => {
       ),
     );
 
-    await discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER);
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER),
+    ).rejects.toMatchObject({ status: 500 });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("cancels the response body before falling back after an HTTP error", async () => {
+  it("cancels the response body before propagating an HTTP error", async () => {
     stubAbortSignalTimeout();
     const response = new Response("unavailable", { status: 503 });
     const cancel = vi.spyOn(response.body!, "cancel");
@@ -257,15 +260,11 @@ describe("huggingface models", () => {
       vi.fn(async () => response),
     );
 
-    const models = await discoverHuggingfaceModels("hf_test_token");
-
-    expect(models.map((model) => model.id)).toEqual(
-      HUGGINGFACE_MODEL_CATALOG.map((model) => model.id),
-    );
+    await expect(discoverHuggingfaceModels("hf_test_token")).rejects.toMatchObject({ status: 503 });
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the static catalog when the discovery response exceeds the byte cap", async () => {
+  it("propagates discovery response overflow after releasing the reader", async () => {
     const chunk = new Uint8Array(1024 * 1024);
     const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
       controller.enqueue(chunk);
@@ -280,9 +279,9 @@ describe("huggingface models", () => {
       vi.fn(async () => response),
     );
 
-    const models = await discoverHuggingfaceModels("hf_test_token");
-
-    expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
+    await expect(discoverHuggingfaceModels("hf_test_token")).rejects.toThrow(
+      "Live model catalog response exceeded",
+    );
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(response.body?.locked).toBe(false);
     expect(response.bodyUsed).toBe(true);

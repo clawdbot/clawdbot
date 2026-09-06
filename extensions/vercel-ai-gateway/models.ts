@@ -205,11 +205,8 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
 }
 
 export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionConfig[]> {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return getStaticVercelAiGatewayModelCatalog();
-  }
-
   const provider = await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: VERCEL_AI_GATEWAY_PROVIDER_ID,
     endpoint: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
     providerConfig: {

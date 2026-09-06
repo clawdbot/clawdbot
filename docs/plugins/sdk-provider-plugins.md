@@ -273,6 +273,27 @@ catalog, API-key auth, and dynamic model resolution.
     | Admission | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and fail closed when the row carries no capability data. |
     | Failure | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider. |
 
+    Bundled providers set `discoveryMode: "strict"` in their catalog options.
+    This code option keeps successful empty results empty and reports failed
+    acquisition through `ProviderCatalogResult.outcomes`, rather than returning
+    seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
+    `auth-rejected` outcome; other acquisition failures produce `unavailable`.
+    Neither a static catalog nor skipped discovery produces a live outcome.
+    Each outcome carries the profile selected for the actual request, when one
+    supplied its credential. Family providers report each sibling independently.
+
+    Public metadata requests declare `authentication: "none"` in discovery
+    options. The prepared request then has no credential or profile identity;
+    its cache key is independent of the configured inference credential.
+    The returned provider configuration still retains its inference credential.
+
+    External calls that omit `discoveryMode` retain the advisory contract above.
+    The strict and advisory paths share the same guarded transport and cache.
+    Custom live builders can use `runLiveProviderCatalog` at their catalog hook
+    to convert acquisition errors into outcomes. Keep metadata-feed fallback
+    separate from account discovery; do not retry a rejected account request
+    anonymously or substitute seed rows inside a strict builder.
+
     For a non-Bearer or nonstandard list endpoint, pass options instead of
     `true`:
 
