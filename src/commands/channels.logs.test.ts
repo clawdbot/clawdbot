@@ -510,6 +510,42 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("keeps a partial replacement anchored to one generation", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.writeFile(
+        logPath,
+        `${logLine({ module: "gateway/channels/slack/send", message: "new-first" })}${logLine({
+          module: "gateway/channels/slack/send",
+          message: "new-partial",
+        }).trimEnd()}`,
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+      await vi.advanceTimersByTimeAsync(10);
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before", "new-first"]);
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-anchors after a same-size rewrite between polls", async () => {
     vi.useFakeTimers();
     try {

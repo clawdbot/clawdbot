@@ -16,6 +16,13 @@ const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
 type LogTailLimit = number | "all";
+type LogFileStat = {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+};
 
 function missingPathToNull(error: unknown): null {
   if (!isMissingPathError(error)) {
@@ -102,116 +109,149 @@ async function readLogSlice(params: {
     };
   }
   try {
-    const stat = await handle.stat({ bigint: true });
-    const size = Number(stat.size);
-    const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
-    const limit = params.limit === "all" ? undefined : clamp(params.limit, 1, MAX_LIMIT);
-    let cursor =
-      typeof params.cursor === "number" && Number.isFinite(params.cursor)
-        ? Math.max(0, Math.floor(params.cursor))
-        : undefined;
-    let reset = false;
-    let skippedBytes: number | undefined;
-    let truncated = false;
-    let start;
-
-    if (cursor != null) {
-      if (cursor > size) {
-        // File rotated or shrank since the previous cursor; restart near the end.
-        reset = true;
-        start = Math.max(0, size - maxBytes);
-        truncated = start > 0;
-      } else {
-        start = cursor;
-        if (size - start > maxBytes) {
-          // Keep reset as the re-anchor signal for existing clients. The skipped byte count
-          // lets current clients distinguish this valid-cursor fast-forward from file shrink.
-          reset = true;
-          truncated = true;
-          const boundedStart = Math.max(0, size - maxBytes);
-          skippedBytes = boundedStart - start;
-          start = boundedStart;
-        }
+    let lastResult: Omit<LogTailReadPayload, "file"> | undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const stat = (await handle.stat({ bigint: true })) as LogFileStat;
+      const result = await readLogSliceAttempt(params, handle, stat);
+      lastResult = result;
+      const finalStat = (await handle.stat({ bigint: true })) as LogFileStat;
+      if (isSameLogFileStat(stat, finalStat)) {
+        return result;
       }
-    } else {
-      start = Math.max(0, size - maxBytes);
-      truncated = start > 0;
     }
-
-    const readWindow = async (windowStart: number, length: number) => {
-      const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - windowStart)));
-      const bytesRead = await readFileWindowFully(handle, buffer, windowStart);
-      return buffer.toString("base64", 0, bytesRead);
-    };
-    const buildGeneration = async (generationCursor: number): Promise<LogFileGeneration> => {
-      const boundedCursor = Math.min(Math.max(0, generationCursor), size);
-      const prefixLength = Math.min(64, size);
-      const boundaryStart = Math.max(0, boundedCursor - 64);
-      return {
-        identity: `${stat.dev}:${stat.ino}`,
-        size,
-        prefix: await readWindow(0, prefixLength),
-        prefixLength,
-        boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
-        mtimeNs: stat.mtimeNs.toString(),
-        ctimeNs: stat.ctimeNs.toString(),
-      };
-    };
-
-    if (size === 0 || size <= start) {
-      return {
-        cursor: size,
-        size,
-        lines: [],
-        truncated,
-        reset,
-        skippedBytes,
-        generation: await buildGeneration(size),
-      };
-    }
-
-    let prefix = "";
-    if (start > 0) {
-      const prefixBuf = Buffer.alloc(1);
-      const prefixRead = await handle.read(prefixBuf, 0, 1, start - 1);
-      prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
-    }
-
-    const length = Math.max(0, size - start);
-    const buffer = Buffer.alloc(length);
-    const bytesRead = await readFileWindowFully(handle, buffer, start);
-    const text = buffer.toString("utf8", 0, bytesRead);
-    let lines = text.split("\n");
-    lines.pop();
-    if (start > 0 && prefix !== "\n") {
-      // Drop the first partial line when starting in the middle of a file.
-      lines.shift();
-    }
-    if (params.filter) {
-      // Sparse consumers inspect the full byte-bounded window before the shared line cap.
-      lines = lines.filter(params.filter);
-    }
-    if (limit !== undefined && lines.length > limit) {
-      truncated = true;
-      lines = lines.slice(lines.length - limit);
-    }
-
-    // Keep an unterminated record pending so a later read can emit it whole.
-    const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
-    cursor = text.endsWith("\n") ? size : start + lastNewline + 1;
-
-    return {
-      cursor,
-      size,
-      lines,
-      truncated,
-      reset,
-      skippedBytes,
-      generation: await buildGeneration(cursor),
-    };
+    return lastResult as Omit<LogTailReadPayload, "file">;
   } finally {
     await handle.close();
   }
+}
+
+function isSameLogFileStat(left: LogFileStat, right: LogFileStat): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+async function readLogSliceAttempt(
+  params: {
+    file: string;
+    cursor?: number;
+    limit: LogTailLimit;
+    maxBytes: number;
+    filter?: (line: string) => boolean;
+  },
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  stat: LogFileStat,
+): Promise<Omit<LogTailReadPayload, "file">> {
+  const size = Number(stat.size);
+  const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
+  const limit = params.limit === "all" ? undefined : clamp(params.limit, 1, MAX_LIMIT);
+  let cursor =
+    typeof params.cursor === "number" && Number.isFinite(params.cursor)
+      ? Math.max(0, Math.floor(params.cursor))
+      : undefined;
+  let reset = false;
+  let skippedBytes: number | undefined;
+  let truncated = false;
+  let start;
+
+  if (cursor != null) {
+    if (cursor > size) {
+      // File rotated or shrank since the previous cursor; restart near the end.
+      reset = true;
+      start = Math.max(0, size - maxBytes);
+      truncated = start > 0;
+    } else {
+      start = cursor;
+      if (size - start > maxBytes) {
+        // Keep reset as the re-anchor signal for existing clients. The skipped byte count
+        // lets current clients distinguish this valid-cursor fast-forward from file shrink.
+        reset = true;
+        truncated = true;
+        const boundedStart = Math.max(0, size - maxBytes);
+        skippedBytes = boundedStart - start;
+        start = boundedStart;
+      }
+    }
+  } else {
+    start = Math.max(0, size - maxBytes);
+    truncated = start > 0;
+  }
+
+  const readWindow = async (windowStart: number, length: number) => {
+    const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - windowStart)));
+    const bytesRead = await readFileWindowFully(handle, buffer, windowStart);
+    return buffer.toString("base64", 0, bytesRead);
+  };
+  const buildGeneration = async (generationCursor: number): Promise<LogFileGeneration> => {
+    const boundedCursor = Math.min(Math.max(0, generationCursor), size);
+    const prefixLength = Math.min(64, size);
+    const boundaryStart = Math.max(0, boundedCursor - 64);
+    return {
+      identity: `${stat.dev}:${stat.ino}`,
+      size,
+      prefix: await readWindow(0, prefixLength),
+      prefixLength,
+      boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
+      mtimeNs: stat.mtimeNs.toString(),
+      ctimeNs: stat.ctimeNs.toString(),
+    };
+  };
+
+  if (size === 0 || size <= start) {
+    return {
+      cursor: size,
+      size,
+      lines: [],
+      truncated,
+      reset,
+      skippedBytes,
+      generation: await buildGeneration(size),
+    };
+  }
+
+  let prefix = "";
+  if (start > 0) {
+    const prefixBuf = Buffer.alloc(1);
+    const prefixRead = await handle.read(prefixBuf, 0, 1, start - 1);
+    prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
+  }
+
+  const length = Math.max(0, size - start);
+  const buffer = Buffer.alloc(length);
+  const bytesRead = await readFileWindowFully(handle, buffer, start);
+  const text = buffer.toString("utf8", 0, bytesRead);
+  let lines = text.split("\n");
+  lines.pop();
+  if (start > 0 && prefix !== "\n") {
+    // Drop the first partial line when starting in the middle of a file.
+    lines.shift();
+  }
+  if (params.filter) {
+    // Sparse consumers inspect the full byte-bounded window before the shared line cap.
+    lines = lines.filter(params.filter);
+  }
+  if (limit !== undefined && lines.length > limit) {
+    truncated = true;
+    lines = lines.slice(lines.length - limit);
+  }
+
+  // Keep an unterminated record pending so a later read can emit it whole.
+  const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
+  cursor = text.endsWith("\n") ? size : start + lastNewline + 1;
+
+  return {
+    cursor,
+    size,
+    lines,
+    truncated,
+    reset,
+    skippedBytes,
+    generation: await buildGeneration(cursor),
+  };
 }
 
 async function readConfiguredLogTailInternal(

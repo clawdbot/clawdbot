@@ -49,6 +49,10 @@ type FileCheckpoint = {
   ctimeNs: string;
 };
 
+function checkpointPrefixLength(size: number): number {
+  return Math.min(64, Math.max(0, size));
+}
+
 function listManifestChannels(): ManifestChannel[] {
   return loadPluginManifestRegistryForPluginRegistry({
     includeDisabled: true,
@@ -186,7 +190,7 @@ async function readFileCheckpoint(
   prefixLength?: number,
   validationCursor = cursor,
 ): Promise<FileCheckpoint | undefined> {
-  const handle = await fs.open(file, "r").catch((error) => {
+  const handle = await fs.open(file, "r").catch((error: unknown) => {
     if (isMissingPathError(error)) {
       return undefined;
     }
@@ -205,7 +209,7 @@ async function readFileCheckpoint(
     };
     const boundedCursor = Math.min(Math.max(0, cursor), size);
     const boundedValidationCursor = Math.min(Math.max(0, validationCursor), size);
-    const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? boundedCursor), size);
+    const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? size), size);
     const boundaryStart = Math.max(0, boundedCursor - 64);
     const validationBoundaryStart = Math.max(0, boundedValidationCursor - 64);
     const boundary = await readWindow(boundaryStart, boundedCursor - boundaryStart);
@@ -351,28 +355,30 @@ async function followChannelLogs(
         }
       }
 
-      const checkpointPrefixLength = reanchored
-        ? undefined
-        : Math.max(previousCheckpoint?.prefixLength ?? 0, Math.min(64, tail.size));
+      const checkpointPrefix = reanchored ? undefined : checkpointPrefixLength(tail.size);
       let checkpoint = await readFileCheckpoint(
         tail.file,
         tail.cursor,
-        checkpointPrefixLength,
+        checkpointPrefix,
         previousCheckpoint?.cursor,
       );
-      if (!isSameTailGeneration(tail.file, tail.generation, checkpoint)) {
+      let checkpointValid = isSameTailGeneration(tail.file, tail.generation, checkpoint);
+      if (!checkpointValid) {
         tail = await readConfiguredParsedLogTail({
           limit: readLimit,
           maxBytes: MAX_BYTES,
           filter: (line) => matchesChannel(line, filter),
         });
         reanchored = true;
-        checkpoint = await readFileCheckpoint(tail.file, tail.cursor);
-        if (!isSameTailGeneration(tail.file, tail.generation, checkpoint)) {
-          checkpoint = undefined;
-        }
+        checkpoint = await readFileCheckpoint(
+          tail.file,
+          tail.cursor,
+          checkpointPrefixLength(tail.size),
+        );
+        checkpointValid = isSameTailGeneration(tail.file, tail.generation, checkpoint);
       }
       if (
+        checkpointValid &&
         !reanchored &&
         previousGeneration !== undefined &&
         previousCheckpoint !== undefined &&
@@ -384,10 +390,23 @@ async function followChannelLogs(
           filter: (line) => matchesChannel(line, filter),
         });
         reanchored = true;
-        checkpoint = await readFileCheckpoint(tail.file, tail.cursor);
-        if (!isSameTailGeneration(tail.file, tail.generation, checkpoint)) {
-          checkpoint = undefined;
+        checkpoint = await readFileCheckpoint(
+          tail.file,
+          tail.cursor,
+          checkpointPrefixLength(tail.size),
+        );
+        checkpointValid = isSameTailGeneration(tail.file, tail.generation, checkpoint);
+      }
+      if (!checkpointValid) {
+        try {
+          await delay(interval, undefined, { signal: controller.signal });
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          throw error;
         }
+        continue;
       }
 
       const fileChanged = previousFile !== undefined && tail.file !== previousFile;
