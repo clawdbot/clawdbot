@@ -356,11 +356,14 @@ describe("generic plugin-owned live session registry", () => {
         expect(cleanupScope.outcome).toBe("uncertain");
         const next = await createOwner({ sessionId: owner.sessionId });
         next.context.params.oneShotCliRun = true;
-        const nextRestart = expect(restartCliLiveSession(next.context)).rejects.toThrow(
-          "resource replacement refused",
+        const nextRestart = restartCliLiveSession(next.context).then(
+          () => undefined,
+          (error: unknown) => error,
         );
         await vi.advanceTimersByTimeAsync(10_000);
-        await nextRestart;
+        expect(await nextRestart).toMatchObject({
+          message: expect.stringContaining("resource replacement refused"),
+        });
         expect(() => next.register()).toThrow("cleanup has not settled");
         owner.exited.resolve();
         await restartCliLiveSession(next.context);

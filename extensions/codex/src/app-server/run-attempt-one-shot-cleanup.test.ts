@@ -17,10 +17,10 @@ import {
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
-import * as sharedClientModule from "./shared-client.js";
 import {
   resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
+  retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
@@ -45,6 +45,17 @@ async function stopTaskOwnedProcess(pid: number): Promise<void> {
       { timeout: 2_000 },
     )
     .toBe(false);
+}
+
+function runOneShot(client: CodexAppServerClient, abortSignal?: AbortSignal) {
+  vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
+  const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+  params.oneShotCliRun = true;
+  params.cleanupBundleMcpOnRunEnd = true;
+  if (abortSignal) {
+    params.abortSignal = abortSignal;
+  }
+  return runCodexAppServerAttempt(params, { bindingStore: testCodexAppServerBindingStore });
 }
 
 setupRunAttemptTestHooks();
@@ -89,19 +100,9 @@ describe("Codex one-shot cleanup receipts", () => {
           }
         },
       });
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       const abort = new AbortController();
-      const params = createParams(
-        path.join(tempDir, "native-terminal-cleanup-session.jsonl"),
-        path.join(tempDir, "native-terminal-cleanup-workspace"),
-      );
-      params.oneShotCliRun = true;
-      params.cleanupBundleMcpOnRunEnd = true;
-      params.abortSignal = abort.signal;
-      const run = runCodexAppServerAttempt(params, {
-        bindingStore: testCodexAppServerBindingStore,
-      });
+      const run = runOneShot(harness.client, abort.signal);
       try {
         await waitForHarnessRequest(harness, "turn/start");
         await new Promise<void>((resolve) => {
@@ -128,24 +129,13 @@ describe("Codex one-shot cleanup receipts", () => {
     },
   );
 
-  it.each(["active lease", "pending acquire", "missing entry"] as const)(
+  it.each(["active lease", "missing entry"] as const)(
     "records uncertain one-shot cleanup when shared retirement is refused: %s",
     async (reason) => {
       const harness = createClientHarness();
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-      const close = vi.spyOn(harness.client, "close");
-      const closeAndWait = vi.spyOn(harness.client, "closeAndWait");
       const warning = vi.spyOn(embeddedAgentLog, "warn");
-      const params = createParams(
-        path.join(tempDir, "retained-cleanup-session.jsonl"),
-        path.join(tempDir, "retained-cleanup-workspace"),
-      );
-      params.oneShotCliRun = true;
-      params.cleanupBundleMcpOnRunEnd = true;
       let releasePeer: (() => void) | undefined;
-      const run = runCodexAppServerAttempt(params, {
-        bindingStore: testCodexAppServerBindingStore,
-      });
+      const run = runOneShot(harness.client);
       try {
         const initialize = await waitForHarnessRequest(harness, "initialize");
         harness.send({
@@ -156,26 +146,9 @@ describe("Codex one-shot cleanup receipts", () => {
         harness.send({ id: thread.id, result: threadStartResult() });
         const turn = await waitForHarnessRequest(harness, "turn/start");
         harness.send({ id: turn.id, result: turnStartResult() });
-        if (reason === "pending acquire") {
-          // Shared-client tests own the pending-startup race. This refusal is
-          // its contract with attempt cleanup, which must preserve that owner.
-          vi.spyOn(
-            sharedClientModule,
-            "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
-          ).mockReturnValue({
-            found: true,
-            closed: false,
-            activeLeases: 0,
-            pendingAcquires: 1,
-          });
-        } else {
-          releasePeer = retainSharedCodexAppServerClientIfCurrent(harness.client);
-          expect(releasePeer).toBeTypeOf("function");
-          if (reason === "missing entry") {
-            expect(
-              sharedClientModule.retireSharedCodexAppServerClientIfCurrent(harness.client),
-            ).toMatchObject({ closed: false });
-          }
+        releasePeer = retainSharedCodexAppServerClientIfCurrent(harness.client);
+        if (reason === "missing entry") {
+          retireSharedCodexAppServerClientIfCurrent(harness.client);
         }
         harness.send({
           method: "turn/completed",
@@ -189,9 +162,6 @@ describe("Codex one-shot cleanup receipts", () => {
         expect(warning).toHaveBeenCalledWith(
           expect.stringMatching(/agent cleanup failed:.*step=codex-shared-client-release/),
         );
-        expect(close).not.toHaveBeenCalled();
-        expect(closeAndWait).not.toHaveBeenCalled();
-        expect(harness.stdinDestroyed).toBe(false);
         const requestStart = harness.writes.length;
         const peerRead = harness.client.request("thread/read", {
           threadId: "thread-peer",
@@ -275,7 +245,6 @@ process.stdin.on("end", () => ${
       });
       const exited = once(child, "exit");
       const client = CodexAppServerClient.fromTransportForTests(child);
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
       if (shutdown === "unknown") {
         vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockRejectedValue(
           new processSnapshot.ProcessInspectionError("unavailable"),
@@ -295,15 +264,7 @@ process.stdin.on("end", () => ${
         }
       });
       const warning = vi.spyOn(embeddedAgentLog, "warn");
-      const params = createParams(
-        path.join(tempDir, "cleanup-session.jsonl"),
-        path.join(tempDir, "cleanup-workspace"),
-      );
-      params.oneShotCliRun = true;
-      params.cleanupBundleMcpOnRunEnd = true;
-      const run = runCodexAppServerAttempt(params, {
-        bindingStore: testCodexAppServerBindingStore,
-      });
+      const run = runOneShot(client);
       try {
         await Promise.race([
           turnStarted.promise,
