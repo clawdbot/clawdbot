@@ -146,6 +146,23 @@ describe("managed service update handoff", () => {
     },
   );
 
+  itUnix.each(["systemd", "launchd"] as const)(
+    "preserves updater staging and validation history after %s parking",
+    async (kind) => {
+      const { run } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      const steps = run?.steps.map((step) => step.step);
+      expect(steps).toEqual(expect.arrayContaining(["staging", "validating"]));
+      expect(steps).not.toContain("activating");
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({ step: "service-stop", status: "completed" }),
+      );
+    },
+  );
+
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       [false, true].map((recover) => ({ kind, recover })),

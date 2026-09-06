@@ -400,6 +400,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               runId,
               beforePark: async () => {
+                // Parking and stop completion preserve the phase so the updater can record staging/validation.
                 const current = getUpdateRun(runId);
                 if (!current) {
                   throw new Error("Update run disappeared before managed Gateway parking.");
