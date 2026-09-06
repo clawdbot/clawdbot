@@ -89,7 +89,7 @@ export const telegramReplyObservationSchema = binding.extend({
   kind: z.literal("telegram-reply"),
   events: z.array(event).max(256),
 });
-export function telegramProofDigest(value: string | Uint8Array): string {
+function telegramProofDigest(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 export function verifyTelegramProofFiles(

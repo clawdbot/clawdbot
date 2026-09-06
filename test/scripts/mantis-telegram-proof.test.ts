@@ -71,7 +71,7 @@ describe("Bounded model-selected plan", () => {
     expect(() => parseTelegramProofPlan(JSON.stringify(input), hash(input))).toThrow();
   });
 });
-async function capture() {
+async function capture(reply = "reply") {
   const root = await mkdtemp(path.join(os.tmpdir(), "tg-record-"));
   try {
     execFileSync(
@@ -81,7 +81,7 @@ async function capture() {
         path.resolve(".agents/skills/telegram-e2e-userbot/scripts/user-record.py"),
         root,
         "hello",
-        "reply",
+        reply,
       ],
       { timeout: 10000 },
     );
@@ -105,18 +105,32 @@ async function capture() {
   }
 }
 describe("Complete canonical recorder observations", () => {
-  it("executes the canonical recorder and returns full observations without a semantic pass", async () => {
-    const input = await capture();
-    const facts = normalizeTelegramCapture(input);
-    expect(facts["telegram-reply.json"].events.some((event) => event.text === "reply")).toBe(true);
-    expect(facts["provider-request.json"].requests).toEqual(input.provider);
-    const encoded = Object.fromEntries(
-      Object.entries(facts).map(([k, v]) => [k, Buffer.from(JSON.stringify(v)).toString("base64")]),
-    );
-    expect(verifyTelegramProofFiles(identity, encoded).assertion_outcome).toBe("inconclusive");
-    const wrong = { ...identity, plan_sha256: "0".repeat(64) };
-    expect(() => verifyTelegramProofFiles(wrong, encoded)).toThrow();
+  it("rejects a Web UI workflow identity relabeled as Telegram", () => {
+    expect(() =>
+      telegramProofIdentitySchema.parse({
+        ...identity,
+        workflow: { ...identity.workflow, path: ".github/workflows/mantis-web-ui-chat-proof.yml" },
+      }),
+    ).toThrow();
   });
+  it.each(["reply", "wrong reply"])(
+    "records %s without declaring a semantic pass",
+    async (reply) => {
+      const input = await capture(reply);
+      const facts = normalizeTelegramCapture(input);
+      expect(facts["telegram-reply.json"].events.some((event) => event.text === reply)).toBe(true);
+      expect(facts["provider-request.json"].requests).toEqual(input.provider);
+      const encoded = Object.fromEntries(
+        Object.entries(facts).map(([k, v]) => [
+          k,
+          Buffer.from(JSON.stringify(v)).toString("base64"),
+        ]),
+      );
+      expect(verifyTelegramProofFiles(identity, encoded).assertion_outcome).toBe("inconclusive");
+      const wrong = { ...identity, plan_sha256: "0".repeat(64) };
+      expect(() => verifyTelegramProofFiles(wrong, encoded)).toThrow();
+    },
+  );
   it("redacts known private values and rejects incomplete or oversized recordings", async () => {
     const input = await capture();
     const raw = input.raw.replaceAll("reply", "private-token");
@@ -126,6 +140,37 @@ describe("Complete canonical recorder observations", () => {
     expect(() => normalizeTelegramCapture({ ...input, quiescent: false })).toThrow();
     expect(() => normalizeTelegramCapture({ ...input, leaseHealthy: false })).toThrow();
     expect(() => normalizeTelegramCapture({ ...input, raw: input.raw.repeat(300) })).toThrow();
+  });
+  it("retains visible formatting and button labels without exporting callback data", async () => {
+    const input = await capture();
+    const rows = input.raw
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const message = rows.find((row) => row.kind === "message");
+    message.raw.message.content.text.entities = [
+      { offset: 0, length: 5, type: { "@type": "textEntityTypeBold" } },
+    ];
+    message.raw.message.reply_markup = {
+      rows: [
+        [
+          {
+            text: "Choose",
+            type: { "@type": "inlineKeyboardButtonTypeCallback", data: "private-token" },
+          },
+        ],
+      ],
+    };
+    const facts = normalizeTelegramCapture({
+      ...input,
+      raw: rows.map((row) => JSON.stringify(row)).join("\n"),
+    });
+    const observed = facts["telegram-reply.json"].events.find((event) => event.kind === "message")!;
+    expect(observed.entities).toEqual([{ offset: 0, length: 5, type: "textEntityTypeBold" }]);
+    expect(observed.buttons).toEqual([
+      [{ text: "Choose", type: "inlineKeyboardButtonTypeCallback" }],
+    ]);
+    expect(JSON.stringify(facts)).not.toContain("private-token");
   });
 });
 async function ingressFixture() {
@@ -154,7 +199,7 @@ async function ingressFixture() {
       whenUnhealthy: revoked.promise,
     },
     fetchImpl: async (input) => {
-      const url = new URL(String(input));
+      const url = new URL(input instanceof Request ? input.url : input);
       forwarded.push(url.pathname);
       const method = url.pathname.split("/").at(-1);
       return Response.json({
@@ -341,7 +386,10 @@ describe("Telegram live-send admission", () => {
     vi.stubEnv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "synthetic-request-token");
     const requests: Array<{ url: string; body: unknown }> = [];
     vi.stubGlobal("fetch", async (input: string | URL, init: RequestInit) => {
-      requests.push({ url: String(input), body: init.body ? JSON.parse(String(init.body)) : null });
+      if (init.body != null && typeof init.body !== "string") {
+        throw new Error("Expected a JSON string request body");
+      }
+      requests.push({ url: String(input), body: init.body ? JSON.parse(init.body) : null });
       return requests.length === 1
         ? Response.json({ value: "synthetic-oidc-token" })
         : Response.json({ ok: true, expiresAt: 12345 });

@@ -3,13 +3,23 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
-import time
 
 source, root, prompt, reply = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("recorder", source)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 root = Path(root)
+
+class Clock:
+    now = 1000.0
+    def time(self):
+        return self.now
+    def sleep(self, seconds):
+        self.now += seconds
+
+# The offline adapter owns elapsed time; host scheduling must not consume the
+# scenario before its first action. Keep the real recorder's deadline logic.
+module.time = Clock()
 
 class Client:
     users = {}
@@ -21,7 +31,7 @@ class Client:
     def next_update(self, **kwargs):
         if self.pending:
             return self.pending.pop(0)
-        time.sleep(0.001)
+        module.time.sleep(0.001)
         return None
 
 class Driver:

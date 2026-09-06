@@ -137,7 +137,7 @@ export type RequestIdentity = z.infer<typeof requestIdentitySchema>;
 export type RequestReceipt = z.infer<typeof requestReceiptSchema>;
 export type RequestExecution = z.infer<typeof executionSchema>;
 export type RequestEvidence = z.infer<typeof evidenceSchema>;
-export const telegramFailureDiagnosticsSchema = z
+const telegramFailureDiagnosticsSchema = z
   .array(
     z.strictObject({
       sequence: z.number().int().min(1).max(16),
@@ -157,7 +157,7 @@ export const telegramFailureDiagnosticsSchema = z
     "Noncanonical diagnostic sequence",
   );
 export type TelegramFailureDiagnostic = z.infer<typeof telegramFailureDiagnosticsSchema>[number];
-export const telegramFailureSchema = telegramProofIdentitySchema.safeExtend({
+const telegramFailureSchema = telegramProofIdentitySchema.safeExtend({
   schema: z.literal("mantis.telegram-failure.v1"),
   assertion_outcome: z.literal("inconclusive"),
   diagnostics: telegramFailureDiagnosticsSchema,
