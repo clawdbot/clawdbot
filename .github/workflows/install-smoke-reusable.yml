@@ -50,12 +50,14 @@ jobs:
       run_fast_install_smoke: ${{ steps.manifest.outputs.run_fast_install_smoke }}
       run_full_install_smoke: ${{ steps.manifest.outputs.run_full_install_smoke }}
       run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
+      fs_safe_native_contract: ${{ steps.manifest.outputs.fs_safe_native_contract }}
       target_sha: ${{ steps.manifest.outputs.target_sha }}
       dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
     steps:
       # The caller workflow SHA can differ during workflow_call. The job context identifies
       # this reusable workflow, so trusted harness checkouts cannot drift to candidate code.
       - name: Assert trusted workflow identity
+        id: workflow
         env:
           EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
           JOB_CONTEXT: ${{ toJSON(job) }}
@@ -63,6 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
           const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
           if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
@@ -74,6 +78,13 @@ jobs:
           if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
             throw new Error("job.workflow_sha must be a full lowercase commit SHA");
           }
+          if (!process.env.GITHUB_OUTPUT) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `workflow_repository=${job.workflow_repository}\nworkflow_sha=${job.workflow_sha}\n`,
+          );
           NODE
 
       - name: Checkout
@@ -84,6 +95,17 @@ jobs:
           fetch-tags: false
           persist-credentials: false
           submodules: false
+
+      - name: Materialize selected-source contract resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.workflow.outputs.workflow_repository }}
+          ref: ${{ steps.workflow.outputs.workflow_sha }}
+          path: .release-harness
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts/resolve-fs-safe-native-contract.mjs
+          sparse-checkout-cone-mode: false
 
       - name: Build install-smoke CI manifest
         id: manifest
@@ -98,6 +120,9 @@ jobs:
           run_bun_global_install_smoke="$workflow_bun_global_install_smoke"
           run_install_smoke=true
           target_sha="$(git rev-parse HEAD)"
+          fs_safe_native_contract="$(node .release-harness/scripts/resolve-fs-safe-native-contract.mjs \
+            "$target_sha" "${{ steps.workflow.outputs.workflow_sha }}" \
+            "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}")"
           dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"
           {
             echo "docs_only=$docs_only"
@@ -105,6 +130,7 @@ jobs:
             echo "run_fast_install_smoke=$run_fast_install_smoke"
             echo "run_full_install_smoke=$run_full_install_smoke"
             echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"
+            echo "fs_safe_native_contract=$fs_safe_native_contract"
             echo "target_sha=$target_sha"
             echo "dockerfile_image=$dockerfile_image"
           } >> "$GITHUB_OUTPUT"
@@ -1465,6 +1491,7 @@ jobs:
       - name: Run Bun global install candidate-payload smoke
         working-directory: .release-harness
         env:
+          OPENCLAW_FS_SAFE_NATIVE_CONTRACT: ${{ needs.preflight.outputs.fs_safe_native_contract }}
           OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
           OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz
         run: bash scripts/e2e/bun-global-install-smoke.sh
