@@ -83,6 +83,7 @@ export async function repairUpdateService(params: {
           expectedBuildId: params.result.after?.buildId ?? undefined,
           requireRunningService: true,
           signal,
+          assertCurrent,
           onVerified: params.onVerified,
         });
       let validation = await verify();
@@ -122,7 +123,9 @@ export async function repairUpdateService(params: {
               true,
             );
           } catch (error) {
-            signal.throwIfAborted();
+            // A stale restart error is not permission to append diagnostics or
+            // start a new serving turn under the superseded repair attempt.
+            assertCurrent();
             if (params.opts.run) {
               recordUpdateRunStep(
                 params.opts.run.runId,
@@ -137,7 +140,7 @@ export async function repairUpdateService(params: {
             }
           }
 
-          signal.throwIfAborted();
+          assertCurrent();
           validation = await verify();
           assertCurrent();
         }

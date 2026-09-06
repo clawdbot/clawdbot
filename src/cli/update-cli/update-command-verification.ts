@@ -66,6 +66,7 @@ export async function verifyUpdatedGateway(params: {
   requireRunningService?: boolean;
   health?: GatewayRestartSnapshot;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   onVerified?: (verifiedAtMs: number) => void;
   recoverHealth?: (
     health: GatewayRestartSnapshot,
@@ -75,10 +76,19 @@ export async function verifyUpdatedGateway(params: {
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
 }): Promise<UpdateRepairValidation> {
-  params.signal?.throwIfAborted();
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+  };
+  assertCurrent();
   const service = resolveGatewayService();
   const waitForHealthy = async () => {
-    params.signal?.throwIfAborted();
+    assertCurrent();
+    const supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
+      service,
+      env: params.serviceEnv,
+    });
+    assertCurrent();
     const health = await waitForGatewayHealthyRestart({
       service,
       port: params.gatewayPort,
@@ -88,21 +98,19 @@ export async function verifyUpdatedGateway(params: {
       requireRunningService: params.requireRunningService,
       settle: { probes: 12 },
       ...(params.signal ? { signal: params.signal } : {}),
-      supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
-        service,
-        env: params.serviceEnv,
-      }),
+      supervisorKeepsAlive,
     });
-    params.signal?.throwIfAborted();
+    assertCurrent();
     return health;
   };
   let health = params.health ?? (await waitForHealthy());
   let launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null = null;
   if (params.recoverHealth) {
     ({ health, launchAgentRecovery } = await params.recoverHealth(health, waitForHealthy));
+    assertCurrent();
   }
   const context = await resolveGatewayRestartProbeContext(params.serviceEnv);
-  params.signal?.throwIfAborted();
+  assertCurrent();
   const http = await waitForGatewayHttpReadiness({
     config: context.config,
     port: params.gatewayPort,
@@ -111,7 +119,7 @@ export async function verifyUpdatedGateway(params: {
     delayMs: 500,
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  params.signal?.throwIfAborted();
+  assertCurrent();
   const readyz = http.readyz === 200;
   recordUpdateGatewayHealth(params.opts.run, health, params.gatewayPort, readyz);
   if (launchAgentRecovery?.attempted) {
@@ -140,7 +148,7 @@ export async function verifyUpdatedGateway(params: {
         : !run || !expectedVersion
           ? ({ status: "failed", reason: "invalid-request" } as const)
           : ({ status: "unavailable", reason: "identity-unavailable" } as const);
-    params.signal?.throwIfAborted();
+    assertCurrent();
     if (run) {
       recordUpdateRunVerification(
         run.runId,

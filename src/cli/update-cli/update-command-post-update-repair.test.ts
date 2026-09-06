@@ -12,6 +12,7 @@ import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-stat
 import type { UpdateRepairParams } from "../../infra/update-repair-protocol.js";
 import {
   createUpdateRun,
+  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
@@ -641,6 +642,65 @@ describe("post-activation repair after rollback refusal or failure", () => {
           await recovery.complete(false);
         }
       }
+    },
+  );
+
+  it.each(["restart-result", "restart-error", "serving-result"] as const)(
+    "does not continue repair after authority is lost during %s",
+    async (boundary) => {
+      const params = fixture();
+      const run = params.opts.run!;
+      const onVerified = vi.fn();
+      let settledRun = getUpdateRun(run.runId, { env: run.env });
+      const revoke = () => {
+        finishUpdateRun(run.runId, { status: "failed", reason: "owner-revoked" }, { env: run.env });
+        settledRun = getUpdateRun(run.runId, { env: run.env });
+      };
+      mocks.repair.mockImplementation(async (repair) => {
+        const controller = new AbortController();
+        const initial = await repair.validate(controller.signal);
+        repair.onEvent?.({
+          type: "turn-started",
+          turn: 1,
+          provider: "openai",
+          model: "gpt-4.1",
+        });
+        if (boundary === "serving-result") {
+          mocks.healthy = true;
+          const serving = mocks.serving.getMockImplementation()!;
+          mocks.serving.mockImplementationOnce(async (request) => {
+            const result = await serving(request);
+            revoke();
+            return result;
+          });
+        } else {
+          mocks.restartCommand.mockImplementationOnce(async () => {
+            revoke();
+            mocks.healthy = true;
+            if (boundary === "restart-error") {
+              throw new Error("Native restart failed after revocation");
+            }
+            return "accepted";
+          });
+        }
+        await expect(repair.validate(controller.signal)).rejects.toThrow(
+          "Repair no longer owns the update attempt.",
+        );
+        return { status: "aborted", attempts: [], finalValidation: initial };
+      });
+      await repairUpdateService({
+        result: { ...params.result, status: "error", reason: "readyz-unhealthy" },
+        root: params.root,
+        env: run.env,
+        opts: params.opts,
+        gatewayPort: 19101,
+        timeoutMs: 1_000,
+        expectedService: params.preManagedServiceStop!,
+        onVerified,
+      });
+      expect(onVerified).not.toHaveBeenCalled();
+      expect(mocks.serving).toHaveBeenCalledTimes(boundary === "serving-result" ? 1 : 0);
+      expect(getUpdateRun(run.runId, { env: run.env })).toEqual(settledRun);
     },
   );
 

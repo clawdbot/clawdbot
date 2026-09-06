@@ -55,6 +55,8 @@ export async function runUpdatedInstallGatewayCommand(
       params.signal?.throwIfAborted();
       params.assertCurrent?.();
       await runDaemonInstall({ force: true, json: params.opts.json || undefined });
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       return "unverified";
     }
     throw new Error(
@@ -89,6 +91,7 @@ export async function runUpdatedInstallGatewayCommand(
     ...(params.signal ? { signal: params.signal, killProcessTree: true } : {}),
   });
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const exited =
     res.termination === "exit" &&
     res.signal === null &&

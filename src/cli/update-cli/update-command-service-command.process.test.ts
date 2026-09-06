@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
-it.each(["restart", "install", "missing candidate"] as const)(
+it.each(["restart", "install", "missing candidate", "restart revoked", "install revoked"] as const)(
   "handles %s after replacing the updater's module files",
   async (scenario) => {
     await withOpenClawTestState(
@@ -10,12 +10,14 @@ it.each(["restart", "install", "missing candidate"] as const)(
       async (state) => {
         const script = String.raw`
           import assert from "node:assert/strict";
+          import { existsSync } from "node:fs";
           import fs from "node:fs/promises";
           import { registerHooks } from "node:module";
           import path from "node:path";
           import { pathToFileURL } from "node:url";
 
           const scenario = ${JSON.stringify(scenario)};
+          const action = scenario.startsWith("install") ? "install" : "restart";
           const root = ${JSON.stringify(state.path("installation"))};
           const dist = path.join(root, "dist");
           const receipt = path.join(root, "candidate.json");
@@ -53,6 +55,11 @@ it.each(["restart", "install", "missing candidate"] as const)(
             opts: { json: true },
             invocationEnv: process.env,
             timeoutMs: 10_000,
+            assertCurrent() {
+              if (scenario.endsWith("revoked") && existsSync(receipt)) {
+                throw new Error("Update authority revoked during native command");
+              }
+            },
           };
           if (scenario === "missing candidate") {
             await assert.rejects(runUpdatedInstallGatewayCommand(params, "install"), {
@@ -68,10 +75,16 @@ it.each(["restart", "install", "missing candidate"] as const)(
               '  compileCacheDisabled: process.env.NODE_DISABLE_COMPILE_CACHE,',
               '}));',
             ].join("\n"));
-            assert.equal(await runUpdatedInstallGatewayCommand(params, scenario, true), "unverified");
+            if (scenario.endsWith("revoked")) {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+                message: "Update authority revoked during native command",
+              });
+            } else {
+              assert.equal(await runUpdatedInstallGatewayCommand(params, action, true), "unverified");
+            }
             const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
             assert.deepEqual(observed, {
-              args: ["gateway", scenario, scenario === "install" ? "--force" : "--preserve-definition", "--json"],
+              args: ["gateway", action, action === "install" ? "--force" : "--preserve-definition", "--json"],
               node: process.execPath,
               config: process.env.OPENCLAW_CONFIG_PATH,
               compileCacheDisabled: "1",
