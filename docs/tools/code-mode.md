@@ -1321,6 +1321,15 @@ tool inputs beyond existing OpenClaw trajectory policy.
 
 ## Debugging
 
+JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
+from the submitted code, excluding internal wrappers and headless setup. For
+TypeScript, compiler diagnostics labeled `openclaw-code-mode:user.ts` refer to
+the submitted TypeScript; runtime frames labeled `openclaw-code-mode:generated.js`
+refer to the transformed JavaScript. Internal wrapper and controller frames are
+omitted from new cells' failures; error messages still share the existing output
+budget. Resumed older snapshots without location metadata retain their previous
+stack format.
+
 Use targeted model transport logging when code mode behaves differently from
 a normal tool run:
 
