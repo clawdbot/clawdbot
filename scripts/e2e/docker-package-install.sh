@@ -176,52 +176,13 @@ for container_name in "$NPM_PROOF_CONTAINER" "$PNPM_PROOF_CONTAINER" "$BUN_PROOF
   wait_for_proof "$container_name"
 done
 
-NPM_PACKAGE_ROOT="/usr/local/lib/node_modules/openclaw"
-NPM_INSTALLED_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
-PNPM_PACKAGE_ROOT="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-package-root | tr -d '\r\n')"
-PNPM_PACKAGE_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" node -p "require('$PNPM_PACKAGE_ROOT/package.json').version")"
-PNPM_INSTALLED_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
-BUN_OPENCLAW_PATH="$(
-  docker exec "$BUN_PROOF_CONTAINER" \
-    node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawPath'
-)"
-BUN_INSTALLED_VERSION="$(
-  docker exec "$BUN_PROOF_CONTAINER" \
-    node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawVersion'
-)"
-PACKAGE_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" node -p "require('$NPM_PACKAGE_ROOT/package.json').version")"
-test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"
-for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BUN_INSTALLED_VERSION"; do
-  if [[ "$installed_version" != *"$PACKAGE_VERSION"* ]]; then
-    echo "installed CLI output $installed_version does not contain package version $PACKAGE_VERSION" >&2
-    exit 1
-  fi
-done
-
-node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts" \
-  --scenario docker-package-install \
-  --output "$IDENTITY_PATH" \
-  --image "$IMAGE_NAME" \
-  --package "$PACKAGE_TGZ" \
-  --container "npm=$NPM_PROOF_CONTAINER" \
-  --container "pnpm=$PNPM_PROOF_CONTAINER" \
-  --container "bun=$BUN_PROOF_CONTAINER" \
-  --container "musl=$MUSL_PROOF_CONTAINER" \
-  --detail "npm:installedPackageRoot=$NPM_PACKAGE_ROOT" \
-  --detail "npm:installedPackageVersion=$PACKAGE_VERSION" \
-  --detail "npm:openclawVersion=$NPM_INSTALLED_VERSION" \
-  --detail "npm:openclawPath=/usr/local/bin/openclaw" \
-  --detail "npm:helpCommand=passed" \
-  --detail "npm:nonRootExecution=passed" \
-  --detail "musl:fsSafeNative=passed" \
-  --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
-  --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
-  --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \
-  --detail "pnpm:openclawPath=/tmp/pnpm-home/bin/openclaw" \
-  --detail "pnpm:helpCommand=passed" \
-  --detail "bun:installedPackageVersion=$PACKAGE_VERSION" \
-  --detail "bun:openclawVersion=$BUN_INSTALLED_VERSION" \
-  --detail "bun:openclawPath=$BUN_OPENCLAW_PATH" \
-  --detail "bun:helpCommand=passed"
+bash "$ROOT_DIR/scripts/e2e/lib/docker-package-identity.sh" \
+  "$PACKAGE_TGZ" \
+  "$IDENTITY_PATH" \
+  "$IMAGE_NAME" \
+  "$NPM_PROOF_CONTAINER" \
+  "$PNPM_PROOF_CONTAINER" \
+  "$BUN_PROOF_CONTAINER" \
+  "$MUSL_PROOF_CONTAINER"
 
 echo "npm, pnpm, and Bun package artifact proofs passed."

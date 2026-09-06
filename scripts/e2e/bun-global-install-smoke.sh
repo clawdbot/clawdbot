@@ -413,15 +413,19 @@ NODE
       "$OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH" \
       "$bun_path" \
       "$openclaw_bin" \
-      "$openclaw_version" <<'NODE'
+      "$openclaw_version" \
+      "$package_root" <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
 
-const [, , proofPath, bunPath, openclawPath, openclawVersion] = process.argv;
+const [, , proofPath, bunPath, openclawPath, openclawVersion, installedPackageRoot] = process.argv;
+const installedPackageVersion = JSON.parse(
+  fs.readFileSync(path.join(installedPackageRoot, "package.json"), "utf8"),
+).version;
 fs.mkdirSync(path.dirname(proofPath), { recursive: true });
 fs.writeFileSync(
   proofPath,
-  `${JSON.stringify({ bunPath, openclawPath, openclawVersion }, null, 2)}\n`,
+  `${JSON.stringify({ bunPath, openclawPath, openclawVersion, installedPackageRoot, installedPackageVersion }, null, 2)}\n`,
 );
 NODE
   fi
