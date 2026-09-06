@@ -583,11 +583,43 @@ extension OpenClawChatViewModel {
     }
 
     var canSwitchSessionBranch: Bool {
-        self.currentSessionEntry()?.hasActiveRun != true &&
+        !self.hasGatewayConfirmedActiveRunForCurrentSession &&
+            self.currentSessionEntry()?.hasActiveRun != true &&
             !self.hasBlockingRunActivity &&
             !self.isSending &&
             !self.isAborting &&
             !self.hasUnresolvedOutboxCommandsForCurrentSession
+    }
+
+    /// The listed row can be stale — a refresh that never applied leaves the
+    /// pre-run entry in place — so the Gateway's own rejection is kept as an
+    /// independent liveness fact until the server contradicts it.
+    var hasGatewayConfirmedActiveRunForCurrentSession: Bool {
+        self.gatewayConfirmedActiveRunSessionKeys.contains { key in
+            self.matchesCurrentSessionKey(incoming: key, current: self.sessionKey)
+        }
+    }
+
+    /// Records the liveness the Gateway asserted when it refused a mutation.
+    /// Callers must record before refreshing: a `sessions.list` failure returns
+    /// without touching `sessions`, and the stale inactive row would otherwise
+    /// re-enable the control into a loop of silently rejected requests.
+    func recordGatewayConfirmedActiveRun(for session: SessionSnapshot) {
+        self.gatewayConfirmedActiveRunSessionKeys.insert(session.key)
+    }
+
+    /// Drops latches the server has since contradicted. Call this only right
+    /// after applying server-authoritative session liveness; an unknown
+    /// (`nil`) or missing row is not a completion and keeps its latch.
+    func reconcileGatewayConfirmedActiveRuns() {
+        guard !self.gatewayConfirmedActiveRunSessionKeys.isEmpty else { return }
+        self.gatewayConfirmedActiveRunSessionKeys = self.gatewayConfirmedActiveRunSessionKeys
+            .filter { key in
+                guard let entry = self.sessions.first(where: {
+                    self.matchesCurrentSessionKey(incoming: $0.key, current: key)
+                }) else { return true }
+                return entry.hasActiveRun != false
+            }
     }
 
     private nonisolated static func branchSwitchIsBlockedByActiveRun(_ error: Error) -> Bool {
@@ -650,6 +682,7 @@ extension OpenClawChatViewModel {
             await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
             if Self.branchSwitchIsBlockedByActiveRun(error) {
+                self.recordGatewayConfirmedActiveRun(for: initiatingSession)
                 await self.fetchSessions(limit: 50, sessionSnapshot: initiatingSession)
                 chatSessionActionsLogger.info(
                     "sessions.branches.switch blocked by active run; refreshed session liveness")

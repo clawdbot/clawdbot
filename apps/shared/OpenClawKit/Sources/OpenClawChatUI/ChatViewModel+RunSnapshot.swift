@@ -20,6 +20,7 @@ extension OpenClawChatViewModel {
                 updated[index].hasActiveRun = sessionInfo.hasActiveRun
                 updated[index].activeRunIds = sessionInfo.activeRunIds
                 self.sessions = updated
+                self.reconcileGatewayConfirmedActiveRuns()
             } else {
                 self.updateActiveSessionRunIDs(sessionInfo.activeRunIds ?? [])
             }

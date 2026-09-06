@@ -193,6 +193,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let forkAtMessageGate: SessionActionCompletionGate?
     private let branchSwitchGate: SessionActionCompletionGate?
     private let branchSwitchError: Error?
+    private let sessionListFailureIndices: Set<Int>
     private let sessionListResponses: [OpenClawChatSessionsListResponse]
     private let branchListGates: [SessionActionCompletionGate]
     private let rewindEditorText: String?
@@ -216,6 +217,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         forkAtMessageGate: SessionActionCompletionGate? = nil,
         branchSwitchGate: SessionActionCompletionGate? = nil,
         branchSwitchError: Error? = nil,
+        sessionListFailureIndices: Set<Int> = [],
         sessionListResponses: [OpenClawChatSessionsListResponse] = [],
         branchListGates: [SessionActionCompletionGate] = [],
         rewindEditorText: String? = "rewound draft",
@@ -238,6 +240,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.forkAtMessageGate = forkAtMessageGate
         self.branchSwitchGate = branchSwitchGate
         self.branchSwitchError = branchSwitchError
+        self.sessionListFailureIndices = sessionListFailureIndices
         self.sessionListResponses = sessionListResponses
         self.branchListGates = branchListGates
         self.rewindEditorText = rewindEditorText
@@ -411,7 +414,9 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         archived _: Bool) async throws -> OpenClawChatSessionsListResponse
     {
         let callIndex = await self.state.recordSessionListRequest()
-        if self.sessionListResponses.indices.contains(callIndex) {
+        if !self.sessionListFailureIndices.contains(callIndex),
+           self.sessionListResponses.indices.contains(callIndex)
+        {
             return self.sessionListResponses[callIndex]
         }
         throw NSError(
@@ -1250,6 +1255,85 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.currentSessionEntry()?.hasActiveRun == true)
         #expect(viewModel.canSwitchSessionBranch == false)
         #expect(viewModel.errorText == nil)
+    }
+
+    @Test func `branch switch retains active run state when the session refresh fails`() async {
+        let branches = self.branches()
+        // The row predates the run, so only the rejection knows the session is busy.
+        let staleInactiveSession = self.entry(key: "main", hasActiveRun: false)
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            // No canned responses, so every sessions.list throws.
+            sessionListResponses: [],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [staleInactiveSession]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 1)
+        #expect(await transport.sessionListRequestCount() == 1)
+        // The refresh failed, so the stale row still reports no run.
+        #expect(viewModel.currentSessionEntry()?.hasActiveRun == false)
+        // The rejection is retained anyway, so the picker cannot re-enable into
+        // a loop of silently rejected switches.
+        #expect(viewModel.canSwitchSessionBranch == false)
+        #expect(viewModel.errorText == nil)
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 1)
+    }
+
+    @Test func `branch switch clears retained active run state on authoritative completion`() async {
+        let branches = self.branches()
+        let staleInactiveSession = self.entry(key: "main", hasActiveRun: false)
+        let completedSession = self.entry(key: "main", hasActiveRun: false)
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            // The refresh inside switchToBranch fails; a later list succeeds and
+            // authoritatively reports the run finished.
+            sessionListFailureIndices: [0],
+            sessionListResponses: [
+                OpenClawChatSessionsListResponse(
+                    ts: nil,
+                    path: nil,
+                    count: 1,
+                    defaults: nil,
+                    sessions: [staleInactiveSession]),
+                OpenClawChatSessionsListResponse(
+                    ts: nil,
+                    path: nil,
+                    count: 1,
+                    defaults: nil,
+                    sessions: [completedSession]),
+            ],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [staleInactiveSession]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(viewModel.canSwitchSessionBranch == false)
+
+        await viewModel.fetchSessions(limit: 50)
+
+        #expect(viewModel.currentSessionEntry()?.hasActiveRun == false)
+        #expect(viewModel.canSwitchSessionBranch)
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 2)
     }
 
     @Test func `branch switch surfaces a non active run rejection`() async {

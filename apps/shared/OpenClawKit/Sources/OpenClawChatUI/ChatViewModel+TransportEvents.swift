@@ -290,6 +290,12 @@ extension OpenClawChatViewModel {
             color: change.color,
             colorPresent: change.colorPresent)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
+        // Only an explicit lifecycle statement retires a Gateway-confirmed run.
+        // A snapshot that omits liveness merges the existing — possibly stale —
+        // value forward and must not be read as completion.
+        if snapshot.hasActiveRun != nil {
+            self.reconcileGatewayConfirmedActiveRuns()
+        }
         self.persistSessionsToCache(
             self.sessions,
             agentID: self.currentSessionSnapshot().deliveryAgentID)
