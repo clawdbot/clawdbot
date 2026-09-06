@@ -147,14 +147,18 @@ function resolveMaintenanceGateState<
   // stale total at a safety factor so the gate keeps its eyes instead of
   // going blind and silently skipping compaction (#138871). We reach this
   // branch only when resolveFreshSessionTotalTokens already returned
-  // undefined (totalTokensFresh !== true or version mismatch), so the total
-  // is genuinely stale. The 0.8 discount biases toward the real-world
-  // ceiling of a still-growing transcript rather than over-trusting a
-  // frozen snapshot; it also mitigates legacy cumulative-CLI totals that
-  // historically over-count retries.
-  const staleFallbackTotalTokens = Math.floor(
-    (resolveSessionTotalTokens(params.entry) ?? 0) * STALE_TOTAL_TOKENS_SAFETY_FACTOR,
-  );
+  // undefined, but we further require totalTokensFresh === false so that
+  // *fresh-but-unversioned* legacy entries (totalTokensFresh === true with
+  // no version) are still ignored — they are not stale. The 0.8 discount
+  // biases toward the real-world ceiling of a still-growing transcript
+  // rather than over-trusting a frozen snapshot; it also mitigates legacy
+  // cumulative-CLI totals that historically over-count retries.
+  const staleFallbackTotalTokens =
+    params.entry.totalTokensFresh === false
+      ? Math.floor(
+          (resolveSessionTotalTokens(params.entry) ?? 0) * STALE_TOTAL_TOKENS_SAFETY_FACTOR,
+        )
+      : 0;
   const totalTokens = freshOrProjectedTotalTokens ?? staleFallbackTotalTokens;
   if (!totalTokens || totalTokens <= 0) {
     return null;
