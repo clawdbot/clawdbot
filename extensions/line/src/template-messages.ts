@@ -115,6 +115,11 @@ function normalizeCarousel(
 ): CarouselNormalizationOutcome {
   const normalized = columns.slice(0, 10).map(normalizeCarouselColumn);
   const first = normalized[0];
+  // Thumbnails are deliberately not part of this check. Outbound normalization
+  // already strips every column's image when one of them is unusable
+  // (`normalizeLineMessage` in actions.ts), which satisfies LINE's all-or-none
+  // rule; degrading the carousel to text here would throw away a card that
+  // owner still delivers.
   const invalid =
     !first ||
     normalized.some(
@@ -122,7 +127,6 @@ function normalizeCarousel(
         column.text === "" ||
         column.actions.length === 0 ||
         (column.title === undefined) !== (first.title === undefined) ||
-        (column.thumbnailImageUrl === undefined) !== (first.thumbnailImageUrl === undefined) ||
         column.actions.length !== first.actions.length,
     );
   if (!invalid) {

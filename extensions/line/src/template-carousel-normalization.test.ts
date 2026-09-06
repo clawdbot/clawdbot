@@ -36,11 +36,6 @@ const invalidCases: Array<{
     fallback: "First: A (Open)\nB (Open)",
   },
   {
-    name: "mixed thumbnails",
-    columns: [column("A", { thumbnailImageUrl: "https://example.com/a.jpg" }), column("B")],
-    fallback: "A (Open)\nB (Open)",
-  },
-  {
     name: "unequal action counts",
     columns: [column("A", { actions: ["One", "Two"] }), column("B", { actions: ["Three"] })],
     fallback: "A (One / Two)\nB (Three)",
@@ -117,6 +112,19 @@ describe("LINE carousel normalization", () => {
     );
 
     expect(() => createTemplateCarousel(built)).toThrow(/LINE carousel/);
+  });
+
+  // Columns that disagree only on their image are left as a carousel: outbound
+  // normalization strips every column's image when one of them is unusable, which
+  // is what LINE's all-or-none rule needs. Degrading to text here would drop a
+  // card that still ships, and `card-image-url.test.ts` pins the stripped wire shape.
+  it("keeps a carousel whose columns disagree only on a thumbnail", () => {
+    expect(
+      buildTemplateMessageFromPayload({
+        type: "carousel",
+        columns: [column("A", { thumbnailImageUrl: "https://example.com/a.jpg" }), column("B")],
+      }),
+    ).toMatchObject({ type: "template", template: { type: "carousel" } });
   });
 
   it("filters blank labels before applying the three-action provider cap", () => {
