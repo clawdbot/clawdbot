@@ -26,6 +26,7 @@ import {
 } from "./code-mode.test-support.js";
 import { Agent } from "./runtime/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
@@ -49,14 +50,7 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: content.some((entry) => entry.type === "toolCall") ? "toolUse" : "stop",
     timestamp: Date.now(),
   };

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -24,6 +25,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 // transactions and incognito sessions keep their handles until owner release.
 export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
+const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
 // Native and transformed SDK graphs must share the complete owner lifecycle;
 // sharing only handles would split borrow pins, failure latches, and cleanup.
 type AgentDatabaseLifecycle = {
@@ -65,6 +67,28 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     retainedCloses: new Set(),
   }),
 );
+
+/** Each physical-open generator owns these checkpoints across any integrity await. */
+export function startAgentDatabaseOpenTiming(agentId: string, pathname: string) {
+  const startedAt = performance.now();
+  let elapsedMs = 0;
+  const phaseDurationsMs = { open: 0, validation: 0, configuration: 0, schema: 0, registration: 0 };
+  return (phase: keyof typeof phaseDurationsMs): void => {
+    const completedMs = Math.floor(performance.now() - startedAt);
+    phaseDurationsMs[phase] = completedMs - elapsedMs;
+    elapsedMs = completedMs;
+    // Registration is the final checkpoint; intermediate phases never emit a partial summary.
+    if (phase === "registration" && elapsedMs >= OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
+      agentDbLog.warn("slow OpenClaw agent database open", {
+        agentId,
+        elapsedMs,
+        path: pathname,
+        phaseDurationsMs,
+        thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
+      });
+    }
+  };
+}
 
 // A failed native close or lease release keeps its original owner until retry succeeds.
 export function retainFailedAgentDatabaseClose(
@@ -333,4 +357,4 @@ export function inspectOpenClawAgentDatabaseOwner(
   }
 }
 
-export { cache as agentDatabaseLifecycle, agentDbLog as agentDatabaseLog };
+export { cache as agentDatabaseLifecycle };
