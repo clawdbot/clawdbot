@@ -1,4 +1,3 @@
-// Discord plugin module implements tts behavior.
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -38,14 +37,17 @@ export async function transcribeVoiceAudio(params: {
   cfg: OpenClawConfig;
   agentId: string;
   filePath: string;
-}): Promise<string | undefined> {
+}) {
   const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
     filePath: params.filePath,
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     mime: "audio/wav",
   });
-  return normalizeOptionalString(result.text);
+  return {
+    text: normalizeOptionalString(result.text),
+    processing: result.decision?.attachmentProcessing?.[0],
+  };
 }
 
 export async function synthesizeVoiceReplyAudio(params: {

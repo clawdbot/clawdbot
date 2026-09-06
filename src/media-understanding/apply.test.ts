@@ -1593,6 +1593,7 @@ describe("applyMediaUnderstanding", () => {
       outcome: "no-attachment",
       attachments: [],
       attachmentDispositions: {},
+      attachmentProcessing: {},
     });
   });
 

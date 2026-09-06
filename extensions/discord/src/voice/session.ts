@@ -32,7 +32,7 @@ export type VoiceOperationResult = {
 export type VoiceJoinOptions = {
   preserveFollowState?: boolean;
   autoJoinWhenOccupied?: boolean;
-  transcripts?: VoiceSessionEntry["transcripts"];
+  captureOnly?: boolean;
 };
 
 export type VoiceSessionGeneration = {
@@ -70,7 +70,7 @@ export type VoiceRealtimeAgentTurnParams = {
 };
 
 export type VoiceRealtimeSpeakerTurn = {
-  close: () => void;
+  close: (reason?: "incomplete-input") => void;
   sendInputAudio: (discordPcm48kStereo: Buffer) => void;
 };
 
@@ -93,6 +93,7 @@ type VoiceRealtimeLifecycle =
 
 export type VoiceSessionEntry = {
   generation: number;
+  captureOnly: boolean;
   autoJoinWhenOccupied: boolean;
   sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
   guildId: string;
@@ -105,7 +106,9 @@ export type VoiceSessionEntry = {
   connection: import("@discordjs/voice").VoiceConnection;
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
+  // Conversation-only segments may retain their WAV after this recording frontier settles.
   processingQueue: Promise<void>;
+  conversations: import("./voice-conversation-input.js").DiscordVoiceConversationQueue;
   audioInputBudget: Awaited<
     ReturnType<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>
   >;
@@ -114,8 +117,8 @@ export type VoiceSessionEntry = {
   realtimeLifecycle: VoiceRealtimeLifecycle;
   transcripts?: {
     sessionId: string;
+    isCurrent: () => boolean;
     onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
-    onStop?: () => void | Promise<void>;
   };
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: (reason?: string) => void;

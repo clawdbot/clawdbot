@@ -493,14 +493,19 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
           turn.sendInputAudio(audio);
         }
       },
-      close: () => {
+      close: (reason) => {
         if (closed) {
           return;
         }
         closed = true;
         this.captures.delete(capture);
         this.lastActivityAt = Date.now();
-        turn.close();
+        if (reason === "incomplete-input") {
+          // Retire this provider connection before a late transcript can dispatch partial speech.
+          this.params.onTerminalError(new Error("Discord realtime received incomplete speech."));
+        } else {
+          turn.close();
+        }
       },
     };
     this.captures.add(capture);
