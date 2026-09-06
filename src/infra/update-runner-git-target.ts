@@ -49,6 +49,7 @@ export async function prepareGitMutation(params: {
 }): Promise<{
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  deferDoctor?: boolean;
 }> {
   const target = await readGitTargetSchemaVersions(params);
   const preparation = await params.beforeGitMutation?.(

@@ -18,7 +18,7 @@ import { UpdateCommandFailure } from "./update-command-result.js";
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 
 export async function withUpdateFailureTriage(
-  opts: Pick<UpdateCommandOptions, "json" | "yes" | "dryRun"> & { invocationCwd?: string },
+  opts: Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & { invocationCwd?: string },
   target: UpdateTriageTarget,
   run: () => Promise<void>,
 ): Promise<void> {
@@ -44,6 +44,7 @@ export async function withUpdateFailureTriage(
     if (
       (!reportedFailure || classifyUpdateOutcome(error.result) === "failed") &&
       !opts.dryRun &&
+      !opts.run?.transferred &&
       target.env[POST_CORE_UPDATE_ENV] !== "1"
     ) {
       const failure = reportedFailure

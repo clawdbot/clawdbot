@@ -1,3 +1,4 @@
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   preflightOpenClawDatabaseSchemas,
@@ -6,6 +7,17 @@ import {
   type OpenClawDatabaseSchemaPreflight,
 } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+
+export function requiresFreshUpdateFinalization(
+  schemaVersions: OpenClawSchemaVersions | undefined,
+): boolean {
+  return Boolean(
+    schemaVersions &&
+    (schemaVersions.state > OPENCLAW_STATE_SCHEMA_VERSION ||
+      schemaVersions.agent > OPENCLAW_AGENT_SCHEMA_VERSION),
+  );
+}
 
 export function formatSchemaRefusalLines(
   schemas: {

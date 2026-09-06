@@ -293,10 +293,11 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     try {
       // Native preparation may abort before returning its recovery handle.
       // Persist that outcome before releasing the signal's process-exit gate.
-      if (finishUpdate && interrupted && updateRun && (restoreAllowed || restorationFailed)) {
+      const run = updateRun?.transferred ? undefined : updateRun;
+      if (finishUpdate && interrupted && run && (restoreAllowed || restorationFailed)) {
         const failed = restorationFailed || !restartSafe;
         finishUpdateRun(
-          updateRun.runId,
+          run.runId,
           {
             status: failed ? "failed" : "skipped",
             reason: restorationFailed
@@ -305,7 +306,7 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
                 ? "update-failed"
                 : "cancelled",
           },
-          { env: updateRun.env },
+          { env: run.env },
         );
       }
     } finally {

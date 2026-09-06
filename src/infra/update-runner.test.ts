@@ -2,11 +2,16 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import * as processExec from "../process/exec.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
@@ -14,6 +19,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
@@ -942,6 +948,65 @@ describe("runGatewayUpdate", () => {
     });
     expect(calls).toContain(fetchCommand);
     expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toStrictEqual([]);
+  });
+
+  it("leaves a newer-schema Doctor to the fresh owner while recording update progress", async () => {
+    await setupGitPackageManagerFixture();
+    const env = { OPENCLAW_STATE_DIR: path.join(tempDir, "isolated-state") };
+    const statePath = resolveOpenClawStateSqlitePath(env);
+    const targetSchema = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    const run = createUpdateRun({ trigger: "cli" }, { env });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const { runCommand } = createDevGitRunner({
+      onCommand(key) {
+        if (key === `git -C ${tempDir} show upstream123:package.json`) {
+          return {
+            stdout: JSON.stringify({
+              openclaw: { schemaVersions: { state: targetSchema, agent: 0 } },
+            }),
+          };
+        }
+        if (key === doctorCommand) {
+          // The updated Doctor changes the shared file before the old runner's
+          // completion callback records this step with its loaded schema code.
+          const db = new DatabaseSync(statePath);
+          try {
+            db.exec(`PRAGMA user_version = ${targetSchema}`);
+          } finally {
+            db.close();
+          }
+        }
+        return undefined;
+      },
+    });
+    try {
+      const result = await runGatewayUpdate({
+        cwd: tempDir,
+        channel: "dev",
+        timeoutMs: 5_000,
+        runCommand,
+        progress: createUpdateRunProgress({ runId: run.runId, env }, {}),
+        beforeGitMutation: async ({ schemaVersions }) => ({
+          deferDoctor: (schemaVersions?.state ?? 0) > OPENCLAW_STATE_SCHEMA_VERSION,
+        }),
+      });
+
+      expect(result, JSON.stringify(result)).toMatchObject({ status: "ok", deferredDoctor: true });
+      expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(
+        expect.objectContaining({ step: "build", status: "completed" }),
+      );
+      const db = new DatabaseSync(statePath, { readOnly: true });
+      try {
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
+      } finally {
+        db.close();
+      }
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it("does not fetch tags for dev updates", async () => {

@@ -51,6 +51,7 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import { continueUpdateFinalizationInFreshProcess } from "./update-command-schema-handoff.js";
 import {
   resolveServiceRefreshEnv,
   stripGatewayServiceMarkerEnv,
@@ -76,7 +77,7 @@ import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
 
-export async function finishUpdate(params: {
+export type FinishUpdateParams = {
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
   root: string;
@@ -97,7 +98,13 @@ export async function finishUpdate(params: {
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
   invocationCwd?: string;
-}): Promise<void> {
+};
+
+export async function finishUpdate(params: FinishUpdateParams): Promise<void> {
+  if (params.result.status === "ok" && params.result.deferredDoctor) {
+    await continueUpdateFinalizationInFreshProcess(params);
+    return;
+  }
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
   const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
     ...result,

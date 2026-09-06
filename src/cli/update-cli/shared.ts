@@ -30,7 +30,7 @@ import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
   /** Internal orchestration context, shared across update phases and child processes. */
-  run?: { runId: string; env: NodeJS.ProcessEnv };
+  run?: { runId: string; env: NodeJS.ProcessEnv; transferred?: boolean };
   acceptCapabilities?: boolean;
   json?: boolean;
   restart?: boolean;

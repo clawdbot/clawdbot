@@ -52,6 +52,10 @@ export function createUpdateProgress(
     currentSpinner = null;
   };
   const refresh = () => {
+    // The target process owns this database once its Doctor can migrate it.
+    if (run?.transferred) {
+      return undefined;
+    }
     const record = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
     if (!record) {
       return undefined;

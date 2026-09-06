@@ -165,6 +165,12 @@ recovery stops and reports the error without retrying with weaker options. Repai
 the reported failure, rerun `openclaw update`, and check `openclaw gateway status --deep`.
 See [Failed update recovery](/gateway/restart-recovery#recovery-after-a-failed-update).
 
+When a target supports a newer database schema, its executable takes over before
+Doctor migrates state. That process completes plugin updates, restart verification,
+and the run report; the old updater stops accessing the database. If migration or
+finalization fails, keep the updated build installed and follow the reported
+recovery steps. Reinstalling older code alone cannot undo a database migration.
+
 On macOS, if Doctor reports an installed but unloaded and disabled Gateway
 LaunchAgent after an interrupted update, finish update verification or Doctor and
 triage first. Then use the printed `openclaw gateway start` command, preserving

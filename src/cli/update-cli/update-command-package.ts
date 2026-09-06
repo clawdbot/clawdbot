@@ -56,6 +56,7 @@ export type PackageInstallUpdateParams = {
   nodeRunner?: string;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
+  deferDoctor?: boolean;
 };
 
 export async function runPackageInstallUpdate(
@@ -116,76 +117,82 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    postVerifyStep: async (verifiedPackageRoot) => {
-      const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
-      if (!entryPath) {
-        return null;
-      }
-      const doctorEnv = resolveUpdateTargetEnv({
-        serviceEnv: params.managedServiceEnv,
-        invocationCwd: params.invocationCwd,
-      });
-      // Backup and Doctor must select the same installation before Doctor can rewrite it.
-      await createUpdateConfigSnapshot(doctorEnv);
-      const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
-      const doctorResultPath = createUpdatePostInstallDoctorResultPath();
-      // The candidate is live only behind the staged npm rollback boundary. Keep
-      // native service changes external until this verification passes and the
-      // outer update finalizer owns the successful refresh/restart.
-      const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
-        targetVersion: candidateHostVersion,
-        allowGatewayServiceRepair: false,
-      });
-      const doctorArgv = [
-        params.nodeRunner ?? resolveNodeRunner(),
-        entryPath,
-        "doctor",
-        "--non-interactive",
-        ...(doctorPolicy.fix ? ["--fix"] : []),
-      ];
-      const doctorProgressInfo = {
-        name: `${CLI_NAME} doctor`,
-        command: doctorArgv.join(" "),
-        index: 0,
-        total: 0,
-      };
-      params.progress?.onStepStart?.(doctorProgressInfo);
-      const doctorStep = await runUpdateStep({
-        name: `${CLI_NAME} doctor`,
-        argv: doctorArgv,
-        cwd: verifiedPackageRoot,
-        env: {
-          ...doctorEnv,
-          ...buildUpdateDoctorEnv({
+    postVerifyStep: params.deferDoctor
+      ? undefined
+      : async (verifiedPackageRoot) => {
+          const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+          if (!entryPath) {
+            return null;
+          }
+          const doctorEnv = resolveUpdateTargetEnv({
+            serviceEnv: params.managedServiceEnv,
+            invocationCwd: params.invocationCwd,
+          });
+          // Backup and Doctor must select the same installation before Doctor can rewrite it.
+          await createUpdateConfigSnapshot(doctorEnv);
+          const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
+          const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+          // The candidate is live only behind the staged npm rollback boundary. Keep
+          // native service changes external until this verification passes and the
+          // outer update finalizer owns the successful refresh/restart.
+          const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+            targetVersion: candidateHostVersion,
             allowGatewayServiceRepair: false,
-            allowGatewayActivation: false,
-            deferConfiguredPluginInstallRepair: true,
-            serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-            compatibilityHostVersion: candidateHostVersion,
-          }),
-          [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
+          });
+          const doctorArgv = [
+            params.nodeRunner ?? resolveNodeRunner(),
+            entryPath,
+            "doctor",
+            "--non-interactive",
+            ...(doctorPolicy.fix ? ["--fix"] : []),
+          ];
+          const doctorProgressInfo = {
+            name: `${CLI_NAME} doctor`,
+            command: doctorArgv.join(" "),
+            index: 0,
+            total: 0,
+          };
+          params.progress?.onStepStart?.(doctorProgressInfo);
+          const doctorStep = await runUpdateStep({
+            name: `${CLI_NAME} doctor`,
+            argv: doctorArgv,
+            cwd: verifiedPackageRoot,
+            env: {
+              ...doctorEnv,
+              ...buildUpdateDoctorEnv({
+                allowGatewayServiceRepair: false,
+                allowGatewayActivation: false,
+                deferConfiguredPluginInstallRepair: true,
+                serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+                compatibilityHostVersion: candidateHostVersion,
+              }),
+              [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
+            },
+            timeoutMs: params.timeoutMs,
+          });
+          const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+          const completedDoctorStep = markPackagePostInstallDoctorAdvisory(
+            doctorStep,
+            doctorResult,
+          );
+          params.progress?.onStepComplete?.({
+            ...doctorProgressInfo,
+            durationMs: completedDoctorStep.durationMs,
+            exitCode: completedDoctorStep.exitCode,
+            stdoutTail: completedDoctorStep.stdoutTail,
+            stderrTail: completedDoctorStep.stderrTail,
+            signal: completedDoctorStep.signal,
+            killed: completedDoctorStep.killed,
+            termination: completedDoctorStep.termination,
+            advisory: completedDoctorStep.advisory,
+          });
+          return completedDoctorStep;
         },
-        timeoutMs: params.timeoutMs,
-      });
-      const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
-      const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
-      params.progress?.onStepComplete?.({
-        ...doctorProgressInfo,
-        durationMs: completedDoctorStep.durationMs,
-        exitCode: completedDoctorStep.exitCode,
-        stdoutTail: completedDoctorStep.stdoutTail,
-        stderrTail: completedDoctorStep.stderrTail,
-        signal: completedDoctorStep.signal,
-        killed: completedDoctorStep.killed,
-        termination: completedDoctorStep.termination,
-        advisory: completedDoctorStep.advisory,
-      });
-      return completedDoctorStep;
-    },
   });
 
   return {
     status: packageUpdate.failedStep ? "error" : "ok",
+    ...(!packageUpdate.failedStep && params.deferDoctor ? { deferredDoctor: true as const } : {}),
     mode: installTarget.manager,
     root: packageUpdate.verifiedPackageRoot ?? params.root,
     reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,

@@ -17,6 +17,7 @@ import {
   checkTargetDatabaseSchemas,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
+  requiresFreshUpdateFinalization,
 } from "./schema-preflight.js";
 import {
   normalizeTag,
@@ -234,6 +235,7 @@ export async function executeMutableUpdate(params: {
     nodeRunner: params.packageUpdateNodeRunner,
     installEnv: params.packageInstallEnv,
     installTarget: params.packageInstallTarget,
+    deferDoctor: requiresFreshUpdateFinalization(params.packageTargetSchemaVersions),
   });
 
   let result: UpdateRunResult;

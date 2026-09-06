@@ -103,6 +103,7 @@ export async function updateGitCheckout(params: {
   let mutationPrepared = false;
   let runtimeMutationStarted = false;
   let stateMigrationStarted = false;
+  let deferDoctor = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
   const prepareMutation = async (revision: string) => {
     const preparation = await prepareGitMutation({
@@ -113,6 +114,7 @@ export async function updateGitCheckout(params: {
       beforeGitMutation: opts.beforeGitMutation,
     });
     mutationPrepared = true;
+    deferDoctor = preparation.deferDoctor === true;
     allowGatewayServiceRepair = preparation.allowGatewayServiceRepair ?? allowGatewayServiceRepair;
     allowGatewayActivation = preparation.allowGatewayActivation ?? allowGatewayActivation;
     recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
@@ -495,35 +497,38 @@ export async function updateGitCheckout(params: {
       });
       return await rollbackError("doctor-entry-missing");
     }
-    const doctorNodePath = await resolveStableNodePath(process.execPath);
-    const doctorTargetVersion = await readPackageVersion(gitRoot);
-    const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
-      targetVersion: doctorTargetVersion,
-      allowGatewayServiceRepair,
-    });
-    stateMigrationStarted = true;
-    recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-    const doctorStep = await runStep(
-      step(
-        "openclaw doctor",
-        [
-          doctorNodePath,
-          doctorEntry,
-          "doctor",
-          "--non-interactive",
-          ...(doctorPolicy.fix ? ["--fix"] : []),
-        ],
-        gitRoot,
-        buildUpdateDoctorEnv({
-          allowGatewayServiceRepair,
-          allowGatewayActivation,
-          serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-          deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-        }),
-      ),
-    );
-    if (doctorStep.exitCode !== 0) {
-      return await rollbackError("doctor-failed");
+    // A newer schema must be migrated only after the target owns finalization.
+    if (!deferDoctor) {
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const doctorTargetVersion = await readPackageVersion(gitRoot);
+      const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion: doctorTargetVersion,
+        allowGatewayServiceRepair,
+      });
+      stateMigrationStarted = true;
+      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+      const doctorStep = await runStep(
+        step(
+          "openclaw doctor",
+          [
+            doctorNodePath,
+            doctorEntry,
+            "doctor",
+            "--non-interactive",
+            ...(doctorPolicy.fix ? ["--fix"] : []),
+          ],
+          gitRoot,
+          buildUpdateDoctorEnv({
+            allowGatewayServiceRepair,
+            allowGatewayActivation,
+            serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+            deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
+          }),
+        ),
+      );
+      if (doctorStep.exitCode !== 0) {
+        return await rollbackError("doctor-failed");
+      }
     }
 
     const uiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
@@ -579,6 +584,7 @@ export async function updateGitCheckout(params: {
       status: "ok",
       mode: "git",
       root: gitRoot,
+      ...(deferDoctor ? { deferredDoctor: true as const } : {}),
       before: { sha: beforeSha, version: beforeVersion },
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,

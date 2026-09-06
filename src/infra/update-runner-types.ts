@@ -38,6 +38,8 @@ export type UpdateRunResult = {
   steps: UpdateStepResult[];
   durationMs: number;
   recovery?: UpdateRecovery;
+  /** Target-owned finalization must run Doctor before activating this install. */
+  deferredDoctor?: true;
   postUpdate?: {
     plugins?: {
       status: "ok" | "warning" | "skipped" | "error";
@@ -129,6 +131,7 @@ export type UpdateRunnerOptions = {
   }) => Promise<{
     allowGatewayServiceRepair?: boolean;
     allowGatewayActivation?: boolean;
+    deferDoctor?: boolean;
   } | void>;
   timeoutMs?: number;
   runCommand?: CommandRunner;

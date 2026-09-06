@@ -23,6 +23,7 @@ import {
   checkTargetDatabaseSchemas,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
+  requiresFreshUpdateFinalization,
 } from "./schema-preflight.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -123,6 +124,7 @@ type BeforeGitMutation = (target: {
 }) => Promise<{
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  deferDoctor?: boolean;
 } | void>;
 
 export function createBeforeGitMutation(params: {
@@ -169,9 +171,12 @@ export function createBeforeGitMutation(params: {
     }
     // A candidate checkout cannot own the service until its global exposure
     // succeeds. Finalization refreshes and activates the verified installation.
-    return params.switchToGit
-      ? { allowGatewayServiceRepair: false, allowGatewayActivation: false }
-      : resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart);
+    return {
+      ...(params.switchToGit
+        ? { allowGatewayServiceRepair: false, allowGatewayActivation: false }
+        : resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart)),
+      ...(requiresFreshUpdateFinalization(target.schemaVersions) ? { deferDoctor: true } : {}),
+    };
   };
 }
 

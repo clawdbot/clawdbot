@@ -28,6 +28,7 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
+import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -79,6 +80,11 @@ const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
+  if (process.env[POST_CORE_UPDATE_ENV] === "finalize") {
+    const { resumeUpdateFinalization } = await import("./update-command-schema-handoff.js");
+    await resumeUpdateFinalization();
+    return;
+  }
   const invocationCwd = tryResolveInvocationCwd();
   const recoveryState: UpdateCommandRecoveryState = {
     triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
@@ -140,7 +146,7 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
             recoveryState.windowsTaskAutoStartRecovery?.complete();
           }
           if (failure) {
-            if (!prepared.postCoreUpdateResume) {
+            if (!prepared.postCoreUpdateResume && !run.transferred) {
               if (failure.error instanceof UpdateCommandFailure) {
                 completeUpdateCommandRun(failure.error.result, run);
               } else {
