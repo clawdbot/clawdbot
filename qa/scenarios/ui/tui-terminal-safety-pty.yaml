@@ -49,13 +49,13 @@ scenario:
       tuiPtyCases:
         - coverageId: tui.terminal-rendering-primitives
           testFile: src/tui/tui-pty-harness.e2e.test.ts
-          testNamePattern: ^TUI PTY harness renders long Unicode output and copy-safe URLs in narrow real PTY frames$
+          testNamePattern: ^TUI PTY harness > renders long Unicode output and copy-safe URLs in narrow real PTY frames$
         - coverageId: tui.output-safety
           testFile: src/tui/tui-pty-harness.e2e.test.ts
-          testNamePattern: ^TUI PTY harness sanitizes ANSI OSC and C1 payloads across real PTY display boundaries$
+          testNamePattern: ^TUI PTY harness > sanitizes ANSI OSC and C1 payloads across real PTY display boundaries$
         - coverageId: tui.output-safety
           testFile: src/tui/tui-pty-harness-assertion-test-support.test.ts
-          testNamePattern: ^hasSynchronizedFrameRow requires exact single-space text and all markers on one completed row$
+          testNamePattern: ^hasSynchronizedFrameRow > requires exact single-space text and all markers on one completed row$
         - coverageId: tui.output-safety
           testFile: src/tui/tui-pty-harness-assertion-test-support.test.ts
-          testNamePattern: ^hasSynchronizedFrameRow rejects terminal row reconstruction false positives$
+          testNamePattern: ^hasSynchronizedFrameRow > rejects terminal row reconstruction false positives$

@@ -1,68 +1,24 @@
-// Spawn utility tests cover child process setup and stream handling helpers.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnWithFallback } from "./spawn-utils.js";
 
+type SpawnImplementation = NonNullable<Parameters<typeof spawnWithFallback>[0]["spawnImpl"]>;
+
 function createStubChild() {
   const child = new EventEmitter() as ChildProcess;
-  child.stdin = new PassThrough() as ChildProcess["stdin"];
-  child.stdout = new PassThrough() as ChildProcess["stdout"];
-  child.stderr = new PassThrough() as ChildProcess["stderr"];
-  Object.defineProperty(child, "pid", { value: 1234, configurable: true });
-  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
-  child.kill = vi.fn(() => true) as ChildProcess["kill"];
   queueMicrotask(() => {
     child.emit("spawn");
   });
   return child;
 }
 
-function spawnOptionsAt(
-  spawnMock: { mock: { calls: readonly unknown[][] } },
-  callIndex: number,
-): { stdio?: unknown } {
-  const call = spawnMock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected spawn call ${callIndex}`);
-  }
-  const options = call[2];
-  if (typeof options !== "object" || options === null || Array.isArray(options)) {
-    throw new Error(`expected spawn call ${callIndex} options`);
-  }
-  return options;
-}
-
 describe("spawnWithFallback", () => {
-  it("does not retry a failed spawn after its caller authority expires", async () => {
-    const child = new EventEmitter() as ChildProcess;
-    const spawnMock = vi.fn(() => child);
-    let current = true;
-    const pending = spawnWithFallback({
-      argv: ["agent-cli"],
-      options: {},
-      fallbacks: [{ label: "no-detach", options: { detached: false } }],
-      spawnImpl: spawnMock,
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("Completion authority expired");
-        }
-      },
-    });
-    const rejected = expect(pending).rejects.toThrow("Completion authority expired");
-    current = false;
-    child.emit("error", Object.assign(new Error("spawn EBADF"), { code: "EBADF" }));
-
-    await rejected;
-    expect(spawnMock).toHaveBeenCalledOnce();
-  });
-
   it("retries on EBADF using fallback options", async () => {
     const spawnMock = vi
-      .fn()
+      .fn<SpawnImplementation>()
       .mockImplementationOnce(() => {
         const err = new Error("spawn EBADF");
         (err as NodeJS.ErrnoException).code = "EBADF";
@@ -73,15 +29,14 @@ describe("spawnWithFallback", () => {
     const result = await spawnWithFallback({
       argv: ["echo", "ok"],
       options: { stdio: ["pipe", "pipe", "pipe"] },
-      fallbacks: [{ label: "safe-stdin", options: { stdio: ["ignore", "pipe", "pipe"] } }],
+      fallbacks: [{ stdio: ["ignore", "pipe", "pipe"] }],
       spawnImpl: spawnMock,
     });
 
     expect(result.usedFallback).toBe(true);
-    expect(result.fallbackLabel).toBe("safe-stdin");
     expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnOptionsAt(spawnMock, 0).stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnOptionsAt(spawnMock, 1).stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(spawnMock.mock.calls[0]?.[2].stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(spawnMock.mock.calls[1]?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
   });
 
   it("does not retry on non-EBADF errors", async () => {
@@ -95,7 +50,7 @@ describe("spawnWithFallback", () => {
       spawnWithFallback({
         argv: ["missing"],
         options: { stdio: ["pipe", "pipe", "pipe"] },
-        fallbacks: [{ label: "safe-stdin", options: { stdio: ["ignore", "pipe", "pipe"] } }],
+        fallbacks: [{ stdio: ["ignore", "pipe", "pipe"] }],
         spawnImpl: spawnMock,
       }),
     ).rejects.toThrow(/ENOENT/);
@@ -106,21 +61,15 @@ describe("spawnWithFallback", () => {
     let current = true;
     const retired = Object.assign(new Error("request authority retired"), { code: "EBADF" });
     const firstChild = createStubChild();
-    Object.defineProperty(firstChild, "pid", { value: undefined });
     const spawnMock = vi
       .fn()
       .mockReturnValueOnce(firstChild)
       .mockImplementation(() => createStubChild());
-    const onFallback = vi.fn();
     const run = spawnWithFallback({
       argv: ["agent-cli"],
       options: {},
-      fallbacks: [
-        { label: "no-detach", options: { detached: false } },
-        { label: "ignore-stdin", options: { stdio: "ignore" } },
-      ],
+      fallbacks: [{ detached: false }, { stdio: "ignore" }],
       spawnImpl: spawnMock,
-      onFallback,
       assertCurrent: () => {
         if (!current) {
           throw retired;
@@ -133,7 +82,6 @@ describe("spawnWithFallback", () => {
 
     expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
     expect(spawnMock).toHaveBeenCalledOnce();
-    expect(onFallback).toHaveBeenCalledOnce();
   });
 
   it("rejects ENOENT from a real missing executable", async () => {

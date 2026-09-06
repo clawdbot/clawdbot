@@ -13,6 +13,7 @@ export type SettingsSaveIndicatorProps = {
   applying: boolean;
   applyDisabled: boolean;
   onRetry: () => void;
+  onSave: () => void;
   onReload: () => void;
   onApply: () => void;
 };
@@ -95,7 +96,7 @@ class SettingsSaveIndicator extends LitElement {
         <button
           class="btn btn--xs settings-save-indicator__action"
           type="button"
-          @click=${props.onRetry}
+          @click=${props.onSave}
         >
           ${t("configView.saveNow")}
         </button>`;

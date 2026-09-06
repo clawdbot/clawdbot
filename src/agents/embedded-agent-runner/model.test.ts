@@ -1137,6 +1137,69 @@ describe("resolveModel", () => {
     expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
   });
 
+  it.each(["clone", "provider", "model", "google"] as const)(
+    "keeps %s request transport ahead of another config's prepared inline facts",
+    async (projection) => {
+      const preparedConfig = makeProviderConfig("custom", {
+        api: "openai-completions",
+        baseUrl: "https://prepared.example/v1",
+        headers: { "X-Retired": "prepared" },
+        models: [{ id: "model-a", name: "Prepared model" }],
+      });
+      preparedSnapshotState.inlineProviderModels = buildInlineProviderModels(
+        preparedConfig.models?.providers ?? {},
+      );
+      const runtimeHooks = {
+        ...createRuntimeHooks(),
+        normalizeProviderTransportWithPlugin: () => undefined,
+      };
+      await resolveModelAsync("custom", "model-a", state.agentDir(), preparedConfig, {
+        runtimeHooks,
+      });
+      const cfg =
+        projection === "clone"
+          ? structuredClone(preparedConfig)
+          : makeProviderConfig("custom", {
+              api: projection === "google" ? "google-generative-ai" : "openai-responses",
+              baseUrl:
+                projection === "google"
+                  ? "https://generativelanguage.googleapis.com"
+                  : "https://request.example/v1",
+              models: [
+                {
+                  id: "model-a",
+                  name: "Requested model",
+                  ...(projection === "model"
+                    ? { api: "openai-completions", baseUrl: "https://model.example/v1" }
+                    : {}),
+                },
+              ],
+            });
+
+      const result = await resolveModelAsync("custom", "model-a", state.agentDir(), cfg, {
+        runtimeHooks,
+      });
+
+      expectRecordFields(expectResolvedModel(result), {
+        id: "model-a",
+        api:
+          projection === "google"
+            ? "google-generative-ai"
+            : projection === "provider"
+              ? "openai-responses"
+              : "openai-completions",
+        baseUrl:
+          projection === "google"
+            ? "https://generativelanguage.googleapis.com/v1beta"
+            : `https://${projection === "clone" ? "prepared" : projection === "model" ? "model" : "request"}.example/v1`,
+      });
+      expect(expectResolvedModel(result).headers?.["X-Retired"]).toBe(
+        projection === "clone" ? "prepared" : undefined,
+      );
+      expect(discoverModels).toHaveBeenCalledOnce();
+    },
+  );
+
   it("falls back when an opaque prepared handle has no model facts", async () => {
     const config = {};
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce(

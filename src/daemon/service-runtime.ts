@@ -34,7 +34,6 @@ export type GatewayServiceRuntime = {
   };
   cachedLabel?: boolean;
   missingUnit?: boolean;
-  missingSupervision?: boolean;
   missingGuiSession?: boolean;
   /** Same-label system-domain owner or an ownership probe that failed closed. */
   systemLaunchDaemon?: {

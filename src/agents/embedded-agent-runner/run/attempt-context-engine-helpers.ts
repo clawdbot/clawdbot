@@ -127,10 +127,14 @@ export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): AssistantMessage | undefined {
-  return params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()
-    .find((message): message is AssistantMessage => message.role === "assistant");
+  const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
+  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
+    const message = params.messagesSnapshot[i];
+    if (message?.role === "assistant") {
+      return message;
+    }
+  }
+  return undefined;
 }
 
 /** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
@@ -138,10 +142,10 @@ function findLatestCurrentAttemptUsageSnapshot(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
-  for (const message of params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()) {
-    if (message.role !== "assistant") {
+  const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
+  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
+    const message = params.messagesSnapshot[i];
+    if (message?.role !== "assistant") {
       continue;
     }
     const usage = normalizeUsage(message.usage);

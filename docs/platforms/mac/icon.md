@@ -11,7 +11,7 @@ Scope: macOS app (`apps/macos`). Rendering: `CritterIconRenderer.makeIcon(...)`.
 
 ## Dock icon
 
-Choose a Dock icon in **Settings → General → Dock icon**:
+Inside the Mac app's Dashboard, choose a Dock icon in **Settings → This Mac → Dock icon**:
 
 - **Original** (default): the original Molty silhouette on a paper tile.
 - **Heritage**: the legacy README lobster with its raised claw.
@@ -20,7 +20,7 @@ Choose a Dock icon in **Settings → General → Dock icon**:
 - **Pincer**: a single claw silhouette with a rounded, flowing wrist.
 - **Open C**: a circular claw with two opposing pincer tips.
 
-Each design has light and dark artwork, shown together in the picker.
+Each design has light and dark artwork.
 On macOS 26 and later, Original uses native icon styling, including the setting in
 **System Settings → Appearance → Icon & widget style**. For automatic switching,
 choose **Dark → Auto** there; the default icon style can otherwise stay light

@@ -36,21 +36,27 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
 
   const args = argv.slice(2);
   let sawCommandOption = false;
+  let literal = false;
   const positionals: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
+    if (!arg) {
       break;
     }
-    const rootConsumed = consumeRootOptionToken(args, i);
+    if (!literal && arg === FLAG_TERMINATOR) {
+      literal = true;
+      continue;
+    }
+    // Command option roles are not registered yet; keep possible help flags visible.
+    const rootConsumed = literal ? 0 : consumeRootOptionToken(args, i);
     if (rootConsumed > 0) {
       i += rootConsumed - 1;
       continue;
     }
-    if (HELP_FLAGS.has(arg)) {
+    if (!literal && HELP_FLAGS.has(arg)) {
       return true;
     }
-    if (arg.startsWith("-")) {
+    if (!literal && arg.startsWith("-")) {
       sawCommandOption = true;
       continue;
     }

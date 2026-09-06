@@ -173,7 +173,7 @@ export function renderDeviceTalk(capability: NativeDeviceSettingsCapability | nu
       renderSettingsToggleRow({
         title: t(`configPage.deviceTalk.${key}`),
         checked: voice[key],
-        disabled: key === "wakeEnabled" && !voice.supported,
+        disabled: key === "wakeEnabled" && !voice.supported && !voice.wakeEnabled,
         description:
           key === "wakeEnabled" && !voice.supported
             ? t("configPage.deviceTalk.unsupported")

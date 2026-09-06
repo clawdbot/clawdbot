@@ -1,6 +1,6 @@
 // Checks thread-binding config keys stay aligned with schema metadata.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
 describe("thread binding config keys", () => {
   it("rejects legacy session.threadBindings.ttlHours", () => {

@@ -839,15 +839,22 @@ public actor GatewayNodeSession {
         }
 
         if let expectedRoute {
-            let data = try await channel.request(
-                method: method,
-                params: params,
-                timeoutMs: timeoutMs,
-                ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+            let result: Result<Data, Error>
+            do {
+                result = try await .success(channel.request(
+                    method: method,
+                    params: params,
+                    timeoutMs: timeoutMs,
+                    ifCurrentConnectionGeneration: expectedRoute.socketGeneration))
+            } catch {
+                result = .failure(error)
+            }
+            // A late error has the same route authority as a late payload.
+            // Revalidate before either outcome reaches a replacement owner.
             guard self.isCurrentRoute(expectedRoute), self.channel === channel else {
                 throw CancellationError()
             }
-            return data
+            return try result.get()
         }
         return try await channel.request(
             method: method,

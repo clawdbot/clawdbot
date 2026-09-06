@@ -13,6 +13,7 @@ const VITEST_OPTIONS_WITH_VALUE = new Set([
   "--environment",
   "--exclude",
   "--execArgv",
+  "--fsModuleCachePath",
   "--hookTimeout",
   "--inspect",
   "--inspectBrk",

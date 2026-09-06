@@ -13,7 +13,23 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: vi.fn(),
 }));
 
-type ShellSupervisor = ReturnType<typeof getProcessSupervisor>;
+function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
+  const cleanupScope = vi.fn(async (_scopeKey: string) => {});
+  const cancelScope = vi.fn<ProcessSupervisor["cancelScope"]>();
+  const supervisor = {
+    spawn,
+    cancel: vi.fn<ProcessSupervisor["cancel"]>(),
+    cancelScope,
+    acquireScopeCleanup: vi.fn<ProcessSupervisor["acquireScopeCleanup"]>((scopeKey) => async () => {
+      cancelScope(scopeKey);
+      await cleanupScope(scopeKey);
+    }),
+    getRecord: vi.fn<ProcessSupervisor["getRecord"]>(),
+  } satisfies ProcessSupervisor;
+  return { supervisor, cleanupScope };
+}
+
+type ShellSupervisor = ReturnType<typeof createShellSupervisor>["supervisor"];
 
 const createSelector = () => {
   const selector = {
@@ -37,8 +53,8 @@ function createOverlayHandle(): OverlayHandle {
 }
 
 function createShellHarness(params?: {
-  spawn?: ProcessSupervisor["spawn"];
-  supervisor?: ShellSupervisor;
+  spawn?: ShellSupervisor["spawn"];
+  supervisor?: ReturnType<typeof createShellSupervisor>;
   getCwd?: () => string | undefined;
   env?: Record<string, string>;
   maxOutputChars?: number;
@@ -58,15 +74,7 @@ function createShellHarness(params?: {
     lastSelector = createSelector();
     return lastSelector;
   });
-  const supervisor =
-    params?.supervisor ??
-    ({
-      spawn: params?.spawn ?? vi.fn(),
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      waitForScope: vi.fn(async () => {}),
-      getRecord: vi.fn(),
-    } satisfies ShellSupervisor);
+  const { supervisor, cleanupScope } = params?.supervisor ?? createShellSupervisor(params?.spawn);
   vi.mocked(getProcessSupervisor).mockReturnValue(supervisor);
   const { runLocalShellLine, shutdown } = createLocalShellRunner({
     chatLog,
@@ -85,6 +93,7 @@ function createShellHarness(params?: {
     closeOverlay,
     createSelectorSpy,
     supervisor,
+    cleanupScope,
     runLocalShellLine,
     shutdown,
     getLastSelector: () => lastSelector,
@@ -92,7 +101,7 @@ function createShellHarness(params?: {
 }
 
 function createSettlingSpawn(params: { stdout?: string[]; stderr?: string[]; error?: Error }) {
-  return vi.fn(async (input: SpawnInput) => {
+  return vi.fn<ProcessSupervisor["spawn"]>(async (input: SpawnInput) => {
     const exit: RunExit = {
       reason: "exit",
       exitCode: 0,
@@ -243,6 +252,10 @@ describe("createLocalShellRunner", () => {
 
   it("fences a pending approval when shutdown begins", async () => {
     const harness = createShellHarness();
+    expect(harness.supervisor.acquireScopeCleanup).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      { requireProcessTree: true },
+    );
     const run = harness.runLocalShellLine("!echo late");
     const selector = harness.getLastSelector();
 
@@ -252,7 +265,7 @@ describe("createLocalShellRunner", () => {
 
     expect(harness.supervisor.spawn).not.toHaveBeenCalled();
     expect(harness.supervisor.cancelScope).toHaveBeenCalledOnce();
-    expect(harness.supervisor.waitForScope).toHaveBeenCalledWith(
+    expect(harness.cleanupScope).toHaveBeenCalledWith(
       vi.mocked(harness.supervisor.cancelScope).mock.calls[0]?.[0],
     );
     expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
@@ -261,7 +274,7 @@ describe("createLocalShellRunner", () => {
   it("keeps another TUI instance's settled command scope alive during shutdown", async () => {
     const spawn = createSettlingSpawn({});
     const first = createShellHarness({ spawn });
-    const second = createShellHarness({ supervisor: first.supervisor });
+    const second = createShellHarness({ supervisor: first });
 
     for (const harness of [first, second]) {
       const run = harness.runLocalShellLine("!echo alive");
@@ -285,7 +298,7 @@ describe("createLocalShellRunner", () => {
 
     expect(first.supervisor.cancelScope).toHaveBeenCalledOnce();
     expect(first.supervisor.cancelScope).toHaveBeenCalledWith(firstScope);
-    expect(first.supervisor.waitForScope).toHaveBeenCalledWith(firstScope);
+    expect(first.cleanupScope).toHaveBeenCalledWith(firstScope);
     expect(liveScopes).toEqual(new Set([secondScope]));
   });
 });

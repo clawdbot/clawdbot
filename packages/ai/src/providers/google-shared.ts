@@ -1,7 +1,3 @@
-/**
- * Shared utilities for Google Generative AI and Google Vertex providers.
- */
-
 import {
   type Content,
   FinishReason,
@@ -13,6 +9,10 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
+/**
+ * Shared utilities for Google Generative AI and Google Vertex providers.
+ */
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -928,7 +928,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
           }
           const delta = hasText ? text : "";
           if (currentBlock.type === "thinking") {
-            currentBlock.thinking += delta;
+            appendAssistantThinking(currentBlock, delta);
             currentBlock.thinkingSignature = retainThoughtSignature(
               currentBlock.thinkingSignature,
               part.thoughtSignature,

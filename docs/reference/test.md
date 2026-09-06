@@ -36,8 +36,10 @@ release proof.
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
 Git cleanup and rsync cannot delete dependencies, build output, or ignored runtime
-there. The wrapper verifies and applies the source bundle in that execution
-workspace, then runs the payload there. It never restores runtime from the caller
+there. The wrapper applies and verifies the source bundle in that execution
+workspace, runs its frozen dependency install, and checks the source and Git
+identity again before the payload. Install output goes to stderr; an install or
+verification failure stops the payload. It never restores runtime from the caller
 or changes the selected rsync binary.
 
 Workspace preparation changes require a fresh lease. A missing or overlapping
@@ -175,6 +177,9 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
+- For Testbox scripts, run a synced file as trailing command arguments or use
+  `--shell`. Active `--script` and `--script-stdin` uploads are rejected before
+  source preparation or lease work.
 
 When remote sync uses a temporary checkout, the wrapper preserves native
 `.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
@@ -262,6 +267,27 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
+Run the test toolchain on Node 22.22.3+, Node 24.15+, or Node 26+. Vitest 5
+excludes Node 25 from its declared engine range; packaged OpenClaw runtime
+support for Node 25.9+ is unchanged.
+
+The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
+packages. Use `describe(name, { concurrent: false }, callback)` for ordered
+suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
+scope, and perform actions whose mock calls you assert inside the test.
+OpenClaw sets `clearMocks: false`, so setup and `beforeAll` calls are preserved.
+Clear or reset each assertion's owned mock actions explicitly as needed.
+Name patterns spanning suites use `suite > test`; native JSON retains its
+space-joined `fullName`, so evidence readers match `ancestorTitles` plus `title`.
+
+Filesystem transform caching uses `test.fsModuleCache` and
+`test.fsModuleCachePath`; the existing `OPENCLAW_VITEST_FS_MODULE_CACHE` and
+`OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` controls retain their ownership and
+disable behavior. Cache-key plugins use `defineCacheKeyGenerator`.
+Inline projects inherit root configuration in Vitest 5, including concatenated
+setup and include arrays. The four UI E2E resource projects declare
+`extends: false` because each supplies its complete inventory and setup.
+
 Maintained JavaScript tooling wrappers and root package commands load TypeScript
 through `scripts/tsx.mjs`, using tsx's ESM entry. This preserves native loading of
 compiled ESM plugins and their import-only dependencies, including when loaded
@@ -275,6 +301,13 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
+Parallel project runs on macOS and Linux reuse filesystem transforms within
+exclusive worker slots, with separate directories for each Vitest configuration.
+A slot stays owned through preflight, retries, and verified child/group completion;
+uncertain cleanup retires it. Explicit isolated cache paths, serial and watch runs,
+and Windows retain their existing cache ownership. Concurrent invocations still
+need separate cache roots.
 
 Control UI builds report size budgets without enforcing them. Run
 `pnpm ui:check-performance` after a build to enforce absolute budgets, or
@@ -780,6 +813,8 @@ They print a companion `<output>.reports-<unique>` directory. Keep that director
 it contains original reports, per-attempt coverage files when coverage is enabled,
 and an `index.json` with child exit codes, signals, timeouts and unstarted work.
 Only the accepted retry attempt contributes to the aggregate.
+Blob reports are exact-version artifacts. Rerun child reports with the current
+Vitest version before merging artifacts produced by another version.
 
 The aggregate preserves the accepted case inventory, but is not a lossless
 replacement for the originals. Native merging does not restore snapshot summaries

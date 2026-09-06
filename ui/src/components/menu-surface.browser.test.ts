@@ -25,7 +25,7 @@ afterEach(() => {
 // desktop grid. Dynamic import keeps jsdom collection from touching the
 // browser-only context module.
 async function useDesktopViewport() {
-  const { page } = await import("@vitest/browser/context");
+  const { page } = await import("vitest/browser");
   await page.viewport(1280, 800);
 }
 
@@ -97,10 +97,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     await useDesktopViewport();
     const { nav, divider } = mountShell();
     const dividerBounds = divider.getBoundingClientRect();
-    const dropdown = document.createElement("wa-dropdown") as HTMLElement & {
-      open: boolean;
-      updateComplete: Promise<unknown>;
-    };
+    const dropdown = document.createElement("wa-dropdown");
     dropdown.className = "sidebar-session-sort-menu";
     const trigger = document.createElement("button");
     trigger.slot = "trigger";
@@ -112,13 +109,14 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     item.textContent = "Created";
     dropdown.append(trigger, item);
     nav.append(dropdown);
+    // Popover membership precedes positioning; hit-test only after the completed show.
+    const shown = new Promise<Event>((resolve) => {
+      dropdown.addEventListener("wa-after-show", resolve, { once: true });
+    });
     dropdown.open = true;
-    await dropdown.updateComplete;
+    await shown;
 
-    const popup = dropdown.shadowRoot?.querySelector<
-      HTMLElement & { updateComplete: Promise<unknown> }
-    >("wa-popup");
-    await popup?.updateComplete;
+    const popup = dropdown.shadowRoot?.querySelector<HTMLElement>("wa-popup");
     const popupSurface = popup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
     await expect.poll(() => popupSurface?.matches(":popover-open")).toBe(true);
     expect(dropdown.closest("openclaw-menu-surface")).toBeNull();

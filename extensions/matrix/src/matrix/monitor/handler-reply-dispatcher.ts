@@ -180,8 +180,9 @@ export function createMatrixReplyDispatcher(config: {
         }
 
         const payloadReplyMismatch =
-          !threadTarget &&
-          (replyToMode !== "off" || payload.replyToTag || payload.replyToCurrent) &&
+          ((!threadTarget && replyToMode !== "off") ||
+            payload.replyToTag ||
+            payload.replyToCurrent) &&
           normalizeOptionalString(payload.replyToId) !== draftController.currentReplyToId();
         let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
         const canPotentiallyFinalizeDraft =
