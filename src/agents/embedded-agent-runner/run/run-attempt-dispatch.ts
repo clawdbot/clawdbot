@@ -140,7 +140,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
   preparedAttempt: EmbeddedRunAttemptParams;
 }> {
   const { params, runtime, control } = input;
-  const observeToolTerminal = createToolTerminalObserver(params.runId);
   const attemptAbortController = new AbortController();
   control.setPostCompactionAbortController(attemptAbortController);
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
@@ -394,7 +393,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         }
       : {}),
     runtimePlan: runtime.runtimePlan,
-    observeToolTerminal,
+    observeToolTerminal: createToolTerminalObserver(params.runId),
     model: applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(runtime.model, runtime.apiKeyInfo),
       runtime.runtimeAuthActive ? null : runtime.apiKeyInfo,
