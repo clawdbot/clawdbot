@@ -110,6 +110,16 @@ every human `Thanks @...` attribution.
      PR references explicitly present in active commit subjects/bodies so
      cherry-picks and squash commits remain accounted for. Resolve every
      association page and exclude PRs merged after the target release commit
+   - explicit multi-commit reverts require a revert subject and one standalone
+     `Reverts <full SHA> and <full SHA>.` declaration (comma-separated lists
+     with final `and` also work). The exact ending ` to restore the previous
+behavior.` is accepted. Duplicate, abbreviated, embedded, or repeated
+     declarations do not establish reversal. Each named commit must be a
+     single-parent ancestor, and reverse-applying all named patches must
+     reproduce the complete revert tree. Recognized declarations that fail
+     this proof stop verification. Proof uses private Git index/object storage
+     without hooks or external diffs; canonical single-revert and
+     revert-of-revert accounting stays intact.
    - canonicalize backports to the original merged PR on `main`: explicit
      cherry-pick origins win, then a unique normalized-subject match requires
      the same author and an overlapping changed path. Suppress release/backport

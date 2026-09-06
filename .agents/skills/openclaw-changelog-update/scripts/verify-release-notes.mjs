@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -582,6 +583,98 @@ export function standardRevertedHash(message) {
   return undefined;
 }
 
+function verifiedMultiRevertedHashes(hash, subject, body) {
+  if (!/^(?:[a-z][a-z0-9-]*(?:\([^)]+\))?!?:\s*)?revert\b/i.test(subject)) {
+    return [];
+  }
+  const declarations = body
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .map((paragraph) =>
+      paragraph.match(
+        /^Reverts ([0-9a-f]{40}(?:, [0-9a-f]{40})*(?:,? and [0-9a-f]{40}))(?:\.| to restore the previous behavior\.)$/i,
+      ),
+    )
+    .filter(Boolean);
+  if (declarations.length !== 1) {
+    return [];
+  }
+  const targets = declarations[0][1].toLowerCase().match(/[0-9a-f]{40}/g);
+  if (new Set(targets).size !== targets.length) {
+    return [];
+  }
+
+  let temporaryDirectory;
+  try {
+    const parents = git(["rev-list", "--parents", "-n", "1", hash]).split(/\s+/);
+    if (parents.length !== 2) {
+      throw new Error("the revert must have exactly one parent");
+    }
+    const parent = parents[1];
+    for (const target of targets) {
+      if (gitCommit(target) !== target || !gitIsAncestor(target, parent)) {
+        throw new Error(`target ${target} must be an existing ancestor of the revert parent`);
+      }
+      if (git(["rev-list", "--parents", "-n", "1", target]).split(/\s+/).length !== 2) {
+        throw new Error(`target ${target} must have exactly one parent`);
+      }
+    }
+    const orderedTargets = git(["rev-list", "--topo-order", parent])
+      .split("\n")
+      .filter((candidate) => targets.includes(candidate));
+    const originalObjects = git(["rev-parse", "--path-format=absolute", "--git-path", "objects"]);
+    temporaryDirectory = mkdtempSync(path.join(tmpdir(), "openclaw-release-revert-"));
+    const objects = path.join(temporaryDirectory, "objects");
+    mkdirSync(objects);
+    const env = {
+      ...process.env,
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_INDEX_FILE: path.join(temporaryDirectory, "index"),
+      GIT_OBJECT_DIRECTORY: objects,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+        JSON.stringify(originalObjects),
+        process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+      ]
+        .filter(Boolean)
+        .join(path.delimiter),
+    };
+    const privateGit = (args, input) =>
+      execFileSync(
+        "git",
+        ["-c", `core.hooksPath=${path.join(temporaryDirectory, "hooks")}`, ...args],
+        { env, input, maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    privateGit(["read-tree", parent]);
+    for (const target of orderedTargets) {
+      // Keep patch bytes intact; text decoding corrupts binary/non-UTF-8 reversals.
+      const patch = privateGit([
+        "diff-tree",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "-p",
+        `${target}^`,
+        target,
+      ]);
+      privateGit(["apply", "--cached", "--reverse", "--whitespace=nowarn", "-"], patch);
+    }
+    const reversedTree = privateGit(["write-tree"]).toString("utf8").trim();
+    if (reversedTree !== git(["rev-parse", `${hash}^{tree}`])) {
+      throw new Error("declared inverse patches do not reproduce the complete revert tree");
+    }
+    return targets;
+  } catch (error) {
+    fail(`could not verify explicit multi-commit revert ${hash}: ${error.message}`);
+  } finally {
+    if (temporaryDirectory) {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+}
+
 function handlesIn(text) {
   const thanksStart = text.lastIndexOf(" Thanks ");
   if (thanksStart < 0) {
@@ -1053,6 +1146,17 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e",
     `${mergeBase}..${targetCommit}`,
   ]);
+  const revertedTargetsByCommit = new Map();
+  const revertedHashesFor = (hash, subject, body) => {
+    if (!revertedTargetsByCommit.has(hash)) {
+      const standard = standardRevertedHash(body);
+      revertedTargetsByCommit.set(
+        hash,
+        standard ? [standard] : verifiedMultiRevertedHashes(hash, subject, body),
+      );
+    }
+    return revertedTargetsByCommit.get(hash);
+  };
   const commits = new Map();
   const revertsByTarget = new Map();
   for (const record of output.split("\x1e")) {
@@ -1063,8 +1167,8 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       record.split("\x1f");
     const hash = rawHash.trim();
     const body = bodyParts.join("\x1f");
-    const revertedHash = standardRevertedHash(body);
-    const isRevert = Boolean(revertedHash) || subject.startsWith('Revert "');
+    const revertedHashes = revertedHashesFor(hash, subject, body);
+    const isRevert = revertedHashes.length > 0 || subject.startsWith('Revert "');
     commits.set(hash, {
       authorEmail,
       authorName,
@@ -1072,21 +1176,20 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       committedAt,
       hash,
       isRevert,
-      revertedHash,
+      revertedHashes,
       subject,
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.revertedHash) {
-      continue;
-    }
-    const targetHash = [...commits.keys()].find((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetHash) {
-      const reverts = revertsByTarget.get(targetHash) ?? [];
-      reverts.push(commit.hash);
-      revertsByTarget.set(targetHash, reverts);
+    for (const revertedHash of commit.revertedHashes) {
+      const targetHash = [...commits.keys()].find((candidate) =>
+        candidate.startsWith(revertedHash),
+      );
+      if (targetHash) {
+        const reverts = revertsByTarget.get(targetHash) ?? [];
+        reverts.push(commit.hash);
+        revertsByTarget.set(targetHash, reverts);
+      }
     }
   }
   const active = new Map();
@@ -1100,7 +1203,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     return value;
   }
   const revertedCommitStates = new Map();
-  function revertedCommitState(ref, seen = new Set()) {
+  function revertedCommitStatesFor(ref, seen = new Set()) {
     let hash;
     try {
       hash = git(["rev-parse", `${ref}^{commit}`]);
@@ -1119,13 +1222,16 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     const [subject, ...bodyParts] = commitOutput.split("\x1f");
     const body = bodyParts.join("\x1f");
     const message = `${subject}\n${body}`;
-    const revertedHash = standardRevertedHash(body);
-    const targetState = revertedHash ? revertedCommitState(revertedHash, seen) : undefined;
-    const state = targetState
-      ? { ...targetState, depth: targetState.depth + 1 }
-      : { depth: 0, hash, references: referencesIn(message) };
-    revertedCommitStates.set(hash, state);
-    return state;
+    const targets = revertedHashesFor(hash, subject, body);
+    const targetStates = targets.flatMap(
+      (target) => revertedCommitStatesFor(target, new Set(seen)) ?? [],
+    );
+    const states =
+      targetStates.length > 0
+        ? targetStates.map((state) => ({ ...state, depth: state.depth + 1 }))
+        : [{ depth: 0, hash, references: referencesIn(message) }];
+    revertedCommitStates.set(hash, states);
+    return states;
   }
 
   const references = [];
@@ -1187,25 +1293,22 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.isRevert || !commit.revertedHash || !isActive(commit.hash)) {
+    if (!commit.isRevert || !isActive(commit.hash)) {
       continue;
     }
-    const targetInRange = [...commits.keys()].some((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetInRange) {
-      continue;
-    }
-    const revertedState = revertedCommitState(commit.revertedHash);
-    if (!revertedState) {
-      continue;
-    }
-    if (revertedState.depth % 2 !== 0) {
-      continue;
-    }
-    revertedCommitHashes.add(revertedState.hash);
-    for (const number of revertedState.references) {
-      revertedReferences.add(number);
+    for (const revertedHash of commit.revertedHashes) {
+      if ([...commits.keys()].some((candidate) => candidate.startsWith(revertedHash))) {
+        continue;
+      }
+      for (const state of revertedCommitStatesFor(revertedHash) ?? []) {
+        if (state.depth % 2 !== 0) {
+          continue;
+        }
+        revertedCommitHashes.add(state.hash);
+        for (const number of state.references) {
+          revertedReferences.add(number);
+        }
+      }
     }
   }
   const activePullRequests = resolveAssociatedPullRequests(
