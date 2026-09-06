@@ -553,14 +553,35 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       completeBatch(settledBatch, state.rearmGeneration, delivery);
       return false;
     }
-    // In-flight handoff must keep the dispatching attempt key so a replay joins
-    // the original synthesis turn instead of rotating to :retry-N.
+    // In-flight / admission-pending handoffs are healthy Gateway work, not
+    // ambiguous failures. Keep the same attempt key and schedule observation
+    // backoffs without spending the failure replay budget; retire only on
+    // terminal evidence or the owning lifecycle deadline.
     if (delivery.reason === "completion_handoff_pending") {
       const lastError = delivery.error ?? delivery.reason ?? "completion_handoff_pending";
-      return scheduleSameKeyReplay(lastError, {
-        ...delivery,
-        error: lastError,
-      });
+      const alreadyPending =
+        state.lastError === "completion_handoff_pending" || state.lastError === lastError;
+      const retryDelayMs = alreadyPending
+        ? REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS.length - 1]
+        : REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0];
+      const nextAttemptAt = Date.now() + retryDelayMs;
+      state = {
+        status: "dispatching",
+        attemptCount: state.attemptCount,
+        // Preserve any prior transport-failure replayCount; do not increment it.
+        ...(state.replayCount !== undefined ? { replayCount: state.replayCount } : {}),
+        nextAttemptAt,
+        batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
+        lastError,
+      };
+      params.transitionBatch(settledBatch, state);
+      logWarn(
+        `requester settle wake pending handoff observation scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
+      );
+      return false;
     }
 
     const attemptCount = attemptIndex + 1;

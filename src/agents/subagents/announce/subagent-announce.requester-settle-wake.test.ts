@@ -824,10 +824,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(firstChild.requesterSettleWake).toMatchObject({
         status: "dispatching",
         attemptCount: 1,
-        replayCount: 1,
         nextAttemptAt: 30_000,
         lastError: "completion_handoff_pending",
       });
+      expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
       expect(completeBatchSpy).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(30_000);
@@ -839,6 +839,83 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         requesterSettleKey("run-a,run-b"),
         requesterSettleKey("run-a,run-b"),
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending handoff through both backoffs without spending the failure replay budget", async () => {
+    const firstChild = makeSettledChild({ runId: "run-a" });
+    const secondChild = makeSettledChild({ runId: "run-b" });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([firstChild, secondChild]);
+    const pending = {
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+    } as const;
+    deliverSpy
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce({ delivered: true, path: "direct" });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(firstChild.requesterSettleWake).toMatchObject({
+        status: "dispatching",
+        attemptCount: 1,
+        nextAttemptAt: 30_000,
+        lastError: "completion_handoff_pending",
+      });
+      expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(firstChild.requesterSettleWake).toMatchObject({
+        status: "dispatching",
+        attemptCount: 1,
+        nextAttemptAt: 150_000,
+        lastError: "completion_handoff_pending",
+      });
+      expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(firstChild.requesterSettleWake).toMatchObject({
+        status: "dispatching",
+        attemptCount: 1,
+        nextAttemptAt: 270_000,
+        lastError: "completion_handoff_pending",
+      });
+      expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledTimes(4);
+      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
+        requesterSettleKey("run-a,run-b"),
+        requesterSettleKey("run-a,run-b"),
+        requesterSettleKey("run-a,run-b"),
+        requesterSettleKey("run-a,run-b"),
+      ]);
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-a", "run-b"], undefined, {
+        delivered: true,
+        path: "direct",
+      });
     } finally {
       vi.useRealTimers();
     }
