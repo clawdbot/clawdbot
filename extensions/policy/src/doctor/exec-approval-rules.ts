@@ -3,6 +3,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_URI, execApprovalsPolicyUri } from "../exec-approvals-uri.js";
 import type { PolicyExecApprovalEvidence } from "../policy-state.js";
+import { getPolicyPath } from "../policy-value.js";
 import { policyShapeFinding, unsupportedPolicyKey } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
 
@@ -50,13 +51,7 @@ export function readExecApprovalAllowlistRequirements(
   policy: unknown,
   path: readonly string[],
 ): readonly ExecApprovalAllowlistRequirement[] | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   if (!Array.isArray(current)) {
     return undefined;
   }

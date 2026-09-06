@@ -13,6 +13,7 @@ import {
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./doctor/register.js";
+import { ocPathSegment } from "./doctor/utils.js";
 import { getPolicyPath, scopedPolicyValue } from "./policy-value.js";
 
 const POLICY_CONFORMANCE_CHECK_IDS = {
@@ -578,11 +579,4 @@ async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResul
 
 function resolvePolicyPath(path: string, cwd: string | undefined): string {
   return isAbsolute(path) ? path : resolve(cwd ?? process.cwd(), path);
-}
-
-function ocPathSegment(value: string): string {
-  if (/^(?:[A-Za-z0-9_-]+|#\d+)$/.test(value)) {
-    return value;
-  }
-  return JSON.stringify(value);
 }
