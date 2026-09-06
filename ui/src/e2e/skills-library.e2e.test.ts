@@ -44,6 +44,34 @@ async function expectLibraryDialogOpen(page: Page) {
   expect(await dialog.isVisible()).toBe(true);
 }
 
+async function expectSkillNameValidation(page: Page) {
+  const input = page.getByLabel("Skill name", { exact: true });
+  await input.hover();
+  await page
+    .locator("openclaw-tooltip[open] .tooltip-content")
+    .getByText("Use 1–63 lowercase letters, digits, or hyphens; start with a letter or digit.", {
+      exact: true,
+    })
+    .waitFor({ state: "visible" });
+  for (const [name, valid] of [
+    ["a", true],
+    ["0", true],
+    ["a--", true],
+    ["a".repeat(63), true],
+    ["", false],
+    ["UPPER", false],
+    ["has space", false],
+    ["under_score", false],
+    ["é", false],
+    ["-leading", false],
+  ] as const) {
+    await input.fill(name);
+    expect(await input.evaluate((element: HTMLInputElement) => element.checkValidity()), name).toBe(
+      valid,
+    );
+  }
+}
+
 suite.define(() => {
   it("keeps workspace creation for a solo shared-token admin with many channel identities", async () => {
     await suite.withPage({}, async ({ page }) => {
@@ -113,6 +141,11 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}skills`);
       await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await expectSkillNameValidation(page);
+      await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
+      expect(await page.getByLabel("Skill name", { exact: true }).inputValue()).toBe(
+        "a".repeat(63),
+      );
       await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
       await page.getByLabel("SKILL.md", { exact: true }).fill(own.content);
       await page.getByLabel("SKILL.md", { exact: true }).press("Control+Enter");
@@ -282,8 +315,12 @@ suite.define(() => {
         expect(await skill.inputValue()).toBe(own.content);
         await picker.selectOption("references/lilac.txt");
         expect(await support.inputValue()).toBe("Supporting instructions.\n");
+        const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
+        // The saved receipt precedes refresh completion; press() does not wait for enabled controls.
+        await expect.poll(() => deleteFile.isEnabled()).toBe(true);
         page.once("dialog", (dialog) => void dialog.accept());
-        await page.getByRole("button", { name: "Delete file", exact: true }).press("Enter");
+        await deleteFile.press("Enter");
+        await picker.locator('option[value="references/lilac.txt"]').waitFor({ state: "detached" });
         expect(await picker.inputValue()).toBe("SKILL.md");
         expect(await skill.inputValue()).toBe(own.content);
         expect(await picker.locator('option[value="references/lilac.txt"]').count()).toBe(0);
@@ -320,6 +357,13 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}skills`);
       await page.getByRole("button", { name: "Import skill", exact: true }).click();
+      await expectSkillNameValidation(page);
+      await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
+      expect(
+        await page
+          .getByLabel("Skill name", { exact: true })
+          .evaluate((element: HTMLInputElement) => element.checkValidity()),
+      ).toBe(false);
       await page.getByLabel("Skill name", { exact: true }).fill("checklist");
       await page.locator('input[name="library-import-files"]').setInputFiles([
         { name: "SKILL.md", mimeType: "text/markdown", buffer: Buffer.from(own.content) },

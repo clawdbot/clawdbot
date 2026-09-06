@@ -34,7 +34,8 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: mocks.loadPluginManifestRegistryCore,
 }));
 
-vi.mock("../../plugins/manifest.js", () => ({
+vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/manifest.js")>()),
   loadPluginManifest: vi.fn(),
 }));
 

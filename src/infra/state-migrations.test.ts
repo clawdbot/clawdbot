@@ -7,6 +7,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import * as channelRegistry from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -27,7 +29,9 @@ import type {
 } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { proposeCreateSkill } from "../skills/workshop/service.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -789,6 +793,39 @@ afterAll(async () => {
 });
 
 describe("state migrations", () => {
+  it("migrates workspace setup during Doctor preflight before runtime consumers", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const workspaceDir = path.join(root, "workspace");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { default: true, workspace: workspaceDir } } },
+    };
+    const sourcePath = path.join(workspaceDir, ".openclaw", "workspace-state.json");
+    const completedAt = "2026-07-15T10:01:00.000Z";
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, JSON.stringify({ version: 1, setupCompletedAt: completedAt }));
+    const assertReady = () =>
+      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+
+    await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    expect(assertReady).toThrow("Legacy workspace setup state requires migration");
+
+    const repaired = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(repaired.warnings).toEqual([]);
+    expect(assertReady).not.toThrow();
+    expect(fsSync.existsSync(sourcePath)).toBe(false);
+    expect(readWorkspaceStateSnapshot(workspaceDir, { env }).setup.setupCompletedAt).toBe(
+      completedAt,
+    );
+  });
+
   let detectionCase: Awaited<ReturnType<typeof detectLegacyStateMigrations>> & {
     stateDir: string;
     env: NodeJS.ProcessEnv;
@@ -1007,26 +1044,60 @@ describe("state migrations", () => {
     ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
   });
 
-  it("keeps automatic migration read-only when the shared schema is current", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-
-    const writer = new DatabaseSync(databasePath);
-    writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
-    try {
+  it.each(["present", "absent", "present with a retained bundle"] as const)(
+    "keeps automatic migration read-only with a current schema and Workshop tables %s",
+    async (workshopTables) => {
+      const root = await createTempDir();
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
       const cfg = createConfig();
       cfg.agents = { list: [{ id: "main" }] };
-      await expect(
-        autoMigrateLegacyState({ cfg, env, homedir: () => root }),
-      ).resolves.toMatchObject({ changes: [], warnings: [] });
-    } finally {
-      writer.exec("ROLLBACK;");
-      writer.close();
-    }
-  });
+      const databasePath = openOpenClawStateDatabase({ env }).path;
+      let bundle: { path: string; content: string } | undefined;
+      if (workshopTables === "present with a retained bundle") {
+        const proposal = await proposeCreateSkill({
+          workspaceDir: path.join(root, "workspace"),
+          config: cfg,
+          agentId: "main",
+          env,
+          name: "retained-procedure",
+          description: "Keep a current proposal through no-op migration",
+          content: "# Retained procedure\n\nKeep this modern draft intact.\n",
+        });
+        const proposalDir = path.join(stateDir, "skill-workshop", "proposals", proposal.record.id);
+        bundle = {
+          path: path.join(proposalDir, proposal.record.draftFile),
+          content: proposal.content,
+        };
+        await expect(fs.access(path.join(proposalDir, "proposal.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      closeOpenClawStateDatabaseForTest();
+
+      const writer = new DatabaseSync(databasePath);
+      if (workshopTables === "absent") {
+        writer.exec(`
+        DROP TABLE skill_workshop_proposal_events;
+        DROP TABLE skill_workshop_proposal_rollbacks;
+        DROP TABLE skill_workshop_collection_reviews;
+        DROP TABLE skill_workshop_proposals;
+      `);
+      }
+      writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
+      try {
+        await expect(
+          autoMigrateLegacyState({ cfg, env, homedir: () => root }),
+        ).resolves.toMatchObject({ changes: [], warnings: [] });
+        if (bundle) {
+          await expect(fs.readFile(bundle.path, "utf8")).resolves.toBe(bundle.content);
+        }
+      } finally {
+        writer.exec("ROLLBACK;");
+        writer.close();
+      }
+    },
+  );
 
   it("runs legacy-main session migration when the other automatic detectors are empty", async () => {
     const root = await createTempDir();

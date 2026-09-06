@@ -1,13 +1,16 @@
 /** Process-local prompt projection state owned by an embedded session lifecycle. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentMessage } from "../runtime/index.js";
 
+type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+
 export type ToolResultPromptProjectionState = {
-  replacements: Map<string, { message: AgentMessage; cacheTtl?: "soft" | "hard" }>;
+  replacements: Map<string, { content: ToolResultMessage["content"]; cacheTtl?: "soft" | "hard" }>;
   frozen: Set<string>;
   ambiguousBaseKeys: Set<string>;
-  sourceTextByKey: Map<string, string[]>;
+  sourceHashByKey: Map<string, string>;
   /** Cache-TTL marks read from the transcript marker; the projection owner materializes them on the next replay. */
   restoredCacheTtl: Map<string, RestoredCacheTtlMark>;
 };
@@ -33,7 +36,7 @@ export function createToolResultPromptProjectionState(): ToolResultPromptProject
     replacements: new Map(),
     frozen: new Set<string>(),
     ambiguousBaseKeys: new Set<string>(),
-    sourceTextByKey: new Map<string, string[]>(),
+    sourceHashByKey: new Map<string, string>(),
     restoredCacheTtl: new Map(),
   };
 }
@@ -53,9 +56,29 @@ export function cloneToolResultPromptProjectionState(
     replacements: new Map(state.replacements),
     frozen: new Set(state.frozen),
     ambiguousBaseKeys: new Set(state.ambiguousBaseKeys),
-    sourceTextByKey: new Map(state.sourceTextByKey),
+    sourceHashByKey: new Map(state.sourceHashByKey),
     restoredCacheTtl: new Map(state.restoredCacheTtl),
   };
+}
+
+export function recordToolResultPromptProjection(
+  state: ToolResultPromptProjectionState,
+  key: string,
+  message: ToolResultMessage,
+  cacheTtl = state.replacements.get(key)?.cacheTtl,
+): void {
+  // Ordinary replay merges canonical metadata and non-text blocks. Keeping them
+  // here would pin full read/web payloads after attempt teardown; TTL owns exact content.
+  state.replacements.set(key, {
+    cacheTtl,
+    content: cacheTtl
+      ? message.content
+      : message.content.flatMap((block) =>
+          isRecord(block) && block.type === "text" && typeof block.text === "string"
+            ? [{ type: "text" as const, text: block.text }]
+            : [],
+        ),
+  });
 }
 
 /** Marker payload stays key-sized: soft trims are recomputed from canonical history, hard clears keep only their placeholder. */
@@ -64,8 +87,8 @@ export function serializeCacheTtlToolResultProjections(state: ToolResultPromptPr
   for (const [key, projection] of state.replacements) {
     if (projection.cacheTtl === "soft") {
       marks.set(key, { mode: "soft" });
-    } else if (projection.cacheTtl === "hard" && projection.message.role === "toolResult") {
-      const placeholder = projection.message.content
+    } else if (projection.cacheTtl === "hard") {
+      const placeholder = projection.content
         .flatMap((block) => (block.type === "text" ? [block.text] : []))
         .join("\n");
       marks.set(key, { mode: "hard", placeholder });

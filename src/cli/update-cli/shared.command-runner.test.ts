@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
-  createGlobalCommandRunner,
   ensureGitCheckout,
   parseTimeoutMsOrExit,
   resolveGlobalManager,
@@ -40,35 +39,6 @@ describe("update CLI shared helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runCommandWithTimeout.mockResolvedValue(successfulCommandResult);
-  });
-
-  it("forwards argv/options and maps exec result shape", async () => {
-    runCommandWithTimeout.mockResolvedValueOnce({
-      stdout: "out",
-      stderr: "err",
-      code: 17,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-    const runCommand = createGlobalCommandRunner();
-
-    const result = await runCommand(["npm", "root", "-g"], {
-      timeoutMs: 1200,
-      cwd: "/tmp/openclaw",
-      env: { OPENCLAW_TEST: "1" },
-    });
-
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(["npm", "root", "-g"], {
-      timeoutMs: 1200,
-      cwd: "/tmp/openclaw",
-      env: { OPENCLAW_TEST: "1" },
-    });
-    expect(result).toEqual({
-      stdout: "out",
-      stderr: "err",
-      code: 17,
-    });
   });
 
   it("requires timeout values to be complete positive integer seconds", () => {

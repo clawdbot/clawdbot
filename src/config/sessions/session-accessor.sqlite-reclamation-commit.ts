@@ -1,10 +1,20 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import {
+  readSqliteBusyTimeout,
+  runWithSqliteBusyTimeout,
+  setSqliteBusyTimeout,
+} from "../../infra/sqlite-busy-timeout.js";
 import {
   isSqliteLockError,
   runSqliteImmediateTransactionSync,
 } from "../../infra/sqlite-transaction.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 
 const COMMIT_DECISION_TIMEOUT_MS = 5_000;
 const WAITING = 0;
@@ -12,9 +22,112 @@ const APPROVED = 1;
 const REJECTED = 2;
 const COMMITTING = 3;
 const SETTLED = 4;
+const REQUESTED = 5;
+
+const pendingAuthorizations = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteReclamationAuthorizations"),
+  () => new Map<string, () => void>(),
+);
+
+/** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
+export async function withSqliteReclamationAuthorization<T>(
+  buffer: SharedArrayBuffer | undefined,
+  databasePath: string,
+  assertCurrent: (() => void) | undefined,
+  run: (authorize: () => unknown[]) => Promise<T>,
+): Promise<T> {
+  if (!buffer || !assertCurrent) {
+    return await run(() => []);
+  }
+  const shared = new Int32Array(buffer);
+  const inOwnerContext = AsyncLocalStorage.snapshot();
+  let consumed = false;
+  let failure: { error: unknown } | undefined;
+  let recovered: unknown[] = [];
+  const authorize = () => {
+    if (failure) {
+      throw failure.error;
+    }
+    if (consumed) {
+      return recovered;
+    }
+    consumed = true;
+    try {
+      recovered = inOwnerContext(
+        authorizeSqliteReclamationCommit,
+        buffer,
+        databasePath,
+        assertCurrent,
+      );
+      return recovered;
+    } catch (error) {
+      failure = { error };
+      throw error;
+    }
+  };
+  const service = () => {
+    if (Atomics.load(shared, 0) === REQUESTED) {
+      try {
+        authorize();
+      } catch {
+        // Rejection belongs to reclamation; its queued request propagates the error.
+      }
+    }
+  };
+  pendingAuthorizations.set(databasePath, service);
+  try {
+    return await run(authorize);
+  } finally {
+    pendingAuthorizations.delete(databasePath);
+  }
+}
+
+/** Retry only write admission; never replay an append or its synchronous callbacks. */
+export function runSqliteTranscriptWriteTransaction<T>(
+  operation: Parameters<typeof runOpenClawAgentWriteTransaction<T>>[0],
+  options: Parameters<typeof runOpenClawAgentWriteTransaction>[1],
+  transactionOptions?: Parameters<typeof runOpenClawAgentWriteTransaction>[2],
+): T {
+  const database = openOpenClawAgentDatabase(options);
+  const service = pendingAuthorizations.get(database.path);
+  if (!service || database.db.isTransaction) {
+    return runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
+  }
+  const busyTimeoutMs = readSqliteBusyTimeout(database.db);
+  const deadline = performance.now() + busyTimeoutMs;
+  let entered = false;
+  while (true) {
+    try {
+      return runWithSqliteBusyTimeout(
+        database.db,
+        Math.min(25, Math.max(0, Math.ceil(deadline - performance.now()))),
+        (restore) =>
+          runOpenClawAgentWriteTransaction(
+            (current) => {
+              entered = true;
+              restore();
+              return operation(current);
+            },
+            options,
+            transactionOptions,
+          ),
+        { lockFailureReporting: "suppress" },
+      );
+    } catch (error) {
+      if (entered || !isSqliteLockError(error) || performance.now() >= deadline) {
+        throw error;
+      }
+      service();
+      if (performance.now() >= deadline) {
+        throw error;
+      }
+    }
+  }
+}
 
 function rejectCommit(shared: Int32Array): void {
   Atomics.compareExchange(shared, 0, WAITING, REJECTED);
+  Atomics.compareExchange(shared, 0, REQUESTED, REJECTED);
   Atomics.compareExchange(shared, 0, APPROVED, REJECTED);
   Atomics.notify(shared, 0);
 }
@@ -25,8 +138,9 @@ export function waitForSqliteReclamationCommit(
   request: () => void,
 ): void {
   const shared = new Int32Array(buffer);
+  Atomics.store(shared, 0, REQUESTED);
   request();
-  Atomics.wait(shared, 0, WAITING, COMMIT_DECISION_TIMEOUT_MS);
+  Atomics.wait(shared, 0, REQUESTED, COMMIT_DECISION_TIMEOUT_MS);
   if (Atomics.compareExchange(shared, 0, APPROVED, COMMITTING) !== APPROVED) {
     rejectCommit(shared);
     throw new Error("SQLite session reclamation commit was not authorized");
@@ -43,7 +157,7 @@ export function markSqliteReclamationSettled(buffer: SharedArrayBuffer | undefin
 }
 
 /** Keep the live parent authority current until the Worker's transaction has settled. */
-export function authorizeSqliteReclamationCommit(
+function authorizeSqliteReclamationCommit(
   buffer: SharedArrayBuffer,
   databasePath: string,
   assertCurrent: () => void,
@@ -58,7 +172,7 @@ export function authorizeSqliteReclamationCommit(
     database = openNodeSqliteDatabase(databasePath);
     setSqliteBusyTimeout(database, COMMIT_DECISION_TIMEOUT_MS);
     assertCurrent();
-    if (Atomics.compareExchange(shared, 0, WAITING, APPROVED) !== WAITING) {
+    if (Atomics.compareExchange(shared, 0, REQUESTED, APPROVED) !== REQUESTED) {
       throw new Error("SQLite session reclamation commit checkpoint expired");
     }
     Atomics.notify(shared, 0);

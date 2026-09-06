@@ -240,7 +240,9 @@ export function convertMessages(
       }
       params.push(assistantMsg);
     } else if (msg.role === "toolResult") {
-      const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+      const imageContentParts: Array<
+        ChatCompletionContentPartText | { type: "image_url"; image_url: { url: string } }
+      > = [];
       let j = i;
 
       while (j < transformedMessages.length) {
@@ -251,7 +253,7 @@ export function convertMessages(
 
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some(isImageWithMediaPayload);
+        const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = sanitizeToolResultText(
           textResult,
           mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
@@ -266,14 +268,18 @@ export function convertMessages(
         }
         params.push(toolResultMsg);
 
-        if (hasImages && model.input.includes("image")) {
-          for (const block of toolMsg.content) {
-            if (isImageWithMediaPayload(block)) {
-              imageBlocks.push({
-                type: "image_url",
-                image_url: { url: `data:${block.mimeType};base64,${block.data}` },
-              });
-            }
+        if (images.length > 0 && model.input.includes("image")) {
+          const boundedToolName = sanitizeSurrogates(truncateUtf16Safe(toolMsg.toolName ?? "", 64));
+          // Count text-only replies too: names and bounded call IDs can collide.
+          imageContentParts.push({
+            type: "text",
+            text: `Image(s) from tool result #${j - i + 1}${boundedToolName ? ` (${boundedToolName})` : ""}:`,
+          });
+          for (const block of images) {
+            imageContentParts.push({
+              type: "image_url",
+              image_url: { url: `data:${block.mimeType};base64,${block.data}` },
+            });
           }
         }
         j += 1;
@@ -281,13 +287,13 @@ export function convertMessages(
 
       i = j - 1;
 
-      if (imageBlocks.length > 0) {
+      if (imageContentParts.length > 0) {
         if (compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
           role: "user",
-          content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...imageBlocks],
+          content: imageContentParts,
         });
         lastRole = "user";
       } else {

@@ -203,21 +203,33 @@ describe("temporal decay", () => {
     expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
   });
 
-  it("uses file mtime fallback for non-memory sources", async () => {
+  it("uses file mtime for additional memory files", async () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
-    const sessionPath = path.join(dir, "sessions", "thread.jsonl");
-    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-    await fs.writeFile(sessionPath, "{}\n");
+    const filePath = path.join(dir, "notes", "topic.md");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "notes\n");
     const oldMtime = new Date(NOW_MS - 30 * DAY_MS);
-    await fs.utimes(sessionPath, oldMtime, oldMtime);
+    await fs.utimes(filePath, oldMtime, oldMtime);
 
     const decayed = await applyTemporalDecayToHybridResults({
-      results: [{ path: "sessions/thread.jsonl", score: 1, source: "sessions" }],
+      results: [{ path: "notes/topic.md", score: 1, source: "memory" }],
       workspaceDir: dir,
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       nowMs: NOW_MS,
     });
 
     expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
+  });
+
+  it("leaves session timestamps unknown when their indexed source is missing", async () => {
+    const entry = { path: "sessions/main/missing.jsonl", score: 1, source: "sessions" };
+    expect(
+      await applyTemporalDecayToHybridResults({
+        results: [entry],
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        sessionSourceMtimes: new Map(),
+        nowMs: NOW_MS,
+      }),
+    ).toEqual([entry]);
   });
 });

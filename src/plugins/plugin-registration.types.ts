@@ -380,6 +380,8 @@ export type OpenClawPluginServiceContext = {
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
+    /** Identity of the hosting process, available only while this service is active. */
+    getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
     emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
       listener: (

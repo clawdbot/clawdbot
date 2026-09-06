@@ -76,7 +76,6 @@ export const OpenClawSchemaShape = {
       lastRunCommit: z.string().optional(),
       lastRunCommand: z.string().optional(),
       lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
-      localModelLeanAutoModel: z.string().optional(),
       securityAcknowledgedAt: z.string().optional(),
     })
     .optional(),
@@ -490,7 +489,6 @@ export const OpenClawSchemaShape = {
             })
             .optional(),
           approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
-          allowSymlinkTargetWrites: z.boolean().optional(),
           maxPending: z.number().int().min(1).optional(),
           maxSkillBytes: z.number().int().min(1).optional(),
         })

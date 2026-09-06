@@ -2,6 +2,10 @@
  * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
+import {
+  hasSensitiveUrlHintTag,
+  SENSITIVE_URL_HINT_TAG,
+} from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -258,7 +262,39 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+    .map(({ originRank: _originRank, ...entry }) => {
+      const configUiHints = Object.fromEntries(
+        Object.entries(entry.configUiHints ?? {}).map(([path, hint]) => [
+          path.trim().replace(/^\./, ""),
+          hint,
+        ]),
+      );
+      // Switching owners does not remove the previous owner's credentials.
+      // Keep sensitivity declarations while the selected owner supplies presentation and schema.
+      for (const record of registry.plugins) {
+        for (const [rawPath, hint] of Object.entries(
+          record.channelConfigs?.[entry.id]?.uiHints ?? {},
+        )) {
+          const path = rawPath.trim().replace(/^\./, "");
+          const sensitiveUrl = hasSensitiveUrlHintTag(hint);
+          if (!path || (hint.sensitive !== true && !sensitiveUrl)) {
+            continue;
+          }
+          const current = configUiHints[path];
+          configUiHints[path] = {
+            ...current,
+            ...(hint.sensitive === true ? { sensitive: true } : {}),
+            ...(sensitiveUrl
+              ? { tags: [...new Set([...(current?.tags ?? []), SENSITIVE_URL_HINT_TAG])] }
+              : {}),
+          };
+        }
+      }
+      if (Object.keys(configUiHints).length) {
+        entry.configUiHints = configUiHints;
+      }
+      return entry;
+    });
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */

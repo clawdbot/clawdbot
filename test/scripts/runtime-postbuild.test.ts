@@ -100,10 +100,12 @@ describe("runtime postbuild static assets", () => {
       packageOutputs: string[];
     }>(`
       const assets = await import("./scripts/lib/static-extension-assets.mts");
+      const discovered = assets.discoverStaticExtensionAssets();
+      const packageAssets = assets.discoverStaticExtensionAssets({ includeExternalPlugins: true });
       return {
-        outputs: assets.listStaticExtensionAssetOutputs(),
+        outputs: discovered.map(({ dest }) => dest),
         sources: assets.listStaticExtensionAssetSources(),
-        packageOutputs: assets.listStaticExtensionAssetOutputs({ includeExternalPlugins: true }),
+        packageOutputs: packageAssets.map(({ dest }) => dest),
       };
     `);
 

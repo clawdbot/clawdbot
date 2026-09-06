@@ -584,6 +584,7 @@ describe("skills gateway handlers (clawhub)", () => {
 
     expect(installSkillMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
+      agentId: "main",
       skillName: "calendar",
       installId: "deps",
       timeoutMs: 120_000,

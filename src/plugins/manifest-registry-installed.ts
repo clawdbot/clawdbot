@@ -140,23 +140,18 @@ function normalizePackageChannelConfiguredState(
   if (!isRecord(configuredState)) {
     return undefined;
   }
-  const env = isRecord(configuredState.env)
-    ? {
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.allOf)?.length
-          ? { allOf: normalizeOptionalTrimmedStringList(configuredState.env.allOf) }
-          : {}),
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.anyOf)?.length
-          ? { anyOf: normalizeOptionalTrimmedStringList(configuredState.env.anyOf) }
-          : {}),
-      }
-    : undefined;
+  const rawEnv = isRecord(configuredState.env) ? configuredState.env : undefined;
+  const allOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.allOf) : undefined;
+  const anyOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.anyOf) : undefined;
+  const env =
+    allOf || anyOf ? { ...(allOf ? { allOf } : {}), ...(anyOf ? { anyOf } : {}) } : undefined;
   const specifier = normalizeOptionalString(configuredState.specifier);
   const exportName = normalizeOptionalString(configuredState.exportName);
-  return specifier || exportName || (env && Object.keys(env).length > 0)
+  return specifier || exportName || env
     ? {
         ...(specifier ? { specifier } : {}),
         ...(exportName ? { exportName } : {}),
-        ...(env && Object.keys(env).length > 0 ? { env } : {}),
+        ...(env ? { env } : {}),
       }
     : undefined;
 }
@@ -322,6 +317,16 @@ function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["set
   return { fields };
 }
 
+const PACKAGE_CHANNEL_NORMALIZERS = [
+  ["exposure", normalizePackageChannelExposure],
+  ["commands", normalizeManifestChannelCommandDefaults],
+  ["configuredState", normalizePackageChannelConfiguredState],
+  ["persistedAuthState", normalizePackageChannelPersistedAuthState],
+  ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
+  ["setup", normalizePackageChannelSetup],
+  ["cliAddOptions", normalizePackageChannelCliOptions],
+] as const;
+
 function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -372,15 +377,7 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
       channel[key] = value[key];
     }
   }
-  for (const [key, normalize] of [
-    ["exposure", normalizePackageChannelExposure],
-    ["commands", normalizeManifestChannelCommandDefaults],
-    ["configuredState", normalizePackageChannelConfiguredState],
-    ["persistedAuthState", normalizePackageChannelPersistedAuthState],
-    ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
-    ["setup", normalizePackageChannelSetup],
-    ["cliAddOptions", normalizePackageChannelCliOptions],
-  ] as const) {
+  for (const [key, normalize] of PACKAGE_CHANNEL_NORMALIZERS) {
     const normalized = normalize(value[key]);
     if (normalized) {
       Object.assign(channel, { [key]: normalized });

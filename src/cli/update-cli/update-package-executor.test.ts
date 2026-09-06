@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { PackageInstallUpdateParams } from "./update-command-package.js";
 import type { PackageUpdateExecutor, PackageUpdatePreparation } from "./update-package-executor.js";
@@ -243,12 +244,23 @@ describe("mutable update execution", () => {
         },
       };
     });
-    mocks.checkTargetSchemas.mockImplementation(() => {
+    const schemaGate = createDeferred();
+    mocks.checkTargetSchemas.mockImplementation(async () => {
       events.push("schema");
+      await schemaGate.promise;
       return { incompatible: [], indeterminate: [] };
     });
 
-    const execution = await executeMutableUpdate(executionParams("package"));
+    const pendingExecution = executeMutableUpdate(executionParams("package"));
+    try {
+      await vi.waitFor(() => expect(mocks.checkTargetSchemas).toHaveBeenCalledOnce());
+      expect(events).toEqual(["prepare", "stop", "schema"]);
+      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+    } finally {
+      schemaGate.resolve();
+      await pendingExecution;
+    }
+    const execution = await pendingExecution;
 
     expect(events).toEqual(["prepare", "stop", "schema", "activate"]);
     expect(execution?.result).toBe(successfulUpdate);

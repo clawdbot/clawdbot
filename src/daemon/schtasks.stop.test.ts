@@ -1,4 +1,5 @@
 // Windows schtasks stop tests cover stopping scheduled task services.
+import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -33,14 +34,16 @@ type SpawnSyncResult = {
   signal: null;
 };
 const spawnSync = vi.hoisted(() =>
-  vi.fn<(command: string, args?: readonly string[]) => SpawnSyncResult>(() => ({
-    pid: 0,
-    output: [null, "-2147024891", ""],
-    stdout: "-2147024891",
-    stderr: "",
-    status: 1,
-    signal: null,
-  })),
+  vi.fn<(command: string, args?: readonly string[], options?: SpawnSyncOptions) => SpawnSyncResult>(
+    () => ({
+      pid: 0,
+      output: [null, "-2147024891", ""],
+      stdout: "-2147024891",
+      stderr: "",
+      status: 1,
+      signal: null,
+    }),
+  ),
 );
 
 vi.mock("node:child_process", async () => {
@@ -68,7 +71,8 @@ const {
   stopScheduledTask,
   suspendScheduledTaskAutoStartForUpdate,
 } = await import("./schtasks.js");
-const { resolveScheduledTaskOwnedGatewayPids } = await import("./schtasks-process.js");
+const { probeProcessState, resolveScheduledTaskOwnedGatewayPids } =
+  await import("./schtasks-process.js");
 const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
 const INSTALLED_GATEWAY_COMMAND_LINE =
@@ -165,9 +169,49 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("Scheduled Task stop/restart cleanup", () => {
+  it.each([
+    { stdout: '"node.exe","4242","Console","1","1,024 K"', status: 0, result: "alive" },
+    { stdout: "No tasks", status: 0, result: "missing" },
+    { stdout: "", status: 1, result: "unknown" },
+  ])(
+    "keeps the tasklist fallback verdict $result with a closed environment",
+    ({ stdout, status, result }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
+      // The default CIM failure reaches the independent PID-only tasklist probe.
+      spawnSync.mockReturnValueOnce({
+        pid: 0,
+        output: [],
+        stdout: "",
+        stderr: "",
+        status: 1,
+        signal: null,
+      });
+      spawnSync.mockReturnValueOnce({
+        pid: 0,
+        output: [],
+        stdout,
+        stderr: "",
+        status,
+        signal: null,
+      });
+      expect(probeProcessState(4242)).toBe(result);
+      expect(spawnSync).toHaveBeenCalledTimes(2);
+      expect(spawnSync.mock.calls[1]).toEqual([
+        expect.stringMatching(/tasklist\.exe$/i),
+        ["/FI", "PID eq 4242", "/FO", "CSV", "/NH"],
+        expect.objectContaining({
+          env: expect.not.objectContaining({ BOUNDARY_PARENT_ONLY: "synthetic" }),
+          timeout: 1_500,
+        }),
+      ]);
+    },
+  );
+
   it("suspends a task whose Settings.Enabled value uses the default", async () => {
     await withPreparedGatewayTask(async ({ env }) => {
       schtasksResponses.push(
@@ -496,12 +540,15 @@ describe("Scheduled Task stop/restart cleanup", () => {
   it.each(["gateway", "task-supervisor", "gateway-with-supervisor"])(
     "stops the exact installed Windows %s even before its port is bound",
     async (owner) => {
+      vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
       await withPreparedGatewayTask(async ({ env, stdout }) => {
         vi.spyOn(process, "platform", "get").mockReturnValue("win32");
         pushSuccessfulSchtasksResponses(3);
         inspectPortUsageMock.mockResolvedValue(freePortUsage());
         let forced = false;
-        spawnSync.mockImplementation((command, args) => {
+        spawnSync.mockImplementation((command, args, options) => {
+          expect(options?.env).toBeDefined();
+          expect(options?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
           const executable = command.toLowerCase();
           if (executable.endsWith("taskkill.exe")) {
             const argv = Array.isArray(args) ? args.map(String) : [];
