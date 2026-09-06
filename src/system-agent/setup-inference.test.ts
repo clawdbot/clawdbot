@@ -94,6 +94,11 @@ const mocks = vi.hoisted(() => ({
   refreshPluginRegistryAfterConfigMutation: vi.fn(),
 }));
 
+vi.mock("../plugins/provider-install-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-install-catalog.js")>()),
+  resolveProviderInstallCatalogEntries: vi.fn(() => []),
+}));
+
 vi.mock("./audit.js", () => ({
   appendSystemAgentAuditEntry: mocks.appendAudit,
 }));
@@ -719,6 +724,34 @@ describe("detectSetupInference", () => {
         expect(reads).toBe(1);
       },
     );
+  });
+
+  it("lists installable official providers with an empty registry without loading or probing them", async () => {
+    const resolvePluginProviders = vi.fn(() => []);
+    const options = await listManualSetupInferenceOptions({
+      resolveManifestProviderAuthChoices: () => [],
+      resolveProviderInstallCatalogEntries: () => [
+        {
+          pluginId: "fixture",
+          providerId: "fixture",
+          methodId: "api-key",
+          choiceId: "fixture-key",
+          choiceLabel: "Fixture API key",
+          label: "Fixture",
+          appGuidedSecret: true,
+          origin: "bundled",
+          install: { npmSpec: "@openclaw/fixture-provider", defaultChoice: "npm" },
+        },
+      ],
+      resolvePluginProviders,
+    });
+    expect(options.manualProviders).toEqual([
+      expect.objectContaining({ id: "fixture-key", brandId: "fixture" }),
+    ]);
+    expect(options.authOptions).toContainEqual(
+      expect.objectContaining({ id: "custom-api-key", kind: "custom" }),
+    );
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("publishes manual setup options before discovery can fail", async () => {
@@ -3087,6 +3120,96 @@ describe("activateSetupInference", () => {
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
   });
 
+  it.each(["success", "failed-key", "wrong-model"] as const)(
+    "uses only the entered custom credential and promotes only the verified route: %s",
+    async (outcome) => {
+      const custom = await import("../commands/onboard-custom.js");
+      const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+      const configHarness = createConfigTransformHarness(initialConfig);
+      const beforeActivation = structuredClone(configHarness.current());
+      vi.spyOn(custom, "promptCustomApiConfig").mockImplementation(async (params) => {
+        expect(params.explicitCredentials).toBe(true);
+        expect(params.setAsPrimary).toBe(false);
+        const key = await params.prompter.text({ message: "API key", sensitive: true });
+        return {
+          providerId: "fixture-custom",
+          modelId: "fixture-model",
+          config: {
+            ...params.config,
+            models: {
+              providers: {
+                "fixture-custom": {
+                  baseUrl: "https://custom.example.test/v1",
+                  api: "openai-responses",
+                  apiKey: key,
+                  models: [
+                    {
+                      id: "fixture-model",
+                      name: "Fixture",
+                      contextWindow: 8192,
+                      maxTokens: 256,
+                      input: ["text"],
+                      reasoning: false,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        };
+      });
+      const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+        expect(params.authProfileId).toMatch(/^fixture-custom:setup-/);
+        expect(params.config?.auth?.order?.["fixture-custom"]).toEqual([params.authProfileId]);
+        expect(params.config?.models?.providers?.["fixture-custom"]?.apiKey).toBeUndefined();
+        if (outcome === "failed-key") {
+          throw new Error("401 rejected entered-custom-key");
+        }
+        return successfulRun("fixture-custom", "fixture-model", {
+          ...params,
+          reportedModel: outcome === "wrong-model" ? "different-model" : "fixture-model",
+        });
+      });
+      try {
+        const result = await activateSetupInference({
+          kind: "provider-auth",
+          authChoice: "custom-api-key",
+          surface: "gateway",
+          prompter: createWizardPrompter({ text: async () => "entered-custom-key" }),
+          deps: {
+            readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
+            runEmbeddedAgent: runEmbeddedAgent as never,
+            transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          },
+        });
+        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(JSON.stringify(result)).not.toContain("entered-custom-key");
+        if (outcome === "success") {
+          expect(result).toMatchObject({ ok: true, modelRef: "fixture-custom/fixture-model" });
+          expect(configHarness.transform).toHaveBeenCalled();
+          expect(configHarness.current().auth?.order?.["fixture-custom"]).toEqual([
+            runEmbeddedAgent.mock.calls[0]?.[0].authProfileId,
+          ]);
+          expect(Object.values(readInMemoryAuthProfileStore(agentDir).profiles)).toContainEqual(
+            expect.objectContaining({
+              type: "api_key",
+              provider: "fixture-custom",
+              key: "entered-custom-key",
+            }),
+          );
+        } else {
+          expect(result.ok).toBe(false);
+          expect(configHarness.transform).not.toHaveBeenCalled();
+          expect(configHarness.current()).toEqual(beforeActivation);
+          expect(readInMemoryAuthProfileStore(agentDir).profiles).toEqual({});
+        }
+      } finally {
+        await removeOAuthTestTempRoot(stateDir);
+      }
+    },
+  );
+
   it("persists provider OAuth when runtime defaults are absent from source config", async () => {
     const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
     const runtimeConfig = {
@@ -3711,9 +3834,13 @@ describe("activateSetupInference", () => {
         expect.arrayContaining(["operator:existing"]),
       );
       expect(Object.keys(probeConfig.auth?.profiles ?? {})).not.toContain("other:unselected");
-      expect(probeConfig.auth?.order).toEqual(initialConfig.auth.order);
+      expect(probeConfig.auth?.order).toEqual({
+        ...initialConfig.auth.order,
+        groq: [runEmbeddedAgent.mock.calls[0]![0].authProfileId],
+      });
 
       const persisted = configHarness.current();
+      expect(persisted.auth?.order).toEqual(initialConfig.auth.order);
       expect(persisted.gateway?.port).toBe(19_000);
       expect(persisted.agents?.defaults?.workspace).toBe("/operator/concurrent");
       expect(persisted.channels?.discord).toEqual({ enabled: false });

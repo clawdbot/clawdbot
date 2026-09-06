@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -241,8 +242,9 @@ private func loadConfigRoot(from url: URL) throws -> [String: Any] {
 }
 
 private func saveConfigRoot(_ root: [String: Any], to url: URL) throws {
+    let output = InitialPluginConfigDefaults.applying(to: root, ifCreatingFileAt: url)
     try FileManager().createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+    let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
     try data.write(to: url, options: [.atomic])
 }
 

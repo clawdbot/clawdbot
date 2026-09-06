@@ -538,6 +538,52 @@ describe("provider install catalog", () => {
     });
   });
 
+  it("preserves declared guided setup capabilities on a cold install without guessing from method names", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/fixture-provider",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "fixture", label: "Fixture" },
+          providers: [
+            {
+              id: "fixture",
+              name: "Fixture",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "fixture-key",
+                  choiceLabel: "Fixture key",
+                  appGuidedSecret: true,
+                  onboardingScopes: ["text-inference"],
+                },
+                {
+                  method: "oauth",
+                  choiceId: "fixture-login",
+                  choiceLabel: "Fixture login",
+                  appGuidedAuth: "oauth",
+                },
+                { method: "api-key", choiceId: "fixture-advanced", choiceLabel: "Advanced setup" },
+              ],
+            },
+          ],
+          install: { npmSpec: "@openclaw/fixture-provider", defaultChoice: "npm" },
+        },
+      },
+    ]);
+    expect(resolveProviderInstallCatalogEntry("fixture-key")).toMatchObject({
+      pluginId: "fixture",
+      appGuidedSecret: true,
+    });
+    expect(resolveProviderInstallCatalogEntry("fixture-login")).toMatchObject({
+      appGuidedAuth: "oauth",
+    });
+    expect(resolveProviderInstallCatalogEntry("fixture-advanced")).not.toHaveProperty(
+      "appGuidedSecret",
+    );
+  });
+
   it("preserves official external provider aliases for configured-plugin repair", () => {
     listOfficialExternalProviderCatalogEntries.mockReturnValue([
       {

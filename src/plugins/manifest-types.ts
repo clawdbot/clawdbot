@@ -326,6 +326,8 @@ export type PluginManifestSecretInputContracts = {
 };
 
 export type PluginManifestConfigContracts = {
+  /** Plugin-owned config defaults persisted only when the host creates its first config file. */
+  initialConfigDefaults?: Record<string, unknown>;
   /**
    * Root-relative config paths that indicate this plugin's setup-time
    * compatibility migrations might apply. Use this to keep generic runtime

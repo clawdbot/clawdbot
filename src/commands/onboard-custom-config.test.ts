@@ -17,6 +17,24 @@ import {
 } from "./onboard-custom-config.js";
 
 const EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+
+it("reserves auth-order-only namespaces for connected custom endpoints", () => {
+  const config: OpenClawConfig = {
+    auth: { order: { custom: ["legacy:host"], "custom-2": ["another:host"] } },
+  };
+  const result = applyCustomApiConfig({
+    config,
+    baseUrl: "https://custom.example.test/v1",
+    modelId: "fixture-model",
+    compatibility: "openai",
+    providerId: "custom",
+    apiKey: "entered-fixture-key",
+    reuseExistingProvider: false,
+  });
+  expect(result.providerId).toBe("custom-3");
+  expect(result.config.auth).toEqual(config.auth);
+  expect(Object.keys(result.config.models?.providers ?? {})).toEqual(["custom-3"]);
+});
 const manifestPlugins = [
   {
     modelIdNormalization: {

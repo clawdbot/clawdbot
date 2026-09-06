@@ -36,6 +36,7 @@ type ProviderInstallCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  includeWorkspacePlugins?: boolean;
 };
 
 type PreferredInstallSource = {
@@ -275,6 +276,17 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           methodId,
           choiceId,
           choiceLabel,
+          ...(choice.appGuidedSecret === true ? { appGuidedSecret: true } : {}),
+          ...(choice.appGuidedAuth === "oauth" || choice.appGuidedAuth === "device-code"
+            ? { appGuidedAuth: choice.appGuidedAuth }
+            : {}),
+          ...(choice.appGuidedDiscovery === true ? { appGuidedDiscovery: true } : {}),
+          ...(choice.appGuidedActionLabel
+            ? { appGuidedActionLabel: choice.appGuidedActionLabel }
+            : {}),
+          ...(choice.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
+          ...(choice.icon ? { icon: choice.icon } : {}),
+          ...(choice.website ? { website: choice.website } : {}),
           ...resolveProviderInstallCatalogChoiceFields({
             choiceHint: choice.choiceHint,
             assistantPriority: choice.assistantPriority,

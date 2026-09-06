@@ -11,6 +11,41 @@ struct OpenClawConfigFileTests {
             .path
     }
 
+    @MainActor
+    @Test
+    func `first save initializes native session discovery consent once`() async throws {
+        let override = self.makeConfigOverridePath()
+        let configURL = URL(fileURLWithPath: override)
+        defer { try? FileManager().removeItem(at: configURL.deletingLastPathComponent()) }
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "plugins": ["entries": [
+                    "anthropic": ["config": [
+                        "sessionCatalog": ["enabled": true],
+                    ]],
+                    "codex": ["config": [
+                        "sessionCatalog": ["enabled": false, "homes": ["/kept"]],
+                    ]],
+                ]],
+            ]))
+            let fresh = OpenClawConfigFile.loadDict()
+            let entries = ((fresh["plugins"] as? [String: Any])?["entries"] as? [String: Any])
+            let anthropic = ((entries?["anthropic"] as? [String: Any])?["config"] as? [String: Any])
+            let codex = ((entries?["codex"] as? [String: Any])?["config"] as? [String: Any])
+            #expect(((anthropic?["sessionCatalog"] as? [String: Any])?["enabled"] as? Bool) == true)
+            #expect(((codex?["sessionCatalog"] as? [String: Any])?["enabled"] as? Bool) == false)
+            #expect((codex?["sessionCatalog"] as? [String: Any])?["homes"] as? [String] == ["/kept"])
+
+            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "local"]]))
+            #expect(OpenClawConfigFile.loadDict()["plugins"] == nil)
+
+            try? FileManager().removeItem(at: configURL)
+            try? Data("{}".utf8).write(to: configURL, options: [.atomic])
+            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "local"]]))
+            #expect(OpenClawConfigFile.loadDict()["plugins"] == nil)
+        }
+    }
+
     @Test
     func `config path respects env override`() async {
         let override = self.makeConfigOverridePath()

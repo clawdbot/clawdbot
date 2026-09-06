@@ -44,8 +44,6 @@ final class OnboardingAISetupModel {
     private(set) var pendingActivationVerification = false
     private(set) var waitingForPendingActivationDeadline = false
     private(set) var configuredGatewayBlocker: ConfiguredGatewayBlocker?
-    /// Set once every detected candidate failed; opens the manual key form.
-    private(set) var exhaustedAutoCandidates = false
 
     var manualProviderID = ""
     var manualKey: String = ""
@@ -106,7 +104,9 @@ final class OnboardingAISetupModel {
         } else if self.activeAuthOption != nil {
             self.isPreparingModel
                 ? "OpenClaw is preparing a local model."
-                : "OpenClaw is completing provider sign-in."
+                : self.isCustomEndpointSetup
+                    ? "OpenClaw is setting up a custom endpoint."
+                    : "OpenClaw is completing provider sign-in."
         } else {
             nil
         }
@@ -163,7 +163,7 @@ final class OnboardingAISetupModel {
 
     func enterConfiguredGatewayBlocker(_ blocker: ConfiguredGatewayBlocker, failure: Failure? = nil) {
         // Retire stale route work without turning a prior attempt back into first
-        // setup. Only an initial blocked probe remains eligible for automatic testing.
+        // setup. Only an initial blocked probe remains eligible for initial discovery.
         let started = self.started
         self.resetForGatewayChange(clearPendingHandoff: false)
         self.started = started
@@ -535,7 +535,6 @@ final class OnboardingAISetupModel {
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
         self.configuredGatewayBlocker = nil
-        self.exhaustedAutoCandidates = false
         self.serverLease = nil
         self.manualProviderID = ""
         self.manualKey = ""
@@ -613,11 +612,23 @@ extension OnboardingAISetupModel {
                   self.isCurrentAttempt(context),
                   !Task.isCancelled
             else { return }
+            let manualProviders = result.manualProviders ?? []
+            var authOptions = result.authOptions ?? []
+            if authOptions.contains(where: \.isCustomEndpoint) {
+                // The auth RPC predates custom endpoints. Require both its method
+                // and the supported choice advertised by this exact Gateway.
+                let authAvailable = await self.gateway.supportsServerMethod(
+                    "openclaw.setup.auth.start",
+                    ifCurrentServerLease: lease) == true
+                guard await self.gateway.isCurrentServerLease(lease),
+                      self.isCurrentAttempt(context),
+                      !Task.isCancelled
+                else { return }
+                if !authAvailable { authOptions.removeAll(where: \.isCustomEndpoint) }
+            }
             self.serverLease = lease
             self.prepareAvailable = prepareAvailable
             self.lastDetectedActivationState = result.persistedActivationState
-            let manualProviders = result.manualProviders ?? []
-            let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
             self.recommendedInstalls = result.recommendedInstalls ?? []
             self.detectedPrepareOptions = result.prepareOptions
@@ -680,11 +691,9 @@ extension OnboardingAISetupModel {
                 }
                 return
             }
-            if intent == .startSetup, let first = autoCandidateAfter(kind: nil) {
-                await self.activate(kind: first.kind, context: context)
-            } else {
-                self.showManualEntry = !self.manualProviders.isEmpty
-            }
+            // Discovery is not consent to use a saved credential. Only a user
+            // selection (or completion of their chosen prepare flow above) activates AI.
+            self.showManualEntry = !self.manualProviders.isEmpty
         } catch {
             guard self.isCurrentAttempt(context) else { return }
             if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
@@ -742,7 +751,7 @@ extension OnboardingAISetupModel {
         var supersededKind: String?
         var supersededAttemptDeadline: Date?
         if self.phase == .testing, let selectedKind {
-            // A user pick supersedes auto-testing; the attempt token rejects every late result.
+            // A new user pick supersedes the prior test; reject every late result.
             supersededKind = selectedKind
             let routeIdentity = self.routeIdentityProvider()
             supersededAttemptDeadline = routeIdentity.flatMap {
@@ -754,10 +763,8 @@ extension OnboardingAISetupModel {
         guard let context = beginAttemptContext(
             supersededAttemptDeadline: supersededAttemptDeadline)
         else { return }
-        // A fresh user-picked attempt owns the verdict; keeping the stale
-        // "none of the found options worked" card up during its test would
-        // contradict the visible Testing state.
-        self.exhaustedAutoCandidates = false
+        // The new selection owns the verdict, including while its task is queued.
+        self.detectError = nil
         if let supersededKind {
             self.statuses[supersededKind] = .untried
             self.selectedKind = kind
@@ -787,7 +794,7 @@ extension OnboardingAISetupModel {
             return
         }
         await self.activate(
-            .candidate(kind: kind, modelRef: candidate.modelRef, label: candidate.label, tryNextOnFailure: true),
+            .candidate(kind: kind, modelRef: candidate.modelRef, label: candidate.label),
             context: context)
     }
 
@@ -885,12 +892,8 @@ extension OnboardingAISetupModel {
                     originalServerLease: lease)
             } else {
                 let failure = Self.failure(label: request.label, status: result.status, error: result.error)
-                if await self.settleFailedActivation(
-                    failure, request: request, context: context, activationOwner: activationOwner, serverLease: lease),
-                    request.tryNextOnFailure
-                {
-                    await tryNextAfterFailure(of: kind, context: context)
-                }
+                await self.settleFailedActivation(
+                    failure, request: request, context: context, activationOwner: activationOwner, serverLease: lease)
             }
         } catch {
             guard self.isCurrentAttempt(context) else { return }
@@ -931,18 +934,17 @@ extension OnboardingAISetupModel {
         }
     }
 
-    @discardableResult
     private func settleFailedActivation(
         _ failure: Failure,
         request: ActivationRequest,
         context: AttemptContext,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
-        serverLease: GatewayConnection.ServerLease) async -> Bool
+        serverLease: GatewayConnection.ServerLease) async
     {
         let leaseIsCurrent = await self.gateway.isCurrentServerLease(serverLease)
         // Lease validation can yield to a new UI attempt. Retire only the exact
         // failed owner, and never let its late continuation reset replacement state.
-        guard self.isCurrentAttempt(context) else { return false }
+        guard self.isCurrentAttempt(context) else { return }
         self.exposeActivationFailure(failure, for: request)
         self.pendingActivationVerification = false
         self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
@@ -950,15 +952,14 @@ extension OnboardingAISetupModel {
             self.detectError = failure
             self.beginPendingActivationDeadlineWait()
             self.onPendingActivationDeadline?(deadline, context.routeIdentity)
-            return false
+            return
         }
         guard leaseIsCurrent else {
             requireFreshDetection(after: failure)
-            return false
+            return
         }
         self.phase = .ready
-        if !request.isManual, !request.tryNextOnFailure { self.showManualEntry = !self.manualProviders.isEmpty }
-        return true
+        if !request.isManual { self.showManualEntry = !self.manualProviders.isEmpty }
     }
 
     private func requestActivation(
@@ -1017,7 +1018,7 @@ extension OnboardingAISetupModel {
             self.manualError = failure
         } else {
             self.statuses[request.kind] = .failed(failure)
-            if !request.tryNextOnFailure { self.detectError = failure }
+            self.detectError = failure
         }
     }
 
@@ -1480,8 +1481,7 @@ extension OnboardingAISetupModel {
                         .candidate(
                             kind: kind,
                             modelRef: preparedModel,
-                            label: preparedProvider.label,
-                            tryNextOnFailure: false),
+                            label: preparedProvider.label),
                         context: context)
                 }
                 return
@@ -1660,16 +1660,5 @@ extension OnboardingAISetupModel {
         } : nil
         self.pendingActivationRequiresFreshActivation = false
         self.onConnected?()
-    }
-
-    private func tryNextAfterFailure(of kind: String, context: AttemptContext) async {
-        guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        if let next = autoCandidateAfter(kind: kind) {
-            await self.activate(kind: next.kind, context: context)
-            return
-        }
-        self.phase = .ready
-        self.exhaustedAutoCandidates = true
-        self.showManualEntry = true
     }
 }

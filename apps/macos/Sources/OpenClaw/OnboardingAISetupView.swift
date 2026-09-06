@@ -191,6 +191,9 @@ struct OnboardingAISetupView: View {
     @ViewBuilder
     private var resultsView: some View {
         if !self.model.candidates.isEmpty {
+            Text("Choose a connection to test, or connect another provider below.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             VStack(spacing: 8) {
                 ForEach(self.model.candidates) { candidate in
                     self.candidateRow(candidate)
@@ -222,7 +225,9 @@ struct OnboardingAISetupView: View {
             OnboardingErrorCard(
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
-                    : "Couldn’t check this Gateway for AI access",
+                    : self.model.selectedKind != nil
+                        ? "AI connection failed"
+                        : "Couldn’t check this Gateway for AI access",
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
@@ -242,20 +247,6 @@ struct OnboardingAISetupView: View {
                 message: providerCatalogError,
                 docsSlug: "start/onboarding",
                 retryTitle: "Try again")
-            {
-                self.model.retryFromScratch()
-            }
-        }
-
-        if self.model.exhaustedAutoCandidates {
-            OnboardingErrorCard(
-                title: "None of the found options worked",
-                message: """
-                The details are listed on each option above. \
-                You can fix the login and retry, or connect with an API key or token below.
-                """,
-                docsSlug: "concepts/model-providers",
-                retryTitle: "Check again")
             {
                 self.model.retryFromScratch()
             }
@@ -302,7 +293,7 @@ struct OnboardingAISetupView: View {
 
     private var unavailableCandidatesSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Detected, but not auto-tested")
+            Text("Detected, but unavailable")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             ForEach(self.model.unavailableCandidates) { candidate in
@@ -489,21 +480,24 @@ struct OnboardingAISetupView: View {
     private var providerAuthSection: some View {
         if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Sign in with a provider")
+                Text("Connect a provider")
                     .font(.headline)
                 Text(
-                    "Use an existing subscription or provider account. " +
-                        "OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.")
+                    "Use a provider account or configure an API connection. " +
+                        "OpenClaw verifies your selection with a real reply.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                let featured = self.model.authOptions.filter(\.featured)
-                let more = self.model.authOptions.filter { !$0.featured }
+                let featured = self.model.providerSignInOptions.filter(\.featured)
+                let more = self.model.providerSignInOptions.filter { !$0.featured }
                 ForEach(featured) { option in
                     self.providerAuthRow(option)
                 }
                 if !self.model.manualProviders.isEmpty {
                     self.apiKeysRow
+                }
+                if let customEndpoint = self.model.customEndpointOption {
+                    self.providerAuthRow(customEndpoint)
                 }
                 if !more.isEmpty {
                     DisclosureGroup("More sign-in options") {
@@ -562,11 +556,13 @@ struct OnboardingAISetupView: View {
                 OnboardingProviderArtwork(
                     icon: option.icon,
                     brandCandidates: [option.brandId, option.id],
-                    fallbackSymbol: option.kind == "device-code"
-                        ? "link.badge.plus"
-                        : "person.crop.circle.badge.checkmark")
+                    fallbackSymbol: option.isCustomEndpoint
+                        ? "network"
+                        : option.kind == "device-code"
+                            ? "link.badge.plus"
+                            : "person.crop.circle.badge.checkmark")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(option.label)
+                    Text(option.isCustomEndpoint ? String(localized: "Custom endpoint…") : option.label)
                         .font(.callout.weight(.semibold))
                     if let hint = option.hint, !hint.isEmpty {
                         Text(hint)
@@ -576,7 +572,7 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Text(option.kind == "device-code" ? "Pair" : "Sign in")
+                Text(option.isCustomEndpoint ? "Configure" : option.kind == "device-code" ? "Pair" : "Sign in")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }

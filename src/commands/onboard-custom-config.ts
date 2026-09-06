@@ -34,7 +34,8 @@ const DEFAULT_MAX_TOKENS = 4096;
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
 const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 type CustomModelInput = "text" | "image";
-type CustomAliasManifestPlugin = Pick<PluginManifestRecord, "modelIdNormalization">;
+type CustomAliasManifestPlugin = Pick<PluginManifestRecord, "modelIdNormalization"> &
+  Partial<Pick<PluginManifestRecord, "providers">>;
 
 /** Result of best-effort image-input inference for custom model ids. */
 type CustomModelImageInputInference = {
@@ -199,7 +200,10 @@ type ApplyCustomApiConfigParams = {
   supportsImageInput?: boolean;
   target?: OnboardingAgentTarget;
   setAsPrimary?: boolean;
+  reservedProviderIds?: readonly string[];
   manifestPlugins?: readonly CustomAliasManifestPlugin[];
+  /** Connected setup allocates an unused provider rather than modifying unverified routes. */
+  reuseExistingProvider?: boolean;
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
@@ -245,6 +249,9 @@ type ResolveCustomProviderIdParams = {
   config: OpenClawConfig;
   baseUrl: string;
   providerId?: string;
+  reservedProviderIds?: readonly string[];
+  reuseExistingProvider?: boolean;
+  manifestPlugins?: readonly CustomAliasManifestPlugin[];
 };
 
 /** Provider id selected for a custom endpoint, with collision rename metadata. */
@@ -279,21 +286,25 @@ function resolveUniqueEndpointId(params: {
   requestedId: string;
   baseUrl: string;
   providers: Record<string, ModelProviderConfig | undefined>;
+  reuseExistingProvider?: boolean;
+  reservedProviderIds?: ReadonlySet<string>;
 }) {
   const normalized = normalizeEndpointId(params.requestedId) || "custom";
   const existing = params.providers[normalized];
   // Azure config URLs are normalized before storage, so host equality preserves
   // the existing provider id across deployment-path and /openai/v1 variants.
   if (
-    !existing?.baseUrl ||
-    existing.baseUrl === params.baseUrl ||
-    (isAzureUrl(params.baseUrl) && hasSameHost(existing.baseUrl, params.baseUrl))
+    (!existing && !params.reservedProviderIds?.has(normalized)) ||
+    (params.reuseExistingProvider !== false &&
+      (!existing?.baseUrl ||
+        existing.baseUrl === params.baseUrl ||
+        (isAzureUrl(params.baseUrl) && hasSameHost(existing.baseUrl, params.baseUrl))))
   ) {
     return { providerId: normalized, renamed: false };
   }
   let suffix = 2;
   let candidate = `${normalized}-${suffix}`;
-  while (params.providers[candidate]) {
+  while (params.providers[candidate] || params.reservedProviderIds?.has(candidate)) {
     suffix += 1;
     candidate = `${normalized}-${suffix}`;
   }
@@ -532,6 +543,21 @@ export function resolveCustomProviderId(
     requestedId: requestedProviderId,
     baseUrl,
     providers,
+    reuseExistingProvider: params.reuseExistingProvider,
+    reservedProviderIds:
+      params.reuseExistingProvider === false
+        ? new Set([
+            ...Object.keys(providers).map(normalizeEndpointId),
+            ...Object.keys(params.config.auth?.order ?? {}).map(normalizeEndpointId),
+            ...(params.reservedProviderIds ?? []).map(normalizeEndpointId),
+            ...Object.values(params.config.auth?.profiles ?? {}).map((profile) =>
+              normalizeEndpointId(profile.provider),
+            ),
+            ...(params.manifestPlugins ?? [])
+              .flatMap((plugin) => plugin.providers ?? [])
+              .map(normalizeEndpointId),
+          ])
+        : undefined,
   });
 
   return {
@@ -611,6 +637,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     config: params.config,
     baseUrl: resolvedBaseUrl,
     providerId: params.providerId,
+    reservedProviderIds: params.reservedProviderIds,
+    reuseExistingProvider: params.reuseExistingProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const providerId = providerIdResult.providerId;
   const providers = params.config.models?.providers ?? {};
@@ -667,21 +696,20 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         reasoning: false,
       };
   const mergedModels = hasModel
-    ? existingModels.map((model) =>
-        model.id === modelId
-          ? {
-              ...model,
-              ...(isAzure ? nextModel : {}),
-              // Preserve caller-authored catalog fields unless setup explicitly
-              // received a new input-mode choice for this existing model.
-              ...(explicitInput ? { input: explicitInput } : {}),
-              name: model.name ?? nextModel.name,
-              cost: model.cost ?? nextModel.cost,
-              contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
-              maxTokens: model.maxTokens ?? nextModel.maxTokens,
-            }
-          : model,
-      )
+    ? existingModels.map((model) => {
+        if (model.id !== modelId) {
+          return model;
+        }
+        return {
+          ...model,
+          ...(isAzure ? nextModel : {}),
+          ...(explicitInput ? { input: explicitInput } : {}),
+          name: model.name ?? nextModel.name,
+          cost: model.cost ?? nextModel.cost,
+          contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
+          maxTokens: model.maxTokens ?? nextModel.maxTokens,
+        };
+      })
     : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =

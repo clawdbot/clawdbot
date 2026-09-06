@@ -88,10 +88,12 @@ has a configured model, the app verifies that model with a real reply before
 opening the normal dashboard.
 
 For a fresh or incomplete Gateway, native setup handles the Gateway connection,
-any needed local CLI/runtime install, and AI access. It detects existing
-credentials or eligible loaded local models, live-tests candidates, and offers
-provider sign-in or masked key/token entry when needed. After a new model
-passes, the app opens guided onboarding in the dashboard for optional setup,
+any needed local CLI/runtime install, and AI access. It lists existing
+credentials or eligible loaded local models and lets you choose which connection
+to test. You can also choose provider sign-in or masked key/token entry. Discovery
+and rechecking never activate a connection, and a failed test does not select
+another provider. After a new model passes, the app opens guided onboarding in
+the dashboard for optional setup,
 including memory import and channels, before the handoff to normal agent chat.
 Memory import and permissions are not separate native first-run pages;
 macOS permissions remain available in **Settings → Permissions**.
@@ -128,7 +130,11 @@ Platform and remote-access details: [Linux app](/platforms/linux) and
 
 ## Custom or unlisted providers
 
-If your provider is not listed, run `openclaw onboard` in a terminal on the
+In macOS setup, choose **Custom endpoint…** to configure an unlisted API service
+with an explicitly entered key. The connected setup flow does not select host
+environment credentials or SecretRefs.
+
+For CLI credential options or keyless endpoints, run `openclaw onboard` on the
 Gateway host, choose **Custom Provider** (under **More…** when shown), and enter:
 
 - Endpoint compatibility: OpenAI-compatible (`/chat/completions`), OpenAI Responses-compatible (`/responses`), Anthropic-compatible (`/messages`), or unknown (probes all three and auto-detects)

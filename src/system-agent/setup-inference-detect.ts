@@ -11,6 +11,7 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
+import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
   listSetupInferenceAuthOptions,
@@ -79,10 +80,39 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
   }).filter(
     (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
   );
+  // Installed manifests remain authoritative. Cold choices are presentation
+  // metadata only: discovery must not install or execute their runtime.
+  const choices = new Map(authChoices.map((choice) => [choice.choiceId, choice]));
+  const installChoices = (
+    deps.resolveProviderInstallCatalogEntries ?? resolveProviderInstallCatalogEntries
+  )({
+    config: cfg,
+    workspaceDir: workspace,
+    includeUntrustedWorkspacePlugins: false,
+    includeWorkspacePlugins: false,
+  });
+  for (const choice of installChoices) {
+    if (
+      !choices.has(choice.choiceId) &&
+      (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled
+    ) {
+      choices.set(choice.choiceId, choice);
+    }
+  }
+  const available = [...choices.values()];
   const manual = {
-    manualProviders: listSetupInferenceManualProviders(authChoices),
-    authOptions: listSetupInferenceAuthOptions(authChoices),
-    prepareOptions: listSetupInferencePrepareOptions(authChoices),
+    manualProviders: listSetupInferenceManualProviders(available),
+    authOptions: [
+      ...listSetupInferenceAuthOptions(available),
+      {
+        id: "custom-api-key",
+        label: "Custom endpoint",
+        hint: "Connect an API endpoint with an explicitly entered API key.",
+        kind: "custom" as const,
+        featured: false,
+      },
+    ],
+    prepareOptions: listSetupInferencePrepareOptions(available),
     workspace,
     // Declining discovery must not turn an already configured install into fresh setup.
     setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, targetAgentId)),

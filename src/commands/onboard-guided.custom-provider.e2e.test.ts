@@ -21,6 +21,7 @@ type Scenario = {
   authless?: boolean;
   outcome?: "fail" | "cancel" | "prompt-cancel";
   surface?: "cli" | "gateway";
+  authMetadata?: "order-only" | "store-only";
 };
 
 async function runCustomSetup(scenario: Scenario) {
@@ -50,12 +51,37 @@ async function runCustomSetup(scenario: Scenario) {
       },
     },
   };
+  if (scenario.surface === "gateway") {
+    initialConfig.auth = {
+      ...(scenario.authMetadata
+        ? {}
+        : {
+            profiles: {
+              "fixture-custom:ambient": { provider: "fixture-custom", mode: "api_key" as const },
+            },
+          }),
+      ...(scenario.authMetadata === "store-only"
+        ? {}
+        : { order: { "fixture-custom": ["fixture-custom:ambient"] } }),
+    };
+  }
   const initialBytes = `${JSON.stringify(initialConfig)}\n`;
   await fs.mkdir(workspace);
   await fs.writeFile(configPath, initialBytes);
   setTestEnvValue("OPENCLAW_STATE_DIR", root);
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
   setTestEnvValue("CUSTOM_SETUP_FIXTURE_KEY", credential);
+  if (scenario.surface === "gateway") {
+    setTestEnvValue("CUSTOM_API_KEY", "ambient-host-key");
+    setTestEnvValue("FIXTURE_CUSTOM_API_KEY", "ambient-host-key");
+    const { upsertAuthProfileWithLockOrThrow } =
+      await import("../agents/auth-profiles/profiles.js");
+    await upsertAuthProfileWithLockOrThrow({
+      profileId: "fixture-custom:ambient",
+      credential: { type: "api_key", provider: "fixture-custom", key: "ambient-host-key" },
+      stateDir: root,
+    });
+  }
 
   const server = createServer((request, response) => {
     void (async () => {
@@ -126,7 +152,7 @@ async function runCustomSetup(scenario: Scenario) {
   const selectAnswers = [
     "custom",
     ...(scenario.surface === "gateway"
-      ? []
+      ? [scenario.protocol]
       : [...(scenario.secretRef ? ["ref", "env"] : ["plaintext"]), scenario.protocol]),
     "skip",
   ];
@@ -205,7 +231,54 @@ async function runCustomSetup(scenario: Scenario) {
   };
 }
 
+async function expectDurableCustomCredential(setup: Awaited<ReturnType<typeof runCustomSetup>>) {
+  const provider = "fixture-custom-2";
+  const selectedProfileId = Object.keys(setup.config.auth?.profiles ?? {}).find((id) =>
+    id.startsWith(provider + ":setup-"),
+  );
+  if (!selectedProfileId) {
+    throw new Error("The verified credential was not persisted");
+  }
+  expect(setup.config.auth?.order?.[provider]).toEqual([selectedProfileId]);
+  const { prepareAgentRuntimeAuth } = await import("../agents/runtime-plan/prepare-auth.js");
+  const providerConfig = setup.config.models?.providers?.[provider];
+  const prepared = prepareAgentRuntimeAuth({
+    provider,
+    modelId: model,
+    modelApi: providerConfig?.api,
+    modelBaseUrl: providerConfig?.baseUrl,
+    config: setup.config,
+    env: {},
+    harnessId: "openclaw",
+    authProfileStore: {
+      version: 1,
+      profiles: {
+        [selectedProfileId]: { type: "api_key", provider, key: setup.credential },
+        "later:host-account": { type: "api_key", provider, key: "ambient-host-key" },
+      },
+    },
+  });
+  expect(prepared.attempts.map(({ kind, profileId }) => ({ kind, profileId }))).toEqual([
+    { kind: "profile", profileId: selectedProfileId },
+  ]);
+}
+
 describe("guided custom provider activation", () => {
+  it.each(["order-only", "store-only"] as const)(
+    "preserves namespaces backed by %s authentication and binds subsequent requests",
+    { timeout: 300_000 },
+    async (authMetadata) => {
+      const setup = await runCustomSetup({ protocol: "openai", surface: "gateway", authMetadata });
+      expect(setup.result).toEqual(
+        expect.arrayContaining(["Inference verified: fixture-custom-2/fixture-model"]),
+      );
+      expect(setup.config.auth?.order?.["fixture-custom"]).toEqual(
+        setup.initialConfig.auth?.order?.["fixture-custom"],
+      );
+      expect(setup.requests.every((request) => request.authorized)).toBe(true);
+      await expectDurableCustomCredential(setup);
+    },
+  );
   it.each<Scenario>([
     { protocol: "openai" as const },
     { protocol: "openai-responses" as const, secretRef: true },
@@ -263,14 +336,42 @@ describe("guided custom provider activation", () => {
     expect(setup.config).toEqual(setup.initialConfig);
   });
 
-  it("keeps custom credential entry local to the Gateway host CLI", async () => {
-    const setup = await runCustomSetup({ protocol: "openai", surface: "gateway" });
-    expect(setup.requests).toEqual([]);
-    expect(setup.textPrompts).toEqual([]);
-    expect(setup.result).toBeNull();
-    expect(setup.config).toEqual(setup.initialConfig);
-    expect(setup.output).toContain("run openclaw onboard on the Gateway host");
-  });
+  it.each<Scenario["protocol"]>(["openai", "openai-responses", "anthropic"])(
+    "verifies connected %s setup with the entered credential, not an ambient account",
+    { timeout: 300_000 },
+    async (protocol) => {
+      const setup = await runCustomSetup({ protocol, surface: "gateway" });
+      expect(setup.result).toEqual(
+        expect.arrayContaining(["Inference verified: fixture-custom-2/fixture-model"]),
+      );
+      expect(setup.requests).toEqual([
+        expect.objectContaining({ stream: false, authorized: true }),
+        expect.objectContaining({ stream: true, authorized: true }),
+      ]);
+      expect(setup.textPrompts.some(([prompt]) => prompt.sensitive)).toBe(true);
+      expect(setup.config.models?.providers?.["fixture-custom-2"]?.apiKey).toBeUndefined();
+      expect(setup.config.agents?.defaults?.model).toContain("fixture-custom-2/fixture-model");
+      await expectDurableCustomCredential(setup);
+      expect(setup.output).not.toContain(setup.credential);
+      expect(setup.output).not.toContain("ambient-host-key");
+    },
+  );
+
+  it.each(["fail", "cancel"] as const)(
+    "does not promote connected custom credentials after %s",
+    { timeout: 300_000 },
+    async (outcome) => {
+      const setup = await runCustomSetup({ protocol: "openai", surface: "gateway", outcome });
+      expect(setup.result).toBeNull();
+      expect(setup.config).toEqual(setup.initialConfig);
+      expect(setup.requests).toEqual([
+        { stream: false, pathname: "/v1/chat/completions", authorized: true },
+        { stream: true, pathname: "/v1/chat/completions", authorized: true },
+      ]);
+      expect(setup.output).not.toContain(setup.credential);
+      expect(setup.activationResults).toEqual([expect.objectContaining({ ok: false })]);
+    },
+  );
 });
 
 function writeCompletion(response: ServerResponse, protocol: Scenario["protocol"]): void {

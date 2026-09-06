@@ -248,7 +248,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       website: Type.Optional(SetupInferenceHttpsUrl),
     }),
   ),
-  /** Provider-owned browser and device-code login methods. */
+  /** Interactive provider sign-in and custom endpoint setup methods. */
   authOptions: Type.Optional(
     Type.Array(
       closedObject({
@@ -260,7 +260,11 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         groupLabel: Type.Optional(Type.String()),
         icon: Type.Optional(SetupInferenceHttpsUrl),
         website: Type.Optional(SetupInferenceHttpsUrl),
-        kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
+        kind: Type.Union([
+          Type.Literal("oauth"),
+          Type.Literal("device-code"),
+          Type.Literal("custom"),
+        ]),
         featured: Type.Boolean(),
       }),
     ),

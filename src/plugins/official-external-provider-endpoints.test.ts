@@ -67,6 +67,55 @@ describe("official external provider endpoint catalog mirror", () => {
   const extensionManifests = listExtensionManifests();
   const catalogManifestsByPluginId = listCatalogManifestsByPluginId();
 
+  it("mirrors app-guided auth capabilities from canonical provider manifests", () => {
+    const fields = [
+      "appGuidedSecret",
+      "appGuidedAuth",
+      "appGuidedDiscovery",
+      "appGuidedActionLabel",
+      "onboardingFeatured",
+      "icon",
+      "website",
+    ] as const;
+    let checked = 0;
+    for (const { manifest } of extensionManifests) {
+      if (typeof manifest.id !== "string" || !Array.isArray(manifest.providerAuthChoices)) {
+        continue;
+      }
+      const catalog = catalogManifestsByPluginId.get(manifest.id);
+      if (!catalog || !Array.isArray(catalog.providers)) {
+        continue;
+      }
+      for (const provider of catalog.providers) {
+        if (!isRecord(provider) || !Array.isArray(provider.authChoices)) {
+          continue;
+        }
+        for (const choice of provider.authChoices) {
+          if (!isRecord(choice)) {
+            continue;
+          }
+          const canonical = manifest.providerAuthChoices.find(
+            (candidate: unknown) =>
+              isRecord(candidate) &&
+              candidate.provider === provider.id &&
+              candidate.method === choice.method &&
+              candidate.choiceId === choice.choiceId,
+          );
+          if (!isRecord(canonical)) {
+            continue;
+          }
+          for (const field of fields) {
+            expect(choice[field], `${manifest.id}/${String(choice.choiceId)} ${field}`).toEqual(
+              canonical[field],
+            );
+          }
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
   it("mirrors providerEndpoints for every dist-excluded plugin manifest that declares them", () => {
     const checkedPluginIds: string[] = [];
     for (const { dirName, manifest } of extensionManifests) {

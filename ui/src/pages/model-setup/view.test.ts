@@ -85,6 +85,33 @@ describe("renderModelSetup", () => {
     expect(container.querySelectorAll("img")).toHaveLength(0);
   });
 
+  it("connects an advertised custom endpoint separately from sign-in without hiding local setup help", () => {
+    const option = {
+      id: "custom-api-key",
+      label: "Custom endpoint",
+      kind: "custom" as const,
+      featured: false,
+    };
+    const onStartAuth = vi.fn();
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: { ...detected, candidates: [], authOptions: [option] },
+        },
+        onStartAuth,
+      }),
+    );
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-auth-choice="custom-api-key"] button',
+    );
+    expect(button?.textContent?.trim()).toBe("Connect");
+    expect(container.querySelector("[data-recommended-install]")).not.toBeNull();
+    expect(text(container)).not.toContain("Sign in with a provider");
+    button?.click();
+    expect(onStartAuth).toHaveBeenCalledWith(option);
+  });
+
   it.each(["logged in · ChatGPT account · alex@example.com", "logged in · API key (usage-billed)"])(
     "shows detected authentication without credential values: %s",
     (detail) => {

@@ -236,7 +236,21 @@ async function runSetupInferenceProbe(
     } else {
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
-      const executionConfig = plan.executionConfig ?? plan.config;
+      const baseExecutionConfig = plan.executionConfig ?? plan.config;
+      // A user pin is preferred, not exclusive during normal failover. Verification
+      // must restrict the probe to the entered/selected credential without changing saved policy.
+      const executionConfig = plan.authProfileId
+        ? {
+            ...baseExecutionConfig,
+            auth: {
+              ...baseExecutionConfig.auth,
+              order: {
+                ...baseExecutionConfig.auth?.order,
+                [plan.provider]: [plan.authProfileId],
+              },
+            },
+          }
+        : baseExecutionConfig;
       result = await runEmbedded({
         preparedRunAdmission,
         sessionId,

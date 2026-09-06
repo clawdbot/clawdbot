@@ -154,9 +154,10 @@ export async function persistActivatedSetupInference(input: {
   // writer moves them into the installed-plugin index before committing,
   // so post-write reconciliation must compare against the stripped route
   // and verify the exact index record separately below.
-  const persistedRoute = pendingCodexInstall
-    ? await projectRoute(stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")))
-    : verifiedRoute;
+  const persistedRoute =
+    pendingCodexInstall || plan.installedProviderPlugin
+      ? await projectRoute(stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")))
+      : verifiedRoute;
   // Runtime config may materialize provider defaults that are intentionally
   // absent from authored config. Compare source writes against the candidate
   // produced from the original source shape, without ignoring concurrent rows.

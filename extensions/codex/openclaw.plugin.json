@@ -411,6 +411,7 @@
     }
   },
   "configContracts": {
+    "initialConfigDefaults": { "sessionCatalog": { "enabled": false } },
     "secretInputs": {
       "paths": [
         { "path": "appServer.authToken", "expected": "string" },

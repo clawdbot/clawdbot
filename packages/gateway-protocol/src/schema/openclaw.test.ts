@@ -215,7 +215,14 @@ describe("OpenClaw setup detection protocol", () => {
           website: "https://ollama.com/download",
         },
       ],
-      authOptions: [],
+      authOptions: [
+        {
+          id: "custom-api-key",
+          label: "Custom endpoint",
+          kind: "custom",
+          featured: false,
+        },
+      ],
       prepareOptions: [
         {
           id: "lmstudio",

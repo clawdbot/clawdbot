@@ -1,6 +1,7 @@
 import CoreFoundation
 import CryptoKit
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 enum OpenClawConfigFile {
@@ -98,6 +99,7 @@ enum OpenClawConfigFile {
             } else {
                 dict
             }
+            output = InitialPluginConfigDefaults.applying(to: output, ifCreatingFileAt: url)
             let preservedGatewayAuth = self.preserveGatewayAuthIfNeeded(
                 previousRoot: previousRoot,
                 output: &output,

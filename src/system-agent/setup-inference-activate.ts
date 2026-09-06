@@ -60,6 +60,7 @@ import {
   resolveSetupAgentRuntimeId,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { retainSetupProviderInstall } from "./setup-inference-provider-install.js";
 import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 import {
@@ -82,25 +83,55 @@ export async function activateSetupInference(
           allowKeychainPrompt: true,
         })
       : null;
+  const enteredSecrets: string[] = [];
+  const prompter = params.prompter;
+  const guardedParams = prompter
+    ? {
+        ...params,
+        prompter: {
+          ...prompter,
+          text: async (input: Parameters<typeof prompter.text>[0]) => {
+            const value = await prompter.text(input);
+            if (input.sensitive && value) {
+              enteredSecrets.push(value);
+            }
+            return value;
+          },
+        },
+      }
+    : params;
   try {
-    const result = await activateSetupInferenceUnredacted(params, codexCliApiKey ?? undefined);
+    const result = await activateSetupInferenceUnredacted(
+      guardedParams,
+      codexCliApiKey ?? undefined,
+    );
     if (result.ok) {
       return {
         ...result,
         lines: await Promise.all(
           result.lines.map((line) =>
-            redactSetupInferenceError(line, params.apiKey, codexCliApiKey?.key),
+            redactSetupInferenceError(line, params.apiKey, codexCliApiKey?.key, ...enteredSecrets),
           ),
         ),
       };
     }
     return {
       ...result,
-      error: await redactSetupInferenceError(result.error, params.apiKey, codexCliApiKey?.key),
+      error: await redactSetupInferenceError(
+        result.error,
+        params.apiKey,
+        codexCliApiKey?.key,
+        ...enteredSecrets,
+      ),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const redacted = await redactSetupInferenceError(message, params.apiKey, codexCliApiKey?.key);
+    const redacted = await redactSetupInferenceError(
+      message,
+      params.apiKey,
+      codexCliApiKey?.key,
+      ...enteredSecrets,
+    );
     if (error instanceof WizardCancelledError) {
       throw new WizardCancelledError(redacted);
     }
@@ -157,14 +188,13 @@ async function activateSetupInferenceUnredacted(
   )();
   const testAgentDir = path.join(tempDir, "agent");
   let pendingCodexInstall: PluginInstallRecord | undefined;
+  let pendingProviderInstall: { pluginId: string; record: PluginInstallRecord } | undefined;
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
-  let codexMetadataNeedsRestore = false;
+  let probeMetadataNeedsRestore = false;
   let verificationProgress: WizardProgress | undefined;
-  let codexProbePluginGeneration: ReturnType<typeof loadSetupInferencePluginGeneration> | undefined;
+  let probePluginGeneration: ReturnType<typeof loadSetupInferencePluginGeneration> | undefined;
   const withProbePluginGeneration = <T>(run: () => T): T =>
-    codexProbePluginGeneration
-      ? withPluginRuntimeGenerationScope(codexProbePluginGeneration, run)
-      : run();
+    probePluginGeneration ? withPluginRuntimeGenerationScope(probePluginGeneration, run) : run();
   try {
     const plan = await buildTestPlan({
       kind: params.kind,
@@ -197,6 +227,12 @@ async function activateSetupInferenceUnredacted(
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
+    if (plan.installedProviderPlugin) {
+      const record = plan.config.plugins?.installs?.[plan.installedProviderPlugin];
+      if (record) {
+        pendingProviderInstall = { pluginId: plan.installedProviderPlugin, record };
+      }
+    }
     let testPlan = plan;
     if (plan.persistModelRef) {
       const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
@@ -263,7 +299,7 @@ async function activateSetupInferenceUnredacted(
               error: ensured.message,
             };
           }
-          codexMetadataNeedsRestore = true;
+          probeMetadataNeedsRestore = true;
           pendingCodexInstall = ensured.cfg.plugins?.installs?.codex;
           if (pendingCodexInstall) {
             // The managed package exists before inference can run. Mark this
@@ -329,7 +365,7 @@ async function activateSetupInferenceUnredacted(
             logger: { warn: (message) => (registryRefreshWarning = message) },
           });
           try {
-            codexProbePluginGeneration = loadSetupInferencePluginGeneration({
+            probePluginGeneration = loadSetupInferencePluginGeneration({
               config: testPlan.config,
               workspaceDir: workspace,
               selection: {
@@ -355,9 +391,25 @@ async function activateSetupInferenceUnredacted(
         return preparationFailure;
       }
     }
+    if (plan.installedProviderPlugin) {
+      probeMetadataNeedsRestore = true;
+      probePluginGeneration = await withPluginLifecycleLease({ signal: params.signal }, async () =>
+        loadSetupInferencePluginGeneration({
+          config: testPlan.config,
+          workspaceDir: workspace,
+          selection: {
+            provider: testPlan.provider,
+            modelId: testPlan.model,
+            runtime: "openclaw",
+            agentId: testPlan.routeAgentId,
+          },
+          resolvePluginMetadataSnapshot: resolveRouteMetadata,
+        }),
+      );
+    }
     const metadataWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
     const routeMetadataSnapshot =
-      codexProbePluginGeneration?.metadataSnapshot ??
+      probePluginGeneration?.metadataSnapshot ??
       resolveRouteMetadata({
         config: testPlan.config,
         env: process.env,
@@ -649,6 +701,18 @@ async function activateSetupInferenceUnredacted(
     };
   } finally {
     verificationProgress?.stop();
+    const providerRetained =
+      !pendingProviderInstall ||
+      (await retainSetupProviderInstall({
+        ...pendingProviderInstall,
+        deps,
+        verifyOwnership: true,
+      }));
+    const providerCleanupError = providerRetained
+      ? undefined
+      : new SetupInferenceActivationIndeterminateError(
+          "Could not confirm provider package ownership after setup. Restart the Gateway before retrying.",
+        );
     let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
     if (pendingCodexInstall && codexInstallOwnership !== "owned") {
       // Reassert after probing: a partial install-index commit may have cleared
@@ -664,15 +728,16 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
-    if (codexMetadataNeedsRestore) {
+    if (probeMetadataNeedsRestore) {
       // The probe owns a private registry. Restore only its staged metadata;
       // Gateway reload owns runtime replacement and the prepared auth generation.
       await restoreSetupPluginMetadata({ readSnapshot, workspaceDir: workspace, deps });
     }
     await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
-    if (codexCleanupError) {
+    const cleanupError = codexCleanupError ?? providerCleanupError;
+    if (cleanupError) {
       // oxlint-disable-next-line no-unsafe-finally -- an indeterminate plugin cleanup must supersede a stale success result
-      throw codexCleanupError;
+      throw cleanupError;
     }
   }
 }

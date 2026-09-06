@@ -958,7 +958,7 @@ Worker providers must declare each `api.registerWorkerProvider(...)` id in `cont
 
 ## configContracts reference
 
-Use `configContracts` for manifest-owned config behavior that generic core helpers need without importing plugin runtime: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing.
+Use `configContracts` for manifest-owned config behavior that generic core helpers need without importing plugin runtime: initial configuration defaults, dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing.
 
 ```json
 {
@@ -991,6 +991,14 @@ Use `configContracts` for manifest-owned config behavior that generic core helpe
 | `compatibilityRuntimePaths`   | No       | `string[]` | Root-relative compatibility paths this plugin can service during runtime before plugin code fully activates. Use this for legacy surfaces that should narrow bundled candidate sets without importing every compatible plugin runtime. |
 | `dangerousFlags`              | No       | `object[]` | Config literals that `openclaw doctor` should flag as insecure or dangerous when enabled. See below.                                                                                                                                   |
 | `secretInputs`                | No       | `object`   | Config paths under `plugins.entries.<id>.config` for SecretRef migration, audit, startup materialization, and optional runtime owner isolation. See below.                                                                             |
+
+`initialConfigDefaults` is an optional object of defaults within
+`plugins.entries.<id>.config`. Shipped declarations from the source tree and
+official catalogs are compiled into shared TypeScript and native bootstrap
+artifacts. They fill only absent fields when a configuration file is first
+created. Existing files, including empty configurations, and explicitly supplied
+values are unchanged. This is not a runtime default or a way for an installed
+third-party plugin to rewrite an existing configuration.
 
 Each `dangerousFlags` entry supports:
 

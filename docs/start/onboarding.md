@@ -85,12 +85,13 @@ Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
 tool-capable model with at least 16K of measured effective context already
 loaded in a reachable LM Studio or Ollama server. Detection runs on the
-Gateway host, including when the macOS app connects to a Linux Gateway. The best
-option is tested with a real completion and only saved
-after it answers. If setup fails, the app shows the reason so you can retry or
-choose another connection. If several options are found you can
-switch between them before continuing. Automatic local discovery never pulls
-or downloads a model. Ollama checks `/api/ps` for loaded models; an eligible
+Gateway host, including when the macOS app connects to a Linux Gateway. Discovery
+only lists available connections: choose the provider you want to use before
+OpenClaw tests it with a real completion. The connection is saved only after it
+answers. If the test fails, the app shows the reason so you can retry or choose
+another connection; it does not try another provider automatically. **Check
+again** refreshes the choices without activating a detected credential. Automatic
+local discovery never pulls or downloads a model. Ollama checks `/api/ps` for loaded models; an eligible
 model that is only installed on disk requires explicit setup through
 **Choose connection** → **Local only**. See [Ollama](/providers/ollama).
 
@@ -138,7 +139,20 @@ Studio API-key route. The list comes from the
 Gateway's active text-inference provider plugins rather than a fixed app list,
 so another provider can opt in without adding provider-specific macOS code.
 
-The manual key/token picker uses the same provider registry. In every route,
+The manual key/token picker includes installed providers and supported official
+providers that can be installed during setup. Choosing an uninstalled provider
+opens its normal plugin review before the credential is tested; simply viewing
+the choices does not install anything.
+
+For an unlisted API service, choose **Custom endpoint…**. Enter the endpoint URL,
+API key, protocol, and model in the setup sheet. Connected custom setup requires
+an explicitly entered key; it cannot select credentials from the Gateway host's
+environment or SecretRefs. If an endpoint ID already belongs to a provider or
+account, connected setup chooses a new ID rather than changing unverified routes.
+CLI custom setup retains its existing credential
+options, including endpoints that do not require a key.
+
+In every route,
 the provider supplies its starter model and configuration. If the starter is an
 alias, OpenClaw tests and saves the provider's canonical model name while
 preserving existing model settings that the starter does not replace. The credential is stored only after
@@ -151,6 +165,13 @@ After a new model passes its live check, native setup closes and opens guided
 onboarding in the dashboard. OpenClaw helps configure the remaining workspace,
 Gateway, channels, and other optional features, then hands you off to normal
 agent chat. A verified pre-existing model opens the normal dashboard instead.
+
+On newly created configurations, Claude Code and Codex session discovery is off.
+Enable it under **Settings → Automation → Plugins** when you want to browse
+those tools' existing sessions, then restart the Gateway. Existing configurations
+and explicit discovery settings are unchanged. Hiding a session catalog only
+changes this browser's display; it does not disable discovery. Browsing a native
+session is separate from importing its history to continue it in OpenClaw.
 
 Memory import is part of guided setup, not a separate native onboarding page.
 For a local Gateway, supported sources include Claude Code auto-memory, Codex

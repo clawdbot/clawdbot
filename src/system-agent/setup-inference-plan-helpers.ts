@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
@@ -16,9 +17,10 @@ import {
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import { GEMINI_CLI_DEFAULT_MODEL_REF } from "../commands/onboard-inference.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderAuthResult } from "../plugins/types.js";
+import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   type ActivateSetupInferenceDeps,
@@ -46,6 +48,8 @@ export type SetupInferenceTestPlan = {
   authProfileId?: string;
   /** Model to persist as default on success; undefined keeps the current one. */
   persistModelRef?: string;
+  /** Provider installed by this activation, requiring a private post-install generation. */
+  installedProviderPlugin?: string;
   manualAuth?: {
     profiles: ProviderAuthResult["profiles"];
     runtimeConfigBase: OpenClawConfig;
@@ -289,6 +293,7 @@ export function prepareManualAuthForActivation(params: {
   preparedConfig: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
   selectedProfileId: string;
+  bindProviderCredential?: boolean;
   modelRef: string;
   targetModelRef: string;
   providerId: string;
@@ -313,6 +318,13 @@ export function prepareManualAuthForActivation(params: {
     selectedProfile,
     selectedProfileId,
   });
+  if (params.bindProviderCredential) {
+    // A fresh client-selected endpoint keeps its credential boundary after verification.
+    config.auth = {
+      ...config.auth,
+      order: { ...config.auth?.order, [params.providerId]: [selectedProfileId] },
+    };
+  }
   return {
     config,
     profiles: [profile],
@@ -437,4 +449,84 @@ export function canonicalizeSetupModelRef(params: {
     aliasIndex,
   });
   return resolved ? `${resolved.ref.provider}/${resolved.ref.model}` : params.raw;
+}
+
+export function buildPreparedProviderTestPlan(params: {
+  cfg: OpenClawConfig;
+  sourceCfg: OpenClawConfig;
+  preparedConfig: OpenClawConfig;
+  profiles: ProviderAuthResult["profiles"];
+  selectedProfileId?: string;
+  bindProviderCredential?: boolean;
+  providerPlugin?: ProviderPlugin;
+  modelRef: string;
+  pluginId?: string;
+  routeAgentId: string;
+  agentDir: string;
+  installationPlugins?: OpenClawConfig["plugins"];
+}): SetupInferenceTestPlan {
+  const ref = parseRef(params.modelRef);
+  // Auth starters are raw provider input; guided discovery already chose its canonical model.
+  ref.model =
+    normalizeOptionalString(
+      params.providerPlugin?.normalizeModelId?.({
+        provider: ref.provider,
+        modelId: ref.model,
+      }),
+    ) ?? ref.model;
+  const modelRef = `${ref.provider}/${ref.model}`;
+  const projection = {
+    baseConfig: params.cfg,
+    preparedConfig: params.preparedConfig,
+    modelRef: params.modelRef,
+    targetModelRef: modelRef,
+    providerId: ref.provider,
+    pluginId: params.pluginId,
+    agentId: params.routeAgentId,
+  };
+  const prepared = params.selectedProfileId
+    ? prepareManualAuthForActivation({
+        ...projection,
+        profiles: params.profiles,
+        selectedProfileId: params.selectedProfileId,
+        bindProviderCredential: params.bindProviderCredential,
+      })
+    : {
+        config: projectManualInferenceConfig(projection),
+        profiles: [],
+        selectedProfileId: undefined,
+      };
+  const config: OpenClawConfig = params.installationPlugins
+    ? {
+        ...prepared.config,
+        plugins: {
+          ...params.installationPlugins,
+          entries: {
+            ...params.installationPlugins.entries,
+            ...prepared.config.plugins?.entries,
+          },
+        },
+      }
+    : prepared.config;
+  return {
+    runner: "embedded",
+    ...ref,
+    modelRef,
+    agentDir: params.agentDir,
+    config,
+    ...(params.installationPlugins !== undefined
+      ? { installedProviderPlugin: params.pluginId }
+      : {}),
+    agentId: "openclaw",
+    routeAgentId: params.routeAgentId,
+    ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
+    persistModelRef: modelRef,
+    manualAuth: {
+      profiles: prepared.profiles,
+      runtimeConfigBase: params.cfg,
+      sourceConfigBase: params.sourceCfg,
+      configPatch: createMergePatch(params.cfg, config),
+      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    },
+  };
 }

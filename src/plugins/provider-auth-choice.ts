@@ -24,7 +24,10 @@ import {
 } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
-import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
+import {
+  resolveProviderInstallCatalogEntry,
+  type ProviderInstallCatalogEntry,
+} from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type {
   ProviderAuthMethod,
@@ -403,6 +406,32 @@ async function prepareProviderPluginAuthMethod(
   };
 }
 
+/** Installs a selected provider through the normal onboarding artifact review. */
+export async function installProviderAuthChoicePlugin(params: {
+  config: OpenClawConfig;
+  entry: ProviderInstallCatalogEntry;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  workspaceDir?: string;
+  beforePersistentEffect?: () => void | Promise<void>;
+}) {
+  const { ensureOnboardingPluginInstalled } =
+    await import("../commands/onboarding-plugin-install.js");
+  return await ensureOnboardingPluginInstalled({
+    cfg: params.config,
+    entry: {
+      pluginId: params.entry.pluginId,
+      label: params.entry.label,
+      install: params.entry.install,
+      ...(params.entry.origin === "bundled" ? { trustedSourceLinkedOfficialInstall: true } : {}),
+    },
+    prompter: params.prompter,
+    runtime: params.runtime,
+    workspaceDir: params.workspaceDir,
+    beforePersistentEffect: params.beforePersistentEffect,
+  });
+}
+
 export async function prepareAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
 ): Promise<PreparedApplyProviderAuthChoiceResult | null> {
@@ -500,18 +529,9 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       });
     }
     if (!resolved && installCatalogEntry) {
-      const { ensureOnboardingPluginInstalled } =
-        await import("../commands/onboarding-plugin-install.js");
-      const installResult = await ensureOnboardingPluginInstalled({
-        cfg: nextConfig,
-        entry: {
-          pluginId: installCatalogEntry.pluginId,
-          label: installCatalogEntry.label,
-          install: installCatalogEntry.install,
-          ...(installCatalogEntry.origin === "bundled"
-            ? { trustedSourceLinkedOfficialInstall: true }
-            : {}),
-        },
+      const installResult = await installProviderAuthChoicePlugin({
+        config: nextConfig,
+        entry: installCatalogEntry,
         prompter: params.prompter,
         runtime: params.runtime,
         workspaceDir,

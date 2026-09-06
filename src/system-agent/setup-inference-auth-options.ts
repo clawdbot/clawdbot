@@ -24,7 +24,7 @@ export type SetupInferenceAuthOption = {
   groupLabel?: string;
   icon?: string;
   website?: string;
-  kind: "oauth" | "device-code";
+  kind: "oauth" | "device-code" | "custom";
   featured: boolean;
 };
 

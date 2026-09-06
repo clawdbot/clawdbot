@@ -80,7 +80,9 @@ struct OnboardingAISetupSheet: View {
                 if deviceCode == nil,
                    let url = OnboardingProviderAuthLink.safeURL(step.externalurl)
                 {
-                    Link("Open sign-in page…", destination: url)
+                    Link(
+                        self.model.isCustomEndpointSetup ? "Open setup page…" : "Open sign-in page…",
+                        destination: url)
                         .font(.caption.weight(.semibold))
                 }
                 if wizardStepExecutor(step) != "gateway" {
@@ -92,6 +94,8 @@ struct OnboardingAISetupSheet: View {
                     ? String(localized: "Preparing your AI connection…")
                     : self.model.isPreparingModel
                     ? String(localized: "Starting local model setup…")
+                    : self.model.isCustomEndpointSetup
+                    ? String(localized: "Starting custom endpoint setup…")
                     : String(localized: "Starting secure sign-in…"))
             }
 
@@ -103,6 +107,8 @@ struct OnboardingAISetupSheet: View {
                         ? String(localized: "AI setup didn’t complete")
                         : self.model.isPreparingModel
                         ? String(localized: "Model setup didn’t complete")
+                        : self.model.isCustomEndpointSetup
+                        ? String(localized: "Custom endpoint setup didn’t complete")
                         : String(localized: "Sign-in didn’t complete"),
                     message: error.summary,
                     details: error.detail,
@@ -181,7 +187,10 @@ struct OnboardingAISetupSheet: View {
     }
 
     private func openProviderAuthURLIfNeeded(_ rawURL: String?) {
-        guard let url = OnboardingProviderAuthLink.safeURL(rawURL),
+        // A custom endpoint may offer documentation, not an OAuth redirect.
+        // Keep that link explicit rather than opening a browser automatically.
+        guard !self.model.isCustomEndpointSetup,
+              let url = OnboardingProviderAuthLink.safeURL(rawURL),
               url != openedProviderAuthURL
         else { return }
         self.openedProviderAuthURL = url

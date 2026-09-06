@@ -1,3 +1,4 @@
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -6,6 +7,24 @@ import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choice
 import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { parseRef } from "./setup-inference-plan-helpers.js";
+
+/** Reads occupied credential namespaces without resolving secrets or changing stores. */
+export function readSetupProviderNamespaces(
+  config: OpenClawConfig,
+  agentId: string,
+  loadStore = loadPersistedAuthProfileStore,
+): string[] {
+  const providers = new Set<string>();
+  for (const store of [loadStore(), loadStore(resolveAgentDir(config, agentId))]) {
+    for (const credential of Object.values(store?.profiles ?? {})) {
+      providers.add(credential.provider);
+    }
+    for (const provider of Object.keys(store?.order ?? {})) {
+      providers.add(provider);
+    }
+  }
+  return [...providers];
+}
 
 export async function runProviderManualSecretMethod(params: {
   config: OpenClawConfig;

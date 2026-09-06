@@ -281,6 +281,55 @@ describe("config io write", () => {
   };
 
   itWithHome(
+    "starts a newly created config with external session discovery disabled",
+    async (home) => {
+      const io = createFastConfigIO(home);
+      await io.writeConfigFile({ gateway: { mode: "local" } });
+      const fresh = JSON.parse(
+        await fs.readFile(configPathForHome(home), "utf8"),
+      ) as OpenClawConfig;
+      expect(fresh.plugins?.entries).toMatchObject({
+        anthropic: { config: { sessionCatalog: { enabled: false } } },
+        codex: { config: { sessionCatalog: { enabled: false } } },
+      });
+      expect(fresh.plugins?.entries?.anthropic?.enabled).toBeUndefined();
+      expect(fresh.plugins?.entries?.codex?.enabled).toBeUndefined();
+    },
+  );
+
+  itWithHome("persists plugin-owned defaults only on the first config write", async (home) => {
+    const io = createFastConfigIO(home);
+    await io.writeConfigFile({
+      plugins: {
+        entries: {
+          anthropic: { config: { sessionCatalog: { enabled: true } } },
+          codex: { config: { sessionCatalog: { enabled: false, homes: ["/kept"] } } },
+        },
+      },
+    });
+    const configPath = configPathForHome(home);
+    const fresh = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(fresh.plugins?.entries?.anthropic?.config).toEqual({
+      sessionCatalog: { enabled: true },
+    });
+    expect(fresh.plugins?.entries?.codex?.config).toEqual({
+      sessionCatalog: { enabled: false, homes: ["/kept"] },
+    });
+
+    await io.writeConfigFile({ gateway: { mode: "local" } });
+    const subsequent = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(subsequent.plugins).toBeUndefined();
+  });
+
+  itWithHome("does not initialize an existing empty config", async (home) => {
+    const { configPath } = await writeConfigFixture(home, {});
+    const io = createFastConfigIO(home);
+    await io.writeConfigFile({ gateway: { mode: "local" } });
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.plugins).toBeUndefined();
+  });
+
+  itWithHome(
     "preserves a bare legacy restriction through an unrelated write and reload",
     async (home) => {
       const original: OpenClawConfig = { agents: { defaults: { models: { bare: {} } } } };
@@ -485,6 +534,8 @@ describe("config io write", () => {
       const staleConfig = {
         plugins: { entries: { demo: { enabled: true } } },
       };
+      // Test repeated writes of an existing config; first creation adds plugin defaults.
+      await writeConfigFixture(home, staleConfig);
 
       await io.writeConfigFile(staleConfig);
       await io.writeConfigFile(staleConfig);

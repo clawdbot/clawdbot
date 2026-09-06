@@ -6,6 +6,7 @@ import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { applyInitialPluginConfigDefaults } from "../plugins/initial-config-defaults.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -100,6 +101,7 @@ export async function writeConfigFileFromContext(
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
 
+  const firstWriteConfig = snapshot.exists ? cfg : applyInitialPluginConfigDefaults(cfg);
   const {
     nextConfig,
     explicitSetPaths,
@@ -109,7 +111,7 @@ export async function writeConfigFileFromContext(
     cronOwner,
   } = prepareConfigWriteTopology({
     ...snapshotRead,
-    nextConfig: cfg,
+    nextConfig: firstWriteConfig,
     options,
     unsetPaths,
     env: deps.env,

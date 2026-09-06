@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
@@ -15,20 +14,14 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
-import {
-  resolveManifestProviderAuthChoice,
-  type ProviderAuthChoiceMetadata,
-} from "../plugins/provider-auth-choices.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
-import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
+import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
+import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
@@ -47,116 +40,16 @@ import {
 } from "./setup-inference-core.js";
 import {
   type SetupInferenceTestPlan,
+  buildPreparedProviderTestPlan,
   canonicalizeSetupModelRef,
   parseRef,
   prepareManualAuthForActivation,
-  projectManualInferenceConfig,
 } from "./setup-inference-plan-helpers.js";
-import { runProviderManualSecretMethod } from "./setup-inference-plan-provider-auth.js";
-
-function buildPreparedProviderTestPlan(params: {
-  cfg: OpenClawConfig;
-  sourceCfg: OpenClawConfig;
-  preparedConfig: OpenClawConfig;
-  profiles: ProviderAuthResult["profiles"];
-  selectedProfileId?: string;
-  providerPlugin?: ProviderPlugin;
-  modelRef: string;
-  pluginId?: string;
-  routeAgentId: string;
-  agentDir: string;
-}): SetupInferenceTestPlan {
-  const ref = parseRef(params.modelRef);
-  // Auth starters are raw provider input; guided discovery already chose its canonical model.
-  ref.model =
-    normalizeOptionalString(
-      params.providerPlugin?.normalizeModelId?.({
-        provider: ref.provider,
-        modelId: ref.model,
-      }),
-    ) ?? ref.model;
-  const modelRef = `${ref.provider}/${ref.model}`;
-  const projection = {
-    baseConfig: params.cfg,
-    preparedConfig: params.preparedConfig,
-    modelRef: params.modelRef,
-    targetModelRef: modelRef,
-    providerId: ref.provider,
-    pluginId: params.pluginId,
-    agentId: params.routeAgentId,
-  };
-  const prepared = params.selectedProfileId
-    ? prepareManualAuthForActivation({
-        ...projection,
-        profiles: params.profiles,
-        selectedProfileId: params.selectedProfileId,
-      })
-    : {
-        config: projectManualInferenceConfig(projection),
-        profiles: [],
-        selectedProfileId: undefined,
-      };
-  return {
-    runner: "embedded",
-    ...ref,
-    modelRef,
-    agentDir: params.agentDir,
-    config: prepared.config,
-    agentId: "openclaw",
-    routeAgentId: params.routeAgentId,
-    ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
-    persistModelRef: modelRef,
-    manualAuth: {
-      profiles: prepared.profiles,
-      runtimeConfigBase: params.cfg,
-      sourceConfigBase: params.sourceCfg,
-      configPatch: createMergePatch(params.cfg, prepared.config),
-      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-    },
-  };
-}
-
-async function prepareSetupProviderAuthChoice(
-  params: Parameters<typeof buildTestPlan>[0],
-  choice: ProviderAuthChoiceMetadata,
-) {
-  // Carry callable auth methods past the lease, never an unbound enabled config.
-  return await withPluginLifecycleLease({ signal: params.signal }, async () => {
-    const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
-    const enableResult = await enablePluginWithCapabilityConsent(params.cfg, choice.pluginId, {
-      workspaceDir: params.pluginWorkspaceDir,
-      beforePersistentEffect: params.beforePersistentEffect,
-      onCapabilityConsent: params.prompter
-        ? createPluginCapabilityConsentPrompter(params.prompter, () =>
-            throwIfSetupInferenceCancelled(params),
-          )
-        : undefined,
-    });
-    if (!enableResult.enabled) {
-      return { error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).` };
-    }
-    const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
-    if (!sourceEnableResult.enabled) {
-      return {
-        error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
-      };
-    }
-    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-      config: enableResult.config,
-      workspaceDir: params.pluginWorkspaceDir,
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-      onlyPluginIds: [choice.pluginId],
-    });
-    const provider = providers.find(
-      (candidate) =>
-        candidate.pluginId === choice.pluginId &&
-        normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-    );
-    const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
-    return { enableResult, sourceEnableResult, provider, method };
-  });
-}
+import {
+  readSetupProviderNamespaces,
+  runProviderManualSecretMethod,
+} from "./setup-inference-plan-provider-auth.js";
+import { prepareSetupProviderAuthChoice } from "./setup-inference-provider-install.js";
 
 export async function buildTestPlan(params: {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
@@ -213,7 +106,14 @@ export async function buildTestPlan(params: {
     if (providerChoice.error !== undefined) {
       return { error: providerChoice.error };
     }
-    const { enableResult, sourceEnableResult, provider, method } = providerChoice;
+    const {
+      enableResult,
+      baseEnableResult,
+      sourceEnableResult,
+      provider,
+      method,
+      installationPlugins,
+    } = providerChoice;
     if (!provider || !method?.appGuidedSetup) {
       return { error: "That detected provider is no longer available on this Gateway." };
     }
@@ -258,7 +158,8 @@ export async function buildTestPlan(params: {
         };
       }
       return buildPreparedProviderTestPlan({
-        cfg: enableResult.config,
+        cfg: baseEnableResult.config,
+        installationPlugins,
         sourceCfg: sourceEnableResult.config,
         preparedConfig,
         profiles: result.profiles,
@@ -456,19 +357,26 @@ export async function buildTestPlan(params: {
       }
       const authChoice = params.authChoice?.trim();
       if (interactive && authChoice === "custom-api-key") {
-        if (params.isRemoteProviderAuth) {
-          return { error: "For a custom provider, run openclaw onboard on the Gateway host." };
-        }
         if (!params.prompter) {
-          return { error: "Custom provider setup requires an interactive CLI session." };
+          return { error: "Custom provider setup requires an interactive setup session." };
         }
         const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
         throwIfSetupInferenceCancelled(params);
+        const reservedProviderIds = params.isRemoteProviderAuth
+          ? readSetupProviderNamespaces(
+              cfg,
+              routeAgentId,
+              params.deps.loadPersistedAuthProfileStore,
+            )
+          : undefined;
         const prepared = await waitForProviderAuth(
           promptCustomApiConfig({
             config: cfg,
             runtime: params.runtime,
             prompter: params.prompter,
+            explicitCredentials: params.isRemoteProviderAuth,
+            reservedProviderIds,
+            signal: params.signal,
             target: {
               agentId: routeAgentId,
               agentDir: params.agentDir,
@@ -480,16 +388,33 @@ export async function buildTestPlan(params: {
           params.signal,
         );
         throwIfSetupInferenceCancelled(params);
+        const profiles: ProviderAuthResult["profiles"] = [];
+        if (params.isRemoteProviderAuth) {
+          const providerConfig = prepared.config.models?.providers?.[prepared.providerId];
+          const key = providerConfig?.apiKey;
+          if (!providerConfig || typeof key !== "string" || !key.trim()) {
+            return { error: "Custom setup requires an explicitly entered API key." };
+          }
+          // Pin the exact entered credential for the real completion. Config-only
+          // keys otherwise allow ambient auth profiles to win during runtime resolution.
+          profiles.push({
+            profileId: `${prepared.providerId}:custom-setup`,
+            credential: { type: "api_key", provider: prepared.providerId, key },
+          });
+          delete providerConfig.apiKey;
+        }
         return buildPreparedProviderTestPlan({
           ...params,
           preparedConfig: prepared.config,
-          profiles: [],
+          profiles,
+          selectedProfileId: profiles[0]?.profileId,
+          bindProviderCredential: params.isRemoteProviderAuth,
           modelRef: `${prepared.providerId}/${prepared.modelId}`,
           routeAgentId,
         });
       }
       const choice = authChoice
-        ? (params.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
+        ? ((params.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
             authChoice,
             {
               config: cfg,
@@ -497,7 +422,16 @@ export async function buildTestPlan(params: {
               includeUntrustedWorkspacePlugins: false,
               includeWorkspacePlugins: false,
             },
-          )
+          ) ??
+          (params.deps.resolveProviderInstallCatalogEntry ?? resolveProviderInstallCatalogEntry)(
+            authChoice,
+            {
+              config: cfg,
+              workspaceDir: params.pluginWorkspaceDir,
+              includeUntrustedWorkspacePlugins: false,
+              includeWorkspacePlugins: false,
+            },
+          ))
         : undefined;
       if (
         !choice ||
@@ -517,7 +451,14 @@ export async function buildTestPlan(params: {
       if (providerChoice.error !== undefined) {
         return { error: providerChoice.error };
       }
-      const { enableResult, sourceEnableResult, provider, method } = providerChoice;
+      const {
+        enableResult,
+        baseEnableResult,
+        sourceEnableResult,
+        provider,
+        method,
+        installationPlugins,
+      } = providerChoice;
       const resolved = provider && method ? { provider, method } : null;
       if (
         !resolved ||
@@ -612,6 +553,8 @@ export async function buildTestPlan(params: {
             config: enableResult.config,
             runtime: params.runtime,
             prompter: createQuickstartNotePrompter(params.runtime),
+            signal: params.signal,
+            assertCurrent: () => throwIfSetupInferenceCancelled(params),
             method: resolved.method,
             agentDir: params.agentDir,
             workspaceDir,
@@ -645,6 +588,7 @@ export async function buildTestPlan(params: {
           error: `${resolved.provider.label} could not prepare this ${interactive ? "login" : "credential"} for app-guided setup: ${detail}`,
         };
       }
+      throwIfSetupInferenceCancelled(params);
       const modelRef = result.defaultModel
         ? normalizeAgentModelRefForConfig(result.defaultModel)
         : "";
@@ -669,7 +613,8 @@ export async function buildTestPlan(params: {
         };
       }
       return buildPreparedProviderTestPlan({
-        cfg: enableResult.config,
+        cfg: baseEnableResult.config,
+        installationPlugins,
         sourceCfg: sourceEnableResult.config,
         preparedConfig,
         profiles: result.profiles,

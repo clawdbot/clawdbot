@@ -17,26 +17,26 @@ extension OnboardingAISetupModel {
     }
 
     enum ActivationRequest {
-        case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
+        case candidate(kind: String, modelRef: String, label: String)
         case manual(key: String, provider: ManualProvider)
 
         var kind: String {
             switch self {
-            case let .candidate(kind, _, _, _): kind
+            case let .candidate(kind, _, _): kind
             case .manual: "api-key"
             }
         }
 
         var modelRef: String? {
             switch self {
-            case let .candidate(_, modelRef, _, _): modelRef
+            case let .candidate(_, modelRef, _): modelRef
             case .manual: nil
             }
         }
 
         var label: String {
             switch self {
-            case let .candidate(_, _, label, _): label
+            case let .candidate(_, _, label): label
             case let .manual(_, provider): provider.label
             }
         }
@@ -49,17 +49,10 @@ extension OnboardingAISetupModel {
             }
         }
 
-        var tryNextOnFailure: Bool {
-            switch self {
-            case let .candidate(_, _, _, tryNext): tryNext
-            case .manual: false
-            }
-        }
-
         @MainActor
         func params(supportsExactModel: Bool) -> [String: AnyCodable] {
             switch self {
-            case let .candidate(kind, modelRef, _, _):
+            case let .candidate(kind, modelRef, _):
                 OnboardingAISetupModel.activationParams(
                     kind: kind,
                     modelRef: modelRef,
@@ -262,6 +255,8 @@ extension OnboardingAISetupModel {
         let website: String?
         let kind: String
         let featured: Bool
+
+        var isCustomEndpoint: Bool { self.id == "custom-api-key" }
     }
 
     struct RecommendedInstall: Identifiable, Equatable, Decodable {
@@ -367,7 +362,21 @@ extension OnboardingAISetupModel {
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
     }
 
+    var customEndpointOption: AuthOption? {
+        self.authOptions.first(where: \.isCustomEndpoint)
+    }
+
+    var providerSignInOptions: [AuthOption] {
+        self.authOptions.filter { !$0.isCustomEndpoint }
+    }
+
+    var isCustomEndpointSetup: Bool {
+        self.activeAuthOption?.isCustomEndpoint == true
+    }
+
     func startProviderAuth(_ option: AuthOption) {
+        // Do not let a stale custom action bypass the current Gateway catalog.
+        guard !option.isCustomEndpoint || self.customEndpointOption == option else { return }
         self.startProviderWizard(option, kind: .auth)
     }
 
@@ -380,20 +389,6 @@ extension OnboardingAISetupModel {
         default: nil
         }
         self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
-    func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
     }
 
     func startProviderPrepare(_ option: PrepareOption) {

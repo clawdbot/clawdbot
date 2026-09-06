@@ -1,0 +1,12 @@
+{
+  "anthropic": {
+    "sessionCatalog": {
+      "enabled": false
+    }
+  },
+  "codex": {
+    "sessionCatalog": {
+      "enabled": false
+    }
+  }
+}

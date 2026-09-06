@@ -22,6 +22,10 @@ import type {
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
+import type {
+  resolveProviderInstallCatalogEntries,
+  resolveProviderInstallCatalogEntry,
+} from "../plugins/provider-install-catalog.js";
 import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
@@ -94,9 +98,9 @@ export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
   /** Installed integrations that cannot safely run the tool-free setup probe. */
   unavailableCandidates: SetupInferenceUnavailableCandidate[];
-  /** Text-inference key/token methods exposed by installed provider manifests. */
+  /** Text-inference key/token methods declared by installed or installable providers. */
   manualProviders: SetupInferenceManualProvider[];
-  /** Interactive provider-owned browser and device-code sign-in methods. */
+  /** Interactive provider sign-in and custom endpoint setup methods. */
   authOptions: SetupInferenceAuthOption[];
   /** Provider-owned app-guided local model setup methods. */
   prepareOptions?: SetupInferencePrepareOption[];
@@ -263,6 +267,7 @@ export type ActivateSetupInferenceDeps = {
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
+  resolveProviderInstallCatalogEntry?: typeof resolveProviderInstallCatalogEntry;
   enablePluginInConfig?: typeof enablePluginInConfig;
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
   loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
@@ -295,6 +300,7 @@ export type DetectSetupInferenceDeps = {
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
+  resolveProviderInstallCatalogEntries?: typeof resolveProviderInstallCatalogEntries;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   enablePluginInConfig?: typeof enablePluginInConfig;
 };

@@ -1,6 +1,6 @@
 // Onboard custom tests cover custom provider prompts and API-key credential handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 
 const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
@@ -80,12 +80,14 @@ async function runPromptCustomApi(
   prompter: ReturnType<typeof createTestPrompter>,
   config: object = {},
   target?: Parameters<typeof promptCustomApiConfig>[0]["target"],
+  options: Pick<Parameters<typeof promptCustomApiConfig>[0], "explicitCredentials" | "signal"> = {},
 ) {
   return promptCustomApiConfig({
     prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
     runtime: { log: vi.fn() } as unknown as Parameters<typeof promptCustomApiConfig>[0]["runtime"],
     config,
     ...(target ? { target } : {}),
+    ...options,
   });
 }
 
@@ -110,6 +112,107 @@ describe("promptCustomApiConfig", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+  });
+
+  it("uses a masked explicit key without reading host credentials or retaining old credential headers", async () => {
+    vi.mocked(ensureApiKeyFromEnvOrPrompt).mockClear();
+    vi.stubEnv("CUSTOM_API_KEY", "host-environment-key");
+    const prompter = createTestPrompter({
+      text: ["https://example.test/v1", "entered-key", "llama3", "custom", ""],
+      select: ["openai"],
+    });
+    const fetch = stubFetchSequence([{ ok: true }]);
+    const otherModel = {
+      id: "other-model",
+      name: "Other",
+      reasoning: false,
+      input: ["text"],
+      maxTokens: 256,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    const result = await runPromptCustomApi(
+      prompter,
+      {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.test/v1",
+              apiKey: "old-host-key",
+              headers: { Authorization: "Bearer old-header" },
+              models: [
+                {
+                  ...otherModel,
+                  id: "llama3",
+                  baseUrl: "https://old-endpoint.test",
+                  headers: { Authorization: "Bearer old-model-header" },
+                },
+                otherModel,
+              ],
+            },
+          },
+        },
+      },
+      undefined,
+      { explicitCredentials: true },
+    );
+    expect(ensureApiKeyFromEnvOrPrompt).not.toHaveBeenCalled();
+    expect(prompter.text.mock.calls[1]?.[0]).toMatchObject({ sensitive: true });
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: "Bearer entered-key" },
+      redirect: "error",
+    });
+    expect(result.providerId).toBe("custom-2");
+    expect(result.config.models?.providers?.custom).toMatchObject({
+      baseUrl: "https://example.test/v1",
+      apiKey: "old-host-key",
+      headers: { Authorization: "Bearer old-header" },
+    });
+    expect(
+      result.config.models?.providers?.custom?.models.find((model) => model.id === "other-model"),
+    ).toEqual(otherModel);
+    const selected = result.config.models?.providers?.[result.providerId];
+    expect(selected).toMatchObject({ apiKey: "entered-key" });
+    expect(selected).not.toHaveProperty("headers");
+    const models = selected?.models;
+    expect(models).toHaveLength(1);
+    expect(models?.find((model) => model.id === "llama3")).not.toHaveProperty("headers");
+    expect(models?.find((model) => model.id === "llama3")).not.toHaveProperty("baseUrl");
+    expect(JSON.stringify(prompter.note.mock.calls)).not.toContain("host-environment-key");
+  });
+
+  it.each(["", "${CUSTOM_API_KEY}"])(
+    "rejects missing or host-referenced connected credentials before a request: %s",
+    async (key) => {
+      vi.mocked(ensureApiKeyFromEnvOrPrompt).mockClear();
+      const prompter = createTestPrompter({ text: ["https://example.test/v1", key] });
+      const fetch = stubFetchSequence([]);
+      await expect(
+        runPromptCustomApi(prompter, {}, undefined, { explicitCredentials: true }),
+      ).rejects.toThrow();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(ensureApiKeyFromEnvOrPrompt).not.toHaveBeenCalled();
+    },
+  );
+
+  it("aborts connected endpoint verification without continuing protocol detection", async () => {
+    const controller = new AbortController();
+    const prompter = createTestPrompter({
+      text: ["https://example.test/v1", "entered-key", "llama3"],
+      select: ["unknown"],
+    });
+    const fetch = vi.fn(async (_url, init: RequestInit) => {
+      controller.abort();
+      init.signal?.throwIfAborted();
+      throw new Error("expected cancellation");
+    });
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      runPromptCustomApi(prompter, {}, undefined, {
+        explicitCredentials: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("handles openai flow and saves alias", async () => {

@@ -460,6 +460,9 @@ export function normalizeManifestConfigContracts(
   const compatibilityRuntimePaths = normalizeTrimmedStringList(value.compatibilityRuntimePaths);
   const rawSecretInputs = isRecord(value.secretInputs) ? value.secretInputs : undefined;
   const dangerousFlags = normalizeManifestDangerousConfigFlags(value.dangerousFlags);
+  const initialConfigDefaults = isRecord(value.initialConfigDefaults)
+    ? structuredClone(value.initialConfigDefaults)
+    : undefined;
   const secretInputPaths = rawSecretInputs
     ? normalizeManifestSecretInputPaths(rawSecretInputs.paths)
     : undefined;
@@ -475,6 +478,7 @@ export function normalizeManifestConfigContracts(
         } satisfies PluginManifestSecretInputContracts)
       : undefined;
   const configContracts = {
+    ...(initialConfigDefaults ? { initialConfigDefaults } : {}),
     ...(compatibilityMigrationPaths.length > 0 ? { compatibilityMigrationPaths } : {}),
     ...(compatibilityRuntimePaths.length > 0 ? { compatibilityRuntimePaths } : {}),
     ...(dangerousFlags ? { dangerousFlags } : {}),

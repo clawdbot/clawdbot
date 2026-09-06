@@ -101,6 +101,7 @@
               {
                 "method": "arcee-platform",
                 "choiceId": "arceeai-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Arcee AI API key",
                 "choiceHint": "Direct (chat.arcee.ai)",
                 "groupId": "arcee",
@@ -117,6 +118,7 @@
               {
                 "method": "openrouter",
                 "choiceId": "arceeai-openrouter",
+                "appGuidedSecret": true,
                 "choiceLabel": "OpenRouter API key",
                 "choiceHint": "Via OpenRouter (openrouter.ai)",
                 "groupId": "arcee",
@@ -164,6 +166,7 @@
               {
                 "method": "api-key",
                 "choiceId": "baseten-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Baseten API key",
                 "groupId": "baseten",
                 "groupLabel": "Baseten",
@@ -216,6 +219,7 @@
               {
                 "method": "api-key",
                 "choiceId": "byteplus-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "BytePlus API key",
                 "groupId": "byteplus",
                 "groupLabel": "BytePlus",
@@ -278,6 +282,7 @@
               {
                 "method": "api-key",
                 "choiceId": "cerebras-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Cerebras API key",
                 "groupId": "cerebras",
                 "groupLabel": "Cerebras",
@@ -336,6 +341,7 @@
               {
                 "method": "oauth",
                 "choiceId": "chutes",
+                "appGuidedAuth": "oauth",
                 "choiceLabel": "Chutes (OAuth)",
                 "choiceHint": "Browser sign-in",
                 "groupId": "chutes",
@@ -348,6 +354,7 @@
               {
                 "method": "api-key",
                 "choiceId": "chutes-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Chutes API key",
                 "choiceHint": "Open-source models including Llama, DeepSeek, and more",
                 "groupId": "chutes",
@@ -395,6 +402,7 @@
               {
                 "method": "api-key",
                 "choiceId": "cohere-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Cohere API key",
                 "groupId": "cohere",
                 "groupLabel": "Cohere",
@@ -565,6 +573,7 @@
               {
                 "method": "api-key",
                 "choiceId": "deepinfra-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "DeepInfra API key",
                 "choiceHint": "Unified API for open source models",
                 "groupId": "deepinfra",
@@ -640,6 +649,7 @@
               {
                 "method": "api-key",
                 "choiceId": "deepseek-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "DeepSeek API key",
                 "groupId": "deepseek",
                 "groupLabel": "DeepSeek",
@@ -689,6 +699,7 @@
               {
                 "method": "api-key",
                 "choiceId": "featherless-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Featherless AI API key",
                 "choiceHint": "OpenAI-compatible access to open models",
                 "groupId": "featherless",
@@ -742,6 +753,7 @@
               {
                 "method": "api-key",
                 "choiceId": "gmi-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "GMI Cloud API key",
                 "choiceHint": "OpenAI-compatible GMI Cloud endpoint.",
                 "groupId": "gmi",
@@ -834,6 +846,8 @@
               {
                 "method": "api-key",
                 "choiceId": "meta-api-key",
+                "appGuidedSecret": true,
+                "onboardingFeatured": true,
                 "choiceLabel": "Meta API key",
                 "choiceHint": "Meta (Responses API)",
                 "groupId": "meta",
@@ -883,6 +897,7 @@
               {
                 "method": "api-key",
                 "choiceId": "mistral-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Mistral API key",
                 "groupId": "mistral",
                 "groupLabel": "Mistral AI",
@@ -937,6 +952,7 @@
               {
                 "method": "api-key",
                 "choiceId": "novita-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "NovitaAI API key",
                 "choiceHint": "OpenAI-compatible NovitaAI endpoint",
                 "groupId": "novita",
@@ -995,6 +1011,7 @@
               {
                 "method": "api-key",
                 "choiceId": "opencode-zen",
+                "appGuidedSecret": true,
                 "choiceLabel": "OpenCode Zen catalog",
                 "groupId": "opencode",
                 "groupLabel": "OpenCode",
@@ -1057,6 +1074,7 @@
               {
                 "method": "api-key",
                 "choiceId": "groq-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Groq API key",
                 "groupId": "groq",
                 "groupLabel": "Groq",
@@ -1111,6 +1129,7 @@
               {
                 "method": "api-key",
                 "choiceId": "kilocode-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Kilo Gateway API key",
                 "choiceHint": "API key (OpenRouter-compatible)",
                 "groupId": "kilocode",
@@ -1165,6 +1184,7 @@
               {
                 "method": "api-key",
                 "choiceId": "kimi-code-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Kimi Code API key (subscription)",
                 "groupId": "moonshot",
                 "groupLabel": "Moonshot AI (Kimi K2.6)",
@@ -1224,6 +1244,7 @@
               {
                 "method": "api-key",
                 "choiceId": "opencode-go",
+                "appGuidedSecret": true,
                 "choiceLabel": "OpenCode Go catalog",
                 "groupId": "opencode",
                 "groupLabel": "OpenCode",
@@ -1320,6 +1341,7 @@
               {
                 "method": "api-key",
                 "choiceId": "qianfan-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Qianfan API key",
                 "groupId": "qianfan",
                 "groupLabel": "Qianfan",
@@ -1389,6 +1411,7 @@
               {
                 "method": "standard-api-key-cn",
                 "choiceId": "qwen-standard-api-key-cn",
+                "appGuidedSecret": true,
                 "deprecatedChoiceIds": [
                   "modelstudio-standard-api-key-cn"
                 ],
@@ -1408,6 +1431,7 @@
               {
                 "method": "standard-api-key",
                 "choiceId": "qwen-standard-api-key",
+                "appGuidedSecret": true,
                 "deprecatedChoiceIds": [
                   "modelstudio-standard-api-key"
                 ],
@@ -1427,6 +1451,7 @@
               {
                 "method": "api-key-cn",
                 "choiceId": "qwen-api-key-cn",
+                "appGuidedSecret": true,
                 "deprecatedChoiceIds": [
                   "modelstudio-api-key-cn"
                 ],
@@ -1446,6 +1471,7 @@
               {
                 "method": "api-key",
                 "choiceId": "qwen-api-key",
+                "appGuidedSecret": true,
                 "deprecatedChoiceIds": [
                   "modelstudio-api-key"
                 ],
@@ -1479,6 +1505,7 @@
               {
                 "method": "api-key",
                 "choiceId": "qwen-token-plan",
+                "appGuidedSecret": true,
                 "choiceLabel": "Qwen Token Plan (Global/Intl)",
                 "choiceHint": "Endpoint: token-plan.ap-southeast-1.maas.aliyuncs.com",
                 "groupId": "qwen",
@@ -1495,6 +1522,7 @@
               {
                 "method": "api-key-cn",
                 "choiceId": "qwen-token-plan-cn",
+                "appGuidedSecret": true,
                 "choiceLabel": "Qwen Token Plan (China)",
                 "choiceHint": "Endpoint: token-plan.cn-beijing.maas.aliyuncs.com",
                 "groupId": "qwen",
@@ -1565,6 +1593,7 @@
               {
                 "method": "api-key",
                 "choiceId": "fireworks-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Fireworks API key",
                 "choiceHint": "API key",
                 "groupId": "fireworks",
@@ -1629,6 +1658,7 @@
               {
                 "method": "api-key",
                 "choiceId": "moonshot-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Moonshot API key (.ai)",
                 "choiceHint": "Kimi K2.6 + Kimi",
                 "groupId": "moonshot",
@@ -1645,6 +1675,7 @@
               {
                 "method": "api-key-cn",
                 "choiceId": "moonshot-api-key-cn",
+                "appGuidedSecret": true,
                 "choiceLabel": "Moonshot API key (.cn)",
                 "choiceHint": "Kimi K2.6 + Kimi",
                 "groupId": "moonshot",
@@ -1723,6 +1754,7 @@
               {
                 "method": "api-key",
                 "choiceId": "tokenhub-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Tencent TokenHub",
                 "choiceHint": "Hy via Tencent TokenHub Gateway",
                 "groupId": "tencent",
@@ -1753,6 +1785,7 @@
               {
                 "method": "api-key",
                 "choiceId": "tokenplan-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Tencent TokenPlan",
                 "choiceHint": "Hy via Tencent TokenPlan Gateway",
                 "groupId": "tencent",
@@ -1803,6 +1836,7 @@
               {
                 "method": "api-key",
                 "choiceId": "venice-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Venice AI API key",
                 "choiceHint": "Privacy-focused (uncensored models)",
                 "groupId": "venice",
@@ -1853,6 +1887,7 @@
               {
                 "method": "api-key",
                 "choiceId": "ai-gateway-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Vercel AI Gateway API key",
                 "choiceHint": "API key",
                 "groupId": "ai-gateway",
@@ -1974,6 +2009,7 @@
               {
                 "method": "api-key",
                 "choiceId": "xiaomi-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Xiaomi API key (Pay-as-you-go)",
                 "choiceHint": "Endpoint: api.xiaomimimo.com/v1",
                 "groupId": "xiaomi",
@@ -2004,6 +2040,7 @@
               {
                 "method": "token-plan-ams",
                 "choiceId": "xiaomi-token-plan-ams",
+                "appGuidedSecret": true,
                 "choiceLabel": "Xiaomi Token Plan (Europe)",
                 "choiceHint": "Endpoint preset: token-plan-ams.xiaomimimo.com/v1",
                 "groupId": "xiaomi",
@@ -2020,6 +2057,7 @@
               {
                 "method": "token-plan-cn",
                 "choiceId": "xiaomi-token-plan-cn",
+                "appGuidedSecret": true,
                 "choiceLabel": "Xiaomi Token Plan (China)",
                 "choiceHint": "Endpoint preset: token-plan-cn.xiaomimimo.com/v1",
                 "groupId": "xiaomi",
@@ -2036,6 +2074,7 @@
               {
                 "method": "token-plan-sgp",
                 "choiceId": "xiaomi-token-plan-sgp",
+                "appGuidedSecret": true,
                 "choiceLabel": "Xiaomi Token Plan (Singapore)",
                 "choiceHint": "Endpoint preset: token-plan-sgp.xiaomimimo.com/v1",
                 "groupId": "xiaomi",
@@ -2108,6 +2147,7 @@
               {
                 "method": "api-key",
                 "choiceId": "zai-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Z.AI API key",
                 "groupId": "zai",
                 "groupLabel": "Z.AI",
@@ -2123,6 +2163,7 @@
               {
                 "method": "coding-global",
                 "choiceId": "zai-coding-global",
+                "appGuidedSecret": true,
                 "choiceLabel": "Coding-Plan-Global",
                 "choiceHint": "GLM Coding Plan Global (api.z.ai)",
                 "groupId": "zai",
@@ -2139,6 +2180,7 @@
               {
                 "method": "coding-cn",
                 "choiceId": "zai-coding-cn",
+                "appGuidedSecret": true,
                 "choiceLabel": "Coding-Plan-CN",
                 "choiceHint": "GLM Coding Plan CN (open.bigmodel.cn)",
                 "groupId": "zai",
@@ -2155,6 +2197,7 @@
               {
                 "method": "global",
                 "choiceId": "zai-global",
+                "appGuidedSecret": true,
                 "choiceLabel": "Global",
                 "choiceHint": "Z.AI Global (api.z.ai)",
                 "groupId": "zai",
@@ -2171,6 +2214,7 @@
               {
                 "method": "cn",
                 "choiceId": "zai-cn",
+                "appGuidedSecret": true,
                 "choiceLabel": "CN",
                 "choiceHint": "Z.AI CN (open.bigmodel.cn)",
                 "groupId": "zai",
@@ -2226,6 +2270,7 @@
               {
                 "method": "api-key",
                 "choiceId": "synthetic-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Synthetic API key",
                 "groupId": "synthetic",
                 "groupLabel": "Synthetic",
@@ -2314,6 +2359,7 @@
               {
                 "method": "api-key",
                 "choiceId": "volcengine-api-key",
+                "appGuidedSecret": true,
                 "choiceLabel": "Volcano Engine API key",
                 "groupId": "volcengine",
                 "groupLabel": "Volcano Engine",
@@ -2380,6 +2426,7 @@
               {
                 "method": "standard-api-key-cn",
                 "choiceId": "stepfun-standard-api-key-cn",
+                "appGuidedSecret": true,
                 "choiceLabel": "StepFun Standard API key (China)",
                 "choiceHint": "Endpoint: api.stepfun.com/v1",
                 "groupId": "stepfun",
@@ -2396,6 +2443,7 @@
               {
                 "method": "standard-api-key-intl",
                 "choiceId": "stepfun-standard-api-key-intl",
+                "appGuidedSecret": true,
                 "choiceLabel": "StepFun Standard API key (Global/Intl)",
                 "choiceHint": "Endpoint: api.stepfun.ai/v1",
                 "groupId": "stepfun",
@@ -2426,6 +2474,7 @@
               {
                 "method": "plan-api-key-cn",
                 "choiceId": "stepfun-plan-api-key-cn",
+                "appGuidedSecret": true,
                 "choiceLabel": "StepFun Step Plan API key (China)",
                 "choiceHint": "Endpoint: api.stepfun.com/step_plan/v1",
                 "groupId": "stepfun",
@@ -2442,6 +2491,7 @@
               {
                 "method": "plan-api-key-intl",
                 "choiceId": "stepfun-plan-api-key-intl",
+                "appGuidedSecret": true,
                 "choiceLabel": "StepFun Step Plan API key (Global/Intl)",
                 "choiceHint": "Endpoint: api.stepfun.ai/step_plan/v1",
                 "groupId": "stepfun",

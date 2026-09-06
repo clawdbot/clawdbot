@@ -419,6 +419,9 @@
       }
     }
   },
+  "configContracts": {
+    "initialConfigDefaults": { "sessionCatalog": { "enabled": false } }
+  },
   "uiHints": {
     "sessionCatalog": {
       "label": "Native Session Discovery",

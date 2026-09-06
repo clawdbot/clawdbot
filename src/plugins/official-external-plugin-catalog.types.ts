@@ -3,6 +3,7 @@ import type {
   PluginManifestCatalog,
   PluginManifestChannelConfig,
   PluginManifestContracts,
+  PluginManifestConfigContracts,
   PluginManifestProviderEndpoint,
 } from "./manifest-types.js";
 import type {
@@ -28,6 +29,14 @@ export type OfficialExternalProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  /** Mirrors the owning manifest; never inferred from method names. */
+  appGuidedSecret?: boolean;
+  appGuidedAuth?: "oauth" | "device-code";
+  appGuidedDiscovery?: boolean;
+  appGuidedActionLabel?: string;
+  onboardingFeatured?: boolean;
+  icon?: string;
+  website?: string;
   onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
 };
 
@@ -74,6 +83,7 @@ type OfficialExternalCatalogChannel = PluginPackageChannel & {
 
 /** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
+  configContracts?: PluginManifestConfigContracts;
   legacyPluginIds?: readonly string[];
   legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];

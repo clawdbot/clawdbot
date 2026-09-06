@@ -98,7 +98,10 @@ async function requestVerification(params: {
   endpoint: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  signal?: AbortSignal;
+  explicitCredentials?: boolean;
 }): Promise<VerificationResult> {
+  params.signal?.throwIfAborted();
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
@@ -110,6 +113,8 @@ async function requestVerification(params: {
           ...params.headers,
         },
         body: JSON.stringify(params.body),
+        signal: params.signal,
+        ...(params.explicitCredentials ? { redirect: "error" as const } : {}),
       },
       VERIFY_TIMEOUT_MS,
     );
@@ -124,6 +129,7 @@ async function requestVerification(params: {
     }
     return { ok: res.ok, status: res.status };
   } catch (error) {
+    params.signal?.throwIfAborted();
     return { ok: false, error };
   } finally {
     await res?.body?.cancel().catch(() => undefined);
@@ -135,16 +141,28 @@ async function requestOpenAiVerification(params: {
   apiKey: string;
   modelId: string;
   responsesApi?: boolean;
+  signal?: AbortSignal;
+  explicitCredentials?: boolean;
 }): Promise<VerificationResult> {
-  return await requestVerification(buildOpenAiVerificationProbeRequest(params));
+  return await requestVerification({
+    ...buildOpenAiVerificationProbeRequest(params),
+    signal: params.signal,
+    explicitCredentials: params.explicitCredentials,
+  });
 }
 
 async function requestAnthropicVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  signal?: AbortSignal;
+  explicitCredentials?: boolean;
 }): Promise<VerificationResult> {
-  return await requestVerification(buildAnthropicVerificationProbeRequest(params));
+  return await requestVerification({
+    ...buildAnthropicVerificationProbeRequest(params),
+    signal: params.signal,
+    explicitCredentials: params.explicitCredentials,
+  });
 }
 
 async function promptBaseUrlAndKey(params: {
@@ -152,6 +170,7 @@ async function promptBaseUrlAndKey(params: {
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
+  explicitCredentials?: boolean;
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
     message: t("wizard.customProvider.apiBaseUrl"),
@@ -162,6 +181,30 @@ async function promptBaseUrlAndKey(params: {
     },
   });
   const baseUrl = baseUrlInput.trim();
+  if (params.explicitCredentials) {
+    const url = new URL(baseUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+      throw new Error("Enter an HTTP(S) API URL without embedded credentials.");
+    }
+    // A connected client may supply a credential, never select host environment
+    // secrets or SecretRefs for delivery to a client-selected endpoint.
+    const validate = (value: string) =>
+      !value.trim() || value.includes("${")
+        ? "Enter an API key directly; host environment references are not supported here."
+        : undefined;
+    const key = normalizeSecretInput(
+      await params.prompter.text({
+        message: "API key (required)",
+        sensitive: true,
+        validate,
+      }),
+    );
+    const error = validate(key);
+    if (error) {
+      throw new Error(error);
+    }
+    return { baseUrl, apiKey: key, resolvedApiKey: key };
+  }
   const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
   let apiKeyInput: SecretInput | undefined;
   // Keep the persisted key shape from the credential helper while also keeping
@@ -213,6 +256,7 @@ async function applyCustomApiRetryChoice(params: {
   prompter: WizardPrompter;
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
+  explicitCredentials?: boolean;
   retryChoice: CustomApiRetryChoice;
   current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
@@ -223,6 +267,7 @@ async function applyCustomApiRetryChoice(params: {
       config: params.config,
       secretInputMode: params.secretInputMode,
       initialBaseUrl: baseUrl,
+      explicitCredentials: params.explicitCredentials,
     });
     baseUrl = retryInput.baseUrl;
     apiKey = retryInput.apiKey;
@@ -242,8 +287,32 @@ export async function promptCustomApiConfig(params: {
   target?: OnboardingAgentTarget;
   secretInputMode?: SecretInputMode;
   setAsPrimary?: boolean;
+  /** Connected clients can enter a key, but cannot borrow host credentials. */
+  explicitCredentials?: boolean;
+  /** Provider namespaces already owned by persisted credentials. No secret values are passed. */
+  reservedProviderIds?: readonly string[];
+  signal?: AbortSignal;
 }): Promise<CustomApiResult> {
-  const { prompter, runtime, config } = params;
+  const { runtime, config } = params;
+  const prompter: WizardPrompter = params.explicitCredentials
+    ? {
+        ...params.prompter,
+        text: async (input) => {
+          const validate = (value: string) =>
+            value.includes("${")
+              ? "Host environment references are not supported in connected setup."
+              : input.validate?.(value);
+          const value = await params.prompter.text({ ...input, validate, signal: params.signal });
+          const error = validate(value);
+          if (error) {
+            throw new Error(error);
+          }
+          params.signal?.throwIfAborted();
+          return value;
+        },
+      }
+    : params.prompter;
+  params.signal?.throwIfAborted();
   const manifestPlugins = loadManifestMetadataSnapshot({
     config,
     workspaceDir: params.target?.workspaceDir,
@@ -254,6 +323,7 @@ export async function promptCustomApiConfig(params: {
     prompter,
     config,
     secretInputMode: params.secretInputMode,
+    explicitCredentials: params.explicitCredentials,
   });
   let baseUrl = baseInput.baseUrl;
   let apiKey = baseInput.apiKey;
@@ -274,6 +344,7 @@ export async function promptCustomApiConfig(params: {
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
 
   while (true) {
+    params.signal?.throwIfAborted();
     let verifiedFromProbe = false;
     if (!compatibility) {
       // Probe in a fixed order so unknown endpoints converge to a concrete
@@ -281,6 +352,8 @@ export async function promptCustomApiConfig(params: {
       const probeSpinner = prompter.progress(t("wizard.customProvider.detectionProgress"));
       const openaiProbe = await requestOpenAiVerification({
         baseUrl,
+        signal: params.signal,
+        explicitCredentials: params.explicitCredentials,
         apiKey: resolvedApiKey,
         modelId,
       });
@@ -291,6 +364,8 @@ export async function promptCustomApiConfig(params: {
       } else {
         const openaiResponsesProbe = await requestOpenAiVerification({
           baseUrl,
+          signal: params.signal,
+          explicitCredentials: params.explicitCredentials,
           apiKey: resolvedApiKey,
           modelId,
           responsesApi: true,
@@ -302,6 +377,8 @@ export async function promptCustomApiConfig(params: {
         } else {
           const anthropicProbe = await requestAnthropicVerification({
             baseUrl,
+            signal: params.signal,
+            explicitCredentials: params.explicitCredentials,
             apiKey: resolvedApiKey,
             modelId,
           });
@@ -320,6 +397,7 @@ export async function promptCustomApiConfig(params: {
               prompter,
               config,
               secretInputMode: params.secretInputMode,
+              explicitCredentials: params.explicitCredentials,
               retryChoice,
               current: { baseUrl, apiKey, resolvedApiKey, modelId },
             }));
@@ -338,9 +416,17 @@ export async function promptCustomApiConfig(params: {
     const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
     const result =
       compatibility === "anthropic"
-        ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
+        ? await requestAnthropicVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+            signal: params.signal,
+            explicitCredentials: params.explicitCredentials,
+          })
         : await requestOpenAiVerification({
             baseUrl,
+            signal: params.signal,
+            explicitCredentials: params.explicitCredentials,
             apiKey: resolvedApiKey,
             modelId,
             responsesApi: compatibility === "openai-responses",
@@ -352,7 +438,9 @@ export async function promptCustomApiConfig(params: {
     if (result.error !== undefined) {
       verifySpinner.stop(
         t("wizard.customProvider.verificationFailedError", {
-          error: formatVerificationError(result.error),
+          error: resolvedApiKey
+            ? formatVerificationError(result.error).split(resolvedApiKey).join("[redacted]")
+            : formatVerificationError(result.error),
         }),
       );
     } else {
@@ -365,6 +453,7 @@ export async function promptCustomApiConfig(params: {
       prompter,
       config,
       secretInputMode: params.secretInputMode,
+      explicitCredentials: params.explicitCredentials,
       retryChoice,
       current: { baseUrl, apiKey, resolvedApiKey, modelId },
     }));
@@ -395,6 +484,9 @@ export async function promptCustomApiConfig(params: {
         config,
         baseUrl,
         providerId: providerIdInput,
+        reservedProviderIds: params.reservedProviderIds,
+        reuseExistingProvider: !params.explicitCredentials,
+        manifestPlugins,
       });
       // Alias validation must use the post-collision provider id, otherwise a
       // renamed endpoint could incorrectly collide with the requested id.
@@ -416,6 +508,7 @@ export async function promptCustomApiConfig(params: {
           initialValue: imageInputInference.supportsImageInput,
         });
   const resolvedCompatibility = compatibility ?? "openai";
+  params.signal?.throwIfAborted();
   const result = applyCustomApiConfig({
     config,
     baseUrl,
@@ -423,9 +516,11 @@ export async function promptCustomApiConfig(params: {
     compatibility: resolvedCompatibility,
     apiKey,
     providerId: providerIdInput,
+    reservedProviderIds: params.reservedProviderIds,
     alias: aliasInput,
     manifestPlugins,
     supportsImageInput,
+    ...(params.explicitCredentials ? { reuseExistingProvider: false } : {}),
     ...(params.target ? { target: params.target } : {}),
     ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
   });

@@ -65,6 +65,9 @@
           "id": "codex",
           "label": "Codex"
         },
+        "configContracts": {
+          "initialConfigDefaults": { "sessionCatalog": { "enabled": false } }
+        },
         "contracts": {
           "migrationProviders": ["codex"]
         },

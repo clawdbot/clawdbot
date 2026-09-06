@@ -43,6 +43,12 @@ struct ConfigureRemoteCommandTests {
 
             let data = try Data(contentsOf: configURL)
             let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let entries = try #require((root["plugins"] as? [String: Any])?["entries"] as? [String: Any])
+            for pluginId in ["anthropic", "codex"] {
+                let config = try #require((entries[pluginId] as? [String: Any])?["config"] as? [String: Any])
+                let catalog = try #require(config["sessionCatalog"] as? [String: Any])
+                #expect(catalog["enabled"] as? Bool == false)
+            }
             let gateway = try #require(root["gateway"] as? [String: Any])
             let remote = try #require(gateway["remote"] as? [String: Any])
             #expect(gateway["mode"] as? String == "remote")

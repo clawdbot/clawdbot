@@ -148,7 +148,7 @@ function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDe
   const installs = result.recommendedInstalls ?? [];
   if (
     result.candidates.length > 0 ||
-    (result.authOptions?.length ?? 0) > 0 ||
+    (result.authOptions?.some((option) => option.kind !== "custom") ?? false) ||
     installs.length === 0
   ) {
     return nothing;
@@ -272,7 +272,9 @@ function renderAuthRow(props: ModelSetupViewProps, option: AuthOption) {
         ${
           option.kind === "device-code"
             ? t("modelSetup.signIn.pair")
-            : t("modelSetup.signIn.signIn")
+            : option.kind === "custom"
+              ? t("common.connect")
+              : t("modelSetup.signIn.signIn")
         }
       </button>
     </div>
@@ -280,9 +282,9 @@ function renderAuthRow(props: ModelSetupViewProps, option: AuthOption) {
 }
 
 function renderSignIn(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
-  const options = (result.authOptions ?? []).toSorted(
-    (left, right) => Number(right.featured) - Number(left.featured),
-  );
+  const options = (result.authOptions ?? [])
+    .filter((option) => option.kind !== "custom")
+    .toSorted((left, right) => Number(right.featured) - Number(left.featured));
   if (options.length === 0) {
     return nothing;
   }
@@ -459,6 +461,13 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
     ${current} ${renderEmptyState(props, result)} ${renderCandidateRows(props, result)}
     ${renderUnavailable(props, result)} ${renderPrepare(props, result)}
     ${renderSignIn(props, result)} ${renderManual(props, result)}
+    ${(result.authOptions ?? [])
+      .filter((option) => option.kind === "custom")
+      .map(
+        (option) => html`<section class="settings-section">
+          <div class="model-setup__rows">${renderAuthRow(props, option)}</div>
+        </section>`,
+      )}
   `;
 }
 
