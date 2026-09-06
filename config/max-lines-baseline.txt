@@ -515,7 +515,6 @@ src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/doctor/shared/preview-warnings.test.ts
-src/commands/doctor/shared/preview-warnings.ts
 src/commands/doctor/shared/stale-auth-order.test.ts
 src/commands/gateway-status.test.ts
 src/commands/migrate.test.ts
