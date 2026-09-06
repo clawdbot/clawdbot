@@ -52,6 +52,9 @@ const text = vi.fn();
 const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }));
 const isCancel = (value: unknown) => value === "cancel";
 const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
+const updateFailureActionMocks = vi.hoisted(() => ({
+  runInteractiveUpdateFailureAction: vi.fn(),
+}));
 
 const readPackageName = vi.fn();
 const readPackageVersion = vi.fn();
@@ -581,6 +584,7 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: runtimeCapture,
 }));
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
+vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
@@ -1874,6 +1878,7 @@ describe("update-cli", () => {
     probePortUsage.mockResolvedValue("free");
     serviceEnabled.mockResolvedValue(true);
     serviceDefinitionMutationCapability.mockResolvedValue(undefined);
+    updateFailureActionMocks.runInteractiveUpdateFailureAction.mockResolvedValue("triage");
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
     restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
     writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);

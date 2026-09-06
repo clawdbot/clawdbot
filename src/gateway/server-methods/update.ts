@@ -6,9 +6,7 @@ import { validateUpdateRunParams } from "../../../packages/gateway-protocol/src/
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
@@ -42,9 +40,9 @@ import {
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
-import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
 import {
   foldPostCoreFinalizeIntoResult,
+  readPreUpdateConfigForPostCoreFinalize,
   runPostCoreFinalizeAfterGatewayUpdate,
 } from "../../infra/update-post-core-finalize.js";
 import {
@@ -80,28 +78,15 @@ import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
 import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
-async function readPreUpdateConfigForPostCoreFinalize(): Promise<
-  PreUpdateConfigRestoreInput | undefined
-> {
-  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-  if (!snapshot.valid) {
-    return undefined;
-  }
-  return {
-    sourceConfig: snapshot.sourceConfig,
-    authoredConfig: isRecord(snapshot.parsed)
-      ? (snapshot.parsed as OpenClawConfig)
-      : snapshot.sourceConfig,
-  };
-}
-
 export const updateHandlers: GatewayRequestHandlers = {
   ...updateStatusHandlers,
+  "update.report": updateReportHandler,
   "update.run": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
@@ -317,6 +302,11 @@ export const updateHandlers: GatewayRequestHandlers = {
           ...(adoptedPackageTargetVersion ? { version: adoptedPackageTargetVersion } : {}),
         },
       });
+      sentinelMeta.target = devTarget
+        ? `${devTarget.upstreamRef}@${devTarget.upstreamSha}`
+        : adoptedPackageTargetVersion
+          ? `version ${adoptedPackageTargetVersion}`
+          : `${effectiveChannel} channel`;
       const acknowledgeUpdate = async (beforeVersion: string | null) => {
         if (refuseNonOwner()) {
           return false;
