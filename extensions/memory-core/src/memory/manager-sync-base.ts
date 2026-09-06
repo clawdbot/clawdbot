@@ -169,7 +169,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     message: string,
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
-  protected abstract pruneEmbeddingCacheIfNeeded(): void;
+  protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(
