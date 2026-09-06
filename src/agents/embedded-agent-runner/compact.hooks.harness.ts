@@ -10,6 +10,10 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { ModelAuthMode } from "../model-auth.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLeaseOptions,
+} from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
 import {
   agentSessionAutomaticCompaction,
@@ -348,6 +352,7 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       ...(modelApi ? { modelApi } : {}),
       ...(params.resolvedTransport ? { transport: params.resolvedTransport } : {}),
     },
+    providerRuntimeHandle: params.providerRuntimeHandle,
     auth: {
       providerForAuth: params.provider,
       authProfileProviderForAuth: params.authProfileProvider ?? params.provider,
@@ -451,7 +456,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
 };
 
 export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
-  async (input: Record<string, unknown>) => ({
+  async (input: PreparedModelRuntimeInput, _options?: PreparedModelRuntimeLeaseOptions) => ({
     snapshot: {
       agentId: input.agentId,
       agentDir: input.agentDir,
@@ -465,7 +470,7 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
     release: vi.fn(),
   }),
 );
-export const getCurrentPluginMetadataSnapshotMock: Mock<
+const getCurrentPluginMetadataSnapshotMock: Mock<
   typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
 > = vi.fn(() => emptyPluginMetadataSnapshot);
 
@@ -1050,6 +1055,10 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: buildAgentRuntimePlanMock,
+    resolvePreparedProviderRuntimeHandle: vi.fn(
+      ({ providerRuntimeHandle, provider, modelId, workspaceDir }: BuildAgentRuntimePlanParams) =>
+        providerRuntimeHandle ?? { provider, modelId, workspaceDir, prepared: true },
+    ),
   }));
 
   vi.doMock("../../plugins/memory-runtime.js", () => ({

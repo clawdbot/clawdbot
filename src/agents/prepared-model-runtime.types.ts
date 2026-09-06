@@ -109,6 +109,19 @@ export type PreparedModelRuntimeLease = Readonly<{
   release: () => void;
 }>;
 
+export type PreparedModelRuntimeLeaseOptions = {
+  retainIdleRunOwner?: boolean;
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  abortSignal?: AbortSignal;
+  /** Pure planning against admitted facts; requested selections remain explicit and additive. */
+  deriveRuntimePluginSelections?: (context: {
+    config: OpenClawConfig;
+    metadataSnapshot: PluginMetadataSnapshot;
+  }) => readonly AgentHarnessPluginSelection[];
+};
+
 export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
   provenance?: PreparedModelRuntimeOwner["provenance"];

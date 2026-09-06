@@ -13,13 +13,13 @@ import { createDiscordHandlerParams } from "./message-handler.test-helpers.js";
 it("applies current inbound timing without losing queued Discord messages", async () => {
   const client = createInternalTestClient();
   const params = createDiscordHandlerParams();
-  const dispatched: string[] = [];
+  const dispatched: string[][] = [];
   setRuntimeConfigSnapshot(params.cfg, params.cfg);
   const handler = createDiscordMessageDispatcher({
     ...params,
     testing: {
-      preflightDiscordMessage: async ({ data }) => {
-        dispatched.push(data.message.content ?? "");
+      preflightDiscordMessage: async ({ data, precedingMessages = [] }) => {
+        dispatched.push([...precedingMessages, data.message].map((message) => message.id));
         return null;
       },
     },
@@ -56,24 +56,29 @@ it("applies current inbound timing without losing queued Discord messages", asyn
   vi.useFakeTimers();
   try {
     await enqueue("immediate");
-    expect(dispatched).toEqual(["immediate"]);
+    expect(dispatched).toEqual([["immediate"]]);
 
     publish({ debounceMs: 50 });
     await enqueue("first");
     await vi.advanceTimersByTimeAsync(25);
-    expect(dispatched).toEqual(["immediate"]);
+    expect(dispatched).toEqual([["immediate"]]);
     publish({ debounceMs: 50, byChannel: { discord: 10 } });
     await enqueue("second");
     await vi.advanceTimersByTimeAsync(9);
-    expect(dispatched).toEqual(["immediate"]);
+    expect(dispatched).toEqual([["immediate"]]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(dispatched).toEqual(["immediate", "first\nsecond"]);
+    expect(dispatched).toEqual([["immediate"], ["first", "second"]]);
 
     publish({ debounceMs: 50 });
     await enqueue("pending");
     publish({ debounceMs: 0 });
     await enqueue("after disable");
-    expect(dispatched).toEqual(["immediate", "first\nsecond", "pending", "after disable"]);
+    expect(dispatched).toEqual([
+      ["immediate"],
+      ["first", "second"],
+      ["pending"],
+      ["after disable"],
+    ]);
 
     publish({ debounceMs: 50 });
     await enqueue("cancel on shutdown");

@@ -13,6 +13,7 @@ import {
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import { attachModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
@@ -53,7 +54,10 @@ import {
 import { supportsModelTools } from "../model-tool-support.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
-import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
+import {
+  buildAgentRuntimePlan,
+  resolvePreparedProviderRuntimeHandle,
+} from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   resolveSessionPermissionExecMode,
@@ -242,7 +246,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
-    const effectiveModel = applyAuthHeaderOverride(
+    const modelWithAuth = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
         contextTokenBudget < (runtimeModelWithContext.contextWindow ?? Infinity)
           ? { ...runtimeModelWithContext, contextWindow: contextTokenBudget }
@@ -255,6 +259,18 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       hasRuntimeAuthExchange ? null : apiKeyInfo,
       params.config,
     );
+    const providerRuntimeHandle = resolvePreparedProviderRuntimeHandle({
+      provider,
+      modelId,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      providerRuntimeHandle: params.runtimePlan?.providerRuntimeHandle,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
+    });
+    const effectiveModel = attachModelProviderRuntimePluginHandle(
+      modelWithAuth,
+      providerRuntimeHandle,
+    );
     const reuseFullRuntimePlan = params.runtimePlan?.auth === resolvedRuntimeAuthPlan;
     const preparedRuntimePlan =
       (reuseFullRuntimePlan ? params.runtimePlan : undefined) ??
@@ -263,6 +279,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         modelId,
         model: effectiveModel,
         modelApi: effectiveModel.api,
+        providerRuntimeHandle,
         harnessId: preparedHarnessRuntime,
         harnessRuntime: preparedHarnessRuntime,
         authProfileMode: resolvedRuntimeAuthPlan.selectedAuthMode,
@@ -279,7 +296,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const runtimePlan = reuseFullRuntimePlan
       ? preparedRuntimePlan
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
-
     const runAbortController = new AbortController();
     const spawnWorkspaceDir =
       effectiveCwd !== effectiveWorkspace
@@ -337,6 +353,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           },
           sandbox,
           sessionPermissionPolicy,
+          requireWorkspaceOnly: params.requireWorkspaceOnly,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,

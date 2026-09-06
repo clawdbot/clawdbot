@@ -368,6 +368,8 @@ export type ReplyPayloadMetadata = {
   heartbeatTerminalToolFailure?: {
     toolName: string;
   };
+  /** Private scratch must survive reply copies without becoming serializable channel data. */
+  heartbeatScratchProposal?: string;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();

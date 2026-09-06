@@ -30,6 +30,7 @@ import {
 } from "./launchd-system.js";
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
@@ -39,6 +40,7 @@ import type {
 const LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS = 2_000;
 function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
   const probe = spawnSync("launchctl", ["print", serviceTarget], {
+    env: resolveServiceManagerEnv(),
     encoding: "utf8",
     timeout: LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS,
   });

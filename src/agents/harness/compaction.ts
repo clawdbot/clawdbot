@@ -279,6 +279,8 @@ async function resolveHarnessCompactApiKey(params: {
       provider,
       modelId,
       config: compactParams.config,
+      workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
       model: input.model,
       forceResolve: input.forceResolve,
       rejectMismatchedModel: true,

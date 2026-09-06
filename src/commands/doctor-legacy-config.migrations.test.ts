@@ -2255,6 +2255,130 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
+  it.each([
+    { label: "model context cap", provider: {}, model: {} },
+    { label: "provider output budget", provider: { maxTokens: 8192 }, model: {} },
+    {
+      label: "overridden model API",
+      provider: { maxTokens: 8192 },
+      model: { api: "openai-completions" },
+    },
+    {
+      label: "explicit provider num_ctx",
+      provider: { maxTokens: 8192, params: { num_ctx: 16_384 } },
+      model: {},
+    },
+    {
+      label: "explicit model num_ctx",
+      provider: { maxTokens: 8192 },
+      model: { params: { num_ctx: 16_384 } },
+    },
+  ])("preserves current Ollama contextTokens with $label", ({ provider, model }) => {
+    const input = legacyConfig({
+      models: {
+        providers: {
+          localOllama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            ...provider,
+            models: [ollamaModel({ contextWindow: 262_144, contextTokens: 32_768, ...model })],
+          },
+        },
+      },
+    });
+    const expected = structuredClone(input);
+    const result = normalizeCompatibilityConfigValues(input);
+
+    expect(result.config).toEqual(expected);
+    expect(result.changes).toEqual([]);
+    const repeated = normalizeCompatibilityConfigValues(result.config);
+    expect(repeated.config).toEqual(expected);
+    expect(repeated.changes).toEqual([]);
+  });
+
+  it.each(["ollama", "openai-completions"] as const)(
+    "migrates legacy Ollama siblings without pinning a current %s model",
+    (api) => {
+      const result = normalizeCompatibilityConfigValues(
+        legacyConfig({
+          models: {
+            providers: {
+              localOllama: {
+                baseUrl: "http://localhost:11434",
+                api: "ollama",
+                maxTokens: 8192,
+                models: [
+                  ollamaModel({
+                    id: "current",
+                    api,
+                    contextWindow: 262_144,
+                    contextTokens: 32_768,
+                    params: { temperature: 0.2 },
+                  }),
+                  ollamaModel({ id: "legacy", contextWindow: 65_536 }),
+                  ollamaModel({
+                    id: "legacy-inherited",
+                    contextWindow: undefined,
+                    maxTokens: undefined,
+                  }),
+                  ollamaModel({
+                    id: "compatible",
+                    api: "openai-completions",
+                    params: { temperature: 0.1 },
+                  }),
+                ],
+              },
+            },
+          },
+        }),
+      );
+      const provider = result.config.models?.providers?.localOllama;
+      expect(provider?.params).toBeUndefined();
+      expect(provider?.models?.[0]).toMatchObject({
+        id: "current",
+        api,
+        contextWindow: 262_144,
+        contextTokens: 32_768,
+        params: { temperature: 0.2 },
+      });
+      expect(provider?.models?.[0]?.params).not.toHaveProperty("num_ctx");
+      expect(provider?.models?.[1]?.params).toEqual({ num_ctx: 65_536 });
+      expect(provider?.models?.[2]?.params).toEqual({ num_ctx: 8192 });
+      expect(provider?.models?.[3]?.params).toEqual({ temperature: 0.1 });
+      const repeated = normalizeCompatibilityConfigValues(result.config);
+      expect(repeated.config).toEqual(result.config);
+      expect(repeated.changes).toEqual([]);
+    },
+  );
+
+  it("keeps retired provider contextTokens usable without adding an Ollama num_ctx pin", () => {
+    const result = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              contextTokens: 32_768,
+              contextWindow: 262_144,
+              maxTokens: 8192,
+              models: [ollamaModel({ contextWindow: undefined })],
+            },
+          },
+        },
+      }),
+    );
+    const provider = result.config.models?.providers?.ollama;
+    expect(provider).not.toHaveProperty("contextTokens");
+    expect(provider).not.toHaveProperty("contextWindow");
+    expect(provider?.params).toBeUndefined();
+    expect(provider?.models?.[0]).toMatchObject({ contextTokens: 32_768, contextWindow: 262_144 });
+    expect(provider?.models?.[0]?.params).toBeUndefined();
+    const repeated = normalizeCompatibilityConfigValues(result.config);
+    expect(repeated.config).toEqual(result.config);
+    expect(repeated.changes).toEqual([]);
+  });
+
   it("sets native Ollama params.num_ctx from explicit model contextWindow budgets", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {

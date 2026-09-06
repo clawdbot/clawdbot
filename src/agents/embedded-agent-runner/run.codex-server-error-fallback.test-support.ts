@@ -39,7 +39,7 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
 
   it("throws FailoverError for persistent Codex server_error after transient retries", async () => {
     // Codex server_error is a provider failure, not a normal assistant reply.
-    // The transient retry owner replays the same model first; once the failure
+    // The transient retry owner continues the same model first; once the failure
     // persists past the retry budget, configured fallbacks receive it through
     // the failover path.
     const rawCodexError =
@@ -85,6 +85,6 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
       "⚠️ openai/gpt-5.4 request failed (provider internal error). This is usually temporary — try again shortly.",
     );
     // Initial attempt plus the full same-model transient retry budget.
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(9);
   });
 });

@@ -2120,8 +2120,10 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error", runId: "run-1" });
   });
 
-  it("keeps error emoji in live run state for the WebUI presentation owner", () => {
-    const diagnostic = "⚠️ 🛠️ Exec failed (exit 1): command failed.";
+  it.each([
+    "⚠️ 🛠️ Exec failed (exit 1): command failed.",
+    "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
+  ])("preserves actionable server guidance in live run state: %s", (diagnostic) => {
     const state = createState({ sessionKey: "main", chatRunId: "run-1" });
 
     expect(

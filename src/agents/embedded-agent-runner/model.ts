@@ -237,14 +237,16 @@ export async function resolveModelAsync(
         return { model: suppressedRuntimeModel, authStorage, modelRegistry };
       }
       return {
-        error: buildUnknownModelError({
-          provider: normalizedRef.provider,
-          modelId: normalizedRef.model,
-          cfg,
-          agentDir: resolvedAgentDir,
-          workspaceDir,
-          runtimeHooks,
-        }),
+        error:
+          explicitModel.error ??
+          buildUnknownModelError({
+            provider: normalizedRef.provider,
+            modelId: normalizedRef.model,
+            cfg,
+            agentDir: resolvedAgentDir,
+            workspaceDir,
+            runtimeHooks,
+          }),
         authStorage,
         modelRegistry,
       };

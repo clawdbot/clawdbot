@@ -391,9 +391,15 @@ That stages grounded durable candidates into the short-term dreaming store while
     exist, doctor reports registration drift. `openclaw doctor --fix` may repair
     that owned registration, but it never installs the host for every OpenClaw
     user and never overwrites a foreign same-name manifest or launcher. For
-    initial setup, run `openclaw browser extension install` first, then add the
-    official Chrome Web Store extension. The unpacked stable path is a
-    development fallback.
+    initial setup, run `openclaw browser extension install` on the machine hosting
+    Chrome. On macOS, this also requests the official Store installation in
+    Google Chrome; reopen Chrome and approve or enable OpenClaw when prompted.
+    Other browsers and platforms need a manual Store install. Doctor's repair
+    does not create a Store request or approve Chrome permissions. Use
+    `openclaw browser extension status` to distinguish a requested installation,
+    Chrome approval, and native-host registration health; these checks do not
+    prove a live relay connection. The unpacked stable path remains a development
+    fallback with `extension install --no-store`.
 
     Doctor also audits the host-local Chrome MCP path when you use `defaultProfile: "user"` or a configured `existing-session` profile:
 

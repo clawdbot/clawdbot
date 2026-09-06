@@ -40,7 +40,7 @@ async function loadHostedSetupForTui() {
 
 export type SystemAgentTuiOptions = Pick<
   SystemAgentChatEngineOptions,
-  "yes" | "deps" | "planWithAssistant" | "verifiedInference"
+  "yes" | "deps" | "verifiedInference"
 > & {
   runTui?: RunTui;
   /** "onboarding" swaps the greeting for the first-run setup proposal. */
@@ -83,7 +83,6 @@ function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
   return new SystemAgentChatEngine({
     yes: opts.yes,
     deps: opts.deps,
-    planWithAssistant: opts.planWithAssistant,
     surface: "cli",
     verifiedInference: opts.verifiedInference,
   });

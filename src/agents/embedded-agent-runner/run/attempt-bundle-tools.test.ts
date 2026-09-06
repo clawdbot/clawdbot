@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,7 +25,7 @@ vi.mock("../../agent-bundle-mcp-tools.js", () => ({
 }));
 
 vi.mock("../../runtime-plan/tools.js", () => ({
-  normalizeAgentRuntimeTools: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+  normalizeAgentRuntimeTools: vi.fn(({ tools }: { tools: unknown[] }) => [...tools]),
 }));
 
 vi.mock("../../local-model-lean.js", () => ({
@@ -372,6 +373,52 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       version: 1,
       source: "final-executable-surface",
     });
+  });
+
+  it("refreshes retained tools and capability captures from each schema projection", async () => {
+    const { filterRuntimeCompatibleTools } = await vi.importActual<
+      typeof import("../../tool-schema-projection.js")
+    >("../../tool-schema-projection.js");
+    mocks.filterRuntimeCompatibleTools.mockImplementation(filterRuntimeCompatibleTools);
+    const first = createStubTool("core_first");
+    const bundled = createStubTool("server__read");
+    const bundledSchema = { type: "object" };
+    bundled.parameters = bundledSchema;
+    setPluginToolMeta(bundled, { pluginId: "bundle-mcp", optional: false });
+    const core = [first];
+    const inherited = ["initial"];
+    const input = createInput(inherited, core);
+    const creatorTools = input.preparedToolBase.cronCreatorToolAllowlist;
+    input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = {};
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [bundled] });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+    const retained = result.uncompactedEffectiveTools;
+    expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+    expect(core).toEqual([first]);
+
+    const second = createStubTool("core_second");
+    core.splice(0, core.length, second);
+    bundledSchema.type = "array";
+    result.refreshTools();
+
+    expect(retained.map((tool) => tool.name)).toEqual(["core_second"]);
+    expect(core).toEqual([second]);
+    expect(inherited).toEqual(["core_second"]);
+    expect(creatorTools).toEqual([{ name: "core_second" }]);
+
+    core.splice(0, core.length, first);
+    bundledSchema.type = "object";
+    result.refreshTools();
+
+    expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+    expect(core).toEqual([first]);
+    expect(inherited).toEqual(["core_first", "server__read"]);
+    expect(creatorTools).toEqual([
+      { name: "core_first" },
+      { name: "server__read", pluginId: "bundle-mcp" },
+    ]);
   });
 
   it("disposes prepared bundle runtimes when later policy setup fails", async () => {

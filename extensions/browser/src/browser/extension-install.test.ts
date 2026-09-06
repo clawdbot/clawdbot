@@ -168,39 +168,91 @@ describe("native host registration", () => {
     },
   );
 
-  it("treats the exact Store record as installed without approving its recorded path", async () => {
-    const value = await fixture();
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
-    const arbitraryPath = path.join(value.root, "not-an-owned-extension-path");
-    await writeChromePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: {
-        [FOUNDATION_STORE_ID]: {
-          location: 1,
-          from_webstore: true,
-          path: arbitraryPath,
+  it.each([
+    {
+      label: "current enabled",
+      recorded: { disable_reasons: [] },
+      enabled: true,
+      awaitingApproval: false,
+    },
+    {
+      label: "current enabled with reasons omitted",
+      recorded: {},
+      enabled: true,
+      awaitingApproval: false,
+    },
+    {
+      label: "pending approval",
+      recorded: { disable_reasons: [8_192] },
+      enabled: false,
+      awaitingApproval: true,
+    },
+    {
+      label: "disabled by user",
+      recorded: { disable_reasons: [1] },
+      enabled: false,
+      awaitingApproval: false,
+    },
+    {
+      label: "legacy enabled",
+      recorded: { state: 1, disable_reasons: 0 },
+      enabled: true,
+      awaitingApproval: false,
+    },
+    {
+      label: "legacy pending approval",
+      recorded: { state: 0, disable_reasons: 8_192 },
+      enabled: false,
+      awaitingApproval: true,
+    },
+    {
+      label: "invalid reasons",
+      recorded: { disable_reasons: "invalid" },
+      enabled: false,
+      awaitingApproval: false,
+    },
+  ])(
+    "reports $label Store state without approving its recorded path",
+    async ({ recorded, enabled, awaitingApproval }) => {
+      const value = await fixture();
+      const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
+      if (!chrome) {
+        throw new Error("missing Chrome fixture root");
+      }
+      const arbitraryPath = path.join(value.root, "not-an-owned-extension-path");
+      await writeChromePreferences({
+        userDataDir: chrome.userDataDir,
+        profile: "Default",
+        entries: {
+          [FOUNDATION_STORE_ID]: {
+            location: 1,
+            from_webstore: true,
+            path: arbitraryPath,
+            ...recorded,
+          },
         },
-      },
-    });
+      });
 
-    const status = await installChromeExtensionBootstrap({
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      deps: value.deps,
-    });
+      const status = await installChromeExtensionBootstrap({
+        bundledDir: value.bundledDir,
+        pluginRoot: value.pluginRoot,
+        waitMs: 1_000,
+        deps: value.deps,
+      });
 
-    expect(status.discovered).toEqual([]);
-    expect(status.storeDiscovered).toEqual([
-      expect.objectContaining({ extensionId: FOUNDATION_STORE_ID, profile: "Default" }),
-    ]);
-    expect(status.approvedPaths).not.toContain(arbitraryPath);
-    expect(status.manualSetupRequired).toBe(false);
-  });
+      expect(status.discovered).toEqual([]);
+      expect(status.storeDiscovered).toEqual([
+        expect.objectContaining({
+          extensionId: FOUNDATION_STORE_ID,
+          profile: "Default",
+          enabled,
+          awaitingApproval,
+        }),
+      ]);
+      expect(status.approvedPaths).not.toContain(arbitraryPath);
+      expect(status.manualSetupRequired).toBe(!enabled);
+    },
+  );
 
   it("refuses to overwrite or remove a foreign manifest with the same host name", async () => {
     const value = await fixture();

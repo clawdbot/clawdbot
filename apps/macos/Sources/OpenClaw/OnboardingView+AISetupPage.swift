@@ -54,9 +54,9 @@ extension OnboardingView {
 
     func maybeStartAISetup(for pageIndex: Int) {
         guard pageIndex == aiPageIndex else { return }
-        // Local mode reaches this page only after the CLI/gateway install page,
-        // so the gateway is up before the first RPC.
-        guard state.connectionMode != .local || cliInstalled else { return }
+        // Only app-managed local installs need CLI activation; external attachments
+        // proceed through the existing route-bound Gateway probe.
+        guard !requiresLocalCLI || cliInstalled else { return }
         self.prepareSystemAgentHandoff()
         // A selected/reconnected Gateway may already have a configured default
         // agent. Check that route before setup tries to author inference.

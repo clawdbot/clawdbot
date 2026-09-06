@@ -1,10 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { formatSqliteErrorCodeSuffix } from "./sqlite-error-diagnostics.js";
 import {
-  SQLITE_READONLY_CHILD_ARG,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./sqlite-readonly-worker.js";
 
 // The sync strategy raw-copies without attaching SQLite to the source, so sync
 // callers stay byte-neutral on the live family; the async strategy holds a read
@@ -12,6 +12,7 @@ import {
 async function runWorker(): Promise<void> {
   const mode = process.argv[3];
   const pathname = process.argv[4];
+  const stagingRoot = process.argv[5];
   if ((mode !== "sync" && mode !== "async") || !pathname) {
     process.exitCode = 1;
     process.stdout.write(
@@ -25,8 +26,8 @@ async function runWorker(): Promise<void> {
   try {
     const prepared =
       mode === "sync"
-        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
-        : await prepareSqliteReadOnlyLocationInProcess(pathname);
+        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
+        : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     process.stdout.write(JSON.stringify({ ok: true, location: prepared.location }));
   } catch (error) {
     process.exitCode = 1;

@@ -1,3 +1,4 @@
+import { registerReplyOperationSuccessorBarrier } from "../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -14,7 +15,11 @@ import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import type { SandboxContext } from "./sandbox/types.js";
-import { resolveSessionPlacementTurnSettlementAssertion } from "./session-placement-forced-terminal-settlement.js";
+import {
+  resolveSessionPlacementForcedTerminalSettlement,
+  resolveSessionPlacementTurnSettlementAssertion,
+  withoutSessionPlacementForcedTerminalSettlement,
+} from "./session-placement-forced-terminal-settlement.js";
 import { settleRequesterAfterSessionSpawns } from "./subagents/registry/subagent-registry.js";
 
 export type LocalTurnPlacementClaim = {
@@ -101,14 +106,32 @@ export async function withSessionPlacementTurnAdmission(
   };
   // Providers may execute locally or remotely; both must release queue ownership
   // only when their actual execution path has acquired its placement claim.
-  const runAdmittedLocalTurn = () => {
+  const runAdmittedLocalTurn = async () => {
+    const settle = resolveSessionPlacementForcedTerminalSettlement();
+    const assertCurrent = resolveSessionPlacementTurnSettlementAssertion();
+    if (params.replyOperation && settle) {
+      // Preflight can stall before an embedded handle exists. The exact reply
+      // owner must release and fence its admitted claim before waking a successor.
+      registerReplyOperationSuccessorBarrier({
+        operation: params.replyOperation,
+        sessionId: claim.sessionId,
+        sessionKeys: [params.replyOperation.key],
+        start: settle,
+      });
+    }
+    assertCurrent?.();
     admitTurn();
-    return task();
+    assertCurrent?.();
+    const result = await task();
+    assertCurrent?.();
+    return result;
   };
   const provider = state.provider;
-  const result = provider
-    ? await provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
-    : await runAdmittedLocalTurn();
+  const result = await withoutSessionPlacementForcedTerminalSettlement(() =>
+    provider
+      ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
+      : runAdmittedLocalTurn(),
+  );
   if (result.meta.executionTrace?.runner === "cli") {
     settleYieldedRequesterAfterPlacementRelease(claim, result);
   }
@@ -172,9 +195,9 @@ export async function withLocalSessionPlacementTurnSettlement(
             open = false;
           }
         };
-        const result = provider
-          ? await provider.executeLocalTurn(claim, runLocal)
-          : await runLocal();
+        const result = await withoutSessionPlacementForcedTerminalSettlement(() =>
+          provider ? provider.executeLocalTurn(claim, runLocal) : runLocal(),
+        );
         settleYieldedRequesterAfterPlacementRelease(claim, result);
         return result;
       },

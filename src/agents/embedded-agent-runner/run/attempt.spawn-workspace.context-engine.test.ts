@@ -293,7 +293,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("keeps Tool Search controls off for lean message-tool-only delivery", async () => {
+  it.each([false, true])("keeps lean replies direct (private: %s)", async (privateReply) => {
     hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([
       {
         name: "message",
@@ -320,6 +320,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         disableTools: false,
         sourceReplyDeliveryMode: "message_tool_only",
+        toolsAllow: privateReply ? ["message"] : undefined,
         config: {
           agents: {
             defaults: {
@@ -338,7 +339,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       0,
       "createOpenClawCodingTools options",
     );
-    expect(options.includeToolSearchControls).toBe(false);
+    expect(options.includeToolSearchControls).toBe(!privateReply);
     const sessionOptions = mockParams(
       hoisted.createAgentSessionMock,
       0,

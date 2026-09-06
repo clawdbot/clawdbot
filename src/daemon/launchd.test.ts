@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortListener } from "../infra/ports-types.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
@@ -680,6 +680,8 @@ vi.mock("node:fs/promises", async () => {
   };
   return { ...wrapped, default: wrapped };
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 beforeEach(() => {
   state.launchctlCalls.length = 0;
@@ -3463,6 +3465,7 @@ describe("launchd install", () => {
   }>)(
     "protects the current service and allows $name",
     async ({ managedPidAfterCleanup, listeners }) => {
+      vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
       const env = createLaunchdEnvWithGatewayPort("19002");
       if (managedPidAfterCleanup !== 4242) {
         state.printOutput = ["state = running", `pid = ${managedPidAfterCleanup}`].join("\n");
@@ -3484,6 +3487,14 @@ describe("launchd install", () => {
         expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
       );
       expect(state.cleanupProtectedPids).toEqual([managedPidAfterCleanup]);
+      expect(launchctlSpawnSync).toHaveBeenCalledWith(
+        "launchctl",
+        ["print", serviceId],
+        expect.objectContaining({
+          env: expect.not.objectContaining({ BOUNDARY_PARENT_ONLY: "synthetic" }),
+          timeout: 2_000,
+        }),
+      );
       expect(inspectPortUsage).toHaveBeenCalledWith(19002, {
         probeHosts: ["127.0.0.1"],
       });
@@ -3722,6 +3733,37 @@ describe("launchd install", () => {
       waitForPid: process.pid,
     });
     expect(state.launchctlCalls).toStrictEqual([]);
+  });
+
+  it("restarts an unloaded LaunchAgent synchronously for a detached update helper that inherits only the configured label", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.serviceLoaded = false;
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+
+    const result = await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      },
+      async () => restartLaunchAgent(launchAgentControlFixture(env, { preserveDefinition: true })),
+    );
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+    expect(launchctlCommandNames()).toEqual([
+      "enable",
+      "kickstart",
+      "enable",
+      "bootstrap",
+      "kickstart",
+    ]);
+    expect(state.kickstartFailuresRemaining).toBe(0);
+    expect(state.serviceLoaded).toBe(true);
   });
 
   it("does not hand restart off for unrelated inherited XPC service names", async () => {

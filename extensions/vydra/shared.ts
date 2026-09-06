@@ -10,6 +10,7 @@ import {
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
@@ -17,7 +18,6 @@ import {
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
@@ -272,12 +272,18 @@ export async function downloadVydraAsset(params: {
           : params.kind === "audio"
             ? "audio/mpeg"
             : "video/mp4");
-      const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
-        timeoutMs: resolveTimeoutMs,
-        onTimeout: () => createVydraTimeoutError(deadline),
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
-      });
+      const buffer = await readProviderBinaryResponse(
+        result.response,
+        deadline.label,
+        params.kind,
+        {
+          maxBytes: params.maxBytes,
+          chunkTimeoutMs: 0,
+          timeoutMs: resolveTimeoutMs,
+          onTimeout: () => createVydraTimeoutError(deadline),
+          onOverflow: ({ maxBytes }) => new Error(`${deadline.label} exceeds ${maxBytes} bytes`),
+        },
+      );
       const extension = resolveVydraFileExtension(params.kind, mimeType);
       const fileStem =
         params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";

@@ -67,7 +67,6 @@ export function renderChatDetailSlot(params: {
         ),
         authToken: params.chat.assistantAttachmentAuthToken,
         connectionEpoch: params.chat.connectionEpoch,
-        localMediaPreviewRoots: params.chat.localMediaPreviewRoots ?? [],
         resourceBasePath: params.chat.resourceBasePath,
         resolveArtifactDownload: params.chat.resolveArtifactDownload,
       }}

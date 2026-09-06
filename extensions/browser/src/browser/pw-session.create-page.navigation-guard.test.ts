@@ -1,4 +1,5 @@
 // Browser tests cover pw session.create page.navigation guard plugin behavior.
+import { EventEmitter } from "node:events";
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -78,7 +79,8 @@ function installBrowserMocks() {
   });
   const mainFrame = {};
   const contextOn = vi.fn();
-  const browserOn = vi.fn();
+  const browserEvents = new EventEmitter();
+  const browserOn = vi.fn(browserEvents.on.bind(browserEvents));
   const browserClose = vi.fn(async () => {});
   const sessionSend = vi.fn(async (method: string) => {
     if (method === "Target.getTargetInfo") {
@@ -116,6 +118,7 @@ function installBrowserMocks() {
   const browser = {
     contexts: () => [context],
     on: browserOn,
+    off: browserEvents.off.bind(browserEvents),
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
