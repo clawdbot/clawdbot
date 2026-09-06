@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadTranscriptEvents,
@@ -55,7 +56,7 @@ describe("host-owned update notices", () => {
       );
       expect(result).toEqual({ delivered: !replaced, owned: !replaced });
       const events = await loadTranscriptEvents(target);
-      const messages = events.filter((event) => event.type === "message");
+      const messages = events.filter((event) => asOptionalRecord(event)?.type === "message");
       expect(messages).toHaveLength(replaced ? 0 : 1);
       if (!replaced) {
         expect(messages[0]).toMatchObject({
