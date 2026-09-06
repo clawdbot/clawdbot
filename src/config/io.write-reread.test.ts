@@ -44,17 +44,15 @@ describe("writeConfigFile canonical reread", () => {
         }
       });
       const realReadFileSync = fsNode.readFileSync.bind(fsNode);
-      vi.spyOn(fsNode, "readFileSync").mockImplementation(
-        (target, options?: BufferEncoding | fsNode.ReadFileSyncOptions | null) => {
-          if (corrupted && target === configPath) {
-            return "{ definitely not json";
-          }
-          return realReadFileSync(
-            target,
-            typeof options === "string" ? { encoding: options } : (options ?? {}),
-          );
-        },
-      );
+      vi.spyOn(fsNode, "readFileSync").mockImplementation((target, options) => {
+        if (corrupted && target === configPath) {
+          return "{ definitely not json";
+        }
+        return realReadFileSync(
+          target,
+          typeof options === "string" ? { encoding: options } : (options ?? {}),
+        );
+      });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const preflight = vi.fn<NonNullable<RuntimeConfigSnapshotRefreshHandler["preflight"]>>(
         ({ sourceConfig }) => ({ sourceConfig }),

@@ -111,7 +111,7 @@ describe("shell env fallback", () => {
     const etcShellsContent = `${shells.join("\n")}\n`;
     const readFileSyncSpy = vi
       .spyOn(fs, "readFileSync")
-      .mockImplementation((filePath, encoding?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
+      .mockImplementation((filePath, encoding) => {
         if (filePath === "/etc/shells" && encoding === "utf8") {
           return etcShellsContent;
         }
