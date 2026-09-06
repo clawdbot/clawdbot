@@ -13,7 +13,10 @@ import { resolvePluginArtifactDeclaredSurface } from "../../../plugins/capabilit
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../../../plugins/capability-summary.js";
 import { resolveClawHubInstallSpecsForUpdateChannel } from "../../../plugins/install-channel-specs.js";
-import type { PluginInstallArtifactConsentHandler } from "../../../plugins/install-types.js";
+import {
+  PLUGIN_INSTALL_ERROR_CODE,
+  type PluginInstallArtifactConsentHandler,
+} from "../../../plugins/install-types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
 import {
   hasRetainedManagedNpmInstallMarker,
@@ -1185,9 +1188,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     },
   );
 
-  describe.each([false, true])(
-    "dependency repair with preexisting retention: %s",
-    (preexisting) => {
+  describe.each([
+    { preexisting: false, staleRuntime: false },
+    { preexisting: true, staleRuntime: false },
+    { preexisting: false, staleRuntime: true },
+    { preexisting: true, staleRuntime: true },
+  ])(
+    "dependency repair with preexisting retention: $preexisting, stale runtime: $staleRuntime",
+    ({ preexisting, staleRuntime }) => {
       it.each([
         "updated",
         "unchanged",
@@ -1196,22 +1204,29 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         "throw",
         "persist-throw",
         "consent-error",
+        "metadata-error",
         "effect-refused",
         "cleanup-error",
         "cleanup-throw",
       ] as const)("settles owned dependency repair markers after %s", async (outcome) => {
         const parent = tempDirs.make("openclaw-doctor-dependency-repair-");
-        const packageName = "dependency-plugin";
-        const pluginId = "dependency-plugin";
+        const packageName = staleRuntime ? "@openclaw/codex" : "dependency-plugin";
+        const pluginId = staleRuntime ? "codex" : "dependency-plugin";
+        const version = staleRuntime ? "2026.9.1-beta.1" : "1.0.0";
+        const env = { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.2" };
         const rootDir = path.join(parent, "node_modules", packageName);
         fs.mkdirSync(rootDir, { recursive: true });
         createColdPluginFixture({
           rootDir,
           pluginId,
           packageName,
+          packageVersion: version,
           packageJson: { dependencies: { "required-runtime": "1.0.0" } },
         });
-        const originalManifest = fs.readFileSync(path.join(rootDir, "package.json"), "utf8");
+        const payloadFiles = ["package.json", "openclaw.plugin.json", "index.cjs"];
+        const originalPayload = payloadFiles.map((file) =>
+          fs.readFileSync(path.join(rootDir, file), "utf8"),
+        );
         const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
         if (preexisting) {
           await markRetainedManagedNpmInstall({
@@ -1224,17 +1239,21 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         const originalMarker = preexisting ? fs.readFileSync(markerPath, "utf8") : undefined;
         const record = {
           source: "npm" as const,
-          spec: `${packageName}@1.0.0`,
+          spec: staleRuntime ? packageName : `${packageName}@${version}`,
           resolvedName: packageName,
-          resolvedSpec: `${packageName}@1.0.0`,
-          resolvedVersion: "1.0.0",
+          resolvedSpec: `${packageName}@${version}`,
+          resolvedVersion: version,
           integrity: "sha512-dependency-fixture",
-          version: "1.0.0",
+          version,
           installPath: rootDir,
         };
         const replacementRecord = { ...record, installPath: path.join(parent, "replacement") };
         const records = { [pluginId]: record };
-        const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+        const originalRecords = structuredClone(records);
+        const cfg: OpenClawConfig = {
+          update: { channel: "beta" },
+          plugins: { entries: { [pluginId]: { enabled: true } } },
+        };
         mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
         mocks.loadPluginMetadataSnapshot.mockReturnValue({
           plugins: [
@@ -1244,6 +1263,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
               rootDir,
               source: path.join(rootDir, "index.cjs"),
               packageName,
+              packageVersion: version,
               packageDependencies: { "required-runtime": "1.0.0" },
               channels: [],
             },
@@ -1253,6 +1273,25 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
           officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
         ]);
+        const { resolveConfiguredPluginInstallContext } =
+          await import("./missing-configured-plugin-install.candidates.js");
+        const context = await resolveConfiguredPluginInstallContext({
+          cfg,
+          env,
+          configuredPluginIds: new Set([pluginId]),
+          configuredChannelIds: new Set(),
+        });
+        // The stale collision must satisfy both gates, without another force-repair reason.
+        expect(context.installedPluginIdsWithStaleVersionBoundRuntimePackages).toEqual(
+          new Set(staleRuntime ? [pluginId] : []),
+        );
+        expect(context.installedPluginMissingRequiredDependencies).toEqual(
+          new Map([[pluginId, { rootDir, missingRequired: ["required-runtime"] }]]),
+        );
+        expect(context.installedPluginIdsWithRepairablePackageDiagnostics.size).toBe(0);
+        expect(context.configuredPluginIdsWithStaleDescriptors.size).toBe(0);
+        expect(context.officialReplacementPluginIds.has(pluginId)).toBe(false);
+        expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
         const failure = new Error(`dependency repair ${outcome}`);
         const cleanupFailure = new Error("retention cleanup failed");
         if (!preexisting && (outcome === "cleanup-error" || outcome === "cleanup-throw")) {
@@ -1262,6 +1301,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           );
         }
         const beforePersistentEffect = vi.fn(async () => {
+          if (beforePersistentEffect.mock.calls.length === 1) {
+            expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(preexisting);
+          }
           if (outcome === "effect-refused") {
             throw failure;
           }
@@ -1271,11 +1313,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           async (params: { config: OpenClawConfig }) => {
             expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(true);
             const repairRecord = params.config.plugins?.installs?.[pluginId];
-            expect(repairRecord).toMatchObject({
+            expect(repairRecord).toStrictEqual({
               source: "npm",
               spec: record.spec,
               resolvedName: packageName,
               integrity: record.integrity,
+              version,
               installPath: rootDir,
             });
             expect(repairRecord?.resolvedSpec).toBeUndefined();
@@ -1289,7 +1332,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             const status =
               outcome === "persist-throw"
                 ? "updated"
-                : outcome === "consent-error" || outcome === "cleanup-error"
+                : outcome === "consent-error" ||
+                    outcome === "metadata-error" ||
+                    outcome === "cleanup-error"
                   ? "error"
                   : outcome;
             if (status === "updated" || status === "unchanged") {
@@ -1310,7 +1355,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
                   message: failure.message,
                   ...(outcome === "consent-error"
                     ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }
-                    : {}),
+                    : outcome === "metadata-error"
+                      ? { code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE }
+                      : {}),
                 },
               ],
             };
@@ -1322,7 +1369,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           repairMissingPluginInstallsForIds({
             cfg,
             pluginIds: [pluginId],
-            env: testEnv,
+            env,
             beforePersistentEffect,
             onCapabilityConsent,
           });
@@ -1344,7 +1391,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             expect(result.records).toEqual({ [pluginId]: replacementRecord });
             expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
               result.records,
-              { config: cfg, env: testEnv },
+              { config: cfg, env },
             );
           } else {
             expect(result.failedPluginIds).toEqual([pluginId]);
@@ -1364,11 +1411,16 @@ describe("repairMissingConfiguredPluginInstalls", () => {
                   code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
                 }),
               );
+            }
+            if (outcome === "consent-error" || outcome === "metadata-error") {
               expect(result.notices ?? []).toEqual([]);
             }
           }
         }
-        expect(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(originalManifest);
+        expect(payloadFiles.map((file) => fs.readFileSync(path.join(rootDir, file), "utf8"))).toEqual(
+          originalPayload,
+        );
+        expect(records).toEqual(originalRecords);
         expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
         if (outcome === "effect-refused") {
           expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
