@@ -99,7 +99,13 @@ async function handleTargetedAct(
         "drag start",
       );
       const to = windowPointArgs(state, params, windowRef, params, "drag end");
-      const dragModifiers = normalizeModifiers(params.modifiers, platform);
+      // Same driver gap as the desktop path: the raw drag tool accepts a modifier
+      // array but does not hold it on the target, so refuse before native input.
+      if (normalizeModifiers(params.modifiers, platform).length > 0) {
+        throw new Error(
+          "COMPUTER_UNSUPPORTED_ACTION: modifier-held drags are not delivered by cua-driver (the modifier is accepted but not held on the target)",
+        );
+      }
       args = {
         ...base,
         from_x: from.x,
@@ -110,7 +116,6 @@ async function handleTargetedAct(
         ...(params.durationMs === undefined
           ? {}
           : { duration_ms: Math.min(10_000, params.durationMs) }),
-        ...(dragModifiers.length ? { modifier: dragModifiers } : {}),
         ...delivery,
       };
       break;

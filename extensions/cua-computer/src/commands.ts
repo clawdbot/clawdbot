@@ -388,13 +388,16 @@ async function handleDesktopAct(
         case "left_click_drag": {
           const from = scalePoint(frame, desktopParams.fromX, desktopParams.fromY, "drag start");
           const to = scalePoint(frame, desktopParams.x, desktopParams.y, "drag end");
-          // DragInput.modifier (SDK 0.22.2) is forwarded here per its typed
-          // contract, but on Linux X11 a real X11 event capture showed the
-          // held modifier does not reach the target during the drag (unlike
-          // click above, which does). Treat this as a driver-side gap, not a
-          // regression: the request is still accepted and an unmodified drag
-          // is unaffected either way.
-          const modifier = normalizeModifiers(desktopParams.modifiers, platform);
+          // The typed DragInput (SDK 0.22.2) accepts a modifier array, but a real
+          // X11 event capture showed the held modifier never reaches the target
+          // during the drag (unlike click above, which does): the driver performs
+          // an unmodified drag and reports success. Refuse before native input so
+          // a modifier-constrained gesture cannot silently run as a different one.
+          if (normalizeModifiers(desktopParams.modifiers, platform).length > 0) {
+            throw new Error(
+              "COMPUTER_UNSUPPORTED_ACTION: modifier-held drags are not delivered by cua-driver (the modifier is accepted but not held on the target)",
+            );
+          }
           assertToolSuccess(
             await driver.drag(
               {
@@ -402,7 +405,6 @@ async function handleDesktopAct(
                 fromY: from.y,
                 toX: to.x,
                 toY: to.y,
-                ...(modifier.length ? { modifier } : {}),
                 // CUA caps desktop drag duration at 10 seconds; clamp rather than
                 // rejecting a valid computer.act request at the SDK boundary.
                 ...(desktopParams.durationMs === undefined

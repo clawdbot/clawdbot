@@ -197,36 +197,26 @@ describe("cua-computer platform modifiers", () => {
   });
 
   it.each(platforms)(
-    "routes a modifier-held window drag through the raw drag tool on $platform",
-    async ({ platform, command }) => {
+    "refuses a modifier-held window drag before native input on $platform",
+    async ({ platform }) => {
       const native = windowDriver();
       const computer = await execution(native.session, platform);
       try {
         const target = await observeWindow(computer);
-        await computer.act(
-          JSON.stringify({
-            action: "left_click_drag",
-            ...target,
-            fromX: 10,
-            fromY: 15,
-            x: 20,
-            y: 30,
-            modifiers: "Command+Shift",
-          }),
-        );
-        expect(native.callTool).toHaveBeenLastCalledWith(
-          "drag",
-          {
-            pid: 4242,
-            window_id: 99,
-            from_x: 10,
-            from_y: 15,
-            to_x: 20,
-            to_y: 30,
-            modifier: [command, "shift"],
-          },
-          undefined,
-        );
+        await expect(
+          computer.act(
+            JSON.stringify({
+              action: "left_click_drag",
+              ...target,
+              fromX: 10,
+              fromY: 15,
+              x: 20,
+              y: 30,
+              modifiers: "Command+Shift",
+            }),
+          ),
+        ).rejects.toThrow("COMPUTER_UNSUPPORTED_ACTION: modifier-held drags are not delivered");
+        expect(native.callTool).toHaveBeenCalledTimes(2);
         expect(native.drag).not.toHaveBeenCalled();
       } finally {
         await computer.close("completion");
@@ -235,8 +225,8 @@ describe("cua-computer platform modifiers", () => {
   );
 
   it.each(platforms)(
-    "passes a modifier-held desktop drag through to the typed driver on $platform",
-    async ({ platform, command }) => {
+    "refuses a modifier-held desktop drag before native input on $platform",
+    async ({ platform }) => {
       const native = driver();
       const computer = await execution(native.session, platform);
       try {
@@ -244,22 +234,22 @@ describe("cua-computer platform modifiers", () => {
           displayFrameId: string;
           width: number;
         };
-        await computer.act(
-          JSON.stringify({
-            action: "left_click_drag",
-            displayFrameId: screen.displayFrameId,
-            refWidth: screen.width,
-            fromX: 10,
-            fromY: 15,
-            x: 20,
-            y: 30,
-            modifiers: "Command+Shift",
-          }),
-        );
-        expect(native.drag).toHaveBeenLastCalledWith(
-          { fromX: 10, fromY: 15, toX: 20, toY: 30, modifier: [command, "shift"] },
-          undefined,
-        );
+        await expect(
+          computer.act(
+            JSON.stringify({
+              action: "left_click_drag",
+              displayFrameId: screen.displayFrameId,
+              refWidth: screen.width,
+              fromX: 10,
+              fromY: 15,
+              x: 20,
+              y: 30,
+              modifiers: "Command+Shift",
+            }),
+          ),
+        ).rejects.toThrow("COMPUTER_UNSUPPORTED_ACTION: modifier-held drags are not delivered");
+        expect(native.drag).not.toHaveBeenCalled();
+        expect(native.callTool).not.toHaveBeenCalled();
       } finally {
         await computer.close("completion");
       }
