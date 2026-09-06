@@ -256,7 +256,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     const embeddedResult = capability
       ? await runWithCronCreatorAuthorityCapability(capability, run)
       : await run();
-    assertSourceCurrent();
+    preparedRunAdmission.assertSourceCurrent();
 
     // Direct edits have normal file-tool semantics; drafts remain pending even
     // if the operator enables automatic maintenance while this review runs.

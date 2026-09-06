@@ -270,6 +270,7 @@ describe("prepared run admission", () => {
     ).resolves.toBe(admitted);
     expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(first);
     prepared.close();
+    expect(() => prepared.assertSourceCurrent()).not.toThrow();
     expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
     expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
@@ -351,11 +352,15 @@ describe("prepared run admission", () => {
           expect(() => recovery!.assertActive()).not.toThrow();
         }
         prepared.close();
+        expect(() => prepared.assertSourceCurrent()).not.toThrow();
         expect(() => recovery!.assertActive()).not.toThrow();
         current = false;
         expect(() => recovery!.assertActive()).toThrow("source claim lost");
         current = true;
         expect(() => recovery!.assertActive()).toThrow(
+          "source execution authority is no longer active",
+        );
+        expect(() => prepared.assertSourceCurrent()).toThrow(
           "source execution authority is no longer active",
         );
       } finally {

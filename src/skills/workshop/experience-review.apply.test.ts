@@ -272,7 +272,7 @@ describe("experience review maintenance", () => {
     },
   );
 
-  it.each(["delete", "replace", "permission", "append"] as const)(
+  it.each(["delete", "replace", "permission", "restore", "append"] as const)(
     "revalidates source authority after a foreground %s",
     async (change) => {
       const workspaceDir = await tempDirs.make("openclaw-experience-live-source-");
@@ -320,7 +320,7 @@ describe("experience review maintenance", () => {
             sessionId: "replacement-session",
             updatedAt: Date.now(),
           });
-        } else if (change === "permission") {
+        } else if (change === "permission" || change === "restore") {
           await upsertSessionEntryCore(candidate.source, {
             permissionMode: "read-only",
             updatedAt: Date.now(),
@@ -338,6 +338,13 @@ describe("experience review maintenance", () => {
         } else {
           expect(retainedAssertion).toThrow("no longer active");
         }
+        if (change === "restore") {
+          await upsertSessionEntryCore(candidate.source, {
+            permissionMode: "guarded",
+            updatedAt: Date.now(),
+          });
+          expect(retainedAssertion).toThrow("no longer active");
+        }
         return { meta: { durationMs: 1 } };
       });
 
@@ -345,7 +352,7 @@ describe("experience review maintenance", () => {
       if (change === "append") {
         await review;
       } else {
-        await expect(review).rejects.toThrow("source session");
+        await expect(review).rejects.toThrow("source");
       }
       expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
         outcome: change === "append" ? "completed" : "failed",
