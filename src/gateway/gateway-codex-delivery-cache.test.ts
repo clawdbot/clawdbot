@@ -83,7 +83,8 @@ describe("Codex delivery-mode prompt caching", () => {
             // Direct RPC has no auto-reply prompt prelude. Its prepared mode must still
             // reach the native turn, including an omitted mode restoring the default.
             const accepted = (await gateway.call("agent", {
-              sessionKey: "agent:main:delivery-cache",
+              agentId: "qa",
+              sessionKey: "agent:qa:delivery-cache",
               message,
               ...transport.buildAgentDelivery({ target: conversation.id }),
               to: conversation.id,

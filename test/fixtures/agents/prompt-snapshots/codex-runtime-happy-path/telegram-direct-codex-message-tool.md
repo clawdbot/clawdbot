@@ -186,7 +186,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -211,9 +211,11 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
   },
   "limitations": [
     "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
+    "Additional context shows this turn's supplied values; native truncation, deduplication and retained history are not simulated.",
     "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API."
   ],
   "openClawRuntime": {
+    "additionalContextFrom": "extensions/codex app-server turn/start additionalContext",
     "collaborationModeDeveloperInstructionsFrom": "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions",
     "configInstructionsFrom": "extensions/codex app-server thread/start config.instructions",
     "developerInstructionsFrom": "extensions/codex app-server thread/start developerInstructions",
@@ -228,6 +230,10 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 
 ```json
 {
+  "additionalContext": {
+    "chars": 882,
+    "roughTokens": 221
+  },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 1433,
     "roughTokens": 359
@@ -253,12 +259,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 716
   },
   "totalTextOnly": {
-    "chars": 26808,
-    "roughTokens": 6702
+    "chars": 27692,
+    "roughTokens": 6923
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84631,
-    "roughTokens": 21158
+    "chars": 85515,
+    "roughTokens": 21379
   },
   "userInputText": {
     "chars": 863,
@@ -509,6 +515,30 @@ OpenClaw loaded these workspace instruction files from the active agent workspac
 ### /tmp/openclaw-happy-path/workspace/USER.md
 
 <USER.md contents will be here>
+```
+
+### User: OpenClaw Additional Context (openclaw_current_sender)
+
+```text
+<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
+```
+
+### Developer: OpenClaw Additional Context (openclaw_source_delivery)
+
+```text
+<openclaw_source_delivery>Current source-delivery policy for this turn (replaces earlier source-delivery guidance):
+Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
+
+`send`: `message`; current source is default target. Set `target` only elsewhere.</openclaw_source_delivery>
+```
+
+### Developer: OpenClaw Additional Context (openclaw_temporal_context)
+
+```text
+<openclaw_temporal_context>## Temporal Context
+Current date: 2026-01-01
+Time zone: UTC
+For the exact current time, use `session_status`.</openclaw_temporal_context>
 ```
 
 ### User: Turn Input Text
