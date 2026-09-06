@@ -161,10 +161,14 @@ type PackageManagerContextOptions = PackageManagerOptions & {
   contextFlagOptions?: ReadonlySet<string>;
 };
 
-const NPM_EXEC_OPTIONS: PackageManagerContextOptions = {
+const NPM_DIRECT_EXEC_OPTIONS: PackageManagerOptions = {
   optionsWithValue: NPM_EXEC_OPTIONS_WITH_VALUE,
-  caseSensitiveOptionsWithValue: new Set(["-C"]),
   flagOptions: NPM_EXEC_FLAG_OPTIONS,
+};
+
+const NPM_EXEC_OPTIONS: PackageManagerContextOptions = {
+  ...NPM_DIRECT_EXEC_OPTIONS,
+  caseSensitiveOptionsWithValue: new Set(["-C"]),
   contextOptionsWithValue: NPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
   contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
   contextFlagOptions: new Set(["--ws", "--workspaces"]),
@@ -177,6 +181,12 @@ const PNPM_EXEC_OPTIONS: PackageManagerContextOptions = {
   contextOptionsWithValue: PNPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
   contextCaseSensitiveOptionsWithValue: PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE,
   contextFlagOptions: new Set(["--recursive", "--workspace-root", "-r", "-w"]),
+};
+
+// dlx keeps both -c and -C outside its allowed options, unlike leading pnpm options.
+const PNPM_DLX_OPTIONS: PackageManagerOptions = {
+  optionsWithValue: PNPM_EXEC_OPTIONS.optionsWithValue,
+  flagOptions: PNPM_FLAG_OPTIONS,
 };
 
 const YARN_EXEC_OPTIONS: PackageManagerContextOptions = {
@@ -199,6 +209,7 @@ function findFirstNonOptionIndex(
   argv: string[],
   startIdx: number,
   params: PackageManagerOptions,
+  terminator: "skip" | "stop" | "reject" = "skip",
 ): number | null {
   let idx = startIdx;
   while (idx < argv.length) {
@@ -208,6 +219,12 @@ function findFirstNonOptionIndex(
       continue;
     }
     if (token === "--") {
+      if (terminator === "reject") {
+        return null;
+      }
+      if (terminator === "stop") {
+        return idx + 1 < argv.length ? idx + 1 : null;
+      }
       idx += 1;
       continue;
     }
@@ -363,7 +380,7 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
     return normalizedTail.length > 0 ? normalizedTail : null;
   }
   if (token === "dlx") {
-    return unwrapPnpmDlxInvocation(argv.slice(idx + 1));
+    return unwrapPackageExecArguments(argv, idx + 1, PNPM_DLX_OPTIONS, "stop");
   }
   if (token === "node") {
     const tail = argv.slice(idx + 1);
@@ -373,135 +390,26 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
   return null;
 }
 
-function unwrapPnpmDlxInvocation(argv: string[]): string[] | null {
-  let idx = 0;
-  while (idx < argv.length) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (token === "--") {
-      const tail = argv.slice(idx + 1);
-      return tail.length > 0 ? tail : null;
-    }
-    if (!token.startsWith("-")) {
-      return argv.slice(idx);
-    }
-    const parsedOption = parseInlineOptionToken(token);
-    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (flag === "-c" || flag === "--shell-mode") {
-      return null;
-    }
-    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (PNPM_FLAG_OPTIONS.has(flag)) {
-      idx += 1;
-      continue;
-    }
-    return null;
-  }
-  return null;
-}
-
-function unwrapDirectPackageExecInvocation(argv: string[]): string[] | null {
-  let idx = 1;
-  while (idx < argv.length) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (!token.startsWith("-")) {
-      return argv.slice(idx);
-    }
-    const flag = normalizeOptionFlag(token);
-    if (flag === "-c" || flag === "--call") {
-      return null;
-    }
-    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (NPM_EXEC_FLAG_OPTIONS.has(flag)) {
-      idx += 1;
-      continue;
-    }
-    return null;
-  }
-  return null;
+function unwrapPackageExecArguments(
+  argv: string[],
+  startIdx: number,
+  params: PackageManagerOptions,
+  terminator: "stop" | "reject",
+): string[] | null {
+  const idx = findFirstNonOptionIndex(argv, startIdx, params, terminator);
+  return idx === null ? null : argv.slice(idx);
 }
 
 function unwrapNpmExecInvocation(argv: string[]): string[] | null {
-  let idx = 1;
-  while (idx < argv.length) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (!token.startsWith("-")) {
-      if (!NPM_EXEC_SUBCOMMANDS.has(token)) {
-        return null;
-      }
-      idx += 1;
-      break;
-    }
-    const parsedOption = parseInlineOptionToken(token);
-    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag) || parsedOption.name === "-C") {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (NPM_EXEC_FLAG_OPTIONS.has(flag)) {
-      idx += 1;
-      continue;
-    }
+  const idx = findFirstNonOptionIndex(argv, 1, NPM_EXEC_OPTIONS, "reject");
+  if (idx === null || !NPM_EXEC_SUBCOMMANDS.has(argv[idx]?.trim() ?? "")) {
     return null;
   }
-  if (idx >= argv.length) {
-    return null;
-  }
-  const tail = argv.slice(idx);
+  const tail = argv.slice(idx + 1);
   if (tail[0] === "--") {
     return tail.length > 1 ? tail.slice(1) : null;
   }
-  return unwrapDirectPackageExecInvocation(["npx", ...tail]);
-}
-
-function unwrapYarnDlxInvocation(argv: string[]): string[] | null {
-  let idx = 0;
-  while (idx < argv.length) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (token === "--") {
-      const tail = argv.slice(idx + 1);
-      return tail.length > 0 ? tail : null;
-    }
-    if (!token.startsWith("-")) {
-      return argv.slice(idx);
-    }
-    const flag = normalizeOptionFlag(token);
-    if (YARN_DLX_OPTIONS_WITH_VALUE.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (YARN_DLX_FLAG_OPTIONS.has(flag)) {
-      idx += 1;
-      continue;
-    }
-    return null;
-  }
-  return null;
+  return unwrapPackageExecArguments(argv, idx + 1, NPM_DIRECT_EXEC_OPTIONS, "reject");
 }
 
 function unwrapYarnExecInvocation(argv: string[]): string[] | null {
@@ -519,7 +427,7 @@ function unwrapYarnExecInvocation(argv: string[]): string[] | null {
     return normalizedTail.length > 0 ? normalizedTail : null;
   }
   if (token === "dlx") {
-    return unwrapYarnDlxInvocation(argv.slice(idx + 1));
+    return unwrapPackageExecArguments(argv, idx + 1, YARN_DLX_OPTIONS, "stop");
   }
   return null;
 }
@@ -548,7 +456,7 @@ export function resolveKnownPackageManagerExecInvocation(
     }
     case "npx":
     case "bunx": {
-      const unwrapped = unwrapDirectPackageExecInvocation(argv);
+      const unwrapped = unwrapPackageExecArguments(argv, 1, NPM_DIRECT_EXEC_OPTIONS, "reject");
       return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
     }
     case "pnpm": {

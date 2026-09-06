@@ -664,7 +664,7 @@ extensions/matrix/src/matrix/monitor/handler-state.ts	1
 extensions/matrix/src/matrix/monitor/handler.ts	2
 extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	2
 extensions/matrix/src/matrix/monitor/index.ts	3
-extensions/matrix/src/matrix/monitor/reaction-events.ts	2
+extensions/matrix/src/matrix/monitor/reaction-events.ts	1
 extensions/matrix/src/matrix/monitor/replies.ts	1
 extensions/matrix/src/matrix/monitor/reply-context.ts	1
 extensions/matrix/src/matrix/monitor/room-history.ts	2
