@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesListResult,
   AgentsListResult,
@@ -471,12 +471,13 @@ describe("AgentsPage gateway lifecycle", () => {
       const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
       const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
       const oldResult = deferred<{ models: ModelCatalogEntry[] }>();
+      const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+      const nextClient = new GatewayBrowserClient({ url: "ws://gateway.test" });
       const oldRequest = vi
-        .fn()
+        .spyOn(client, "request")
         .mockReturnValueOnce(oldResult.promise)
         .mockResolvedValue({ models: nextModels });
-      const nextRequest = vi.fn(async () => ({ models: nextModels }));
-      const client = { request: oldRequest } as GatewayBrowserClient;
+      const nextRequest = vi.spyOn(nextClient, "request").mockResolvedValue({ models: nextModels });
       const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
       page.routeData = { panel: "overview" } as AgentsRouteData;
       setPageGateway(page, client);
@@ -491,7 +492,7 @@ describe("AgentsPage gateway lifecycle", () => {
         }
         setPageGateway(
           page,
-          replacement === "client" ? ({ request: nextRequest } as GatewayBrowserClient) : client,
+          replacement === "client" ? nextClient : client,
           true,
           replacement === "gateway source",
         );
