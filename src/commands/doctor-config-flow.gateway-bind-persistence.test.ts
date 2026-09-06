@@ -2,12 +2,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { createConfigIO, readConfigFileSnapshot } from "../config/config.js";
 import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
-import { repairLegacyConfigForUpdateChannel } from "./doctor/legacy-config-repair.js";
+import {
+  planLegacyConfigForUpdateChannel,
+  repairLegacyConfigForUpdateChannel,
+} from "./doctor/legacy-config-repair.js";
 
 describe("Doctor gateway bind persistence", () => {
   afterEach(() => {
@@ -53,8 +56,24 @@ describe("Doctor gateway bind persistence", () => {
           await fs.writeFile(includePath, JSON.stringify(diagnostics));
         }
         const before = await fs.readFile(configPath, "utf8");
+        const includedBefore =
+          scenario === "include" ? await fs.readFile(includePath, "utf8") : null;
+        const snapshot = await readConfigFileSnapshot();
+        const plan = planLegacyConfigForUpdateChannel(snapshot);
+        expect(await fs.readFile(configPath, "utf8")).toBe(before);
+        if (scenario === "include") {
+          expect(await fs.readFile(includePath, "utf8")).toBe(includedBefore);
+        }
+        if (scenario === "invalid") {
+          expect(plan).toBeUndefined();
+        } else {
+          expect(plan?.config.diagnostics?.otel).toEqual({
+            enabled: false,
+            endpoint: "http://collector.test:4317",
+          });
+        }
         const result = await repairLegacyConfigForUpdateChannel({
-          configSnapshot: await readConfigFileSnapshot(),
+          configSnapshot: snapshot,
           jsonMode: true,
         });
         if (scenario === "invalid") {
@@ -75,6 +94,60 @@ describe("Doctor gateway bind persistence", () => {
             otel: { enabled: false, endpoint: "http://collector.test:4317" },
           });
         }
+      });
+    },
+  );
+
+  it.each(["unchanged", "root edit", "include edit", "different profile"] as const)(
+    "persists a prepared legacy plan only for its original source: %s",
+    async (scenario) => {
+      await withTempHome(async (home) => {
+        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            gateway: { $include: "gateway.json" },
+          });
+          const includePath = path.join(path.dirname(configPath), "gateway.json");
+          await fs.writeFile(includePath, '{"mode":"local","bind":"localhost"}\n');
+          const { snapshot, writeOptions } = await createConfigIO({
+            observe: false,
+          }).readConfigFileSnapshotForWrite();
+          const plan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+          expect(plan).toBeDefined();
+          const original = await fs.readFile(configPath, "utf8");
+          const originalInclude = await fs.readFile(includePath, "utf8");
+          const persist = () =>
+            repairLegacyConfigForUpdateChannel({
+              configSnapshot: snapshot,
+              plan,
+              jsonMode: true,
+            });
+          // Planning is read-only; original authored bytes still exist at the seal boundary.
+          expect(snapshot.raw).toBe(original);
+          expect(await fs.readFile(includePath, "utf8")).toBe(originalInclude);
+          if (scenario === "unchanged") {
+            const result = await persist();
+            expect(result.repaired).toBe(true);
+            expect(result.snapshot.config.gateway?.bind).toBe("loopback");
+            expect(await fs.readFile(configPath, "utf8")).toBe(original);
+            expect(JSON.parse(await fs.readFile(includePath, "utf8")).bind).toBe("loopback");
+          } else if (scenario === "different profile") {
+            const otherPath = path.join(path.dirname(configPath), "other.json");
+            await fs.writeFile(otherPath, original);
+            await withEnvOverride({ OPENCLAW_CONFIG_PATH: otherPath }, async () => {
+              await expect(persist()).rejects.toThrow(/config path changed/);
+            });
+            expect(await fs.readFile(otherPath, "utf8")).toBe(original);
+            expect(await fs.readFile(configPath, "utf8")).toBe(original);
+            expect(await fs.readFile(includePath, "utf8")).toBe(originalInclude);
+          } else {
+            const editedPath = scenario === "root edit" ? configPath : includePath;
+            await fs.appendFile(editedPath, "\n");
+            await expect(persist()).rejects.toThrow(/changed since last load/);
+            expect(await fs.readFile(editedPath, "utf8")).toBe(
+              (scenario === "root edit" ? original : originalInclude) + "\n",
+            );
+          }
+        });
       });
     },
   );

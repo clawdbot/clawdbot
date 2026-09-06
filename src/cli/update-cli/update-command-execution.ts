@@ -1,3 +1,4 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -106,6 +107,7 @@ export async function executeMutableUpdate(params: {
   managedServiceNodeRunner?: string;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
   recoveryState: UpdateCommandRecoveryState;
   prepareMutableUpdate: (env?: NodeJS.ProcessEnv) => Promise<void>;
   onActivation?: () => void;
@@ -131,6 +133,7 @@ export async function executeMutableUpdate(params: {
       invocationCwd: params.invocationCwd,
       managedServiceRootRedirect: params.managedServiceRootRedirect,
       expectedServices: admission.services,
+      legacyConfigPlan: params.legacyConfigPlan,
     });
     admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
     const schemas = await checkTargetDatabaseSchemasForContexts(versions, admission.contexts);
@@ -492,6 +495,7 @@ export async function executeMutableUpdate(params: {
         timeoutMs: params.updateStepTimeoutMs,
         invocationCwd: params.invocationCwd,
         managedServiceRootRedirect: params.managedServiceRootRedirect,
+        legacyConfigPlan: params.legacyConfigPlan,
       });
     }
     if (params.updateInstallKind === "package") {

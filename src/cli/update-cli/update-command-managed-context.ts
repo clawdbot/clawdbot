@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -22,6 +23,7 @@ export async function captureOwnedManagedUpdatePreflightContext(params: {
   stopState: PreManagedServiceStop | undefined;
   processEnv: NodeJS.ProcessEnv;
   invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
 }) {
   const state = params.stopState;
   if (state?.serviceUpdateVerdict?.kind !== "owned" || !state.serviceEnv) {
@@ -36,13 +38,16 @@ export async function captureOwnedManagedUpdatePreflightContext(params: {
         invocationCwd: params.invocationCwd,
       }),
     ),
+    { legacyConfigPlan: params.legacyConfigPlan },
   );
 }
 
 export async function revalidateUpdateDatabaseContext(
   expected: Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>,
 ) {
-  const current = await captureTargetDatabaseSchemaContext(expected.readEnv);
+  const current = await captureTargetDatabaseSchemaContext(expected.readEnv, {
+    legacyConfigPlan: expected.legacyConfigPlan,
+  });
   const before = expected.configSnapshot;
   const after = current.configSnapshot;
   if (

@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
@@ -69,17 +71,44 @@ async function checkTargetDatabaseSchemas(
   });
 }
 
-export async function captureTargetDatabaseSchemaContext(env: NodeJS.ProcessEnv) {
+export async function captureTargetDatabaseSchemaContext(
+  env: NodeJS.ProcessEnv,
+  options?: { legacyConfigPlan?: LegacyConfigUpdatePlan },
+) {
   // Do not load plugins, recover config, record observations, or change the
   // caller's environment just to discover the stores selected by this config.
   const inspectionEnv = cloneEnvWithPlatformSemantics(env);
   const readEnv = cloneEnvWithPlatformSemantics(env);
-  const snapshot = await createConfigIO({
+  const { snapshot, writeOptions } = await createConfigIO({
     env: inspectionEnv,
     observe: false,
     pluginValidation: "core-only",
-  }).readConfigFileSnapshot();
-  if (!snapshot.valid || snapshot.readError) {
+  }).readConfigFileSnapshotForWrite();
+  // A Doctor-validated projection is usable only for its exact authored source.
+  // Keep the original snapshot intact for checkpointing and later revalidation;
+  // a caller's plan must not authorize a different managed service's config.
+  const planned = options?.legacyConfigPlan;
+  const before = planned?.snapshot;
+  const legacyConfigPlan =
+    before &&
+    before.path === snapshot.path &&
+    before.exists === snapshot.exists &&
+    before.raw === snapshot.raw &&
+    before.hash === snapshot.hash &&
+    isDeepStrictEqual(before.includedPaths ?? [], snapshot.includedPaths ?? []) &&
+    isDeepStrictEqual(before.includeProvenance ?? [], snapshot.includeProvenance ?? []) &&
+    isDeepStrictEqual(before.sourceConfig, snapshot.sourceConfig) &&
+    isDeepStrictEqual(
+      planned.includeIdentity.includeFileHashesForWrite ?? {},
+      writeOptions.includeFileHashesForWrite ?? {},
+    ) &&
+    isDeepStrictEqual(
+      planned.includeIdentity.includeFileTargetsForWrite ?? {},
+      writeOptions.includeFileTargetsForWrite ?? {},
+    )
+      ? planned
+      : undefined;
+  if ((!snapshot.valid && !legacyConfigPlan) || snapshot.readError) {
     throw new UpdatePreMutationError(
       "database-schema-preflight",
       `Update refused: could not inspect configured database paths from ${snapshot.path}. Correct the configuration before retrying.`,
@@ -87,9 +116,10 @@ export async function captureTargetDatabaseSchemaContext(env: NodeJS.ProcessEnv)
   }
   return {
     env: inspectionEnv,
-    config: snapshot.sourceConfig ?? snapshot.config,
+    config: legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config,
     configSnapshot: snapshot,
     readEnv,
+    ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
   };
 }
 

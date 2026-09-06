@@ -1,3 +1,4 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { formatUpdateAncestryBlockMessage } from "./update-command-handoff.js";
@@ -18,6 +19,7 @@ export async function inspectUpdateDatabaseContexts(params: {
   jsonMode: boolean;
   timeoutMs: number;
   invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
 }) {
@@ -64,6 +66,7 @@ export async function inspectUpdateDatabaseContexts(params: {
     stopState: service,
     processEnv: process.env,
     invocationCwd: params.invocationCwd,
+    legacyConfigPlan: params.legacyConfigPlan,
   });
   if (params.managedServiceRootRedirect && !managed) {
     throw new UpdatePreMutationError(
@@ -74,7 +77,11 @@ export async function inspectUpdateDatabaseContexts(params: {
   // Redirected package replacement does not own the invoking installation's stores.
   const contexts = params.managedServiceRootRedirect
     ? []
-    : [await captureTargetDatabaseSchemaContext(process.env)];
+    : [
+        await captureTargetDatabaseSchemaContext(process.env, {
+          legacyConfigPlan: params.legacyConfigPlan,
+        }),
+      ];
   if (managed) {
     contexts.push(managed);
   }
