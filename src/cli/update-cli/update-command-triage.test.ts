@@ -320,6 +320,44 @@ describe("update failure triage boundary", () => {
     expect(attemptIds[0]).not.toBe(attemptIds[1]);
   });
 
+  it("passes the admitted run identity to interactive reporting", async () => {
+    const target = await createInstalledTriage();
+    const runId = "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3";
+    const opts = { json: false, run: { runId, env: target.env } };
+    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
+
+    await withTerminal(async () => {
+      await expect(
+        withUpdateFailureTriage(opts, target, async () => {
+          throw new UpdateCommandFailure(failedUpdate);
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+    });
+
+    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ attemptId: runId }),
+    );
+  });
+
+  it("keeps reporting in the admitted run's state scope", async () => {
+    const target = await createInstalledTriage();
+    const env = { ...target.env, OPENCLAW_STATE_DIR: path.join(target.root, "admitted-state") };
+    const opts = { run: { runId: "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3", env } };
+    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
+
+    await withTerminal(async () => {
+      await expect(
+        withUpdateFailureTriage(opts, target, async () => {
+          throw new UpdateCommandFailure(failedUpdate);
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+    });
+
+    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ env }),
+    );
+  });
+
   it("does not start triage when the selected report action throws", async () => {
     const target = await createInstalledTriage();
     const bin = path.join(target.root, "bin");

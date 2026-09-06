@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { runInteractiveUpdateFailureAction } from "../../cli/update-cli/update-command-report.js";
 import type { RunGithubCli } from "../../infra/github-issue.js";
 import {
   readUpdateFailureReportReceipt,
@@ -34,6 +35,11 @@ vi.mock("../../infra/github-issue.js", async () => {
       _runGh: unknown,
       hooks: Parameters<typeof actual.submitGithubIssue>[2],
     ) => actual.submitGithubIssue(issue, mocks.runGh, hooks),
+    reconcileGithubIssue: (
+      issue: Parameters<typeof actual.reconcileGithubIssue>[0],
+      _runGh: unknown,
+      hooks: Parameters<typeof actual.reconcileGithubIssue>[2],
+    ) => actual.reconcileGithubIssue(issue, mocks.runGh, hooks),
   };
 });
 vi.mock("../server-restart-sentinel.js", () => ({
@@ -261,6 +267,105 @@ describe("Report action from the authoritative update ledger", () => {
     expect(mocks.runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "api"]);
     expect(await reportFiles()).toEqual([]);
   });
+
+  it.each([
+    { outcome: "created", changedPreview: false },
+    { outcome: "created", changedPreview: true },
+    { outcome: "pending", changedPreview: false },
+    { outcome: "pending", changedPreview: true },
+  ] as const)(
+    "reuses CLI $outcome across Gateway reconnect, changed preview: $changedPreview",
+    async ({ outcome, changedPreview }) => {
+      recordFailure();
+      mocks.runGh.mockImplementation(async (args) => {
+        if (args[0] === "auth") {
+          return { started: true, status: 0, stdout: Buffer.alloc(0) };
+        }
+        if (args[0] === "issue") {
+          expect(args[1]).toBe("list");
+          return { started: true, status: 0, stdout: Buffer.from("[]") };
+        }
+        expect(args[0]).toBe("api");
+        return outcome === "created"
+          ? { started: true, status: 0, stdout: Buffer.from(issueUrl) }
+          : { started: true, status: 1, stdout: Buffer.alloc(0) };
+      });
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      await expect(
+        runInteractiveUpdateFailureAction({
+          attemptId: runId,
+          env: process.env,
+          result: {
+            status: "error",
+            mode: "git",
+            reason: "build-failed",
+            before: { version: "2026.9.1" },
+            after: {
+              version: changedPreview ? "2026.9.3" : "2026.9.2",
+              upstreamRef: "f".repeat(40),
+            },
+            steps: [
+              { name: "validating", command: "", cwd: "", durationMs: 0, exitCode: null },
+              { name: "build", command: "", cwd: "", durationMs: 0, exitCode: null },
+            ],
+            durationMs: 1,
+          },
+          runtime,
+          dependencies: {
+            prompts: {
+              chooseAction: async () => "report",
+              confirmSubmission: async () => true,
+            },
+          },
+        }),
+      ).resolves.toBe("handled");
+      expect(runtime.error).not.toHaveBeenCalled();
+      const createPhases = () =>
+        mocks.runGh.mock.calls.map(([args]) => args[0]).filter((kind) => kind !== "issue");
+      expect(createPhases()).toEqual(["auth", "api"]);
+      closeOpenClawStateDatabaseForTest();
+      expect(readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
+
+      const { body, previewDigest } = await preview();
+      if (!changedPreview) {
+        expect(runtime.log).toHaveBeenCalledWith(body);
+      }
+      expect(readUpdateFailureReportReceipt(runId)?.previewDigest === previewDigest).toBe(
+        !changedPreview,
+      );
+      const response = await invoke({ action: "submit", attemptId: runId, previewDigest });
+      expect(response).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining(
+          outcome === "created" ? { status: "duplicate" } : { status: "pending" },
+        ),
+      );
+      if (outcome === "created" && !changedPreview) {
+        expect(response.mock.calls[0]?.[1]).toMatchObject({ url: issueUrl });
+      } else {
+        expect(response.mock.calls[0]?.[1]).not.toHaveProperty("url");
+        expect(response.mock.calls[0]?.[1]).not.toHaveProperty("fallbackUrl");
+      }
+      expect(createPhases()).toEqual(["auth", "api"]);
+
+      const nextRunId = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+      createUpdateRun({ runId: nextRunId, trigger: "cli" });
+      finishUpdateRun(nextRunId, { status: "failed", reason: "build-failed" });
+      const nextPreview = await invoke({ action: "preview", attemptId: nextRunId });
+      const nextResult = nextPreview.mock.calls[0]?.[1];
+      if (!isRecord(nextResult) || typeof nextResult.previewDigest !== "string") {
+        throw new Error("Missing distinct-run report preview");
+      }
+      await invoke({
+        action: "submit",
+        attemptId: nextRunId,
+        previewDigest: nextResult.previewDigest,
+      });
+      expect(createPhases()).toEqual(["auth", "api", "auth", "api"]);
+      expect(readUpdateFailureReportReceipt(nextRunId)).toMatchObject({ status: outcome });
+      expect(readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
+    },
+  );
 
   it.each(["auth-preflight", "attempt-validation"] as const)(
     "refuses a retired connection during %s and permits explicit resubmission after reconnect",

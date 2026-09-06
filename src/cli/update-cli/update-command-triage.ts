@@ -20,13 +20,13 @@ import { UpdateCommandFailure } from "./update-command-result.js";
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 
 export async function withUpdateFailureTriage(
-  opts: Pick<UpdateCommandOptions, "json" | "yes" | "dryRun"> & { invocationCwd?: string },
+  opts: Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & { invocationCwd?: string },
   target: UpdateTriageTarget,
   run: () => Promise<void>,
 ): Promise<void> {
-  // One wrapper call owns one actual update execution. A later CLI invocation
-  // is a new attempt; persisted managed failures use their handoff identity.
-  const updateAttemptId = randomUUID();
+  // CLI and Gateway reports for an admitted run share its identity and state scope.
+  // Standalone calls without an admitted run still own a fresh attempt.
+  const updateAttemptId = opts.run?.runId ?? randomUUID();
   const mode = opts.json
     ? "json"
     : !opts.yes && isTerminalInteractive()
@@ -87,7 +87,7 @@ export async function withUpdateFailureTriage(
           try {
             nextAction = await runInteractiveUpdateFailureAction({
               attemptId: updateAttemptId,
-              env: target.env,
+              env: opts.run?.env ?? target.env,
               ...(failure.error ? { error: failure.error } : {}),
               ...(failure.result ? { result: failure.result } : {}),
               runtime: defaultRuntime,
