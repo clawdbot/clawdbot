@@ -425,8 +425,74 @@ export const PluginsCatalogGetParamsSchema = closedObject({
   id: Type.String({ minLength: 1, maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" }),
 });
 
+const PluginDiscoveryCompatibilitySchema = closedObject({
+  pluginApiRange: Type.Optional(NonEmptyString),
+  builtWithOpenClawVersion: Type.Optional(NonEmptyString),
+  pluginSdkVersion: Type.Optional(NonEmptyString),
+  minGatewayVersion: Type.Optional(NonEmptyString),
+});
+
+const PluginDiscoveryConfigFieldSchema = closedObject({
+  name: NonEmptyString,
+  description: Type.Optional(Type.String()),
+  required: Type.Boolean(),
+  sensitive: Type.Boolean(),
+});
+
+const PluginDiscoveryVersionSchema = closedObject({
+  version: NonEmptyString,
+  createdAt: Type.Integer({ minimum: 0 }),
+  changelog: Type.String(),
+  tags: Type.Array(NonEmptyString),
+});
+
+export const PluginDiscoveryDetailSchema = closedObject({
+  origin: Type.Union([Type.Literal("clawhub"), Type.Literal("local")]),
+  packageName: Type.Optional(NonEmptyString),
+  author: Type.Optional(
+    closedObject({
+      handle: Type.Optional(NonEmptyString),
+      displayName: Type.Optional(NonEmptyString),
+    }),
+  ),
+  topics: Type.Array(NonEmptyString),
+  createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  updatedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  readme: Type.Optional(Type.String({ maxLength: 524_288 })),
+  compatibility: Type.Optional(PluginDiscoveryCompatibilitySchema),
+  configuration: Type.Array(PluginDiscoveryConfigFieldSchema),
+  mcpServers: Type.Array(NonEmptyString),
+  skills: Type.Array(
+    closedObject({
+      name: NonEmptyString,
+      description: Type.Optional(Type.String()),
+    }),
+  ),
+  versions: Type.Array(PluginDiscoveryVersionSchema, { maxItems: 10 }),
+  verification: Type.Optional(
+    closedObject({
+      tier: NonEmptyString,
+      summary: Type.Optional(Type.String()),
+      sourceRepo: Type.Optional(NonEmptyString),
+      sourceCommit: Type.Optional(NonEmptyString),
+      sourcePath: Type.Optional(NonEmptyString),
+      scanStatus: Type.Optional(NonEmptyString),
+    }),
+  ),
+  security: Type.Optional(
+    closedObject({
+      status: NonEmptyString,
+      verdict: Type.Optional(NonEmptyString),
+      summary: Type.Optional(Type.String()),
+      guidance: Type.Optional(Type.String()),
+      checkedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+  ),
+});
+
 export const PluginsCatalogGetResultSchema = closedObject({
   plugin: PluginDiscoveryEntrySchema,
+  detail: PluginDiscoveryDetailSchema,
 });
 
 /** Trusted official-catalog or acknowledged ClawHub install request. */
@@ -507,6 +573,7 @@ export type PluginDiscoveryCategory = Static<typeof PluginDiscoveryCategorySchem
 export type PluginDiscoveryCatalogFacts = Static<typeof PluginDiscoveryCatalogFactsSchema>;
 export type PluginDiscoveryLocalFacts = Static<typeof PluginDiscoveryLocalFactsSchema>;
 export type PluginDiscoveryEntry = Static<typeof PluginDiscoveryEntrySchema>;
+export type PluginDiscoveryDetail = Static<typeof PluginDiscoveryDetailSchema>;
 export type PluginsCatalogBrowseParams = Static<typeof PluginsCatalogBrowseParamsSchema>;
 export type PluginsCatalogBrowseResult = Static<typeof PluginsCatalogBrowseResultSchema>;
 export type PluginsCatalogCategoriesParams = Static<typeof PluginsCatalogCategoriesParamsSchema>;

@@ -1,24 +1,24 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
-import { html, nothing, type PropertyValues } from "lit";
+import { type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  pathForPluginCatalogEntry,
   pathForPluginSettings,
   pathForRoute,
+  pluginCatalogIdFromPath,
   pluginSettingsIdFromPath,
 } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { analyzeConfigSchema } from "../../components/config-form.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
 import {
+  loadPluginDiscoveryDetail,
   uninstallPlugin,
+  type PluginDiscoveryDetailResult,
   type PluginListResult,
   type PluginMutationResult,
   type PluginsInspectResult,
@@ -30,24 +30,17 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/plugins.css";
-import { renderPluginCatalogResults } from "./catalog-results.ts";
-import { renderPluginConsentDialog } from "./consent-dialog.ts";
-import { renderInstalledPlugins } from "./installed-plugins.ts";
+import type { PluginCatalogDetailTab } from "./catalog-detail.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginIconController } from "./plugin-icon-controller.ts";
 import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import type { PluginRowMessage } from "./plugin-row-message.ts";
 import { PluginsConsentController } from "./plugins-consent-controller.ts";
-import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import type { PluginsHubTab } from "./plugins-hub.ts";
 import { mergePluginCatalogItem, pluginMutationBlockedReason } from "./plugins-page-model.ts";
+import { renderPluginsPage } from "./plugins-page-view.ts";
 import type { PluginsRouteData } from "./route-data.ts";
-import { pluginAdvancedSchema, pluginConfigSchema } from "./settings-model.ts";
-import {
-  renderPluginSettingsDetail,
-  renderPluginSettingsInventory,
-  type PluginSettingsTab,
-} from "./settings-view.ts";
+import type { PluginSettingsTab } from "./settings-view.ts";
 
 type PluginsPageSurface = "discovery" | "settings";
 
@@ -73,6 +66,12 @@ export class PluginsPage extends OpenClawLightDomElement {
   } | null = null;
   @state() private iconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
+  @state() private catalogDetail: {
+    id: string;
+    result: PluginDiscoveryDetailResult | null;
+    error: string | null;
+  } | null = null;
+  @state() private catalogDetailTab: PluginCatalogDetailTab = "readme";
   private configAutoSaveStatus = this.context?.runtimeConfig.state.configAutoSaveStatus ?? "idle";
   private pluginConfigEditPending = false;
   private routeDataConsumed = false;
@@ -220,6 +219,11 @@ export class PluginsPage extends OpenClawLightDomElement {
         });
       }
       event.stopPropagation();
+      return;
+    }
+    if (this.catalogDetail) {
+      this.closeCatalogDetail();
+      event.stopPropagation();
     }
   };
 
@@ -260,9 +264,17 @@ export class PluginsPage extends OpenClawLightDomElement {
     if (shouldRefreshAfterChange) {
       void this.refreshCatalog();
       if (this.surface === "discovery") {
-        void this.discovery.refresh();
-        void this.discovery.refreshCategories();
-        void this.discovery.refreshFeatured();
+        const catalogId = pluginCatalogIdFromPath(
+          this.routeData?.location.pathname ?? "",
+          this.context.basePath,
+        );
+        if (catalogId) {
+          void this.showCatalogDetail(catalogId);
+        } else {
+          void this.discovery.refresh();
+          void this.discovery.refreshCategories();
+          void this.discovery.refreshFeatured();
+        }
       }
     } else {
       this.ensureInitialData();
@@ -278,6 +290,10 @@ export class PluginsPage extends OpenClawLightDomElement {
     const detailPluginId =
       this.surface === "settings"
         ? pluginSettingsIdFromPath(data.location.pathname, this.context.basePath)
+        : null;
+    const catalogId =
+      this.surface === "discovery"
+        ? pluginCatalogIdFromPath(data.location.pathname, this.context.basePath)
         : null;
     // Route location is UI state, not Gateway data. Apply it even when the
     // catalog snapshot is stale so deep links do not fall back to Installed.
@@ -296,6 +312,9 @@ export class PluginsPage extends OpenClawLightDomElement {
     if (detailPluginId !== this.detail?.pluginId) {
       void this.showDetails(detailPluginId);
     }
+    if (catalogId !== this.catalogDetail?.id) {
+      void this.showCatalogDetail(catalogId);
+    }
     this.ensureInitialData();
   }
 
@@ -306,6 +325,7 @@ export class PluginsPage extends OpenClawLightDomElement {
     }
     // Inspection results belong to one connection epoch, including same-client reconnects.
     this.detail = null;
+    this.catalogDetail = null;
     this.consentController.reset();
   }
 
@@ -340,7 +360,17 @@ export class PluginsPage extends OpenClawLightDomElement {
       void this.refreshCatalog();
     }
     if (this.surface === "discovery") {
-      this.discovery.ensureInitial();
+      const catalogId = pluginCatalogIdFromPath(
+        this.routeData?.location.pathname ?? "",
+        this.context.basePath,
+      );
+      if (catalogId) {
+        if (catalogId !== this.catalogDetail?.id) {
+          void this.showCatalogDetail(catalogId);
+        }
+      } else {
+        this.discovery.ensureInitial();
+      }
     }
   }
 
@@ -443,6 +473,37 @@ export class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
+  private async showCatalogDetail(id: string | null) {
+    const detail = id ? { id, result: null, error: null } : null;
+    this.catalogDetail = detail;
+    this.catalogDetailTab = "readme";
+    if (!detail) {
+      return;
+    }
+    const scope = this.gateway.capture();
+    if (!scope) {
+      return;
+    }
+    try {
+      const result = await loadPluginDiscoveryDetail(scope.client, detail.id);
+      if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
+        this.catalogDetail = { ...detail, result };
+      }
+    } catch (error) {
+      if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
+        this.catalogDetail = { ...detail, error: formatUiError(error) };
+      }
+    }
+  }
+
+  private closeCatalogDetail() {
+    this.catalogDetail = null;
+    this.catalogDetailTab = "readme";
+    this.context.navigate("plugins", {
+      pathname: pathForRoute("plugins", this.context.basePath),
+    });
+  }
+
   private updateEnabled(pluginId: string, enabled: boolean, key?: string): Promise<void> {
     return this.consentController.updateEnabled(pluginId, enabled, key);
   }
@@ -484,206 +545,88 @@ export class PluginsPage extends OpenClawLightDomElement {
 
   override render() {
     const blockedReason = this.mutationBlockedReason();
-    const discovery = this.surface === "discovery";
-    const configState = this.context.runtimeConfig.state;
-    const configAnalysis = analyzeConfigSchema(configState.configSchema);
-    const detailPluginId = this.detail?.pluginId ?? null;
-    const settingsParentRoute =
-      new URLSearchParams(this.routeData?.location.search ?? "").get("from") === "plugins"
-        ? "plugins"
-        : "plugin-settings";
-    const settingsShared = {
+    return renderPluginsPage({
+      context: this.context,
+      routeData: this.routeData,
+      surface: this.surface,
       connected: this.gateway.connected,
       loading: this.loading,
       result: this.result,
       error: this.error,
+      query: this.query,
+      settingsTab: this.settingsTab,
+      inventoryExpanded: this.inventoryExpanded,
+      inventorySearchOpen: this.inventorySearchOpen,
       busy: this.busy,
       messages: this.messages,
+      detail: this.detail,
       pageNotice: this.pageNotice,
       iconUrls: this.iconUrls,
-      canMutate: this.canMutate(),
+      catalogDetail: this.catalogDetail,
+      catalogDetailTab: this.catalogDetailTab,
       mutationBlockedReason: blockedReason,
-      configBusy: configState.configLoading || configState.configSaving,
-      configError: configState.lastError,
+      canMutate: this.canMutate(),
       canEditConfig: this.canEditConfig(),
-      configValue: configState.configForm,
-      configHints: configState.configUiHints,
-      configSchemaLoading: configState.configSchemaLoading,
-      configUnsupportedPaths: configAnalysis.unsupportedPaths,
-      onIconError: (pluginId: string) => this.pluginIcons.handleError(pluginId),
-      onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) =>
-        void this.updateEnabled(pluginId, enabled, rowKey),
-      onUninstall: (pluginId: string, rowKey: string) => void this.uninstall(pluginId, rowKey),
-      onConfigPatch: (path: Array<string | number>, value: unknown) => {
-        this.pluginConfigEditPending = true;
-        this.context.runtimeConfig.patchForm(path, value);
+      discovery: this.discovery,
+      consentController: this.consentController,
+      actions: {
+        selectHubTab: (tab) => this.selectHubTab(tab),
+        closeCatalogDetail: () => this.closeCatalogDetail(),
+        retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
+        selectCatalogDetailTab: (tab) => {
+          this.catalogDetailTab = tab;
+        },
+        setInventoryExpanded: (expanded) => {
+          this.inventoryExpanded = expanded;
+        },
+        setInventorySearchOpen: (open) => {
+          this.inventorySearchOpen = open;
+          if (!open) this.query = "";
+        },
+        setQuery: (query) => {
+          this.query = query;
+        },
+        refreshCatalog: () => void this.refreshCatalog(),
+        openPluginSettings: (pluginId, fromDiscovery) => {
+          this.context.navigate("plugin-settings", {
+            pathname: pluginId
+              ? pathForPluginSettings(pluginId, this.context.basePath)
+              : pathForRoute("plugin-settings", this.context.basePath),
+            search: fromDiscovery && pluginId ? "?from=plugins" : "",
+          });
+        },
+        handlePluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
+        updateEnabled: (pluginId, enabled, rowKey) =>
+          void this.updateEnabled(pluginId, enabled, rowKey),
+        uninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
+        patchConfig: (path, value) => {
+          this.pluginConfigEditPending = true;
+          this.context.runtimeConfig.patchForm(path, value);
+        },
+        removeConfig: (path) => {
+          this.pluginConfigEditPending = true;
+          this.context.runtimeConfig.removeFormValue(path);
+        },
+        reloadConfig: () => {
+          this.pluginConfigEditPending = false;
+          void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
+        },
+        closeSettingsDetail: (parentRoute) => {
+          this.detail = null;
+          this.context.navigate(parentRoute, {
+            pathname: pathForRoute(parentRoute, this.context.basePath),
+          });
+        },
+        retrySettingsDetail: (pluginId) => void this.showDetails(pluginId),
+        selectSettingsTab: (tab) => {
+          this.settingsTab = tab;
+          this.context.replace("plugin-settings", {
+            pathname: pathForRoute("plugin-settings", this.context.basePath),
+            search: tab === "advanced" ? "?tab=advanced" : "",
+          });
+        },
       },
-      onConfigRemove: (path: Array<string | number>) => {
-        this.pluginConfigEditPending = true;
-        this.context.runtimeConfig.removeFormValue(path);
-      },
-      onConfigReload: () => {
-        this.pluginConfigEditPending = false;
-        void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
-      },
-      onRefresh: () => void this.refreshCatalog(),
-    };
-    return html`
-      ${
-        discovery
-          ? renderPluginsHubHeader({
-              active: "plugins",
-              onSelect: (tab) => this.selectHubTab(tab),
-            })
-          : nothing
-      }
-      ${renderSettingsWorkspace(html`
-        ${
-          discovery
-            ? html`<wa-tab-panel
-                id=${PLUGINS_HUB_PANEL_ID}
-                name="plugins"
-                active
-                aria-labelledby="plugins-tab-plugins"
-                >${renderInstalledPlugins({
-                  connected: this.gateway.connected,
-                  loading: this.loading,
-                  result: this.result,
-                  error: this.error,
-                  expanded: this.inventoryExpanded,
-                  searchOpen: this.inventorySearchOpen,
-                  query: this.query,
-                  busy: this.busy,
-                  iconUrls: this.iconUrls,
-                  attributions: this.discovery.attributions,
-                  canMutate: this.canMutate(),
-                  mutationBlockedReason: blockedReason,
-                  consent: this.consentController.consent,
-                  consentInspection: this.consentController.inspection,
-                  consentInspectionLoading: this.consentController.inspectionLoading,
-                  consentInspectionError: this.consentController.inspectionError,
-                  onExpandedChange: (expanded) => {
-                    this.inventoryExpanded = expanded;
-                  },
-                  onSearchOpenChange: (open) => {
-                    this.inventorySearchOpen = open;
-                    if (!open) {
-                      this.query = "";
-                    }
-                  },
-                  onQueryChange: (query) => {
-                    this.query = query;
-                  },
-                  onRefresh: () => void this.refreshCatalog(),
-                  settingsHref: (pluginId) =>
-                    `${pathForPluginSettings(pluginId, this.context.basePath)}?from=plugins`,
-                  onOpenSettings: (pluginId) => {
-                    this.context.navigate("plugin-settings", {
-                      pathname: pluginId
-                        ? pathForPluginSettings(pluginId, this.context.basePath)
-                        : pathForRoute("plugin-settings", this.context.basePath),
-                      search: pluginId ? "?from=plugins" : "",
-                    });
-                  },
-                  onIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
-                  onCancelConsent: () => this.consentController.close(),
-                  onConfirmConsent: () => this.consentController.confirm(),
-                  onRetryConsentInspection: () => void this.consentController.inspect(),
-                })}${renderPluginCatalogResults({
-                  connected: this.gateway.connected,
-                  loading: this.discovery.loading,
-                  paging: this.discovery.paging,
-                  pageNumber: this.discovery.pageNumber,
-                  canGoPrevious: this.discovery.canGoPrevious,
-                  canGoNext: this.discovery.canGoNext,
-                  result: this.discovery.result,
-                  error: this.discovery.error,
-                  categories: this.discovery.categories,
-                  categoriesError: this.discovery.categoriesError,
-                  featured: this.discovery.featured,
-                  featuredLoading: this.discovery.featuredLoading,
-                  featuredError: this.discovery.featuredError,
-                  intent: this.discovery.intent,
-                  category: this.discovery.category,
-                  query: this.discovery.query,
-                  entryHref: (id) => pathForPluginCatalogEntry(id, this.context.basePath),
-                  onIntentChange: (intent) => this.discovery.selectIntent(intent),
-                  onCategoryChange: (category) => this.discovery.selectCategory(category),
-                  onQueryChange: (query) => this.discovery.updateQuery(query),
-                  onOpenEntry: (id) => {
-                    this.context.navigate("plugins", {
-                      pathname: pathForPluginCatalogEntry(id, this.context.basePath),
-                    });
-                  },
-                  onPreviousPage: () => void this.discovery.previousPage(),
-                  onNextPage: () => void this.discovery.nextPage(),
-                  onRetry: () => void this.discovery.refresh(),
-                  onRetryCategories: () => void this.discovery.refreshCategories(),
-                  onRetryFeatured: () => void this.discovery.refreshFeatured(),
-                })}</wa-tab-panel
-              >`
-            : detailPluginId
-              ? renderPluginSettingsDetail({
-                  ...settingsShared,
-                  pluginId: detailPluginId,
-                  inspection: this.detail?.inspection ?? null,
-                  inspectionError: this.detail?.error ?? null,
-                  configSchema: pluginConfigSchema(configAnalysis.schema, detailPluginId),
-                  backHref: pathForRoute(settingsParentRoute, this.context.basePath),
-                  backLabel:
-                    settingsParentRoute === "plugins" ? t("tabs.plugins") : t("nav.settings"),
-                  onBack: () => {
-                    this.detail = null;
-                    this.context.navigate(settingsParentRoute, {
-                      pathname: pathForRoute(settingsParentRoute, this.context.basePath),
-                    });
-                  },
-                  onRetryInspection: () => void this.showDetails(detailPluginId),
-                })
-              : renderPluginSettingsInventory({
-                  ...settingsShared,
-                  tab: this.settingsTab,
-                  query: this.query,
-                  advancedSchema: pluginAdvancedSchema(configAnalysis.schema),
-                  onTabChange: (tab) => {
-                    this.settingsTab = tab;
-                    this.context.replace("plugin-settings", {
-                      pathname: pathForRoute("plugin-settings", this.context.basePath),
-                      search: tab === "advanced" ? "?tab=advanced" : "",
-                    });
-                  },
-                  onQueryChange: (query) => {
-                    this.query = query;
-                  },
-                  pluginHref: (pluginId) => pathForPluginSettings(pluginId, this.context.basePath),
-                  onOpenPlugin: (pluginId) => {
-                    this.context.navigate("plugin-settings", {
-                      pathname: pathForPluginSettings(pluginId, this.context.basePath),
-                    });
-                  },
-                })
-        }
-      `)}
-      ${
-        !discovery && this.consentController.consent
-          ? renderPluginConsentDialog({
-              consent: this.consentController.consent,
-              inspection: this.consentController.inspection,
-              loading: this.consentController.inspectionLoading,
-              error: this.consentController.inspectionError,
-              iconUrl: this.consentController.consent.pluginId
-                ? this.iconUrls[this.consentController.consent.pluginId]
-                : undefined,
-              canMutate: this.canMutate(),
-              mutationBlockedReason: blockedReason,
-              busy: Object.values(this.busy).some(Boolean),
-              onCancel: () => this.consentController.close(),
-              onConfirm: () => this.consentController.confirm(),
-              onRetry: () => void this.consentController.inspect(),
-            })
-          : nothing
-      }
-    `;
+    });
   }
 }
 

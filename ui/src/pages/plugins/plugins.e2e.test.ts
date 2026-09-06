@@ -3,14 +3,8 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
-import type {
-  PluginCatalogItem,
-  PluginListResult,
-  PluginMutationResult,
-  PluginsInspectResult,
-} from "../../lib/plugins/index.ts";
+import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -19,12 +13,29 @@ import {
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 import {
+  calendarInspection,
+  calendarPlugin,
+  calendarSearchResponse,
+  configSnapshot,
   discoveryCategories,
   discoveryResult,
+  enableWorkboardResult,
   finalDiscoveryPageItems,
   featuredResult,
+  initialInventory,
+  installResult,
+  installedPluginsInventory,
+  lobsterInspection,
+  lobsterPlugin,
+  matrixDetail,
   matrixDiscoveryPlugin,
+  remoteIconPlugin,
   secondDiscoveryPageItems,
+  telegramPlugin,
+  uninstallResult,
+  workboardDisabled,
+  workboardEnabled,
+  workboardInspection,
 } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -39,268 +50,16 @@ const pluginMethods = [
   "plugins.search",
   "plugins.catalog.browse",
   "plugins.catalog.categories",
+  "plugins.catalog.get",
   "plugins.install",
   "plugins.setEnabled",
   "plugins.uninstall",
 ];
-const workboardDisabled = {
-  id: "workboard",
-  name: "Workboard",
-  packageName: "@openclaw/workboard",
-  description: "Dashboard workboard for agent-owned issues and sessions.",
-  version: "2026.7.9",
-  kind: ["productivity"],
-  origin: "bundled",
-  installed: true,
-  enabled: false,
-  state: "disabled",
-  featured: true,
-  order: 10,
-  category: "tool",
-  removable: false,
-} satisfies PluginCatalogItem;
-
-const workboardEnabled = {
-  ...workboardDisabled,
-  enabled: true,
-  state: "enabled",
-} satisfies PluginCatalogItem;
-
-const lobsterPlugin = {
-  id: "lobster",
-  name: "Lobster",
-  description: "Run typed workflows with resumable approvals.",
-  kind: ["plugin"],
-  origin: "official",
-  installed: false,
-  enabled: false,
-  state: "not-installed",
-  featured: true,
-  order: 50,
-  install: { source: "clawhub", packageName: "@openclaw/lobster" },
-} satisfies PluginCatalogItem;
-
-const remoteIconPlugin = {
-  id: "remote-icon",
-  name: "FireCrawl",
-  description: "Web extraction and crawling.",
-  kind: ["plugin"],
-  origin: "official",
-  installed: false,
-  enabled: false,
-  state: "not-installed",
-  featured: true,
-  order: 60,
-  hasIcon: true,
-  install: { source: "clawhub", packageName: "@openclaw/firecrawl" },
-} satisfies PluginCatalogItem;
-
-const calendarPlugin = {
-  id: "calendar-plus",
-  name: "Calendar Plus",
-  packageName: "calendar-plus",
-  description: "Plan and coordinate work from a shared calendar.",
-  version: "1.2.3",
-  kind: ["productivity"],
-  origin: "global",
-  installed: true,
-  enabled: true,
-  state: "enabled",
-  category: "tool",
-  removable: true,
-} satisfies PluginCatalogItem;
-
-const telegramPlugin = {
-  id: "telegram",
-  name: "Telegram",
-  packageName: "@openclaw/telegram",
-  description: "Chat with your agent from Telegram groups and direct messages.",
-  version: "1.4.0",
-  kind: ["channel"],
-  origin: "bundled",
-  installed: true,
-  enabled: false,
-  state: "disabled",
-  category: "channel",
-  removable: false,
-} satisfies PluginCatalogItem;
-
-function installedInventoryPlugin(
-  id: string,
-  overrides: Partial<PluginCatalogItem> = {},
-): PluginCatalogItem {
-  return {
-    id,
-    name: id
-      .split("-")
-      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-      .join(" "),
-    description: `Operator-visible capability for ${id}.`,
-    kind: ["productivity"],
-    origin: "bundled",
-    installed: true,
-    enabled: false,
-    state: "disabled",
-    category: "tool",
-    removable: false,
-    ...overrides,
-  };
-}
-
-const installedPluginsItems = [
-  installedInventoryPlugin("attention-b", {
-    state: "error",
-    error: "Manifest B failed",
-    order: 20,
-  }),
-  installedInventoryPlugin("enabled-b", { enabled: true, state: "enabled", order: 20 }),
-  installedInventoryPlugin("needs-setup", { state: "needs-setup", order: 5 }),
-  ...Array.from({ length: 11 }, (_, index) =>
-    installedInventoryPlugin(
-      index === 0 ? "workboard" : `disabled-${String(index).padStart(2, "0")}`,
-      {
-        ...(index === 0
-          ? {
-              name: "Workboard",
-              description: "Dashboard workboard for agent-owned issues and sessions.",
-            }
-          : {}),
-        order: index,
-      },
-    ),
-  ),
-  installedInventoryPlugin("attention-a", {
-    state: "error",
-    error: "Manifest A failed",
-    order: 10,
-    category: "internal-category",
-  }),
-  installedInventoryPlugin("enabled-a", { enabled: true, state: "enabled", order: 10 }),
-];
-
-const installedPluginsInventory = inventory(installedPluginsItems);
-
-const initialInventory = inventory([
-  workboardDisabled,
-  telegramPlugin,
-  lobsterPlugin,
-  remoteIconPlugin,
-]);
-const calendarSearchResponse = {
-  results: [
-    {
-      score: 0.98,
-      package: {
-        name: "calendar-plus",
-        displayName: "Calendar Plus",
-        family: "code-plugin",
-        channel: "community",
-        isOfficial: false,
-        summary: "Plan and coordinate work from a shared calendar.",
-        latestVersion: "1.2.3",
-        downloads: 1420,
-        verificationTier: "source-linked",
-      },
-    },
-  ],
-} satisfies PluginsSearchResult;
-
-const uninstallResult = {
-  ok: true,
-  pluginId: "calendar-plus",
-  restartRequired: true,
-  removed: ["config entry", "install record", "directory"],
-};
-
-const installResult = {
-  ok: true,
-  plugin: calendarPlugin,
-  restartRequired: true,
-} satisfies PluginMutationResult;
-
-const enableWorkboardResult = {
-  ok: true,
-  plugin: workboardEnabled,
-  restartRequired: false,
-} satisfies PluginMutationResult;
-
-const workboardInspection = {
-  ok: true,
-  reviewToken: "a".repeat(64),
-  plugin: {
-    id: workboardDisabled.id,
-    name: workboardDisabled.name,
-    origin: workboardDisabled.origin,
-    installed: true,
-    enabled: false,
-  },
-  source: { kind: "npm", packageName: workboardDisabled.packageName },
-  declared: {
-    channels: [],
-    providers: [],
-    tools: [],
-    contracts: [],
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  },
-  grants: {
-    hooks: {
-      allowPromptInjection: { effective: true },
-      allowConversationAccess: { effective: true },
-    },
-  },
-} satisfies PluginsInspectResult;
-
-const lobsterInspection = {
-  ...workboardInspection,
-  reviewToken: "b".repeat(64),
-  plugin: {
-    id: lobsterPlugin.id,
-    name: lobsterPlugin.name,
-    origin: lobsterPlugin.origin,
-    installed: false,
-    enabled: false,
-  },
-  source: { kind: "npm", packageName: "@openclaw/lobster" },
-} satisfies PluginsInspectResult;
-
-const calendarInspection = {
-  ...workboardInspection,
-  reviewToken: "c".repeat(64),
-  plugin: { ...calendarPlugin, installed: false, enabled: false },
-  source: { kind: "clawhub", packageName: "calendar-plus" },
-  declared: { ...workboardInspection.declared, tools: ["calendar_create"] },
-} satisfies PluginsInspectResult;
-
 let browser: Browser;
 let server: ControlUiE2eServer;
 
 function inventory(plugins: PluginCatalogItem[]): PluginListResult {
   return { plugins, diagnostics: [], mutationAllowed: true };
-}
-
-function configSnapshot(isWorkboardEnabled: boolean) {
-  const config = {
-    plugins: {
-      entries: {
-        workboard: { enabled: isWorkboardEnabled },
-      },
-    },
-  };
-  return {
-    config,
-    hash: isWorkboardEnabled ? "plugins-config-enabled" : "plugins-config-disabled",
-    issues: [],
-    path: "/tmp/openclaw-e2e/openclaw.json",
-    raw: JSON.stringify(config, null, 2),
-    resolved: config,
-    sourceConfig: config,
-    valid: true,
-  };
 }
 
 function readOnlyConnectResponse() {
@@ -395,6 +154,9 @@ function pluginMethodResponses() {
       ],
     },
     "plugins.catalog.categories": discoveryCategories,
+    "plugins.catalog.get": {
+      cases: [{ match: { id: matrixDiscoveryPlugin.id }, response: matrixDetail }],
+    },
     "plugins.install": {
       cases: [
         {
@@ -669,6 +431,49 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await openAttentionSettings.focus();
       await page.keyboard.press("Enter");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/attention-a");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens a routed ClawHub-style plugin detail page with normalized metadata", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: pluginMethodResponses(),
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.getByRole("heading", { level: 1, name: "Matrix", exact: true }).waitFor();
+      expect(
+        (await gateway.getRequests("plugins.catalog.get")).map((request) => request.params),
+      ).toContainEqual({ id: matrixDiscoveryPlugin.id });
+      expect(
+        await page.getByText("Connect OpenClaw to Matrix rooms and direct messages.").count(),
+      ).toBe(1);
+      const detailTabs = page.getByRole("tablist", { name: "Plugin details" });
+      expect(await detailTabs.getByRole("tab", { name: "README" }).count()).toBe(1);
+      expect(await detailTabs.getByRole("tab", { name: "Skills" }).count()).toBe(1);
+      expect(await detailTabs.getByRole("tab", { name: "Configuration" }).count()).toBe(1);
+      expect(await detailTabs.getByRole("tab", { name: "Compatibility" }).count()).toBe(1);
+      expect(await detailTabs.getByRole("tab", { name: "Versions" }).count()).toBe(1);
+      expect(await detailTabs.getByRole("tab", { name: "Advanced" }).count()).toBe(1);
+      expect(await page.getByText("52.2k", { exact: true }).count()).toBe(1);
+      expect(await page.getByText("Capabilities match the stated purpose.").count()).toBe(1);
+      expect(
+        await page
+          .getByRole("link", { name: "openclaw/openclaw", exact: true })
+          .getAttribute("href"),
+      ).toBe("https://github.com/openclaw/openclaw");
+      expect(
+        await page.getByRole("link", { name: "@openclaw", exact: true }).getAttribute("href"),
+      ).toBe("https://clawhub.ai/user/openclaw");
+
+      await detailTabs.getByRole("tab", { name: "Versions" }).click();
+      expect(await page.getByText("2.1.0", { exact: true }).count()).toBe(1);
+      expect(await page.getByText("Current release", { exact: true }).count()).toBe(1);
     } finally {
       await context.close();
     }

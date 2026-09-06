@@ -68,7 +68,7 @@ function categoryIcon(icon: string | undefined): TemplateResult {
   return (icon && CATEGORY_ICONS[icon]) || icons.box;
 }
 
-function formatCompactCount(value: number): string {
+export function formatCompactCount(value: number): string {
   if (value < 1_000) {
     return new Intl.NumberFormat().format(value);
   }

@@ -19,6 +19,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   decodePluginDiscoveryId,
   joinClawHubPluginCatalog,
+  joinClawHubPluginDetail,
 } from "../../plugins/catalog-discovery.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
@@ -234,11 +235,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         fetchClawHubPluginDetail({ packageName }),
         listManagedPlugins({ config: context.getRuntimeConfig() }),
       ]);
-      const [plugin] = joinClawHubPluginCatalog({ remote: [remote], local });
-      if (!plugin) {
-        throw new Error("ClawHub returned no plugin detail.");
-      }
-      respond(true, { plugin }, undefined);
+      respond(true, joinClawHubPluginDetail({ remote, local }), undefined);
     } catch (error) {
       respond(
         false,

@@ -12,6 +12,7 @@ import type {
   PluginsInstallResult,
   PluginsCatalogBrowseResult as ProtocolPluginsCatalogBrowseResult,
   PluginsCatalogCategoriesResult as ProtocolPluginsCatalogCategoriesResult,
+  PluginsCatalogGetResult as ProtocolPluginsCatalogGetResult,
   PluginsListResult as ProtocolPluginsListResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
@@ -25,6 +26,7 @@ export type PluginDiscoveryCategory = ProtocolPluginDiscoveryCategory;
 export type PluginDiscoveryEntry = ProtocolPluginDiscoveryEntry;
 export type PluginDiscoveryResult = ProtocolPluginsCatalogBrowseResult;
 export type PluginDiscoveryCategoriesResult = ProtocolPluginsCatalogCategoriesResult;
+export type PluginDiscoveryDetailResult = ProtocolPluginsCatalogGetResult;
 export type PluginDeclaredSurface = ProtocolPluginDeclaredSurface;
 export type PluginHookGrant = ProtocolPluginHookGrant;
 export type PluginInspectSource = ProtocolPluginInspectSource;
@@ -37,6 +39,18 @@ type PluginUninstallResult = PluginsUninstallResult;
 
 export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginListResult> {
   return client.request<PluginListResult>("plugins.list", {});
+}
+
+export function loadPluginDiscoveryDetail(
+  client: GatewayBrowserClient,
+  id: string,
+  signal?: AbortSignal,
+): Promise<PluginDiscoveryDetailResult> {
+  return client.request<PluginDiscoveryDetailResult>(
+    "plugins.catalog.get",
+    { id },
+    signal ? { signal } : undefined,
+  );
 }
 
 export function installPlugin(

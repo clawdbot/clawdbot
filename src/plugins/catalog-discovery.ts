@@ -1,11 +1,15 @@
 // Canonical join between ClawHub discovery identity and Gateway-owned runtime state.
 import type {
   PluginCatalogEntry,
+  PluginDiscoveryDetail,
   PluginDiscoveryEntry,
   PluginDiscoveryLocalFacts,
   PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import type { ClawHubPluginCatalogEntry } from "../infra/clawhub-plugin-catalog.js";
+import type {
+  ClawHubPluginCatalogEntry,
+  ClawHubPluginDetail,
+} from "../infra/clawhub-plugin-catalog.js";
 
 const DISCOVERY_ID_PREFIX = "ch_";
 const DISCOVERY_ID_PAYLOAD = /^[A-Za-z0-9_-]+$/u;
@@ -124,4 +128,31 @@ export function joinClawHubPluginCatalog(params: {
       local: projectLocalFacts(localPlugin, params.local.mutationAllowed),
     };
   });
+}
+
+export function joinClawHubPluginDetail(params: {
+  remote: ClawHubPluginDetail;
+  local: PluginsListResult;
+}): { plugin: PluginDiscoveryEntry; detail: PluginDiscoveryDetail } {
+  const [plugin] = joinClawHubPluginCatalog({ remote: [params.remote], local: params.local });
+  if (!plugin) {
+    throw new Error("ClawHub returned no plugin detail.");
+  }
+  const detail: PluginDiscoveryDetail = {
+    origin: "clawhub",
+    packageName: params.remote.packageName,
+    ...(params.remote.owner ? { author: params.remote.owner } : {}),
+    topics: params.remote.topics,
+    ...(params.remote.createdAt !== undefined ? { createdAt: params.remote.createdAt } : {}),
+    ...(params.remote.updatedAt !== undefined ? { updatedAt: params.remote.updatedAt } : {}),
+    ...(params.remote.readme ? { readme: params.remote.readme } : {}),
+    ...(params.remote.compatibility ? { compatibility: params.remote.compatibility } : {}),
+    configuration: params.remote.configFields,
+    mcpServers: params.remote.mcpServers,
+    skills: params.remote.skills,
+    versions: params.remote.versions,
+    ...(params.remote.verification ? { verification: params.remote.verification } : {}),
+    ...(params.remote.security ? { security: params.remote.security } : {}),
+  };
+  return { plugin, detail };
 }
