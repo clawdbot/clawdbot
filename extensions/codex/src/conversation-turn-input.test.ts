@@ -27,7 +27,46 @@ describe("codex conversation turn input", () => {
     ).toEqual([
       { type: "text", text: "what is this?", text_elements: [] },
       { type: "localImage", path: "/tmp/photo.png" },
+      { type: "text", text: "[inbound media: /tmp/readme.txt]", text_elements: [] },
     ]);
+  });
+
+  it("does not silently discard an inbound voice attachment", () => {
+    const input = buildCodexConversationTurnInput({
+      prompt: "Please answer the attached voice note.",
+      event: {
+        content: "Please answer the attached voice note.",
+        channel: "telegram",
+        isGroup: true,
+        metadata: {
+          mediaPath: "/tmp/voice.ogg",
+          mediaPaths: ["/tmp/voice.ogg"],
+          mediaType: "audio/ogg",
+          mediaTypes: ["audio/ogg"],
+        },
+      },
+    });
+    expect(JSON.stringify(input)).toContain("/tmp/voice.ogg");
+  });
+
+  it("includes a text reference for non-image media with a remote url", () => {
+    const input = buildCodexConversationTurnInput({
+      prompt: "describe this",
+      event: {
+        content: "describe this",
+        channel: "telegram",
+        isGroup: false,
+        metadata: {
+          mediaUrl: "https://example.test/audio.mp3",
+          mediaType: "audio/mpeg",
+        },
+      },
+    });
+    expect(input).toContainEqual({
+      type: "text",
+      text: "[inbound media: https://example.test/audio.mp3]",
+      text_elements: [],
+    });
   });
 
   it("uses staged remote-cache paths for remote iMessage image attachments", () => {
