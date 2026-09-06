@@ -279,7 +279,7 @@ extensions/cua-computer/src/driver-client.ts	15
 extensions/cua-computer/src/driver-result.ts	9
 extensions/cua-computer/src/mcp-driver-client.ts	5
 extensions/cua-computer/src/window-actions.ts	3
-extensions/deepinfra/provider-models.ts	3
+extensions/deepinfra/provider-models.ts	2
 extensions/deepinfra/video-generation-provider.ts	2
 extensions/deepseek/provider-policy-api.ts	4
 extensions/device-pair/index.ts	6
@@ -521,7 +521,6 @@ extensions/google/index.ts	1
 extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/onboard.ts	3
-extensions/google/provider-catalog.ts	2
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	6
 extensions/google/transport-stream.ts	15
@@ -864,7 +863,7 @@ extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
 extensions/nostr/src/setup-surface.ts	2
 extensions/nostr/src/types.ts	3
-extensions/nvidia/provider-catalog.ts	3
+extensions/nvidia/provider-catalog.ts	2
 extensions/oc-path/src/oc-path/find.ts	13
 extensions/oc-path/src/oc-path/jsonc/parse.ts	1
 extensions/oc-path/src/oc-path/universal.ts	4
@@ -1520,9 +1519,8 @@ packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
-packages/gateway-protocol/src/clawhub-trust-error-details.ts	1
 packages/gateway-protocol/src/client-info.ts	4
-packages/gateway-protocol/src/connect-error-details.ts	12
+packages/gateway-protocol/src/connect-error-details.ts	9
 packages/gateway-protocol/src/gateway-error-details.ts	1
 packages/gateway-protocol/src/protocol-validator.ts	3
 packages/gateway-protocol/src/schema/audit-activity.ts	1
@@ -1824,7 +1822,7 @@ src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	5
-src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
+src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
@@ -3716,7 +3714,7 @@ src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
 src/tui/tui-session-run-coordinator.ts	1
 src/tui/tui-stream-assembler.ts	2
-src/tui/tui-task-suggestions.ts	7
+src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	5
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
@@ -4017,7 +4015,6 @@ ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	13
-ui/src/pages/skill-workshop/header-controls.ts	1
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/skill-workshop-page.ts	1

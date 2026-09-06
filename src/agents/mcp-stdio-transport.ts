@@ -1,7 +1,6 @@
 /**
  * OpenClaw stdio transport wrapper for MCP server subprocesses.
  */
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import process from "node:process";
 import { PassThrough } from "node:stream";
@@ -11,8 +10,13 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
-import { signalProcessTree } from "../process/kill-tree.js";
-import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
+import {
+  closeOwnedStdioProcess,
+  createOwnedStdioProcess,
+  OwnedStdioCleanupError,
+  type OwnedStdioProcess,
+} from "../process/owned-stdio.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 type OpenClawStdioServerParameters = {
   command: string;
@@ -23,15 +27,6 @@ type OpenClawStdioServerParameters = {
   stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
-const CLOSE_TIMEOUT_MS = 2000;
-const SIGKILL_REAP_TIMEOUT_MS = 500;
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms).unref();
-  });
-}
-
 export class OpenClawStdioClientTransport implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
@@ -39,8 +34,13 @@ export class OpenClawStdioClientTransport implements Transport {
 
   private readonly readBuffer = new ReadBuffer();
   private readonly stderrStream: PassThrough | null = null;
-  private state: "ready" | "started" | "closing" | "closed" = "ready";
-  private process?: ChildProcess;
+  private process?: OwnedStdioProcess;
+  private starting?: Promise<void>;
+  private closing?: Promise<void>;
+  private forceRequested = false;
+  private closeNotified = false;
+  private readonly startupAbort = new AbortController();
+  private startupCleanupError?: OwnedStdioCleanupError;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
@@ -49,13 +49,16 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   async start(): Promise<void> {
-    if (this.state !== "ready") {
+    if (this.starting || this.closing) {
       throw new Error(
         "OpenClawStdioClientTransport already started or closed; Client.connect() starts transports automatically.",
       );
     }
-    this.state = "started";
+    this.starting = this.startProcess();
+    return this.starting;
+  }
 
+  private async startProcess(): Promise<void> {
     const prepareDataDir = this.serverParams.prepareDataDir?.trim();
     if (prepareDataDir) {
       try {
@@ -67,67 +70,77 @@ export class OpenClawStdioClientTransport implements Transport {
         );
       }
     }
-    // Directory preparation yields before a child exists. Retirement must
-    // close that launch as well as any process it already created.
-    if (this.state !== "started") {
+
+    // Directory preparation may finish after shutdown has retired this launch.
+    if (this.startupAbort.signal.aborted) {
       throw new Error("MCP stdio transport is closed");
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const baseEnv = mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]);
-      const preparedSpawn = prepareOomScoreAdjustedSpawn(
-        this.serverParams.command,
-        this.serverParams.args ?? [],
-        { env: baseEnv },
-      );
-      const child = spawn(preparedSpawn.command, preparedSpawn.args, {
+    try {
+      const child = await createOwnedStdioProcess({
+        argv: [this.serverParams.command, ...(this.serverParams.args ?? [])],
         cwd: this.serverParams.cwd,
-        detached: process.platform !== "win32",
-        env: preparedSpawn.env,
-        shell: false,
-        stdio: ["pipe", "pipe", this.serverParams.stderr ?? "inherit"],
-        windowsHide: process.platform === "win32",
+        env: mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]),
+        abortSignal: this.startupAbort.signal,
+        stderrDestination:
+          this.stderrStream ?? (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
       });
       this.process = child;
-
-      child.on("error", (error: Error) => {
-        reject(error);
-        this.onerror?.(error);
-      });
-      child.on("spawn", () => resolve());
-      child.on("close", () => {
-        // Shutdown can finish before a delayed close event. Only the live
-        // child handle still owns the detached group; its PID can be reused later.
-        if (this.process === child && process.platform !== "win32" && child.pid) {
-          signalProcessTree(child.pid, "SIGKILL", { detached: true });
-        }
-        this.process = undefined;
-        this.finishClose();
-      });
-      child.stdin?.on("error", (error: Error) => this.onerror?.(error));
-      child.stdout?.on("data", (chunk: Buffer) => {
+      child.onError((error) => this.onerror?.(error));
+      const receive = (chunk: Buffer) => {
         try {
           this.readBuffer.append(chunk);
           this.processReadBuffer();
         } catch (error) {
           this.onerror?.(error instanceof Error ? error : new Error(String(error)));
-          void this.close();
+          void this.close().catch(() => {});
         }
-      });
-      child.stdout?.on("error", (error: Error) => this.onerror?.(error));
-      if (this.stderrStream && child.stderr) {
-        child.stderr.on("error", (error: Error) => this.onerror?.(error));
-        child.stderr.pipe(this.stderrStream);
+      };
+      child.onStdout((text) => {
+        if (!child.supportsRawOutput) {
+          receive(Buffer.from(text));
+        }
+      }, receive);
+      if (this.serverParams.stderr === "ignore") {
+        child.onStderr(() => {});
       }
-    });
+      // Root closure retires the connection immediately; the retained owner still
+      // joins descendants before disposal can certify completed cleanup.
+      void child.wait().then(
+        () => {
+          void this.close().catch(() => {});
+          this.notifyClosed();
+        },
+        (error: unknown) => {
+          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          void this.close().catch(() => {});
+          this.notifyClosed();
+        },
+      );
+    } catch (error) {
+      if (error instanceof OwnedStdioCleanupError) {
+        this.startupCleanupError = error;
+        recordAgentCleanupFailure();
+      }
+      this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   get stderr() {
-    return this.stderrStream ?? this.process?.stderr ?? null;
+    return this.stderrStream;
   }
 
   get pid() {
     return this.process?.pid ?? null;
+  }
+
+  private notifyClosed(): void {
+    if (this.closeNotified) {
+      return;
+    }
+    this.closeNotified = true;
+    this.onclose?.();
   }
 
   private processReadBuffer() {
@@ -144,60 +157,44 @@ export class OpenClawStdioClientTransport implements Transport {
     }
   }
 
-  async close(): Promise<void> {
-    await this.stopProcess(false);
-  }
-
-  async forceClose(): Promise<void> {
-    await this.stopProcess(true);
-  }
-
-  private finishClose(): void {
-    if (this.state === "closed") {
-      return;
+  close(): Promise<void> {
+    if (this.starting && !this.process) {
+      this.startupAbort.abort();
     }
-    this.state = "closed";
-    this.readBuffer.clear();
-    this.onclose?.();
-  }
-
-  private async stopProcess(force: boolean): Promise<void> {
-    if (this.state === "closed") {
-      return;
-    }
-    this.state = "closing";
-    const processToClose = this.process;
-    if (processToClose) {
-      const isRunning = () => this.process === processToClose && processToClose.exitCode === null;
-      const closePromise = new Promise<void>((resolve) => {
-        processToClose.once("close", () => resolve());
-      });
-      if (!force) {
-        try {
-          processToClose.stdin?.end();
-        } catch {
-          // best-effort
+    this.closing ??= (async () => {
+      // A connect timeout can request disposal while the spawn owner is admitting.
+      await this.starting?.catch(() => undefined);
+      try {
+        if (this.startupCleanupError) {
+          throw this.startupCleanupError;
         }
-        await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
-        if (isRunning() && processToClose.pid) {
-          signalProcessTree(processToClose.pid, "SIGTERM", { detached: true });
-          await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
+        if (this.process) {
+          await closeOwnedStdioProcess(this.process, { force: this.forceRequested });
         }
+      } catch (error) {
+        recordAgentCleanupFailure();
+        throw error;
+      } finally {
+        this.process = undefined;
+        this.readBuffer.clear();
+        this.stderrStream?.end();
+        this.notifyClosed();
       }
-      if (processToClose.pid && (isRunning() || (force && process.platform !== "win32"))) {
-        signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
-        if (processToClose.exitCode === null) {
-          await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
-        }
-      }
-    }
-    this.process = undefined;
-    this.finishClose();
+    })();
+    // Attach observation in this caller's scope, including already failed startup.
+    void this.closing.catch(() => recordAgentCleanupFailure());
+    return this.closing;
+  }
+
+  forceClose(): Promise<void> {
+    this.forceRequested = true;
+    this.process?.kill("SIGKILL");
+    return this.close();
   }
 
   send(message: JSONRPCMessage): Promise<void> {
     return new Promise((resolve, reject) => {
-      const stdin = this.state === "started" ? this.process?.stdin : undefined;
+      const stdin = this.closing ? undefined : this.process?.stdin;
       if (!stdin) {
         throw new Error("Not connected");
       }
@@ -205,18 +202,13 @@ export class OpenClawStdioClientTransport implements Transport {
       // Settle from the write callback so async EPIPE rejects instead of
       // escaping to uncaughtException. (#75438)
       try {
-        const flushed = stdin.write(json, (err) => {
+        stdin.write(json, (err) => {
           if (err) {
             reject(err);
           } else {
             resolve();
           }
         });
-        if (!flushed) {
-          // Back-pressure: drain fires when the buffer empties, but the
-          // write callback above still owns promise settlement.
-          stdin.once("drain", () => {});
-        }
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));
       }

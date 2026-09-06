@@ -9,6 +9,7 @@ import type {
   McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 function compareCatalogTools(left: McpCatalogTool, right: McpCatalogTool): number {
   return (
@@ -91,6 +92,8 @@ export function createCombinedSessionMcpRuntime(params: {
   const parts = params.parts;
   // Empty partitions still own run/view leases; populated ones carry reused server leases.
   let activeLeases = 0;
+  let disposal: Promise<void> | undefined;
+  let cleanupFailure: PromiseRejectedResult | undefined;
   let lastUsedAt = Math.max(Date.now(), ...parts.map((part) => part.lastUsedAt));
   let cachedCatalog: McpToolCatalog | null = null;
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
@@ -291,8 +294,34 @@ export function createCombinedSessionMcpRuntime(params: {
       }
       return await owner.getPrompt(serverName, name, args);
     },
+    async joinCleanup() {
+      await disposal;
+      const outcomes = await Promise.allSettled(
+        parts.map(async (part) => {
+          if (!part.joinCleanup) {
+            throw new Error("MCP runtime does not expose cleanup ownership");
+          }
+          await part.joinCleanup();
+        }),
+      );
+      cleanupFailure ??= outcomes.find((outcome) => outcome.status === "rejected");
+      if (cleanupFailure) {
+        recordAgentCleanupFailure();
+        throw cleanupFailure.reason;
+      }
+    },
     async dispose() {
-      await Promise.allSettled(parts.map((part) => part.dispose()));
+      // SDK parts may throw without retaining their own failure. The facade owns
+      // that result across callers while Gateway disposal stays best effort.
+      disposal ??= Promise.allSettled(parts.map(async (part) => await part.dispose())).then(
+        (outcomes) => {
+          cleanupFailure ??= outcomes.find((outcome) => outcome.status === "rejected");
+        },
+      );
+      await disposal;
+      if (cleanupFailure) {
+        recordAgentCleanupFailure();
+      }
     },
   };
 }

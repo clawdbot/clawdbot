@@ -1,9 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { buildSessionsYieldContextMessage } from "../agents/sessions-yield-context.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
+  appendSessionTranscriptReport,
   bindSessionTranscriptStoreScope,
   isSessionTranscriptProjectionUnavailableError,
   loadSessionEntry,
@@ -74,6 +76,32 @@ export type {
 export type SessionTranscriptEvent = unknown;
 
 export type SessionTranscriptTargetParams = SessionTranscriptReadParams;
+
+/** Persists a successful yield's private context through the admitted session writer. */
+export async function appendSessionYieldContext(
+  params: SessionTranscriptTargetParams & {
+    config?: OpenClawConfig;
+    message: string;
+    assertCurrent: () => void;
+  },
+): Promise<void> {
+  const { message, assertCurrent, config, ...scope } = params;
+  assertCurrent();
+  const result = await appendSessionTranscriptReport(
+    bindSessionTranscriptStoreScope(scope, config),
+    {
+      kind: "custom",
+      customTypes: [],
+      selectReport: () => {
+        assertCurrent();
+        return buildSessionsYieldContextMessage(message);
+      },
+    },
+  );
+  if (!result.ok) {
+    throw new Error(`Could not persist sessions_yield context: ${result.error.code}`);
+  }
+}
 
 /** Scoped target and bounds for one raw generation-aware transcript page. */
 export type SessionTranscriptRawDeltaParams = SessionTranscriptTargetParams &

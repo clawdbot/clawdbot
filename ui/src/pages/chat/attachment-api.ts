@@ -4,7 +4,8 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  // FileReader data URLs may include MIME parameters; chat.send uses the bare media type.
+  const match = /^data:([^;,]+)(?:;[^;,=]+=[^;,]*)*;base64,(.+)$/.exec(dataUrl);
   if (!match) {
     return null;
   }

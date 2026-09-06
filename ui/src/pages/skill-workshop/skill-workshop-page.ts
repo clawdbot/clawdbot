@@ -42,7 +42,7 @@ import {
   type SkillWorkshopPageContext,
   type SkillWorkshopSourceScope,
 } from "./source-scope.ts";
-import { loadSkillWorkshopMode, loadSkillWorkshopUseCurrentChatForRevisions } from "./storage.ts";
+import { loadSkillWorkshopMode } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
 
 function renderSkillWorkshopPage(
@@ -283,7 +283,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: SkillWorkshopPageContext;
   @property({ attribute: false }) data?: SkillWorkshopRouteData;
-  @property({ attribute: false }) onRevisionRequest?: SkillWorkshopRevisionRequest;
 
   private state?: SkillWorkshopState;
   private operationEpoch = 0;
@@ -457,7 +456,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       instructions,
       proposal,
       proposalAgentId,
-      state: scope.state,
     });
   };
 
@@ -473,7 +471,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   private readonly handleRevisionSubmit = (proposalId: string) => {
     const scope = this.captureSourceScope();
-    const sendRevisionRequest = this.onRevisionRequest ?? this.handleRevisionRequest;
     if (!scope) {
       return;
     }
@@ -481,7 +478,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       scope.state,
       scope.context,
       proposalId,
-      sendRevisionRequest,
+      this.handleRevisionRequest,
       () => this.isCurrentSourceScope(scope),
     )
       .then((outcome) => {
@@ -504,8 +501,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!this.state && this.context) {
       this.state = createSkillWorkshopState(this.data);
       this.state.skillWorkshopMode = loadSkillWorkshopMode();
-      this.state.skillWorkshopUseCurrentChatForRevisions =
-        loadSkillWorkshopUseCurrentChatForRevisions();
     }
   }
 
@@ -556,7 +551,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     next.skillWorkshopQuery = previous.skillWorkshopQuery;
     next.skillWorkshopQueueWidth = previous.skillWorkshopQueueWidth;
     next.skillWorkshopMode = previous.skillWorkshopMode;
-    next.skillWorkshopUseCurrentChatForRevisions = previous.skillWorkshopUseCurrentChatForRevisions;
     this.state = next;
     this.requestPageUpdate();
   }
