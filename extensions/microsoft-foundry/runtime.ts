@@ -49,9 +49,7 @@ async function refreshEntraToken(params?: {
       cachedTokens.delete(cacheKey);
     }
   }
-  const cacheKey = getFoundryTokenCacheKey(params);
-  cachedTokens.delete(cacheKey);
-  cachedTokens.set(cacheKey, {
+  cachedTokens.set(getFoundryTokenCacheKey(params), {
     token: result.accessToken,
     expiresAt,
   });
