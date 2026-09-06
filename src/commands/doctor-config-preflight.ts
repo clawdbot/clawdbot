@@ -23,6 +23,7 @@ import type {
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import type {
   LegacyStateMigrationStepReceipt,
+  MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -224,16 +225,30 @@ export async function runDoctorConfigPreflight(
     }, 60_000);
     startupMigrationHeartbeat.unref?.();
   };
-  const noteStartupStateMigrationResult = (result: {
-    changes: string[];
-    warnings: string[];
-    notices?: string[];
-  }) => {
+  const noteStartupStateMigrationResult = (result: MigrationMessages) => {
     startupMigrationWarnings.push(...result.warnings);
     noteStateMigrationResult({
       ...result,
       warnings: gatewayStartupCheckpointRequired ? [] : result.warnings,
     });
+  };
+  const migratePluginDoctorState = async (config: OpenClawConfig) => {
+    const { autoMigrateLegacyPluginDoctorState } =
+      await import("../infra/state-migrations.plugin-doctor.js");
+    noteStartupStateMigrationResult(
+      await measurePreflightStep("plugin-doctor-migrations", () =>
+        runWithPluginMetadataSnapshot({ config }, () =>
+          autoMigrateLegacyPluginDoctorState({
+            config,
+            env: process.env,
+            log: migrationLog,
+            ...(options.doctorOnlyStateMigrations === true
+              ? { doctorOnlyStateMigrations: true }
+              : {}),
+          }),
+        ),
+      ),
+    );
   };
   const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
     runWithPluginMetadataSnapshot({ config: snapshot.sourceConfig ?? snapshot.config ?? {} }, () =>
@@ -509,28 +524,19 @@ export async function runDoctorConfigPreflight(
         );
       }
       const { autoMigrateLegacyTaskStateSidecars } = stateDirMigrations;
+      const migrateTaskStateSidecars = async () =>
+        noteStartupStateMigrationResult(
+          await measurePreflightStep("task-sidecar-migrations", () =>
+            autoMigrateLegacyTaskStateSidecars({ env: process.env, log: migrationLog }),
+          ),
+        );
       if (stateMigrationInput) {
         // Retired cron.store selects a persisted SQLite partition. Preserve it in machine state
         // before config repair removes the only custom-partition evidence.
         if (pluginDoctorOnly) {
           // Core state is absent, but plugin paths may own external migration state.
           // Keep their doctor owner active without loading channel/session detectors.
-          const { autoMigrateLegacyPluginDoctorState } =
-            await import("../infra/state-migrations.plugin-doctor.js");
-          noteStartupStateMigrationResult(
-            await measurePreflightStep("plugin-doctor-migrations", () =>
-              runWithPluginMetadataSnapshot({ config: pluginDoctorOnlyConfig }, () =>
-                autoMigrateLegacyPluginDoctorState({
-                  config: pluginDoctorOnlyConfig,
-                  env: process.env,
-                  log: migrationLog,
-                  ...(options.doctorOnlyStateMigrations === true
-                    ? { doctorOnlyStateMigrations: true }
-                    : {}),
-                }),
-              ),
-            ),
-          );
+          await migratePluginDoctorState(pluginDoctorOnlyConfig);
         } else if (stateMigrationInput.cfg) {
           const { autoMigrateLegacyState } = await import("../infra/state-migrations.doctor.js");
           const migrationConfig = stateMigrationInput.cfg;
@@ -603,40 +609,11 @@ export async function runDoctorConfigPreflight(
               migrateLegacyConfigMachineState({ config: pluginDoctorConfig, env: process.env }),
             );
           }
-          const { autoMigrateLegacyPluginDoctorState } =
-            await import("../infra/state-migrations.plugin-doctor.js");
-          noteStartupStateMigrationResult(
-            await measurePreflightStep("plugin-doctor-migrations", () =>
-              runWithPluginMetadataSnapshot({ config: pluginDoctorConfig }, () =>
-                autoMigrateLegacyPluginDoctorState({
-                  config: pluginDoctorConfig,
-                  env: process.env,
-                  log: migrationLog,
-                  ...(options.doctorOnlyStateMigrations === true
-                    ? { doctorOnlyStateMigrations: true }
-                    : {}),
-                }),
-              ),
-            ),
-          );
-          noteStartupStateMigrationResult(
-            await measurePreflightStep("task-sidecar-migrations", () =>
-              autoMigrateLegacyTaskStateSidecars({
-                env: process.env,
-                log: migrationLog,
-              }),
-            ),
-          );
+          await migratePluginDoctorState(pluginDoctorConfig);
+          await migrateTaskStateSidecars();
         }
       } else {
-        noteStartupStateMigrationResult(
-          await measurePreflightStep("task-sidecar-migrations", () =>
-            autoMigrateLegacyTaskStateSidecars({
-              env: process.env,
-              log: migrationLog,
-            }),
-          ),
-        );
+        await migrateTaskStateSidecars();
       }
     }
     if (

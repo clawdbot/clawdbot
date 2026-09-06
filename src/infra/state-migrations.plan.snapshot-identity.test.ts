@@ -222,11 +222,17 @@ describe("legacy state migration snapshot identity", () => {
     }
   });
 
-  it.each(["DELETE", "WAL"])(
-    "preserves a caller-held %s read transaction through the complete planner",
-    async (journalMode) => {
+  it.each([
+    ["DELETE", "held.sqlite"],
+    ["WAL", "held.sqlite"],
+    ["DELETE", "state/openclaw.sqlite"],
+    ["WAL", "state/openclaw.sqlite"],
+  ])(
+    "preserves a caller-held %s read transaction on %s through the complete planner",
+    async (journalMode, relativePath) => {
       const fixture = await makeFixture();
-      const databasePath = path.join(fixture.stateDir, "held.sqlite");
+      const databasePath = path.join(fixture.stateDir, relativePath);
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
       const database = new DatabaseSync(databasePath);
       const compete = () => {
         const child = spawnSync(

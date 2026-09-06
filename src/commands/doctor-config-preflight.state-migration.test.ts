@@ -28,40 +28,20 @@ import {
 const maybeRepairPluginOpenClawHostLinks = getMaybeRepairPluginOpenClawHostLinksMock();
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => ({
-    migrated: false,
-    skipped: false,
-    changes: [],
-    warnings: [],
-  })),
+  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult([], false)),
 );
 const autoMigrateLegacyState = vi.hoisted(() =>
   vi.fn(
     async (_params?: {
       onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
-    }): Promise<StateMigrationResult> => ({
-      migrated: true,
-      skipped: false,
-      changes: ["imported"],
-      warnings: [],
-    }),
+    }): Promise<StateMigrationResult> => makeStateMigrationResult(["imported"]),
   ),
 );
 const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => ({
-    migrated: true,
-    skipped: false,
-    changes: ["plugin-imported"],
-    warnings: [],
-  })),
+  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["plugin-imported"])),
 );
 const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => ({
-    migrated: true,
-    skipped: false,
-    changes: ["task-imported"],
-    warnings: [],
-  })),
+  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["task-imported"])),
 );
 const migrateLegacyConfigMachineState = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
