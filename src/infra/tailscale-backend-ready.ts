@@ -30,10 +30,12 @@ export function isTransientTailscaleStatusError(error: unknown): boolean {
     .join("\n")
     .toLowerCase();
 
+  // The CLI's connect failure wording varies by platform and version: "local tailscaled",
+  // "local tailscaled process", "local Tailscale service", "local Tailscale daemon". The
+  // shared prefix is the stable contract (tailscale/cmd/tailscale/cli/diag.go).
   return (
     record?.timedOut === true ||
-    detail.includes("failed to connect to local tailscale daemon") ||
-    detail.includes("failed to connect to local tailscale service") ||
+    detail.includes("failed to connect to local tailscale") ||
     detail.includes("connection refused") ||
     detail.includes("503 service unavailable")
   );

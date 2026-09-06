@@ -101,6 +101,11 @@ describe("tailscale helpers", () => {
   it.each([
     [new Error("Failed to connect to local Tailscale daemon; not running?")],
     [new Error("failed to connect to local Tailscale service; is Tailscale running?")],
+    [
+      new Error(
+        "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)",
+      ),
+    ],
     [Object.assign(new Error("Command timed out"), { timedOut: true, signal: "SIGTERM" })],
   ])("retries post-Serve status after a transient failure", async (failure) => {
     vi.useFakeTimers();
@@ -264,14 +269,30 @@ describe("tailscale helpers", () => {
       ]);
     });
 
-    it("waits while the daemon is not accepting connections yet", async () => {
+    // Connect-failure wording as emitted by the tailscale CLI (cmd/tailscale/cli/diag.go),
+    // which differs by platform and by whether a tailscaled process was found.
+    it.each([
+      ["older daemon wording", "failed to connect to local tailscale daemon"],
+      [
+        "linux 1.102 with no daemon process",
+        "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)",
+      ],
+      [
+        "windows 1.102 with no daemon process",
+        "failed to connect to local tailscaled process; is the Tailscale service running?",
+      ],
+      [
+        "macos 1.102 with no daemon process",
+        "failed to connect to local Tailscale service; is Tailscale running?",
+      ],
+      [
+        "daemon process found but not listening yet",
+        "failed to connect to local tailscaled (which appears to be running as /usr/sbin/tailscaled, pid 812). Got error: dial unix /var/run/tailscale/tailscaled.sock: connect: no such file or directory",
+      ],
+    ])("waits while the daemon is not accepting connections yet (%s)", async (_label, stderr) => {
       const exec = vi
         .fn()
-        .mockRejectedValueOnce(
-          Object.assign(new Error("status failed"), {
-            stderr: "failed to connect to local tailscale daemon",
-          }),
-        )
+        .mockRejectedValueOnce(Object.assign(new Error("status failed"), { stderr }))
         .mockResolvedValueOnce(status("Running"));
       const info = vi.fn();
 
