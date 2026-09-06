@@ -5294,6 +5294,117 @@ describe("prepareCliRunContext", () => {
     expect(orphanCheck).not.toHaveBeenCalled();
   });
 
+  it("reseeds prior conversation for an uncompacted session-less backend that opted in", async () => {
+    const askedAt = "2020-01-02T03:04:05.000Z";
+    fixture.appendTranscript({
+      id: "msg-none-mode-1",
+      parentId: null,
+      timestamp: askedAt,
+      message: { role: "user", content: "prior session-less ask", timestamp: 1 },
+    });
+    setCliBackendForPrepareTest({
+      sessionMode: "none",
+      reseedFromRawTranscriptWhenUncompacted: true,
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    // No native session is ever resumed here, so the OpenClaw transcript is the only
+    // place prior conversation can come from - it must reach the fresh CLI run.
+    expect(context.reusableCliSession).toEqual({ mode: "none" });
+    expect(context.openClawHistoryPrompt).toBeDefined();
+    expect(context.openClawHistoryPrompt).toContain(`[${askedAt}] User: prior session-less ask`);
+    expect(context.openClawHistoryPrompt).toContain(
+      "<next_user_message>\nlatest ask\n</next_user_message>",
+    );
+  });
+
+  it("leaves an uncompacted session-less backend without raw reseed when it did not opt in", async () => {
+    fixture.appendTranscript({
+      id: "msg-none-mode-2",
+      parentId: null,
+      timestamp: "2020-01-02T03:04:05.000Z",
+      message: { role: "user", content: "prior session-less ask", timestamp: 1 },
+    });
+    setCliBackendForPrepareTest({ sessionMode: "none" });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    // The backend opt-in still gates raw reseed; supplying a reason must not bypass it.
+    expect(context.reusableCliSession).toEqual({ mode: "none" });
+    expect(context.openClawHistoryPrompt ?? "").not.toContain("prior session-less ask");
+  });
+
+  it("does not repeat the current user turn that production persists before CLI preparation", async () => {
+    const askedAt = "2020-01-02T03:04:05.000Z";
+    fixture.appendTranscript({
+      id: "msg-ordering-prior",
+      parentId: null,
+      timestamp: askedAt,
+      message: { role: "user", content: "prior session-less ask", timestamp: 1 },
+    });
+    // Production admits and persists the user turn before CLI preparation
+    // (agent-runner-execute.ts -> admitUserTurn -> persistApproved), so the reseed
+    // read sees the current turn too. Mirror that ordering here.
+    fixture.appendTranscript({
+      id: "msg-ordering-current",
+      parentId: "msg-ordering-prior",
+      timestamp: "2020-01-02T03:04:06.000Z",
+      message: { role: "user", content: "latest ask", timestamp: 2 },
+    });
+    setCliBackendForPrepareTest({
+      sessionMode: "none",
+      reseedFromRawTranscriptWhenUncompacted: true,
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      provider: "claude-cli",
+      model: "opus",
+      userTurnTranscriptRecorder: {
+        message: undefined,
+        resolveMessage: vi.fn(async () => undefined),
+        getAdmissionReceipt: () => ({
+          agentId: "main",
+          sessionId: fixture.session.sessionTarget.sessionId,
+          sessionKey: "agent:main:telegram:direct:peer",
+          storePath: fixture.session.sessionTarget.storePath,
+          generation: "generation-1",
+          entryId: "msg-ordering-current",
+          rawSeq: 2,
+          effectiveParentId: "msg-ordering-prior",
+          activeMessagePosition: 1,
+          logicalTurnId: "ordering-turn",
+          role: "user" as const,
+        }),
+        markRuntimePersistencePending: vi.fn(),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        hasPersisted: () => true,
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: vi.fn(async () => {}),
+        persistApproved: vi.fn(async () => undefined),
+        persistBlocked: vi.fn(async () => undefined),
+        persistFallback: vi.fn(async () => undefined),
+      },
+    });
+
+    const historyPrompt = context.openClawHistoryPrompt ?? "";
+    expect(historyPrompt).toContain("prior session-less ask");
+    // The current turn already appears in <next_user_message>; replaying the persisted
+    // copy as history would hand the CLI the same ask twice.
+    expect(historyPrompt.split("latest ask").length - 1).toBe(1);
+  });
+
   it("checks claude-cli transcript content under the resolved cwd", async () => {
     const { dir } = fixture.session;
     const taskDir = path.join(dir, "task");
