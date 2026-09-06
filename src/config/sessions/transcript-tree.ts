@@ -389,7 +389,7 @@ export function selectSessionTranscriptTreePathNodes<T>(
     }
     currentId = current.parentId;
   }
-  return path.reverse();
+  return path.toReversed();
 }
 
 /** Merge normalized paths in original file order and expose their retained parent links. */
@@ -407,7 +407,7 @@ export function mergeSessionTranscriptTreePaths<T>(
       selectedParentId = node.id;
     }
   }
-  return [...selectedById.values()].sort((left, right) => left.index - right.index);
+  return [...selectedById.values()].toSorted((left, right) => left.index - right.index);
 }
 
 /**
