@@ -99,6 +99,68 @@ describe("translation provider privacy and fallback", () => {
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
   });
 
+  it.each([
+    { args: ["sync", "--refresh-key"], error: "requires a catalog key" },
+    {
+      args: ["sync", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["check", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--force", "--refresh-key", "chat.parentSession"],
+      error: "cannot be combined with --force",
+    },
+    {
+      args: [
+        "sync",
+        "--write",
+        "--locale",
+        "pl",
+        ...Array.from({ length: 65 }, (_, i) => ["--refresh-key", `key${i}`]).flat(),
+      ],
+      error: "at most 64 distinct keys",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--refresh-key", "missing.fixture.key"],
+      error: "unknown refresh key: missing.fixture.key",
+    },
+  ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      ...args,
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(error);
+  });
+
+  it("requires provider authentication for targeted refresh even when auth is optional", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      "sync",
+      "--write",
+      "--locale",
+      "pl",
+      "--refresh-key",
+      "chat.parentSession",
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
+  });
+
   it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
     const temp = createTempDirTracker();
     const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");

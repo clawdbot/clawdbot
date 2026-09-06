@@ -68,12 +68,18 @@ export function createControlUiLocaleSyncPlan(input: {
   entry: LocaleEntry;
   existingFlat: ReadonlyMap<string, string>;
   force: boolean;
+  refreshKeys?: ReadonlySet<string>;
   hashText: (text: string) => string;
   previousMeta: LocaleMeta | null;
   sourceFlat: ReadonlyMap<string, string>;
   sourceHash: string;
   translationMemory: ReadonlyMap<string, TranslationMemoryEntry>;
 }) {
+  for (const key of input.refreshKeys ?? []) {
+    if (!input.sourceFlat.has(key)) {
+      throw new Error(`unknown refresh key: ${key}`);
+    }
+  }
   const previousFallbackKeys = new Set(input.previousMeta?.fallbackKeys ?? []);
   const translationMemory = new Map(input.translationMemory);
   const translationMemoryBySegment = new Map(
@@ -96,7 +102,7 @@ export function createControlUiLocaleSyncPlan(input: {
   for (const [key, text] of input.sourceFlat.entries()) {
     const textHash = input.hashText(text);
     const segmentCacheKey = input.cacheKeyFor(key, textHash);
-    if (input.force && input.allowTranslate) {
+    if ((input.force || input.refreshKeys?.has(key)) && input.allowTranslate) {
       pending.push({ cacheKey: segmentCacheKey, key, text, textHash });
       continue;
     }

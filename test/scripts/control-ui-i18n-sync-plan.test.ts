@@ -51,6 +51,68 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
 }
 
 describe("createControlUiLocaleSyncPlan", () => {
+  it("refreshes selected keys without replaying cached aliases or dropping normal pending work", () => {
+    const cached = memoryEntry({ segment_id: "refresh", segment_ids: ["alias"] });
+    const plan = createControlUiLocaleSyncPlan({
+      allowTranslate: true,
+      cacheKeyFor,
+      entry,
+      existingFlat: new Map([
+        ["refresh", "Partage"],
+        ["alias", "Partage"],
+        ["keep", "Conserver"],
+      ]),
+      force: false,
+      refreshKeys: new Set(["refresh"]),
+      hashText,
+      previousMeta: localeMeta(),
+      sourceFlat: new Map([
+        ["refresh", "Shared"],
+        ["alias", "Shared"],
+        ["keep", "Keep"],
+        ["missing", "New"],
+        ["changed", "Changed {new}"],
+      ]),
+      sourceHash: "source",
+      translationMemory: new Map([
+        [cached.cache_key, cached],
+        [
+          "old",
+          memoryEntry({
+            cache_key: "old",
+            segment_id: "changed",
+            text: "Changed {old}",
+            text_hash: hashText("Changed {old}"),
+          }),
+        ],
+      ]),
+    });
+    expect(plan.pending.map((item) => item.key)).toEqual(["refresh", "missing", "changed"]);
+    plan.recordTranslations(
+      plan.pending,
+      new Map([
+        ["refresh", "Corrigé"],
+        ["missing", "Nouveau"],
+        ["changed", "Modifié {new}"],
+      ]),
+      { sourceLocale: "en", updatedAt: () => "2026-09-06T00:00:00.000Z" },
+    );
+    const rendered = plan.render({
+      defaultGlossary: [],
+      glossary: [],
+      generatedAt: "2026-09-06T00:00:00.000Z",
+      workflow: 1,
+    });
+    expect(Object.fromEntries(rendered.nextFlat)).toEqual({
+      refresh: "Corrigé",
+      alias: "Partage",
+      keep: "Conserver",
+      missing: "Nouveau",
+      changed: "Modifié {new}",
+    });
+    expect(rendered.fallbackCount).toBe(0);
+  });
+
   it("retranslates cached and existing strings on a full refresh", () => {
     const cached = memoryEntry({ segment_id: "cached" });
     const plan = createControlUiLocaleSyncPlan({
