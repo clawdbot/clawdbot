@@ -2549,6 +2549,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
 }
 
 .sidebar-customize-menu__text {
+  display: block;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
