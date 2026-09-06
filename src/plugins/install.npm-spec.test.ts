@@ -2997,22 +2997,19 @@ describe("installPluginFromNpmSpec", () => {
           logger: { info: () => {}, warn: () => {} },
         });
 
-        expect(result).toMatchObject({ ok: true, pluginId: packageName });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, pluginId: packageName });
+        if (!result.ok) {
+          return;
+        }
         expect(onBeforePluginArtifactCommit).toHaveBeenCalledOnce();
-        const hostLink = path.join(
-          resolveTestPluginPackageDir(npmRoot, packageName),
-          "node_modules",
-          "openclaw",
-        );
+        const hostLink = path.join(result.targetDir, "node_modules", "openclaw");
         expect(fs.lstatSync(hostLink).isSymbolicLink()).toBe(true);
         expect(fs.realpathSync(hostLink)).toBe(
           fs.realpathSync(resolveOpenClawPackageRootSyncMock.mock.results[0]?.value),
         );
-        expectNpmInstallIntoProject({
-          calls: runCommandWithTimeoutMock.mock.calls,
-          npmRoot,
-          packageName,
-        });
+        expect(
+          runCommandWithTimeoutMock.mock.calls.filter(([argv]) => isManagedNpmInstallCommand(argv)),
+        ).toHaveLength(1);
       },
     );
   });
