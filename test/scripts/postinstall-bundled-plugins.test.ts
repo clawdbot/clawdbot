@@ -21,7 +21,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
 async function expectPathExists(filePath: string) {
-  await expect(fs.access(filePath)).resolves.toBeUndefined();
+  await fs.access(filePath);
 }
 
 async function expectPathMissing(filePath: string) {
