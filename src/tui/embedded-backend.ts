@@ -83,6 +83,7 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
+import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
@@ -780,17 +781,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       throw new Error(applied.error.message);
     }
 
-    const resolved = resolveSessionModelRef(cfg, applied.entry, target.agentId);
-    return {
-      ok: true as const,
-      path: target.storePath,
-      key: target.canonicalKey ?? opts.key,
-      entry: { ...applied.entry },
-      resolved: {
-        modelProvider: resolved.provider,
-        model: resolved.model,
-      },
-    };
+    return projectSessionPatchResult({
+      canonicalKey: target.canonicalKey ?? opts.key,
+      cfg,
+      entry: applied.entry,
+      storePath: target.storePath,
+      targetAgentId: target.agentId,
+    });
   }
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {

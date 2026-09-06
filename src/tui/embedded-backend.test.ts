@@ -3103,7 +3103,6 @@ describe("EmbeddedTuiBackend", () => {
       const resolveCanonical = vi
         .spyOn(sessionUtils, "resolveCanonicalGatewaySessionStoreKey")
         .mockReturnValue({ target, primaryKey: "global", entry });
-      const resolveModel = vi.spyOn(sessionUtils, "resolveSessionModelRef");
       projectSessionsPatchEntryMock.mockResolvedValueOnce({ ok: true, entry });
       const backend = new EmbeddedTuiBackend();
       const patch = {
@@ -3124,11 +3123,16 @@ describe("EmbeddedTuiBackend", () => {
             patch,
           }),
         );
-        expect.soft(resolveModel).toHaveBeenCalledWith(expect.anything(), entry, owner);
+        expect.soft(projectSessionPatchResultMock).toHaveBeenCalledWith({
+          canonicalKey: "global",
+          cfg: expect.anything(),
+          entry,
+          storePath: target.storePath,
+          targetAgentId: owner,
+        });
       } finally {
         resolveTarget.mockRestore();
         resolveCanonical.mockRestore();
-        resolveModel.mockRestore();
       }
     },
   );
