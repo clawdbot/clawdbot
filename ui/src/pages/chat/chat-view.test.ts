@@ -7139,7 +7139,8 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSetup = vi.fn();
-    const container = renderModelControls(state, { onModelSetup });
+    const onModelSelect = vi.fn(async () => true);
+    const container = renderModelControls(state, { onModelSetup, onModelSelect });
     const cold = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="openai/gpt-5.6-luna"]',
     );
@@ -7147,10 +7148,13 @@ describe("chat model controls", () => {
       '[data-chat-model-option="codex/gpt-5.6-luna"]',
     );
     expect(cold?.dataset.chatModelSetup).toBe("true");
-    expect(recovering?.disabled).toBe(true);
+    // A cooldown is transient, unlike a real auth failure, so the row stays
+    // selectable instead of dead-ending — retrying is the recovery path.
+    expect(recovering?.disabled).toBe(false);
     expect(recovering?.textContent).not.toContain("Sign-in needed");
     recovering?.click();
     expect(onModelSetup).not.toHaveBeenCalled();
+    expect(onModelSelect).toHaveBeenCalledWith("codex/gpt-5.6-luna", "main");
     cold?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
