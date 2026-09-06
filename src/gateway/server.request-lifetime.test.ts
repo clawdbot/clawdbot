@@ -11,7 +11,6 @@ import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
-import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import {
   getTestPluginRegistry,
   resetTestPluginRegistry,
@@ -23,6 +22,7 @@ import {
   installGatewayTestHooks,
   onceMessage,
 } from "./test-helpers.server.js";
+import { observeHeldGatewayWorkDrain } from "./test/server-held-work.test-support.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

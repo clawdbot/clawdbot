@@ -8,8 +8,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Worker, parentPort } from "node:worker_threads";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { PluginInstance } from "../plugin-instance.js";
+import { PluginInstance } from "../../../src/plugins/plugin-instance.js";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 
 const require = createRequire(import.meta.url);
 

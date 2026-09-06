@@ -14,7 +14,6 @@ import * as questionChannel from "../infra/question-channel-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
-import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -24,6 +23,7 @@ import {
   onceMessage,
   rpcReq,
 } from "./test-helpers.server.js";
+import { observeHeldGatewayWorkDrain } from "./test/server-held-work.test-support.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

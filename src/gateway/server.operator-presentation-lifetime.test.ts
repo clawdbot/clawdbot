@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as approvalWebPush from "./approval-web-push.js";
-import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import { createGatewaySuiteHarness, installGatewayTestHooks } from "./test-helpers.server.js";
+import { observeHeldGatewayWorkDrain } from "./test/server-held-work.test-support.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, onTestFinished, vi } from "vitest";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 
 /** Observe the exact work owner; connection scopes also join server-side transport release. */
 export async function observeHeldGatewayWorkDrain(getSignal?: () => AbortSignal | undefined) {
@@ -10,7 +10,7 @@ export async function observeHeldGatewayWorkDrain(getSignal?: () => AbortSignal 
   onTestFinished(() => observation.mockRestore());
 
   if (!getSignal) {
-    const kernelModule = await import("./server-kernel.js");
+    const kernelModule = await import("../server-kernel.js");
     const createKernel = kernelModule.createGatewayKernel;
     const factory = vi
       .spyOn(kernelModule, "createGatewayKernel")
