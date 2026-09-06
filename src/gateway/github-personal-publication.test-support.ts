@@ -26,6 +26,28 @@ export const personalPublicationAccount = { accountId: 101, login: "personal-ali
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
 
+export function personalPublicationReplayCases(generation: string) {
+  const selection = { source: "personal" as const, generation, account };
+  const request = { sessionKey: SESSION_KEY, idempotencyKey: "personal-replay", selection };
+  return {
+    request,
+    caseOnly: {
+      ...request,
+      selection: { ...selection, account: { ...account, login: account.login.toUpperCase() } },
+    },
+    mismatches: [
+      { ...request, selection: { ...selection, generation: `${generation}-changed` } },
+      {
+        ...request,
+        selection: { ...selection, account: { ...account, accountId: account.accountId + 1 } },
+      },
+      { ...request, selection: { ...selection, account: { ...account, login: "different-user" } } },
+      { ...request, title: "Different title" },
+      { ...request, body: "Different body" },
+    ],
+  };
+}
+
 export async function createPersonalPublicationFixture() {
   const owner = ensureProfileForEmail("alice@example.test").id;
   const otherOwner = ensureProfileForEmail("bob@example.test").id;

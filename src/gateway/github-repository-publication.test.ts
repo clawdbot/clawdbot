@@ -8,6 +8,7 @@ import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount,
+  personalPublicationReplayCases,
 } from "./github-personal-publication.test-support.js";
 import {
   SESSION_ID,
@@ -57,6 +58,34 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.effects).toEqual(["push", "pull_request"]);
     expect(mocks.findWorktree).not.toHaveBeenCalled();
     expect(mocks.resolveRepository).not.toHaveBeenCalled();
+  });
+
+  it("replays only the original personal selection and content without new repository publication work", async () => {
+    const f = await repositoryFixture();
+    const person = await createPersonalPublicationFixture();
+    f.runtime.accountId = personalPublicationAccount.accountId;
+    const cases = personalPublicationReplayCases(person.generation);
+    const published = await person.coordinator.requestPersonalForSession(
+      cases.request,
+      person.action,
+    );
+    expect(published.status).toBe("published");
+    const receipt = readRepositoryGitHubPublication(published.requestId);
+    const commandCount = mocks.runCommand.mock.calls.length;
+    const effects = [...f.runtime.effects];
+    await expect(
+      person.coordinator.requestPersonalForSession(cases.caseOnly, person.action),
+    ).resolves.toEqual(published);
+    for (const changed of cases.mismatches) {
+      await expect(
+        person.coordinator.requestPersonalForSession(changed, person.action),
+      ).rejects.toThrow(
+        "My GitHub publication idempotency key was reused with a different selection.",
+      );
+    }
+    expect(mocks.runCommand).toHaveBeenCalledTimes(commandCount);
+    expect(f.runtime.effects).toEqual(effects);
+    expect(readRepositoryGitHubPublication(published.requestId)).toEqual(receipt);
   });
 
   it.each(["shared", "personal"] as const)(
