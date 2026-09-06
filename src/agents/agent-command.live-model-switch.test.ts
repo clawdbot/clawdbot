@@ -2082,6 +2082,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("passes explicit timeout overrides into agent attempts", async () => {
+    // Freeze preflight elapsed time to keep the forwarding assertions exact.
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 

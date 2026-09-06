@@ -1,5 +1,6 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
@@ -42,10 +43,7 @@ import {
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import {
-  modelCatalogLogicalKey,
-  resolveConfiguredModelPolicyAllow,
-} from "../../agents/model-selection-shared.js";
+import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
@@ -55,6 +53,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -200,22 +199,6 @@ type StatusModelRouteIssue =
       authRequirement: ProviderModelRouteCandidate["authRequirement"];
       message: string;
     };
-
-function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
-  return providerUsageRuntimeLoader.load();
-}
-
-function loadProgressRuntime(): Promise<ProgressRuntime> {
-  return progressRuntimeLoader.load();
-}
-
-function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
-  return terminalTableRuntimeLoader.load();
-}
-
-function loadListProbeRuntime(): Promise<ListProbeRuntime> {
-  return listProbeRuntimeLoader.load();
-}
 
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
   if (raw === undefined || raw === null || raw === "") {
@@ -652,11 +635,20 @@ export async function modelsStatusCommand(
       string,
       Array<{ api?: (typeof catalog.routeVariants)[number]["api"]; baseUrl?: string }>
     >();
+    const resolveStatusRouteIdentityKey = (entry: { provider: string; id: string }) => {
+      const provider = normalizeProviderId(entry.provider);
+      // Physical catalog rows may repeat their provider in the model id.
+      // Collapse only that prefix; the remaining model id stays case-sensitive.
+      return resolveModelCatalogIdentityKey({
+        provider,
+        id: stripSelfProviderModelPrefix(provider, modelKey(provider, entry.id)),
+      });
+    };
     for (const entry of catalog.routeVariants) {
       if (entry.api === undefined && entry.baseUrl === undefined) {
         continue;
       }
-      const key = modelCatalogLogicalKey(entry);
+      const key = resolveStatusRouteIdentityKey(entry);
       const sources = routeSourcesByModel.get(key) ?? [];
       sources.push({ api: entry.api, baseUrl: entry.baseUrl });
       routeSourcesByModel.set(key, sources);
@@ -667,7 +659,7 @@ export async function modelsStatusCommand(
       await Promise.all(
         providerUseRefs.map(async (usage) => {
           const observedRoutes = routeSourcesByModel.get(
-            modelCatalogLogicalKey({ provider: usage.provider, id: usage.model }),
+            resolveStatusRouteIdentityKey({ provider: usage.provider, id: usage.model }),
           );
           const ref = {
             modelId: usage.model,
@@ -1140,8 +1132,8 @@ export async function modelsStatusCommand(
     let probeSummary: AuthProbeSummary | undefined;
     if (opts.probe) {
       const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
-        loadProgressRuntime(),
-        loadListProbeRuntime(),
+        progressRuntimeLoader.load(),
+        listProbeRuntimeLoader.load(),
       ]);
       probeSummary = await withProgressTotals(
         { label: "Probing auth profiles…", total: 1 },
@@ -1589,7 +1581,7 @@ export async function modelsStatusCommand(
       runtime.log(colorize(rich, theme.muted, "- none"));
     } else {
       const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
-        await loadProviderUsageRuntime();
+        await providerUsageRuntimeLoader.load();
       const usageByProvider = new Map<string, string>();
       const usageProviders = Array.from(
         new Set(
@@ -1677,7 +1669,7 @@ export async function modelsStatusCommand(
       const [
         { getTerminalTableWidth, renderTable },
         { describeProbeSummary, formatProbeLatency, sortProbeResults },
-      ] = await Promise.all([loadTerminalTableRuntime(), loadListProbeRuntime()]);
+      ] = await Promise.all([terminalTableRuntimeLoader.load(), listProbeRuntimeLoader.load()]);
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Auth probes"));
       if (probeSummary.results.length === 0) {

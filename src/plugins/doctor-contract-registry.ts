@@ -5,6 +5,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
+import { discoverConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -201,11 +202,18 @@ function resolvePluginDoctorManifestRecords(params: {
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
 
-  const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
-  const scopedProviderIds = params?.pluginIds
-    ? new Set(params.pluginIds.map(normalizeProviderId).filter(Boolean))
+  return filterPluginDoctorRecordsByScope(manifestRegistry.plugins, params.pluginIds);
+}
+
+function filterPluginDoctorRecordsByScope(
+  records: readonly PluginManifestRegistryRecord[],
+  pluginIds?: readonly string[],
+): PluginManifestRegistryRecord[] {
+  const scopedPluginIds = pluginIds ? new Set(pluginIds) : null;
+  const scopedProviderIds = pluginIds
+    ? new Set(pluginIds.map(normalizeProviderId).filter(Boolean))
     : null;
-  return manifestRegistry.plugins.filter(
+  return records.filter(
     (record) =>
       !(
         scopedPluginIds &&
@@ -467,8 +475,12 @@ function resolvePluginDoctorStateMigrationRecords(params: {
   pluginIds?: readonly string[];
   artifactPreservingReadOnly?: boolean;
 }): PluginManifestRegistryRecord[] {
+  if (params.pluginIds?.length === 0) {
+    return [];
+  }
+  const registry = discoverConfigWidePluginManifestRegistry(params);
   return filterPluginDoctorStateMigrationRecords(
-    resolvePluginDoctorManifestRecords(params),
+    filterPluginDoctorRecordsByScope(registry.plugins, params.pluginIds),
     params.config,
   );
 }

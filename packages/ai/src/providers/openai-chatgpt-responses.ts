@@ -362,6 +362,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               () => {
                 websocketRequestSent = true;
               },
+              options?.signal,
             );
 
             if (activeSignal?.aborted) {
@@ -1458,6 +1459,10 @@ async function processWebSocketStream(
   observePromptEgress?: ObserveResponsesPromptEgress,
   payloadVariant: ResponsesEncryptedContentAttempt<RequestBody>["kind"] = "initial",
   onRequestSent?: () => void,
+  // Stream progress must be reported on the caller's signal: the runner idle
+  // watchdog listens there, while `options.signal` here is the request-scoped
+  // abort composite that nothing outside this provider observes.
+  activitySignal?: AbortSignal,
 ): Promise<void> {
   const { socket, entry, release } = await acquireWebSocket(
     url,
@@ -1507,7 +1512,7 @@ async function processWebSocketStream(
         firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
         abortFirstEventStream,
         onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
-        signal: options?.signal,
+        signal: activitySignal ?? options?.signal,
         reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
           sessionId: options?.sessionId,
           authProfileId: options?.authProfileId,

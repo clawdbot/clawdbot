@@ -222,6 +222,8 @@ Each enrollment receives short-lived download authority scoped to that live prov
 
 Native dependencies are installed by npm for the cloud machine's operating system and CPU; the archive does not copy the build host's native `node_modules`. Registry access is still required, and this is not an offline dependency bundle. Bootstrap does not select a global OpenClaw installation merely because its version matches.
 
+Bootstrap emits `CRABBOX_PHASE:openclaw-bootstrap-*` markers into the Crabbox command stream for download, installation, verification, plugin activation, and node launch. Crabbox records these as command phase timings; cached runs emit only the work they perform.
+
 The Gateway reuses its prepared archive for subsequent enrollments with the same execution mode. Nodes keep successful installs under `~/.openclaw-worker/node-runtimes/<sha256>`, so a warm image can reuse the exact artifact. A different digest selects a different installation even when the version is unchanged. The runtime archive omits the worker deploy artifacts. After enrollment, OpenClaw `worker-turn` installs the content-addressed worker bundle from a matching archive retained in a prepared project image, or downloads it through the authenticated node channel when that archive is absent. Prepared archives still undergo validation; see [Warm images](/gateway/cloud-workers#warm-images). Codex `remote-exec` starts the managed exec-server directly. Existing placement checks, node-command allowlists, and invocation approval still govern execution.
 
 ### Build a complete custom node package

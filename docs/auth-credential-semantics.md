@@ -96,6 +96,10 @@ When every eligible OAuth candidate fails preparation, discovery reports
 provider as unconfigured. Compatible prior inventory remains available. A usable
 fallback credential still supplies its own catalog result.
 
+When a catalog deadline expires, late provider results are discarded before
+finalization. An already-started hook or OAuth refresh may finish, including
+persisting a rotated credential, but cannot publish to the expired catalog run.
+
 API-key-oriented and full-auth catalog callbacks retain their existing source
 priorities. Plugins must keep credential bytes and their authentication mode from
 the same selection. Catalog failure and recovery preserve the

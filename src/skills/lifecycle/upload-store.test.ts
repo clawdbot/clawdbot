@@ -411,7 +411,9 @@ describe("skill upload store", () => {
       );
       expect(archiveReads).toEqual([]);
       await store.withCommittedUpload(begin.uploadId, async (record) => {
-        expect(await fs.readFile(record.archivePath)).toEqual(archive);
+        const materialized = await fs.readFile(record.archivePath);
+        expect(materialized).toHaveLength(archive.length);
+        expect(materialized.equals(archive), "materialized archive bytes").toBe(true);
       });
       expect(archiveReads).toEqual([{ bytes: archive.length, inTransaction: true }]);
       const copiedBytes = bufferFrom.mock.calls.reduce((total, [value]) => {

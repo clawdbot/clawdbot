@@ -12,6 +12,7 @@ import {
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
+import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   isCanonicalSqliteSessionMainKeyCurrent,
@@ -34,7 +35,7 @@ export function assertSessionStoreMigrationComplete(params: {
     ...targets.map((target) => target.storePath),
   ].find((storePath) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath));
   if (legacyStore) {
-    throw new Error(
+    throw new SessionStoreMigrationRequiredError(
       `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
     );
   }

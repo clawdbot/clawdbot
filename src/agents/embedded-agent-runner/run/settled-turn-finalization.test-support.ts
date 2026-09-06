@@ -175,7 +175,7 @@ export function projectSettledProviderFailureAttempt(
     messagesSnapshot: base.messagesSnapshot,
   };
   const subscription = {
-    assistantTexts: [],
+    assistantTexts: base.assistantTexts,
     didSendDeterministicApprovalPrompt: () => false,
     didSendViaMessagingTool: () => false,
     getAcceptedSessionSpawns: () => [],

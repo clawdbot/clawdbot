@@ -173,8 +173,9 @@ Installer-driven switches verify the replacement before the working owner is ret
 
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
-and affected per-agent database schema versions and configuration content are
-unchanged. The restored
+and affected pre-existing per-agent database schema versions and configuration
+content are unchanged. A database first created by the candidate is neutral only
+at its supported schema version for that database kind. The restored
 Gateway must pass the same runtime checks before recovery is reported as
 complete. A schema migration prevents automatic package rollback; replacing
 code cannot undo migrated state. Incomplete file rollback retains its backups
@@ -592,7 +593,7 @@ campaigns, the CLI, and `update.run` API clients are unaffected.
 After confirmation, the dialog shows the live phase list, step details, and
 verification results. It stays open during restart and resumes from the Gateway's
 run record after reconnecting. Success and failure both leave a final report in
-the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui#updates).
+the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui/settings#updates).
 
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
@@ -660,6 +661,12 @@ made after the backup.
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that configuration content is unchanged.
+Databases first created during activation or serving verification are
+schema-neutral when their version matches the candidate's supported version for
+that database kind. A changed schema version or missing pre-existing database,
+or a new database at a foreign version, still blocks rollback. Before restoring
+code, the updater also checks that the previous package supports any new database;
+unknown or incompatible support refuses rollback with `rollback-state-unverified`.
 When both checks pass and the retained previous package was verified before the
 update, it stops the candidate and restores the previous generation: package,
 command shim, service definition, and config writer stamp. Owned, writable
@@ -681,12 +688,20 @@ verification failure. The command still exits nonzero; recovery does not turn a
 rejected candidate into a successful update.
 
 Serving verification is required, not advisory. It uses configured inference and
-has a 60-second budget. Unavailable inference, timeout, a failed turn, or missing
-saved messages fails verification. A restored Gateway must pass its own serving
+has a 60-second budget. The saved reply must include the run-specific verification
+token as a whole word; punctuation or a short sentence around it is accepted.
+Unavailable inference, timeout, an incomplete turn, a non-matching response, or
+missing saved messages fails verification. `response-mismatch` means the turn was
+saved but its reply did not contain the token; `persistence-missing` means no
+committed request/response pair was found. Use `openclaw update status` for the
+recorded reason and `openclaw triage` to diagnose a failed check. Recovery guidance
+reports whether the Gateway is running or stopped from the latest service
+observation, even when a running candidate did not pass verification.
+A restored Gateway must pass its own serving
 check before the run can finish as `rolled-back`; candidate proof cannot be reused
 after a restart or restoration.
 
-If configuration content or a schema version changed, rollback is refused with
+If configuration content changed or the databases are not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. The updater attempts
 [bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
 on the installed candidate, preserving migrated state. The same repair slot can

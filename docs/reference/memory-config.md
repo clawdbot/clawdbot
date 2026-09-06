@@ -616,6 +616,8 @@ full-text matching, including in queries that also contain short terms.
 
 `memory.citations` controls citation visibility for built-in memory results:
 
+Cited snippets preserve leading indentation; trailing whitespace is removed before the source footer.
+
 | Value            | Behavior                                               |
 | ---------------- | ------------------------------------------------------ |
 | `auto` (default) | Include `Source: <path#line>` when useful              |

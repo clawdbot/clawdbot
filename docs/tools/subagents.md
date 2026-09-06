@@ -554,6 +554,10 @@ Each agent session (at any depth) can have at most `maxChildrenPerAgent`
 (default `5`) active children at a time. This prevents runaway fan-out
 from a single orchestrator.
 
+### Reset a conversation
+
+A full in-place conversation reset cancels unfinished native subagents associated with that session, including yielded children and children whose completion requester differs from their controller. Chat `/reset` and `sessions.reset` use the same cleanup owner. If child cancellation is incomplete, reset reports a failure before clearing the conversation; inspect the remaining tasks and retry. Child transcripts and unrelated sessions are preserved.
+
 ### Cascade stop
 
 Explicit cancellation of an orchestrator cascades through its descendant

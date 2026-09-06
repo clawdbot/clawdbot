@@ -1033,25 +1033,7 @@ grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
 
   it("prints heartbeat progress for long successful centralized Docker builds", () => {
     const workDir = tempDirs.make("openclaw-docker-build-heartbeat-");
-    writeExecutables(join(workDir, "bin"), {
-      timeout: `#!/bin/bash
-set -euo pipefail
-if [[ "$1" = "--kill-after=1s" ]]; then
-  exit 0
-fi
-shift 2
-"$@"
-`,
-      docker: `#!/bin/sh
-printf "captured docker build log\\n"
-/bin/sleep 0.05
-`,
-    });
-
     const script = repoShell(workDir)`
-export PATH="$TMPDIR/bin:$PATH"
-export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
-
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 printf "captured docker build log\\n" >"$TMPDIR/build.log"
