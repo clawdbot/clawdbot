@@ -73,7 +73,7 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 import {
-  buildPluginDependencyStatus,
+  findMissingRequiredPluginDependencies,
   normalizePluginDependencySpecs,
 } from "./status-dependencies-core.js";
 
@@ -507,15 +507,15 @@ export async function installPluginFromManagedNpmRoot(
       };
     }
 
-    const dependencyStatus = buildPluginDependencyStatus({
+    const missingRequired = await findMissingRequiredPluginDependencies({
       rootDir: installRoot,
       dependencyRootDir: npmRoot,
       ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
     });
-    if (!dependencyStatus.requiredInstalled) {
+    if (missingRequired.length > 0) {
       return {
         ok: false,
-        error: `npm install reported success but left required dependencies missing for ${params.packageName}: ${dependencyStatus.missing.join(", ")}`,
+        error: `npm install reported success but left required dependencies missing for ${params.packageName}: ${missingRequired.join(", ")}`,
       };
     }
 
