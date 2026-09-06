@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { toTarLocalPath, transferRepoE2eArtifacts } from "../../scripts/repo-e2e-artifacts.mts";
+import { transferRepoE2eArtifacts } from "../../scripts/repo-e2e-artifacts.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -93,7 +93,9 @@ describe("repo E2E artifact transfer", () => {
         fs.rmSync(path.join(root, output), { recursive: true });
       }
       // Clean Git state outranks archive mtimes; restore still refreshes the local stamp.
-      execFileSync("tar", ["-xzf", toTarLocalPath(root, path.join(artifact, "repo-e2e-build.tar.gz"))], { cwd: root });
+      execFileSync("tar", ["-xzf", "repo-e2e-build.tar.gz", "-C", root.split(path.sep).join("/")], {
+        cwd: artifact,
+      });
       expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });
       expect(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs).toBeLessThan(
         fs.statSync(path.join(root, "package.json")).mtimeMs,

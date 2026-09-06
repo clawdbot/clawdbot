@@ -8,18 +8,12 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { writeBuildStamp, writeRuntimePostBuildStamp } from "./lib/local-build-metadata.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 
-/** Archive path as a tar-local arg: cwd-relative when possible, else POSIX-absolute.
- * GNU tar reads "C:\..." as a remote host (rmt), so neither form may leak a
- * drive-letter path into argv. */
-export function toTarLocalPath(fromDir: string, file: string): string {
-  const rel = path.relative(fromDir, file).split(path.sep).join("/");
-  if (!/^[A-Za-z]:\//.test(rel) && !rel.startsWith("//")) return rel;
-  const abs = file.split(path.sep).join("/");
-  const m = abs.match(/^([A-Za-z]):\//);
-  return m ? `/${m[1].toLowerCase()}${abs.slice(2)}` : abs;
-}
-
 const archiveName = "repo-e2e-build.tar.gz";
+
+/** Tar parses backslashes in -C as escapes (GNU tar), so hand it forward slashes. Native and POSIX tars accept them too. */
+function toTarDirArg(dir: string): string {
+  return dir.split(path.sep).join("/");
+}
 
 /** Carry one completed build between exact-target E2E jobs, without dependency or build caches. */
 export function transferRepoE2eArtifacts(
@@ -50,10 +44,6 @@ export function transferRepoE2eArtifacts(
   }
   const archive = path.join(artifactRoot, archiveName);
   const manifest = path.join(artifactRoot, "repo-e2e-build.json");
-  // GNU tar reads "C:\..." as a remote host; a cwd-relative archive path stays local everywhere.
-  // Cross-drive (path.relative gives back an absolute path): use a POSIX-absolute
-  // path (/c/...) so tar never parses it as host:path.
-  const archiveArg = toTarLocalPath(root, archive);
   if (operation === "pack") {
     const outputs = [
       "dist",
@@ -66,8 +56,10 @@ export function transferRepoE2eArtifacts(
     ];
     fs.mkdirSync(artifactRoot, { recursive: true });
     // Tar preserves hidden stamps, executable bits, and relative runtime-overlay links.
-    execFileSync("tar", ["-czf", archiveArg, "--null", "-T", "-"], {
-      cwd: root,
+    // The archive travels as a basename under the artifact dir (cwd) while inputs resolve
+    // against the build root via -C, so no drive-letter path ever reaches tar argv.
+    execFileSync("tar", ["-czf", archiveName, "-C", toTarDirArg(root), "--null", "-T", "-"], {
+      cwd: artifactRoot,
       input: outputs.join("\0") + "\0",
     });
     fs.writeFileSync(manifest, JSON.stringify({ identity, sha256: digest(archive) }) + "\n");
@@ -80,7 +72,7 @@ export function transferRepoE2eArtifacts(
   if (recorded.sha256 !== digest(archive)) {
     throw new Error("Repo E2E artifact archive digest mismatch");
   }
-  execFileSync("tar", ["-xzf", archiveArg], { cwd: root });
+  execFileSync("tar", ["-xzf", archiveName, "-C", toTarDirArg(root)], { cwd: artifactRoot });
   // Checkout config mtimes are newer than the producer's stamps. Refresh only
   // local freshness metadata after exact identity verification, before readers start.
   writeBuildStamp({ cwd: root });
