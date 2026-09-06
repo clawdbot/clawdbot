@@ -132,6 +132,20 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
   return renderCodeModeCatalogIndex(included, lines.length);
 }
 
+function describeCodeModeSkillsGuidance(skills: CodeModeToolContext["codeModeSkills"]): string {
+  if (!skills?.length) {
+    return "";
+  }
+  const hasFilesystemCompanion = skills.some(
+    (skill) =>
+      !skill.location.startsWith("node://") && !skill.source.filePath.startsWith("node://"),
+  );
+  if (hasFilesystemCompanion) {
+    return ' Skills are available through the async `skills` global: use `await skills.list()`, `await skills.read(name)` for SKILL.md, and `await skills.read(name, "modules/foo.md")` for a file under a local filesystem skill root. Node-hosted skills accept only SKILL.md.';
+  }
+  return " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)` for SKILL.md. Companion relative paths are not available for node-hosted skills.";
+}
+
 function createCodeModeExecDescription(
   ctx: CodeModeToolContext,
   catalog?: readonly ToolSearchCatalogEntry[],
@@ -158,9 +172,7 @@ function createCodeModeExecDescription(
     !catalogKnown || hasNodes
       ? "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n"
       : "";
-  const skillsGuidance = ctx.codeModeSkills?.length
-    ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
-    : "";
+  const skillsGuidance = describeCodeModeSkillsGuidance(ctx.codeModeSkills);
   const { maxOutputBytes, timeoutMs } = config;
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
   const bindings = catalog
