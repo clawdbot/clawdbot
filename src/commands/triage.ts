@@ -484,26 +484,7 @@ export async function triageCommand(
   }
 
   if (automatic && !automatic.diagnosticOnly) {
-    // Automatic recovery must verify the original symptom and may need an atomic restart.
-    // Its preflight and turn share one target; Doctor-only validation cannot replace them.
     const result = await withInstallationTarget(target, async () => {
-      const { verifySetupInference } = await import("../system-agent/setup-inference.js");
-      if (!isCurrent()) {
-        return { exitCode: 1 };
-      }
-      const inference = await verifySetupInference({
-        runtime,
-        timeoutMs: 15_000,
-      });
-      if (!isCurrent()) {
-        return { exitCode: 1 };
-      }
-      if (!inference.ok) {
-        const reason = triageCollectionError(inference.error, redaction);
-        throw new Error(
-          `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
-        );
-      }
       const { agentExecCommand } = await import("./agent-exec.js");
       if (!isCurrent()) {
         return { exitCode: 1 };

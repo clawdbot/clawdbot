@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   writeDiagnosticSupportExport: vi.fn(),
   gatherDaemonStatus: vi.fn(),
   runUpdateRepairLoop: vi.fn(),
-  verifySetupInference: vi.fn(),
   agentExecCommand: vi.fn(),
   resolveExecutablePath: vi.fn(),
   spawn: vi.fn(),
@@ -55,10 +54,6 @@ vi.mock("../cli/daemon-cli/status.gather.js", () => ({
 
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
-}));
-
-vi.mock("../system-agent/setup-inference.js", () => ({
-  verifySetupInference: mocks.verifySetupInference,
 }));
 
 vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
@@ -99,7 +94,6 @@ describe("triageCommand", () => {
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
-    mocks.verifySetupInference.mockResolvedValue({ ok: true });
     mocks.agentExecCommand.mockResolvedValue({ exitCode: 1 });
     const runtime = createTriageRuntime();
     await expect(
@@ -131,7 +125,6 @@ describe("triageCommand", () => {
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
-    mocks.verifySetupInference.mockResolvedValue({ ok: true });
     const controller = new AbortController();
     let current = true;
     let effectCount = 0;
@@ -197,10 +190,7 @@ describe("triageCommand", () => {
           path.join(stateDir, "openclaw.json"),
           JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
         );
-        mocks.verifySetupInference.mockResolvedValue({
-          ok: false,
-          error: "Authentication required",
-        });
+        mocks.agentExecCommand.mockRejectedValue(new Error("Authentication required"));
       }
       const runtime = createTriageRuntime();
       await triageCommand(
@@ -231,7 +221,7 @@ describe("triageCommand", () => {
       expect(await fs.readFile(path.join(stateDir, "logs/support", promptFile!), "utf8")).toContain(
         "original build failure",
       );
-      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+      expect(mocks.agentExecCommand).toHaveBeenCalledTimes(configured ? 1 : 0);
       expect(mocks.spawn).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
     },
@@ -244,7 +234,6 @@ describe("triageCommand", () => {
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
-    mocks.verifySetupInference.mockResolvedValue({ ok: true });
     mocks.agentExecCommand.mockResolvedValue({ exitCode: 0 });
     const runtime = createTriageRuntime();
 
@@ -330,7 +319,6 @@ describe("triageCommand", () => {
         expect(runtime.exit).not.toHaveBeenCalled();
       }
       expect(runtime.writeJson).not.toHaveBeenCalled();
-      expect(mocks.verifySetupInference).not.toHaveBeenCalled();
     },
   );
 
@@ -497,7 +485,6 @@ describe("triageCommand", () => {
       }
     });
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-    expect(mocks.verifySetupInference).not.toHaveBeenCalled();
     expect(mocks.agentExecCommand).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
   });

@@ -38,18 +38,14 @@ import { triageCommand } from "./triage.js";
 const mocks = vi.hoisted(() => ({
   collectDoctorFindings: vi.fn(),
   writeDiagnosticSupportExport: vi.fn(),
-  verifySetupInference: vi.fn(),
   agentCommand: vi.fn(),
 }));
 
-// Diagnostics and inference are fixture leaves; triage, exec, config, env filtering,
+// Diagnostics are fixture leaves; triage, exec, config, env filtering,
 // and child processes stay real so the handoff cannot hide behind an exec mock.
 vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../logging/diagnostic-support-export.js", () => ({
   writeDiagnosticSupportExport: mocks.writeDiagnosticSupportExport,
-}));
-vi.mock("../system-agent/setup-inference.js", () => ({
-  verifySetupInference: mocks.verifySetupInference,
 }));
 vi.mock("./agent.js", () => ({ agentCommand: mocks.agentCommand }));
 
@@ -394,10 +390,6 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   string,
                   ReturnType<typeof getInstallationTarget>
                 > = {};
-                mocks.verifySetupInference.mockImplementation(async () => {
-                  observedTargets.preflight = getInstallationTarget();
-                  return { ok: true };
-                });
                 const runtime = {
                   log: vi.fn(),
                   error: vi.fn(),
@@ -542,9 +534,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 expect(runtime.error.mock.calls).toEqual(fails ? [["synthetic run failure"]] : []);
                 expect(runtime.exit.mock.calls).toEqual(fails && automatic ? [[1]] : []);
                 expect(getInstallationTarget()).toBeUndefined();
-                expect(observedTargets).toEqual(
-                  automatic ? { preflight: target, repair: target } : { repair: target },
-                );
+                expect(observedTargets).toEqual({ repair: target });
                 expect(mocks.agentCommand).toHaveBeenCalledOnce();
                 expect(execSpy).toHaveBeenCalledOnce();
                 expect(execSpy.mock.calls[0]?.[1].stateDir).toBeUndefined();
