@@ -264,7 +264,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
         break;
       case "cancel":
         // An aborted run settles the dispatch without a final payload; the
-        // handler's finally block flushes and redacts the unconsumed draft.
+        // handler's finally block flushes and finalizes the visible draft.
         releaseRun?.({ queuedFinal: false, counts: { final: 0, block: 0 } });
         await handlerDone;
         break;
@@ -344,8 +344,8 @@ const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
       { kind: "idle" },
     ],
   },
-  // Shared abandon shape: the handler's finally block flushes the pending
-  // throttled edit, then redacts the unconsumed draft.
+  // Matrix abandon shape: the handler flushes the pending throttled edit,
+  // then ends the live state while preserving the unconsumed draft.
   deliveryTraceScenarios["cancel-mid-stream"],
 ];
 
