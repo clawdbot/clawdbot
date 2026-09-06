@@ -243,19 +243,12 @@ async function resolveUpstreamCandidates(params: {
   let selectedDevUpstream: string | null = null;
   let sawResolvableUpstreamRef = false;
   for (const upstreamRef of upstreamRefs) {
+    let resolvedUpstreamRef = upstreamRef;
     if (upstreamRef.endsWith("@{upstream}")) {
       const upstreamStep = await runStep(
         params.step(
           "upstream check",
-          [
-            "git",
-            "-C",
-            params.gitRoot,
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            upstreamRef,
-          ],
+          ["git", "-C", params.gitRoot, "rev-parse", "--symbolic-full-name", upstreamRef],
           params.gitRoot,
         ),
       );
@@ -263,6 +256,7 @@ async function resolveUpstreamCandidates(params: {
         continue;
       }
       sawResolvableUpstreamRef = true;
+      resolvedUpstreamRef = upstreamStep.stdoutTail?.trim() ?? upstreamRef;
     }
     const shaStep = await runStep(
       params.step(
@@ -274,7 +268,7 @@ async function resolveUpstreamCandidates(params: {
     const sha = shaStep.stdoutTail?.trim();
     if (shaStep.exitCode === 0 && sha) {
       upstreamSha = sha;
-      selectedDevUpstream = /^refs\/remotes\/(.+)$/u.exec(upstreamRef)?.[1] ?? null;
+      selectedDevUpstream = /^refs\/remotes\/(.+)$/u.exec(resolvedUpstreamRef)?.[1] ?? null;
       break;
     }
     if (shaStep.exitCode === 0) {
@@ -344,6 +338,7 @@ async function testPreflightCandidate(params: {
   sha: string;
   rebaseFrom?: string;
   runLint: boolean;
+  beforeCandidate?: (revision: string) => Promise<void>;
   validateCandidate?: (root: string) => Promise<void>;
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
@@ -407,6 +402,8 @@ async function testPreflightCandidate(params: {
     return { status: "failed" };
   }
   const candidateSha = candidateHead.stdout.trim();
+  // A local rebase can change package metadata from the fetched base revision.
+  await params.beforeCandidate?.(candidateSha);
   const manager = await resolveUpdateBuildManager(
     params.runCommand,
     params.worktreeDir,
@@ -497,8 +494,11 @@ async function testPreflightCandidate(params: {
     // the resulting candidate only after that preparation finishes.
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
     await candidateCommand.restoreWorkspace?.();
+    await params.validateCandidate?.(params.worktreeDir);
+    // Activation checks out candidateSha and promotes only generated runtime paths.
+    // Check after repair so validated source edits cannot disappear at activation.
     const cleanCheck = await runCandidateCheck(
-      "build clean check",
+      "candidate clean check",
       gitCleanCheckArgs(params.worktreeDir),
     );
     const status = params.steps.at(-1);
@@ -508,7 +508,20 @@ async function testPreflightCandidate(params: {
       }
       return { status: "failed" };
     }
-    await params.validateCandidate?.(params.worktreeDir);
+    const sourceCheck = await runCandidateCheck("candidate source check", [
+      "git",
+      "-C",
+      params.worktreeDir,
+      "diff",
+      "--quiet",
+      candidateSha,
+      "--",
+    ]);
+    if (sourceCheck) {
+      sourceCheck.stderrTail =
+        "Candidate source differs from the selected commit. Repair the source revision before retrying the update.";
+      return { status: "failed" };
+    }
     await params.prepareCandidate?.(params.worktreeDir, params.preflightRoot);
     return { status: "ok", candidateSha };
   } finally {
@@ -530,6 +543,7 @@ export async function runGitCandidatePreflight(params: {
   defaultCommandEnv: NodeJS.ProcessEnv | undefined;
   steps: UpdateStepResult[];
   step: StepFactory;
+  beforeCandidate?: (revision: string) => Promise<void>;
 }): Promise<GitCandidatePreflightResult> {
   const devTargetRef = params.devTarget
     ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
@@ -600,6 +614,9 @@ export async function runGitCandidatePreflight(params: {
         : (params.beforeSha ?? undefined)
       : undefined;
 
+  // Worktree checkout can execute filters, and subsequent checks run target code.
+  // Admit its metadata before either operation, then admit each distinct fallback.
+  await params.beforeCandidate?.(preflightBaseSha);
   let preflightRoot: string;
   try {
     preflightRoot = await createPreflightRoot(params.gitRoot);
@@ -634,6 +651,9 @@ export async function runGitCandidatePreflight(params: {
     for (const sha of candidates) {
       if (!params.prepareGitExposure && sha === params.beforeSha) {
         return { status: "skipped", reason: "already-current" };
+      }
+      if (sha !== preflightBaseSha) {
+        await params.beforeCandidate?.(sha);
       }
       const candidate = await testPreflightCandidate({
         ...params,

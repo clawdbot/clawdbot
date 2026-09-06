@@ -192,7 +192,10 @@ describe("grep tool streaming", () => {
           ? "\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]"
           : ""),
     );
-    expect(result.details).toEqual(limit === 1 ? { matchLimitReached: 1 } : undefined);
+    expect(result.details).toEqual({
+      content: textContent(result),
+      ...(limit === 1 ? { matchLimitReached: 1 } : {}),
+    });
     expect(child.killed).toBe(limit === 1);
   });
 
@@ -275,7 +278,7 @@ describe("grep tool streaming", () => {
           text: `sample.txt-1- ${encoding === "byte-form" ? "before�" : "before"}\nsample.txt:2: ${encoding === "byte-form" ? "needle�" : "needle中"}\nsample.txt-3- after`,
         },
       ]);
-      expect(result.details).toBeUndefined();
+      expect(result.details).toEqual({ content: textContent(result) });
       expect(vi.mocked(spawnCommand).mock.calls[0]?.[0]).toEqual(
         expect.arrayContaining(["--context", "1"]),
       );
@@ -322,7 +325,7 @@ describe("grep tool streaming", () => {
     expect(textContent(result)).toBe(
       `sample.txt-1- before\nsample.txt:2: foo retained\nsample.txt-3- ${lines[2]}\nsample.txt-4- ${lines[3]}\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]`,
     );
-    expect(result.details).toEqual({ matchLimitReached: 1 });
+    expect(result.details).toEqual({ content: textContent(result), matchLimitReached: 1 });
   });
 
   it("keeps exact-limit overlapping windows in match order", async () => {
@@ -353,7 +356,7 @@ describe("grep tool streaming", () => {
     expect(textContent(result)).toBe(
       "match.txt-1- before\nmatch.txt:2: foo first\nmatch.txt-3- foo second\nmatch.txt-2- foo first\nmatch.txt:3: foo second\nmatch.txt-4- after",
     );
-    expect(result.details).toBeUndefined();
+    expect(result.details).toEqual({ content: textContent(result) });
     expect(child.killed).toBe(false);
   });
 
@@ -527,7 +530,7 @@ describe("grep tool streaming", () => {
 
       const result = await resultPromise;
       expect(result.content).toEqual([{ type: "text", text: expected.join("\n") }]);
-      expect(result.details).toBeUndefined();
+      expect(result.details).toEqual({ content: expected.join("\n") });
     },
   );
 

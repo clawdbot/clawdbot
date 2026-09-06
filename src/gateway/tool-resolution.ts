@@ -6,6 +6,7 @@ import { filterToolsByMessageProvider } from "../agents/agent-tools.message-prov
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
+import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
@@ -344,12 +345,9 @@ export function resolveGatewayScopedTools(
   const execConfig = includeNodeExecTool
     ? resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId })
     : undefined;
-  const includeMediatedBaseCodingTools = ["read", "write", "edit"].some((name) =>
-    mediatedToolNames.has(name),
-  );
-  const includeMediatedShellTools = ["apply_patch", "exec", "process"].some((name) =>
-    mediatedToolNames.has(name),
-  );
+  const mediatedToolFamilies = new Set(Array.from(mediatedToolNames, resolveCoreToolFactoryFamily));
+  const includeMediatedBaseCodingTools = mediatedToolFamilies.has("base-coding");
+  const includeMediatedShellTools = mediatedToolFamilies.has("shell");
   const mediatedCodingTools =
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? createOpenClawCodingTools({

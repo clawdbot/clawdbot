@@ -696,14 +696,20 @@ Managed library selections keep their exact revisions until an explicit
 attach or refresh. The file-watcher behavior below applies to ordinary
 file-backed skill roots, not immutable library revisions.
 
-File-backed skills refresh mid-session in two cases:
+File-backed skills refresh mid-session when:
 
 - The skills watcher detects a `SKILL.md` change.
 - A new eligible remote node connects.
+- Native file-watch capacity is exhausted and the next agent turn starts.
 
 The refreshed list is picked up on the next agent turn. If the effective agent
 allowlist changes, OpenClaw refreshes the snapshot to keep visible skills
 aligned.
+
+When native watch capacity is exhausted, OpenClaw logs one warning and stops
+the skills watchers. With watching enabled, later agent turns refresh file-backed
+skills through the existing snapshot preparation. Restart the Gateway after
+restoring watch capacity to enable native watching again.
 
 <AccordionGroup>
   <Accordion title="Skills watcher">

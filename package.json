@@ -365,7 +365,7 @@
     "!dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
     "!dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
     "!dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-    "!dist/qa-runtime-*.js",
+    "!dist/qa-runtime-*",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/**",
@@ -396,7 +396,13 @@
     "!dist/plugin-sdk/blob-runtime.d.ts",
     "!dist/plugin-sdk/realtime-transcription-session.d.ts",
     "!dist/plugin-sdk/speech-provider.d.ts",
-    "!dist/plugin-sdk/realtime-voice-provider.d.ts"
+    "!dist/plugin-sdk/realtime-voice-provider.d.ts",
+    "!dist/plugin-sdk/provider-thinking-runtime.d.ts",
+    "!dist/plugin-sdk/embedding-provider-adapter.d.ts",
+    "!dist/plugin-sdk/agent-harness-registration.d.ts",
+    "!dist/plugin-sdk/session-catalog-paging.d.ts",
+    "!dist/plugin-sdk/provider-auth-aliases.d.ts",
+    "!dist/plugin-sdk/provider-model-metadata.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -716,6 +722,9 @@
     "./plugin-sdk/embedding-providers": {
       "default": "./dist/plugin-sdk/embedding-providers.js"
     },
+    "./plugin-sdk/embedding-provider-adapter": {
+      "default": "./dist/plugin-sdk/embedding-provider-adapter.js"
+    },
     "./plugin-sdk/media-generation-runtime": {
       "default": "./dist/plugin-sdk/media-generation-runtime.js"
     },
@@ -839,6 +848,9 @@
     },
     "./plugin-sdk/agent-harness-exec-review-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
+    },
+    "./plugin-sdk/agent-harness-registration": {
+      "default": "./dist/plugin-sdk/agent-harness-registration.js"
     },
     "./plugin-sdk/agent-harness-runtime": {
       "types": "./dist/plugin-sdk/agent-harness-runtime.d.ts",
@@ -1134,6 +1146,9 @@
       "types": "./dist/plugin-sdk/session-catalog.d.ts",
       "default": "./dist/plugin-sdk/session-catalog.js"
     },
+    "./plugin-sdk/session-catalog-paging": {
+      "default": "./dist/plugin-sdk/session-catalog-paging.js"
+    },
     "./plugin-sdk/session-catalog-runtime": {
       "default": "./dist/plugin-sdk/session-catalog-runtime.js"
     },
@@ -1342,6 +1357,9 @@
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
     },
+    "./plugin-sdk/provider-auth-aliases": {
+      "default": "./dist/plugin-sdk/provider-auth-aliases.js"
+    },
     "./plugin-sdk/provider-oauth-runtime": {
       "default": "./dist/plugin-sdk/provider-oauth-runtime.js"
     },
@@ -1390,6 +1408,9 @@
     "./plugin-sdk/provider-model-types": {
       "default": "./dist/plugin-sdk/provider-model-types.js"
     },
+    "./plugin-sdk/provider-model-metadata": {
+      "default": "./dist/plugin-sdk/provider-model-metadata.js"
+    },
     "./plugin-sdk/provider-model-shared": {
       "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
@@ -1401,6 +1422,9 @@
     },
     "./plugin-sdk/provider-stream-shared": {
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
+    },
+    "./plugin-sdk/provider-thinking-runtime": {
+      "default": "./dist/plugin-sdk/provider-thinking-runtime.js"
     },
     "./plugin-sdk/provider-transport-runtime": {
       "default": "./dist/plugin-sdk/provider-transport-runtime.js"
@@ -2088,6 +2112,8 @@
     "native:i18n:baseline": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts sync --write",
+    "native-catalogs:gen": "node scripts/generate-native-session-catalogs.mjs",
+    "native-catalogs:check": "node scripts/generate-native-session-catalogs.mjs --check",
     "native:i18n:verify": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts verify",
     "android:i18n:check": "node --import ./scripts/tsx.mjs scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import ./scripts/tsx.mjs scripts/apple-app-i18n.ts check",

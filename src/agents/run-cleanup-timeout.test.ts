@@ -31,49 +31,83 @@ describe("agent cleanup timeout", () => {
     vi.useRealTimers();
   });
 
-  it("returns after the cleanup timeout when a cleanup step stalls", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
-
+  it.each<{
+    name: string;
+    step: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+    expectedTimeoutMs: number;
+  }>([
+    {
+      name: "default budget",
+      step: "bundle-mcp-retire",
+      env: {},
+      expectedTimeoutMs: AGENT_CLEANUP_STEP_TIMEOUT_MS,
+    },
+    {
+      name: "trajectory environment override",
+      step: "openclaw-trajectory-flush",
+      env: { OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000" },
+      expectedTimeoutMs: 25_000,
+    },
+    {
+      name: "general environment override",
+      step: "bundle-mcp-retire",
+      env: { OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "1500" },
+      expectedTimeoutMs: 1_500,
+    },
+    {
+      name: "explicit budget before environment overrides",
+      step: "openclaw-trajectory-flush",
+      timeoutMs: 2_000,
+      env: {
+        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000",
+        OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "15000",
+      },
+      expectedTimeoutMs: 2_000,
+    },
+    {
+      name: "explicit zero clamped to one millisecond",
+      step: "openclaw-trajectory-flush",
+      timeoutMs: 0,
+      env: { OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000" },
+      expectedTimeoutMs: 1,
+    },
+    {
+      name: "invalid environment numbers ignored",
+      step: "openclaw-trajectory-flush",
+      env: {
+        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "0",
+        OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "not-a-number",
+      },
+      expectedTimeoutMs: AGENT_CLEANUP_STEP_TIMEOUT_MS,
+    },
+    {
+      name: "invalid environment formats ignored",
+      step: "openclaw-trajectory-flush",
+      env: {
+        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "1e3",
+        OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "0x10",
+      },
+      expectedTimeoutMs: AGENT_CLEANUP_STEP_TIMEOUT_MS,
+    },
+  ])("bounds stalled cleanup with $name", async ({ step, env, timeoutMs, expectedTimeoutMs }) => {
     const result = runAgentCleanupStep({
       runId: "run-1",
       sessionId: "session-1",
-      step: "bundle-mcp-retire",
-      cleanup,
+      step,
+      cleanup: () => new Promise<never>(() => {}),
       log,
+      env,
+      timeoutMs,
     });
 
-    await vi.advanceTimersByTimeAsync(AGENT_CLEANUP_STEP_TIMEOUT_MS);
-    await expect(result).resolves.toBeUndefined();
-
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(log.warn).toHaveBeenCalledWith(
-      "agent cleanup timed out: runId=run-1 sessionId=session-1 step=bundle-mcp-retire timeoutMs=10000",
-    );
-  });
-
-  it("uses the trajectory flush timeout environment override for trajectory cleanup", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
-
-    const result = runAgentCleanupStep({
-      runId: "run-trajectory",
-      sessionId: "session-trajectory",
-      step: "openclaw-trajectory-flush",
-      cleanup,
-      log,
-      env: {
-        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000",
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(24_999);
+    await vi.advanceTimersByTimeAsync(expectedTimeoutMs - 1);
     expect(log.warn).not.toHaveBeenCalled();
-
     await vi.advanceTimersByTimeAsync(1);
     await expect(result).resolves.toBeUndefined();
-
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(log.warn).toHaveBeenCalledWith(
-      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=openclaw-trajectory-flush timeoutMs=25000",
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+      `agent cleanup timed out: runId=run-1 sessionId=session-1 step=${step} timeoutMs=${expectedTimeoutMs}`,
     );
   });
 
@@ -180,78 +214,6 @@ describe("agent cleanup timeout", () => {
     );
   });
 
-  it("uses the general cleanup timeout environment override for other cleanup steps", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
-
-    const result = runAgentCleanupStep({
-      runId: "run-general",
-      sessionId: "session-general",
-      step: "bundle-mcp-retire",
-      cleanup,
-      log,
-      env: {
-        OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "1500",
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(1_500);
-    await expect(result).resolves.toBeUndefined();
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "agent cleanup timed out: runId=run-general sessionId=session-general step=bundle-mcp-retire timeoutMs=1500",
-    );
-  });
-
-  it("prefers explicit cleanup timeout values over environment overrides", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
-
-    const result = runAgentCleanupStep({
-      runId: "run-explicit",
-      sessionId: "session-explicit",
-      step: "openclaw-trajectory-flush",
-      timeoutMs: 2_000,
-      cleanup,
-      log,
-      env: {
-        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000",
-        OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "15000",
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(log.warn).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(result).resolves.toBeUndefined();
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "agent cleanup timed out: runId=run-explicit sessionId=session-explicit step=openclaw-trajectory-flush timeoutMs=2000",
-    );
-  });
-
-  it("keeps explicit zero cleanup timeouts as a one millisecond timeout", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
-
-    const result = runAgentCleanupStep({
-      runId: "run-zero",
-      sessionId: "session-zero",
-      step: "openclaw-trajectory-flush",
-      timeoutMs: 0,
-      cleanup,
-      log,
-      env: {
-        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000",
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(result).resolves.toBeUndefined();
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "agent cleanup timed out: runId=run-zero sessionId=session-zero step=openclaw-trajectory-flush timeoutMs=1",
-    );
-  });
-
   it.each([false, true])(
     "preserves nested cleanup uncertainty and the original run outcome (fails=%s)",
     async (fails) => {
@@ -284,46 +246,6 @@ describe("agent cleanup timeout", () => {
       expect(outer.outcome).toBe("uncertain");
     },
   );
-
-  it.each([
-    {
-      runId: "run-invalid-env-number",
-      sessionId: "session-invalid-env-number",
-      env: {
-        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "0",
-        OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "not-a-number",
-      },
-    },
-    {
-      runId: "run-invalid-env-format",
-      sessionId: "session-invalid-env-format",
-      env: {
-        OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "1e3",
-        OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "0x10",
-      },
-    },
-  ])("ignores invalid cleanup timeout environment values", async ({ runId, sessionId, env }) => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
-
-    const result = runAgentCleanupStep({
-      runId,
-      sessionId,
-      step: "openclaw-trajectory-flush",
-      cleanup,
-      log,
-      env,
-    });
-
-    await vi.advanceTimersByTimeAsync(AGENT_CLEANUP_STEP_TIMEOUT_MS - 1);
-    expect(log.warn).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(result).resolves.toBeUndefined();
-
-    expect(log.warn).toHaveBeenCalledWith(
-      `agent cleanup timed out: runId=${runId} sessionId=${sessionId} step=openclaw-trajectory-flush timeoutMs=10000`,
-    );
-  });
 
   it("logs cleanup rejection without throwing", async () => {
     await expect(

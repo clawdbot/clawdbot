@@ -45,6 +45,7 @@ describe("buildBootstrapBudgetState", () => {
     expect(state.bootstrapMaxChars).toBe(10);
     expect(state.bootstrapTotalMaxChars).toBe(12);
     expect(state.bootstrapPromptWarningMode).toBe("always");
+    expect(state.bootstrapAnalysis.totalNearLimit).toBe(true);
     expect(state.bootstrapAnalysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
     expect(state.bootstrapPromptWarning.warningShown).toBe(true);
   });
@@ -120,7 +121,7 @@ describe("buildBootstrapInjectionStats", () => {
 });
 
 describe("analyzeBootstrapBudget", () => {
-  it("reports per-file and total-limit causes", () => {
+  it("reports causes while excluding missing-file markers from file totals", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
         {
@@ -132,11 +133,19 @@ describe("analyzeBootstrapBudget", () => {
           truncated: true,
         },
         {
+          name: "IDENTITY.md",
+          path: "/tmp/IDENTITY.md",
+          missing: true,
+          rawChars: 0,
+          injectedChars: 40,
+          truncated: false,
+        },
+        {
           name: "SOUL.md",
           path: "/tmp/SOUL.md",
           missing: false,
-          rawChars: 90,
-          injectedChars: 80,
+          rawChars: 50,
+          injectedChars: 40,
           truncated: true,
         },
       ],
@@ -144,8 +153,10 @@ describe("analyzeBootstrapBudget", () => {
       bootstrapTotalMaxChars: 200,
     });
     expect(analysis.hasTruncation).toBe(true);
-    expect(analysis.totalNearLimit).toBe(true);
+    expect(analysis.totalNearLimit).toBe(false);
     expect(analysis.truncatedFiles).toHaveLength(2);
+    expect(analysis.totals).toMatchObject({ rawChars: 200, injectedChars: 160 });
+    expect(analysis.files[1]).toMatchObject({ nearLimit: false, causes: [] });
     const agents = analysis.truncatedFiles.find((file) => file.name === "AGENTS.md");
     const soul = analysis.truncatedFiles.find((file) => file.name === "SOUL.md");
     expect(agents?.causes).toContain("per-file-limit");

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UpdateRepairValidation } from "./update-repair-agent.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
+import type { UpdateRepairValidation } from "./update-repair-protocol.js";
 
 type UpdateRepairParams = Parameters<typeof runUpdateRepairLoop>[0];
 
@@ -186,16 +186,26 @@ describe("runUpdateRepairLoop", () => {
     expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
   });
 
-  it("stops at the tool budget after checking what changed", async () => {
-    runtime.runUpdateRepairTurn.mockResolvedValueOnce(turnResult("Stopped", 2));
-    const validate = vi
-      .fn()
-      .mockResolvedValueOnce(unhealthy(-2))
-      .mockResolvedValueOnce(unhealthy(-1));
-    const result = await runUpdateRepairLoop({ ...params(validate), budget: { maxToolCalls: 2 } });
-    expect(result).toMatchObject({ status: "aborted", reason: "tool-call-budget" });
-    expect(result.attempts[0]?.validation).toEqual(unhealthy(-1));
-  });
+  it.each([{ calls: [2] }, { calls: [1, 1] }])(
+    "shares the tool budget across improving turns: $calls",
+    async ({ calls }) => {
+      for (const toolCalls of calls) {
+        runtime.runUpdateRepairTurn.mockResolvedValueOnce(turnResult("Partial repair", toolCalls));
+      }
+      const validate = vi.fn(async () => unhealthy(-4 + validate.mock.calls.length));
+      const result = await runUpdateRepairLoop({
+        ...params(validate),
+        budget: { maxToolCalls: 2 },
+      });
+      expect(result).toMatchObject({ status: "aborted", reason: "tool-call-budget" });
+      expect(result.attempts.map((attempt) => attempt.toolCalls)).toEqual(calls);
+      expect(runtime.runUpdateRepairTurn.mock.calls.map(([input]) => input.maxToolCalls)).toEqual(
+        calls.length === 1 ? [2] : [2, 1],
+      );
+      expect(validate).toHaveBeenCalledTimes(calls.length + 1);
+      expect(result.attempts.at(-1)?.validation).toEqual(unhealthy(-3 + calls.length));
+    },
+  );
 
   it.each([
     ['REPAIR_RESULT: {"status":"partial","summary":"One error remains."}', "One error remains."],

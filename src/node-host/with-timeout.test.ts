@@ -12,8 +12,14 @@ describe("runAbortableTimeout", () => {
   it("names the operation pending when the deadline fires", async () => {
     vi.useFakeTimers();
     let stage = "queued";
+    let signal: AbortSignal | undefined;
+    let reportProgress!: () => void;
     const pending = runAbortableTimeout(
-      () => new Promise<never>(() => {}),
+      (timeoutSignal, resetTimeout) => {
+        signal = timeoutSignal;
+        reportProgress = resetTimeout;
+        return new Promise<never>(() => {});
+      },
       30,
       () => `publication: ${stage}`,
     );
@@ -23,6 +29,9 @@ describe("runAbortableTimeout", () => {
     expect(await result).toEqual([
       { status: "rejected", reason: new Error("publication: credentials timed out") },
     ]);
+    expect(signal?.aborted).toBe(true);
+    await expect(pending).rejects.toBe(signal?.reason);
+    reportProgress();
     expect(vi.getTimerCount()).toBe(0);
   });
 

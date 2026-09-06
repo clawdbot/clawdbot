@@ -1309,14 +1309,9 @@ describe("mcp loopback server", () => {
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.surface).toBe("loopback");
     expect(call.includeNodeExecTool).toBe(false);
-    expect(Array.from(call.excludeToolNames ?? [])).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-    ]);
+    expect(new Set(call.excludeToolNames)).toEqual(
+      new Set(["read", "write", "edit", "ls", "apply_patch", "exec", "process"]),
+    );
   });
 
   it("normalizes whitespace, duplicate, and empty client capability headers", async () => {

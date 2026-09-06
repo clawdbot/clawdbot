@@ -4,6 +4,7 @@ import type { Duplex, Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "../../infra/errors.js";
+import { withTimeout } from "../../infra/fs-safe.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -217,6 +218,7 @@ export async function createServiceChildRelayAdapter(
   let childError: Error | undefined;
   let childDisconnected = false;
   let childExited = false;
+  const relayExit = createDeferredCore();
   let requestedSignal: "SIGTERM" | "SIGKILL" | undefined;
   let waitError: Error | undefined;
   const startup = createDeferredCore();
@@ -255,12 +257,12 @@ export async function createServiceChildRelayAdapter(
   child.stderr?.once("end", settleWait);
   child.stderr?.once("close", settleWait);
 
-  const loseIdentity = (message: string) => {
+  const loseIdentity = (message: string, options?: ErrorOptions) => {
     if (state === "closed" || state === "identity-lost") {
       return;
     }
     state = "identity-lost";
-    waitError = new Error(`service child cleanup identity lost: ${message}`);
+    waitError = new Error(`service child cleanup identity lost: ${message}`, options);
     events.emitError(waitError, "process");
     if (!commandPid) {
       startup.reject(waitError);
@@ -343,16 +345,38 @@ export async function createServiceChildRelayAdapter(
     // Only kernel group disappearance certifies closure. The anchor's census is
     // advisory: hidden or concurrently forked members can be absent from ps.
     const deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    if (!childExited) {
+      // Control EOF can precede the relay reaping its anchor. Darwin reports
+      // EPERM for that unreaped zombie group, so join before observing it.
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        loseIdentity("service child relay did not exit before cleanup deadline");
+        return;
+      }
+      try {
+        await withTimeout(
+          Promise.race([relayExit.promise, extinctionCompletion.promise]),
+          remainingMs,
+          { message: "service child relay did not exit before cleanup deadline" },
+        );
+      } catch {
+        loseIdentity("service child relay did not exit before cleanup deadline");
+        return;
+      }
+      if (state !== "closing") {
+        return;
+      }
+    }
     for (;;) {
       try {
         // Observation only: signalling a retired numeric PGID could hit a reused group.
         process.kill(-anchorPid, 0);
-      } catch (error) {
+      } catch (cause) {
         // SAFETY: process.kill throws Node system errors; only the exact ESRCH code certifies absence.
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        if ((cause as NodeJS.ErrnoException).code === "ESRCH") {
           finishAuthorityClose(missingReceiptError);
         } else {
-          loseIdentity("owned process group disappearance could not be confirmed");
+          loseIdentity("owned process group disappearance could not be confirmed", { cause });
         }
         return;
       }
@@ -525,6 +549,7 @@ export async function createServiceChildRelayAdapter(
   });
   child.once("exit", () => {
     childExited = true;
+    relayExit.resolve();
     removeConstructionAbortListener();
     if (useWindowsJobAnchor) {
       finishWindowsAuthority();

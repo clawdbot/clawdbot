@@ -1372,8 +1372,8 @@ class MainViewModel private constructor(
     ensureRuntime().refreshModelCatalog()
   }
 
-  fun refreshProviderModels() {
-    ensureRuntime().refreshProviderModels()
+  fun refreshProviderModels(refresh: Boolean = false) {
+    ensureRuntime().refreshProviderModels(refresh)
   }
 
   fun refreshTalkSetupReadiness() {

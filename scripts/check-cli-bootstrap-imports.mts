@@ -276,7 +276,7 @@ function listJsFiles(dirPath: string, fsImpl: typeof fs = fs): string[] {
       files.push(...listJsFiles(fullPath, fsImpl));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".js")) {
+    if (entry.isFile() && /\.m?js$/u.test(entry.name)) {
       files.push(fullPath);
     }
   }

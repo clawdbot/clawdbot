@@ -24,7 +24,6 @@ function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
       cancelScope(scopeKey);
       await cleanupScope(scopeKey);
     }),
-    getRecord: vi.fn<ProcessSupervisor["getRecord"]>(),
   } satisfies ProcessSupervisor;
   return { supervisor, cleanupScope };
 }
@@ -112,12 +111,15 @@ function createSettlingSpawn(params: { stdout?: string[]; stderr?: string[]; err
       timedOut: false,
       noOutputTimedOut: false,
     };
+    const activity = { resultSettled: false, lastOutputAtMs: 0 };
     return {
+      activity,
       runId: "local-shell-run",
       startedAtMs: 0,
       wait: async () => {
         params.stdout?.forEach((chunk) => input.onStdout?.(chunk));
         params.stderr?.forEach((chunk) => input.onStderr?.(chunk));
+        activity.resultSettled = true;
         if (params.error) {
           throw params.error;
         }
@@ -254,7 +256,7 @@ describe("createLocalShellRunner", () => {
     const harness = createShellHarness();
     expect(harness.supervisor.acquireScopeCleanup).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
-      { requireProcessTree: true },
+      { processTree: "required-all" },
     );
     const run = harness.runLocalShellLine("!echo late");
     const selector = harness.getLastSelector();

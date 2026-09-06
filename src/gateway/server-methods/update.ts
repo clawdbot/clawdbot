@@ -6,9 +6,7 @@ import { validateUpdateRunParams } from "../../../packages/gateway-protocol/src/
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
@@ -42,9 +40,9 @@ import {
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
-import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
 import {
   foldPostCoreFinalizeIntoResult,
+  readPreUpdateConfigForPostCoreFinalize,
   runPostCoreFinalizeAfterGatewayUpdate,
 } from "../../infra/update-post-core-finalize.js";
 import {
@@ -55,6 +53,7 @@ import {
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -80,28 +79,15 @@ import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
 import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
-async function readPreUpdateConfigForPostCoreFinalize(): Promise<
-  PreUpdateConfigRestoreInput | undefined
-> {
-  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-  if (!snapshot.valid) {
-    return undefined;
-  }
-  return {
-    sourceConfig: snapshot.sourceConfig,
-    authoredConfig: isRecord(snapshot.parsed)
-      ? (snapshot.parsed as OpenClawConfig)
-      : snapshot.sourceConfig,
-  };
-}
-
 export const updateHandlers: GatewayRequestHandlers = {
   ...updateStatusHandlers,
+  "update.report": updateReportHandler,
   "update.run": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
@@ -179,8 +165,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     let handoff:
       | { status: "started"; pid?: number; command: string }
-      | { status: "already-running"; command: string; message: string }
-      | { status: "unavailable"; command: string; message: string }
+      | { status: "already-running" | "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffOwner: GatewayRestartIntent["successorOwner"];
     let ackDelivered = false;
@@ -317,6 +302,11 @@ export const updateHandlers: GatewayRequestHandlers = {
           ...(adoptedPackageTargetVersion ? { version: adoptedPackageTargetVersion } : {}),
         },
       });
+      sentinelMeta.target = devTarget
+        ? `${devTarget.upstreamRef}@${devTarget.upstreamSha}`
+        : adoptedPackageTargetVersion
+          ? `version ${adoptedPackageTargetVersion}`
+          : `${effectiveChannel} channel`;
       const acknowledgeUpdate = async (beforeVersion: string | null) => {
         if (refuseNonOwner()) {
           return false;
@@ -409,8 +399,12 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               runId,
               beforePark: async () => {
-                const activating = recordUpdateRunPhase(runId, "activating");
-                await notify(activating, "activating");
+                // Parking and stop completion preserve the phase so the updater can record staging/validation.
+                const current = getUpdateRun(runId);
+                if (!current) {
+                  throw new Error("Update run disappeared before managed Gateway parking.");
+                }
+                await notify(current, current.phase === "requested" ? "parking" : "activating");
               },
               requester: params.requester,
               root: installRoot,
@@ -589,17 +583,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       },
     );
     for (const step of result.steps) {
+      const completed =
+        step.exitCode === 0 ||
+        step.advisory ||
+        (step.exitCode === null && result.status !== "error");
       recordUpdateRunStep(runId, {
         step: step.name,
-        status:
-          step.exitCode === 0 ||
-          step.advisory ||
-          (step.exitCode === null && result.status !== "error")
-            ? "completed"
-            : "failed",
-        ...(step.exitCode !== 0
-          ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-          : {}),
+        status: completed ? "completed" : "failed",
+        ...(!completed ? { detail: summarizeUpdateStepFailure(step) } : {}),
       });
     }
     // A managed orchestrator or the replacement Gateway owns terminal success;
@@ -697,12 +688,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null;
-    if (
-      (ackDelivered || ackQueued) &&
-      result.status !== "ok" &&
-      handoff?.status !== "started" &&
-      !restart
-    ) {
+    if ((ackDelivered || ackQueued) && result.status !== "ok" && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
     context?.logGateway?.info(

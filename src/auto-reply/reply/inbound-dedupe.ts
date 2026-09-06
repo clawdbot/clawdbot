@@ -77,16 +77,26 @@ function buildInboundDedupeKey(ctx: MsgContext): string | null {
   return JSON.stringify([sessionScope, routeKey, messageId]);
 }
 
-export function claimInboundDedupe(ctx: MsgContext): InboundDedupeClaimResult {
+export function claimInboundDedupe(
+  ctx: MsgContext,
+  opts?: { reclaimPendingInput?: () => boolean },
+): InboundDedupeClaimResult {
   const key = buildInboundDedupeKey(ctx);
   if (!key) {
     return { status: "invalid" };
   }
-  if (inboundDedupeCache.peek(key)) {
-    return { status: "duplicate" };
-  }
+  const duplicate = inboundDedupeCache.peek(key);
   if (inboundDedupeInFlight.has(key)) {
-    return { status: "inflight" };
+    return { status: duplicate ? "duplicate" : "inflight" };
+  }
+  // Spend recovery on the first claim, even if its old receipt expired. A later
+  // call from this same owner must not supersede its own completed admission.
+  const recovered = opts?.reclaimPendingInput?.() === true;
+  if (duplicate) {
+    if (!recovered) {
+      return { status: "duplicate" };
+    }
+    inboundDedupeCache.delete(key);
   }
   const owner = {};
   inboundDedupeInFlight.set(key, owner);

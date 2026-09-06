@@ -456,7 +456,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "cmd-policy-unattended",
-        command: "gh run view 1",
+        // Executable binding must reach the hook without requiring an unrelated CLI installation.
+        command: "node --version",
         cwd: workspaceDir,
       },
     });

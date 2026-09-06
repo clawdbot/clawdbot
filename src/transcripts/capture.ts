@@ -45,6 +45,12 @@ type ActiveTranscriptsSession = {
   providerId: string;
   // Cleanup belongs to the admitted provider, even after registry replacement.
   provider: Pick<TranscriptSourceProvider, "stop">;
+  // Diagnostic request identity, never authority. URLs retain presence only, not invitations.
+  configuredSource?: Readonly<
+    Pick<TranscriptSourceLocator, "providerId" | "accountId" | "guildId" | "channelId"> & {
+      meetingUrl: boolean;
+    }
+  >;
   // Durable timestamps can collide; lifecycle cleanup must match this exact process-owned capture.
   lifecycleToken?: symbol;
   // Keep the capture reserved until provider and durable stop work both finish.
@@ -76,6 +82,26 @@ export function isTranscriptSelectionCurrent(
       (selection.historicalRevision !== undefined &&
         store.readSummaryInputRevision(selection.session) === selection.historicalRevision))
   );
+}
+
+/** Read-only process facts; a retained stop/cleanup owner does not prove capture is armed. */
+export function readTranscriptCaptureSnapshot() {
+  return [...activeSessions.values()]
+    .filter((entry) => entry.phase !== "terminal" && entry.phase !== "failed")
+    .map((entry) => ({
+      session: {
+        sessionId: entry.session.sessionId,
+        startedAt: entry.session.startedAt,
+        source: { ...entry.session.source },
+      },
+      providerId: entry.providerId,
+      configuredSource: entry.configuredSource ? { ...entry.configuredSource } : undefined,
+      lifecycleToken: entry.lifecycleToken,
+      state:
+        entry.phase === "active" && !entry.stopping && !entry.cleanupPending
+          ? ("armed" as const)
+          : ("unknown" as const),
+    }));
 }
 
 export function isTranscriptSessionActive(
@@ -478,6 +504,16 @@ export async function startTranscripts(params: {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
+  // Capture omissions before account resolution or provider handoff can replace them.
+  const configuredSource = params.configuredLifecycle
+    ? {
+        providerId: requestedSource.providerId,
+        accountId: requestedSource.accountId,
+        guildId: requestedSource.guildId,
+        channelId: requestedSource.channelId,
+        meetingUrl: Boolean(requestedSource.meetingUrl),
+      }
+    : undefined;
   const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
   if (!provider?.start) {
     throw new Error(`transcripts provider ${requestedSource.providerId} cannot start live capture`);
@@ -537,6 +573,7 @@ export async function startTranscripts(params: {
     providerId: provider.id,
     provider,
     phase: "starting",
+    configuredSource,
     lifecycleToken: params.lifecycleToken,
   };
   let admitted = false;

@@ -1,5 +1,6 @@
 // Opencode plugin entrypoint registers its OpenClaw integration.
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
@@ -25,18 +26,6 @@ import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
-type OpencodeZenCatalogAuth = { apiKey?: string; discoveryApiKey?: string; profileId?: string };
-
-function resolveOpencodeZenCatalogAuth(
-  resolveProviderApiKey: (providerId: string) => OpencodeZenCatalogAuth,
-): OpencodeZenCatalogAuth | undefined {
-  const own = resolveProviderApiKey(PROVIDER_ID);
-  if (own.apiKey || own.discoveryApiKey) {
-    return own;
-  }
-  const shared = resolveProviderApiKey("opencode-go");
-  return shared.apiKey || shared.discoveryApiKey ? shared : undefined;
-}
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
@@ -131,7 +120,10 @@ export default defineSingleProviderPluginEntry({
         if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
           return null;
         }
-        const auth = resolveOpencodeZenCatalogAuth(ctx.resolveProviderApiKey);
+        const auth = resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
+          PROVIDER_ID,
+          "opencode-go",
+        ]);
         if (!auth) {
           return null;
         }

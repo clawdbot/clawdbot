@@ -180,6 +180,8 @@ describe("runCronCommandJob", () => {
 
         await vi.advanceTimersByTimeAsync(500);
         await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+        // Force delivery now has a separate bounded exit-observation phase.
+        await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
         const result = await command;
         expect(result.status).toBe("error");
         expect(result.error).toBe("command timed out");

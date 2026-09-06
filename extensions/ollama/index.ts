@@ -24,8 +24,8 @@ import {
   coerceSecretRef,
   isNonSecretApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,

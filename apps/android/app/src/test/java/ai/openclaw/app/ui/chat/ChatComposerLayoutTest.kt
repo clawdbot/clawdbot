@@ -26,6 +26,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.speech.SpeechRecognizer
+import android.view.KeyEvent
 import android.view.inspector.WindowInspector
 import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.foundation.background
@@ -73,6 +74,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Dp
@@ -108,6 +110,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-420dpi")
@@ -385,31 +388,47 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun slashSuggestionsKeepEditorAndStopVisibleAndLastSuggestionReachable() {
+  fun slashSuggestionsKeepEditorAndSendVisibleAndLastSuggestionReachable() {
     showChat()
     val editor = composeRule.onNode(hasSetTextAction())
     editor.performTextReplacement("/")
     editor.assertTextEquals("/")
 
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
     val sidebar = composeRule.onNodeWithContentDescription(nativeString("Show Sidebar")).assertIsDisplayed()
     val lastSuggestion = composeRule.onNodeWithText("/loop").performScrollTo().assertIsDisplayed()
     sidebar.assertIsDisplayed()
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
     lastSuggestion.performClick()
     editor.assertTextEquals("/loop ")
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
   }
 
   @Test
-  fun normalTextAndShortSuggestionListsKeepComposerVisible() {
+  fun activeRunKeepsNewTextSendableAndRestoresStopForAnEmptyDraft() {
     showChat()
+    assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
     val editor = composeRule.onNode(hasSetTextAction())
     listOf("hello", "/help", "/unknown").forEach { input ->
       editor.performTextReplacement(input)
       editor.assertTextEquals(input)
-      assertComposerControlsVisible()
+      assertComposerControlsVisible(primaryAction = "Send")
+      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled()
+      assertTrue("Typing must not end the active run", controller.pendingRunCount.value > 0)
     }
+    editor.performTextReplacement("")
+    assertComposerControlsVisible(primaryAction = "Stop")
+    composeRule.onNodeWithContentDescription(nativeString("Send")).assertDoesNotExist()
+  }
+
+  @Test
+  fun physicalEnterPreservesTheDraftDuringTalkWithAnActiveRun() {
+    assertPhysicalEnterDuringActiveRun(talkActive = true, expectedSends = 0)
+  }
+
+  @Test
+  fun physicalEnterSendsTheDraftDuringANonTalkActiveRun() {
+    assertPhysicalEnterDuringActiveRun(talkActive = false, expectedSends = 1)
   }
 
   @Test
@@ -557,7 +576,7 @@ class ChatComposerLayoutTest {
       assertTrue("The editor must grow from ${index + 1} to ${index + 2} visible lines", next > current)
     }
     assertEquals("The seventh line must scroll inside the six-line editor", heights[5], heights[6])
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
   }
 
   @Test
@@ -1333,6 +1352,62 @@ class ChatComposerLayoutTest {
     }
   }
 
+  private fun assertPhysicalEnterDuringActiveRun(
+    talkActive: Boolean,
+    expectedSends: Int,
+  ) {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = AndroidScreenshotFixture.gatewayId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = "Test gateway",
+      ),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val viewModel = showChat(talkActive = talkActive)
+    val owner = viewModel.captureChatShareOwner()
+    assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
+    assertTrue("The composer must have a routable controller owner", controller.isCurrentComposerOwner(owner))
+    val sent = ConcurrentLinkedQueue<JsonObject>()
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      if (method == "chat.send") {
+        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+        sent.add(payload)
+        buildJsonObject {
+          put("runId", payload.getValue("idempotencyKey"))
+          put("status", JsonPrimitive("started"))
+        }.toString()
+      } else {
+        originalRequest(gatewayId, method, params)
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      val draft = "Physical follow-up"
+      val editor = composeRule.onNode(hasSetTextAction())
+      editor.performClick()
+      editor.performTextReplacement(draft)
+      assertComposerControlsVisible(talkActive = talkActive, primaryAction = if (talkActive) "Stop" else "Send")
+      if (!talkActive) composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled()
+      composeRule.runOnIdle {
+        val root = WindowInspector.getGlobalWindowViews().single { it.hasFocus() }
+        assertTrue("The focused editor must consume Enter down", root.dispatchKeyEventPreIme(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue("The focused editor must consume Enter up", root.dispatchKeyEventPreIme(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+      }
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        composeRule.runOnIdle { owner !in viewModel.chatComposerState.sendStates.value }
+      }
+      assertEquals(List(expectedSends) { JsonPrimitive(draft) }, sent.map { it["message"] })
+      editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(if (expectedSends == 0) draft else "")))
+    } finally {
+      requestField.set(controller, originalRequest)
+    }
+  }
+
   private fun assertDraftKeepsDisabledSendWhileAdmissionIsPending(
     text: String = "",
     attachment: PendingAttachment? = null,
@@ -1340,11 +1415,7 @@ class ChatComposerLayoutTest {
     val viewModel = showChat()
     val owner = viewModel.captureChatShareOwner()
     composeRule.runOnIdle {
-      val runId = requireNotNull(controller.selectedActiveRunPresentation.value.runId)
-      controller.handleGatewayEvent(
-        "agent",
-        """{"sessionKey":"${controller.sessionKey.value}","runId":"$runId","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
-      )
+      assertTrue("The prior run must remain active", controller.pendingRunCount.value > 0)
       viewModel.chatComposerState.addAttachments(owner, listOfNotNull(attachment))
     }
     val editor = composeRule.onNode(hasSetTextAction())

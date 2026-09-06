@@ -34,6 +34,7 @@ import {
   createUpdateProgressWatcher,
   type UpdateProgress,
 } from "../../app/update-confirmation.ts";
+import { canReportUpdateFailure } from "../../app/update-failure-report-controller.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -76,6 +77,7 @@ import {
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { renderMcp } from "./mcp.ts";
+import { renderMeetingCapture } from "./meeting-capture.ts";
 import { renderMemoryPage } from "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
@@ -122,12 +124,16 @@ type ConfigPageSetting =
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
 // sensible instead of silently opening the old page's default section.
-const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
+const MOVED_SECTION_ROUTES: Record<
+  string,
+  { routeId: RouteId; keepSection: boolean; advanced?: boolean }
+> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
   "appearance:wizard": { routeId: "advanced", keepSection: true },
+  "advanced:transcripts": { routeId: "communications", keepSection: true, advanced: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -628,8 +634,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       const movedRoute = MOVED_SECTION_ROUTES[`${this.pageId}:${rawSection}`];
       if (movedRoute) {
         this.context?.navigate(movedRoute.routeId, {
-          search: movedRoute.keepSection ? `?section=${encodeURIComponent(rawSection)}` : "",
-          hash: globalThis.location?.hash ?? "",
+          search: movedRoute.keepSection
+            ? `?section=${encodeURIComponent(rawSection)}${movedRoute.advanced ? "&advanced=1" : ""}`
+            : "",
+          hash: this.routeData?.hash ?? globalThis.location?.hash ?? "",
         });
         return;
       }
@@ -1044,6 +1052,9 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
+        reportableUpdateFailureId: overlaySnapshot.reportableUpdateFailureId,
+        updateFailureReportBusy: overlaySnapshot.updateFailureReportBusy,
+        updateFailureReportNotice: overlaySnapshot.updateFailureReportNotice,
         run: overlaySnapshot.updateRun,
         connected: gatewaySnapshot.phase === "connected",
         configBusy: this.isCuratedConfigMutationDisabled(),
@@ -1051,6 +1062,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
         canCheckStatus: canCallGatewayMethod(gatewaySnapshot, "update.status", "operator.admin"),
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
+        canReport: canReportUpdateFailure(gatewaySnapshot),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
         onUpdateChecksChange: (enabled) =>
@@ -1071,6 +1083,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           }),
         onHoldUpdate: () => this.context.overlays.holdUpdate(),
         onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
+        onReportFailure: (attemptId) => this.context.overlays.reportUpdateFailure(attemptId),
       });
     }
     const includeSections = this.includeSections();
@@ -1294,6 +1307,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
       showSectionDocs: this.pageId !== "communications",
+      renderSection:
+        this.pageId === "communications" && activeSection === "transcripts"
+          ? (editor) =>
+              renderMeetingCapture({
+                mutationDisabled: this.isCuratedConfigMutationDisabled(),
+                advancedExpanded:
+                  this.routeData?.advanced === true ||
+                  this.routeData?.targetBlockId === "config-section-transcripts",
+                editor,
+              })
+          : undefined,
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable
           ? renderBrowserLinkPreferencesRow({

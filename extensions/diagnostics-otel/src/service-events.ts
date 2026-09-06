@@ -64,11 +64,9 @@ export function createDiagnosticsEventHandler(params: {
     recordHarnessRunError,
     recordContextAssembled,
     recordModelCallStarted,
-    recordModelCallCompleted,
-    recordModelCallError,
+    recordModelCallFinished,
     recordToolExecutionStarted,
-    recordToolExecutionCompleted,
-    recordToolExecutionError,
+    recordToolExecutionFinished,
     recordToolExecutionBlocked,
     recordSkillUsed,
     recordExecProcessCompleted,
@@ -197,19 +195,15 @@ export function createDiagnosticsEventHandler(params: {
           recordModelCallStarted(evt, metadata);
           return;
         case "model.call.completed":
-          recordModelCallCompleted(evt, metadata, privateData.modelContent);
-          return;
         case "model.call.error":
-          recordModelCallError(evt, metadata, privateData.modelContent);
+          recordModelCallFinished(evt, metadata, privateData.modelContent);
           return;
         case "tool.execution.started":
           recordToolExecutionStarted(evt, metadata);
           return;
         case "tool.execution.completed":
-          recordToolExecutionCompleted(evt, metadata, privateData.toolContent);
-          return;
         case "tool.execution.error":
-          recordToolExecutionError(evt, metadata, privateData.toolContent);
+          recordToolExecutionFinished(evt, metadata, privateData.toolContent);
           return;
         case "tool.execution.blocked":
           recordToolExecutionBlocked(evt, metadata);

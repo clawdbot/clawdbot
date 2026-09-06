@@ -825,6 +825,11 @@ Calling a global or catalog handle returns the normal tool's JSON `details`
 value directly. Exact catalog ids and raw `{ tool, result }` envelopes are not
 guest-visible.
 
+The `ls`, `find`, and `grep` tools include their bounded listing or search text
+in `content`, including empty-result messages and truncation notices. Directory
+pages retain `nextAfter`; search results retain their existing limit and
+truncation metadata.
+
 ## Declared output contracts
 
 OpenClaw tools can declare `outputSchema` for the structured value placed in
@@ -981,6 +986,13 @@ declare namespace MCP.github {
 }
 ```
 
+Dictionary inputs retain their value types. Nullable enums and fields marked
+`nullable: true` include `null`, unless an explicit enum excludes it.
+Top-level fields with defaults may be omitted from calls.
+These declarations approximate JSON Schema; for constraints that TypeScript
+cannot express, inspect the original schema with
+`MCP.<server>.$api("<tool>", { schema: true })`.
+
 MCP tool calls return their original JSON-safe content blocks, including block
 annotations and block-level `_meta`, plus top-level `structuredContent` and
 `isError` when provided. Top-level MCP `_meta` and private app metadata never
@@ -1019,6 +1031,12 @@ the bridge as JSON-compatible values with explicit size caps.
 ```typescript
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
+
+Await async values before emitting them or returning arrays or plain objects that
+contain them. Unawaited Promises appear as a diagnostic string with `await` and
+`Promise.all` guidance. For example, use
+`return await Promise.all(handles.map((tool) => tool.describe()));` to return tool
+descriptions. Output serialization does not await nested Promises for you.
 
 Output order matches guest calls. Each nested tool result is bounded separately
 by `maxOutputBytes`. Cumulative guest output and the final value or failure

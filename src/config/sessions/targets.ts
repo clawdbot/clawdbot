@@ -20,7 +20,7 @@ import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } fro
 import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import {
   listDurableSqliteTargetOwnersForSessionStorePath,
-  listDurableSqliteTargetPathsForSessionStorePath,
+  listSqliteTargetCandidatePathsForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
 } from "./session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
@@ -551,7 +551,7 @@ export function resolveConfiguredAgentDatabaseCandidatePaths(
   return [
     ...new Set(
       listConfiguredSessionStoreAgentIds(cfg).flatMap((agentId) =>
-        listDurableSqliteTargetPathsForSessionStorePath(
+        listSqliteTargetCandidatePathsForSessionStorePath(
           resolveSessionStorePathCore(cfg.session?.store, { agentId, env: params.env }),
         ),
       ),

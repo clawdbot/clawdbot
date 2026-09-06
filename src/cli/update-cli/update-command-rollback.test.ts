@@ -11,15 +11,22 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
+import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
-  restart: vi.fn(),
+  restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   reachable: vi.fn(),
+  execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
+}));
+vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
+  createWindowsTaskAutoStartGuard: () => async () => {},
 }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  runUpdatedInstallGatewayCommand: async () => true,
+  runUpdatedInstallGatewayCommand: async () => "accepted",
 }));
 vi.mock("./update-command-service.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
@@ -27,7 +34,8 @@ vi.mock("./update-command-service.js", () => ({
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate: async (
     stopped: PreManagedServiceStop | undefined,
     safe: boolean,
-  ) => stopped?.windowsTaskAutoStartRecovery?.restore(safe),
+    guard?: () => Promise<void>,
+  ) => stopped?.windowsTaskAutoStartRecovery?.restore(safe, guard),
   resolveUpdatedGatewayRestartPort: async () => 19101,
 }));
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
@@ -88,7 +96,7 @@ describe("verified package rollback", () => {
     });
     mocks.restart.mockImplementation(async ({ onVerified }) => {
       onVerified?.(125);
-      return true;
+      return "ok";
     });
   });
   it.each([
@@ -175,6 +183,117 @@ describe("verified package rollback", () => {
       expect(renderUpdateRunReport(row, { nextAction }).markdown).toContain(
         "Keep the candidate installed if its gateway is reachable; otherwise keep the gateway stopped.",
       );
+    },
+  );
+  it.each([
+    { activated: false, healthy: true },
+    { activated: false, healthy: false },
+    { activated: true, healthy: true },
+    { activated: true, healthy: false },
+  ])(
+    "retains Windows suspension through rollback (activated=$activated, healthy=$healthy)",
+    async ({ activated, healthy }) => {
+      const stateDir = dirs.make("rollback-windows-owner-");
+      const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_WINDOWS_TASK_NAME: "rollback-fixture" };
+      const config = await readPreviousConfig(env);
+      const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config, env });
+      let enabled = true;
+      const actions: string[] = [];
+      mocks.execSchtasks.mockImplementation(async (args) => {
+        if (args[0] === "/Query") {
+          return {
+            code: 0,
+            stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
+            stderr: "",
+          };
+        }
+        const action = args[0] === "/Run" ? "/Run" : args.at(-1)!;
+        actions.push(action);
+        if (action === "/Run") {
+          return { code: enabled ? 0 : 1, stdout: "", stderr: enabled ? "" : "task disabled" };
+        }
+        enabled = action === "/ENABLE";
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const original = createWindowsTaskAutoStartRecovery({ serviceEnv: env });
+      await original.suspended;
+      original.beginMutation();
+      if (activated) {
+        await original.restore(true);
+      }
+      let fresh: ReturnType<typeof createWindowsTaskAutoStartRecovery> | undefined;
+      const service = {
+        stopped: true,
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+        serviceEnv: env,
+        serviceUpdateVerdict: {
+          kind: "owned" as const,
+          root: previousRoot,
+          fingerprint: "fixture",
+          refreshDefinition: false,
+        },
+      };
+      mocks.stop.mockImplementationOnce(async () => {
+        fresh = createWindowsTaskAutoStartRecovery({ serviceEnv: env });
+        const suspended = await fresh.suspended;
+        if (!suspended) {
+          await fresh.complete();
+        }
+        return { ...service, windowsTaskAutoStartRecovery: suspended ? fresh : undefined };
+      });
+      mocks.restart.mockImplementationOnce(async ({ refreshServiceEnv }) => {
+        expect(refreshServiceEnv).toBe(false);
+        const running = await mocks.execSchtasks(["/Run", "/TN", "rollback-fixture"]);
+        if (running.code !== 0) {
+          throw new Error(running.stderr);
+        }
+        return healthy ? "ok" : "restart-health-failed";
+      });
+      try {
+        const outcome = await rollbackFailedUpdate({
+          result: {
+            status: "error",
+            mode: "npm",
+            root: candidateRoot,
+            reason: "doctor-failed",
+            before: { version: "2026.9.1" },
+            after: { version: "2026.9.3" },
+            steps: [],
+            durationMs: 1,
+          },
+          previousRoot,
+          schemaVersions,
+          previousVerified: true,
+          packageTransaction: {
+            backupRoot: "/backup",
+            complete: vi.fn(async () => {}),
+            rollback: async () => ({
+              name: "package rollback",
+              activePackageRoot: previousRoot,
+              command: "restore",
+              cwd: previousRoot,
+              exitCode: 0,
+              durationMs: 1,
+            }),
+          },
+          config,
+          opts: { json: true },
+          preManagedServiceStop: { ...service, windowsTaskAutoStartRecovery: original },
+          timeoutMs: 1_000,
+        });
+        expect(enabled).toBe(true);
+        expect(outcome.rolledBack).toBe(healthy);
+        const retained = outcome.stoppedForRollback?.windowsTaskAutoStartRecovery;
+        expect(retained).toBe(activated ? fresh : original);
+        await retained?.complete(healthy);
+        expect(enabled).toBe(healthy);
+        expect(actions.slice(-2)).toEqual(healthy ? ["/ENABLE", "/Run"] : ["/Run", "/DISABLE"]);
+      } finally {
+        await fresh?.complete(false);
+        await original.complete(false);
+      }
     },
   );
   it.each([
@@ -305,6 +424,8 @@ describe("verified package rollback", () => {
     const stopped = {
       stopped: true,
       windowsTaskAutoStartRecovery: {
+        suspended: Promise.resolve(true),
+        handoff: () => {},
         beginMutation: () => {},
         restore: vi.fn(async () => {}),
         complete,
@@ -345,10 +466,11 @@ describe("verified package rollback", () => {
     "restored-shims-failed",
     "partial-restore",
     "restart-unhealthy",
+    "restart-refused",
     "restart-threw",
   ] as const)("retains active installation identity after %s", async (failure) => {
     const restoredPackage = failure !== "source-failed" && failure !== "partial-restore";
-    const rollbackSucceeded = failure === "restart-unhealthy" || failure === "restart-threw";
+    const rollbackSucceeded = failure.startsWith("restart-");
     const activePackageRoot =
       failure === "partial-restore" ? null : restoredPackage ? previousRoot : candidateRoot;
     const stateDir = dirs.make("rollback-source-failed-");
@@ -368,7 +490,9 @@ describe("verified package rollback", () => {
     if (failure === "restart-threw") {
       mocks.restart.mockRejectedValueOnce(new Error("Service restart transport failed"));
     } else {
-      mocks.restart.mockResolvedValueOnce(false);
+      mocks.restart.mockResolvedValueOnce(
+        failure === "restart-unhealthy" ? "restart-health-failed" : "failed",
+      );
     }
     const outcome = await rollbackFailedUpdate({
       result,

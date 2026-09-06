@@ -15,6 +15,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
+import { broadcastChatDelta } from "./chat-broadcast.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import {
   createChatSendDispatchErrorLifecycle,
@@ -103,6 +104,17 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           await persistUserTurnTranscript();
         }
         const warn = vi.fn();
+        const chatRunState = createChatRunState();
+        const broadcast = vi.fn();
+        const agentRunSeq = new Map<string, number>();
+        broadcastChatDelta({
+          context: { chatRunState, broadcast, agentRunSeq, nodeSendToSession: vi.fn() },
+          runId,
+          sessionKey: target.sessionKey,
+          text: "Command instructions",
+          isCurrent: () => true,
+        });
+        const previewGroup = chatRunState.runs.get(runId)?.liveTextGroup;
         const lifecycle = createChatSendDispatchErrorLifecycle({
           admission: {
             activeRunAbort: {
@@ -118,11 +130,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
               : undefined,
           },
           context: {
-            agentRunSeq: new Map(),
-            broadcast: vi.fn(),
+            agentRunSeq,
+            broadcast,
             broadcastToConnIds: vi.fn(),
             chatAbortControllers: new Map(),
-            chatRunState: createChatRunState(),
+            chatRunState,
             dedupe: new Map(),
             getRuntimeConfig: () => ({}),
             getSessionEventSubscriberConnIds: () => new Set<string>(),
@@ -131,6 +143,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             removeChatRun: vi.fn(),
           } as never,
           isQueuedFollowupEnqueued: () => false,
+          isAgentRunStarted: () => false,
           persistUserTurnTranscript,
           session: {
             agentId: target.agentId,
@@ -153,7 +166,15 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         });
 
         await lifecycle.handleError(new Error("Cloud worker unavailable"));
+        expect(broadcast).toHaveBeenLastCalledWith(
+          "chat",
+          expect.objectContaining({ state: "error" }),
+          expect.objectContaining({ liveText: { group: previewGroup?.signal } }),
+        );
+        expect(previewGroup?.signal.aborted).toBe(false);
         await lifecycle.finalize();
+        expect(chatRunState.runs.has(runId)).toBe(false);
+        expect(previewGroup?.signal.aborted).toBe(true);
 
         expect(warn).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)).toMatchObject({ status: "failed", lastRunId: runId });
@@ -260,6 +281,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         removeChatRun,
       } as never,
       isQueuedFollowupEnqueued: () => true,
+      isAgentRunStarted: () => false,
       persistUserTurnTranscript: vi.fn(),
       session: {
         agentId: "main",
@@ -358,6 +380,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           removeChatRun,
         } as never,
         isQueuedFollowupEnqueued: () => false,
+        isAgentRunStarted: () => false,
         persistUserTurnTranscript: vi.fn(),
         session: {
           agentId: "main",
@@ -425,6 +448,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         removeChatRun: vi.fn(),
       } as never,
       isQueuedFollowupEnqueued: () => false,
+      isAgentRunStarted: () => false,
       persistUserTurnTranscript: vi.fn(),
       session: {
         agentId: "main",
@@ -474,6 +498,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     };
     const dedupe = new Map([[`chat:${runId}`, terminalEntry]]);
     const broadcast = vi.fn();
+    const chatRunState = createChatRunState();
+    chatRunState.getOrCreate(runId).buffer = "Native-owned output";
     const lifecycle = createChatSendDispatchErrorLifecycle({
       admission: {
         activeRunAbort: registration,
@@ -484,7 +510,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       context: {
         agentRunSeq: new Map(),
         broadcast,
-        chatRunState: createChatRunState(),
+        chatRunState,
         dedupe,
         getRuntimeConfig: () => ({}),
         logGateway: { warn: vi.fn() },
@@ -492,6 +518,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         removeChatRun: vi.fn(),
       } as never,
       isQueuedFollowupEnqueued: () => false,
+      isAgentRunStarted: () => true,
       persistUserTurnTranscript: vi.fn(),
       session: {
         agentId: "main",
@@ -507,8 +534,10 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     });
 
     await lifecycle.handleError(new Error("dispatch rejected after agent terminal"));
+    await lifecycle.finalize();
 
     expect(dedupe.get(`chat:${runId}`)).toBe(terminalEntry);
+    expect(chatRunState.runs.get(runId)?.buffer).toBe("Native-owned output");
     expect(broadcast).not.toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId, state: "error" }),
@@ -574,6 +603,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           removeChatRun: vi.fn(),
         } as never,
         isQueuedFollowupEnqueued: () => false,
+        isAgentRunStarted: () => false,
         persistUserTurnTranscript: vi.fn(),
         session: {
           agentId: "ops",

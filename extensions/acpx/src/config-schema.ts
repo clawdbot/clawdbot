@@ -31,21 +31,6 @@ export type AcpxMcpServer = {
   env: Array<{ name: string; value: string }>;
 };
 
-/** User-provided ACPX plugin configuration before defaults are resolved. */
-export type AcpxPluginConfig = {
-  cwd?: string;
-  stateDir?: string;
-  probeAgent?: string;
-  permissionMode?: AcpxPermissionMode;
-  nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
-  pluginToolsMcpBridge?: boolean;
-  openClawToolsMcpBridge?: boolean;
-  timeoutSeconds?: number;
-  piSessionCatalog?: { enabled?: boolean };
-  mcpServers?: Record<string, McpServerConfig>;
-  agents?: Record<string, { command: string; args?: string[] }>;
-};
-
 /** Fully resolved ACPX config consumed by the runtime service. */
 export type ResolvedAcpxPluginConfig = {
   cwd: string;

@@ -151,7 +151,7 @@ const mocks = vi.hoisted(() => {
         status: "pending" | "failed" | "completed";
       } | null
     >(() => null),
-    ackDelivery: vi.fn(async () => {}),
+    ackDelivery: vi.fn(async (_id: string) => {}),
     failDelivery: vi.fn(async () => {}),
     failDeliveryAfterPlatformSend: vi.fn(async () => {}),
     failDeliveryBeforePlatformSend: vi.fn(async () => {}),
@@ -815,7 +815,9 @@ describe("scheduleRestartSentinelWake", () => {
       completionRetention: "permanent",
       maxRetries: 45,
     });
-    expect(mocks.ackDelivery).toHaveBeenCalledWith("restart-sentinel-notice:agent:main:main:123");
+    expect(mocks.ackDelivery.mock.calls[0]?.[0]).toBe(
+      "restart-sentinel-notice:agent:main:main:123",
+    );
     expect(mocks.reserveDeliveryAttempt).toHaveBeenCalledWith(
       "restart-sentinel-notice:agent:main:main:123",
       45,
@@ -1384,10 +1386,10 @@ describe("scheduleRestartSentinelWake", () => {
       deliveryQueueId: "restart-sentinel-notice:agent:main:main:123",
     });
     expect(mocks.ackDelivery).not.toHaveBeenCalled();
-    expect(mocks.failDelivery).toHaveBeenCalledWith(
+    expect(mocks.failDelivery.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "platform outcome unknown",
-    );
+    ]);
     expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
     expectRecordFields(mockCallArg(mocks.drainPendingDeliveries), {
       drainKey: "restart-recovery:restart-sentinel-notice:agent:main:main:123",
@@ -1417,10 +1419,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
+    expect(mocks.failDeliveryAfterPlatformSend.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "ack unavailable",
-    );
+    ]);
     expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(mocks.logWarn).toHaveBeenCalledWith(
       "restart summary: outbound delivery ack failed; queued for recovery: ack unavailable",
@@ -1454,10 +1456,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.failDelivery).toHaveBeenCalledWith(
+    expect(mocks.failDelivery.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "transport still not ready",
-    );
+    ]);
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
     expectContinuationDispatchFields({ routeSessionKey: "agent:main:main" }, { Body: "continue" });
   });

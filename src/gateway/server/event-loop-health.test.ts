@@ -173,7 +173,11 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       degraded: true,
       degradedSinceMs: 60_999,
     });
-    harness.samples(50);
+    const degraded = harness.monitor.snapshot();
+    harness.samples(49);
+    expect(harness.monitor.snapshot()).toBe(degraded);
+    expect(harness.monitor.persistentDegradationSnapshot()).toBe(degraded);
+    harness.sample();
     expect(harness.monitor.snapshot()).toMatchObject({ degraded: false, degradedSinceMs: null });
     expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
   });

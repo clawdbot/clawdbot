@@ -20,7 +20,8 @@ import {
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
+import { AcpxRuntime, testing, type AcpSessionRecord, type AcpSessionStore } from "./runtime.js";
+import { resolveAcpxSessionResource } from "./session-owner.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
 
 type TestSessionStore = {
@@ -148,6 +149,76 @@ function makeRuntime(
         };
       }
     ).bridgeSafeDelegate,
+  };
+}
+
+function makeManagedDelegateRuntime() {
+  const target = { sessionKey: "shared-project", agentId: "main" };
+  const resource = resolveAcpxSessionResource(target);
+  const pid = process.pid + 1;
+  let record: AcpSessionRecord = {
+    schema: "acpx.session.v1",
+    name: resource,
+    acpxRecordId: resource,
+    acpSessionId: "managed-delegate-session",
+    agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+    cwd: "/tmp",
+    pid,
+    closed: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastUsedAt: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    lastSeq: 0,
+    messages: [],
+    cumulative_token_usage: {},
+    request_token_usage: {},
+    eventLog: {
+      active_path: "unused.jsonl",
+      segment_count: 0,
+      max_segment_bytes: 1024,
+      max_segments: 1,
+    },
+  };
+  const baseStore = {
+    load: vi.fn(async () => structuredClone(record)),
+    save: vi.fn(async (next: AcpSessionRecord) => {
+      record = structuredClone(next);
+    }),
+  };
+  const sleep = vi.fn(async () => {});
+  const runtime = new AcpxRuntime(
+    {
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      permissionMode: "deny-all",
+      agentRegistry: { resolve: () => CODEX_ACP_WRAPPER_COMMAND, list: () => ["fixture"] },
+      openclawToolsMcpBridgeEnabled: true,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
+    },
+    {
+      openclawProcessCleanup: {
+        platform: "linux",
+        listProcesses: async () => [{ pid, ppid: 1, command: CODEX_ACP_WRAPPER_COMMAND }],
+        killProcess: vi.fn(),
+        sleep,
+      },
+    },
+  );
+  // Retention is observed directly; lifecycle operations use the real upstream runtime.
+  const delegates = (
+    runtime as unknown as {
+      managedToolsSessionDelegates: ReadonlyMap<string, object>;
+    }
+  ).managedToolsSessionDelegates;
+  return {
+    runtime,
+    target,
+    resource,
+    delegates,
+    baseStore,
+    sleep,
+    ensure: () => runtime.ensureSession({ ...target, agent: "fixture", mode: "persistent" }),
   };
 }
 
@@ -2071,45 +2142,74 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(baseStore["load"]).toHaveBeenCalledOnce();
   });
 
-  it("releases managed OpenClaw tools MCP delegates after close", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+  it.each(["success", "cleanup-failure", "close-failure"] as const)(
+    "retires only successfully closed managed delegates after %s",
+    async (outcome) => {
+      const { runtime, target, resource, delegates, baseStore, sleep, ensure } =
+        makeManagedDelegateRuntime();
+      const handle = await ensure();
+      const first = delegates.get(resource);
+      expect(first).toBeDefined();
+      expect(delegates.has(target.sessionKey)).toBe(false);
+      if (outcome === "cleanup-failure") {
+        sleep.mockRejectedValueOnce(new Error("cleanup failed"));
+      }
+      if (outcome === "close-failure") {
+        baseStore.save.mockRejectedValueOnce(new Error("close failed"));
+      }
+      const closing = runtime.close({ handle, reason: "closed" });
+      if (outcome === "success") {
+        await closing;
+      } else {
+        await expect(closing).rejects.toThrow(
+          outcome === "cleanup-failure" ? "cleanup failed" : "close failed",
+        );
+      }
+      expect(delegates.size).toBe(outcome === "close-failure" ? 1 : 0);
+      expect((await baseStore.load()).closed).toBe(outcome !== "close-failure");
+      const next = await ensure();
+      if (outcome === "close-failure") {
+        expect(delegates.get(resource)).toBe(first);
+      } else {
+        expect(delegates.get(resource)).not.toBe(first);
+      }
+      expect(next.sessionKey).toBe(target.sessionKey);
+      expect(next.agentId).toBe(target.agentId);
+      await runtime.close({ handle: next, reason: "closed" });
+      expect(delegates.size).toBe(0);
+    },
+  );
 
-    const { runtime } = makeRuntime(baseStore, {
-      openclawToolsMcpBridgeEnabled: true,
-      mcpServers: [
-        {
-          name: "openclaw-tools",
-          command: "node",
-          args: ["dist/mcp/openclaw-tools-serve.js"],
-          env: [],
-        },
-      ],
+  it("does not evict a replacement when an older delegate close finishes later", async () => {
+    const { runtime, resource, delegates, baseStore, ensure } = makeManagedDelegateRuntime();
+    const handle = await ensure();
+    const first = delegates.get(resource);
+    const closingStarted = createDeferred<void>();
+    const releaseClose = createDeferred<void>();
+    const save = baseStore.save.getMockImplementation()!;
+    baseStore.save.mockImplementationOnce(async (record) => {
+      closingStarted.resolve();
+      await releaseClose.promise;
+      await save(record);
     });
-    const exposedRuntime = runtime as unknown as {
-      managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
-      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): {
-        close: AcpRuntime["close"];
-      };
-    };
-    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
-      sessionKey: "agent:codex:main",
-    });
-    const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
-
-    await runtime.close({
-      handle: {
-        sessionKey: "agent:codex:main",
-        backend: "acpx",
-        runtimeSessionName: "agent:codex:main",
-      },
-      reason: "closed",
-    });
-
-    expect(close).toHaveBeenCalledOnce();
-    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
+    const firstClose = runtime.close({ handle, reason: "older close" });
+    try {
+      await closingStarted.promise;
+      await runtime.close({ handle, reason: "concurrent close" });
+      expect(delegates.size).toBe(0);
+      const next = await ensure();
+      const replacement = delegates.get(resource);
+      expect(replacement).toBeDefined();
+      expect(replacement).not.toBe(first);
+      releaseClose.resolve();
+      await firstClose;
+      expect(delegates.get(resource)).toBe(replacement);
+      await runtime.close({ handle: next, reason: "final close" });
+      expect(delegates.size).toBe(0);
+    } finally {
+      releaseClose.resolve();
+      await firstClose;
+    }
   });
 
   it("cleans up OpenClaw-owned ACPX process trees after close", async () => {

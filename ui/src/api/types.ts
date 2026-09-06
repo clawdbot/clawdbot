@@ -48,6 +48,7 @@ export type {
   CronScratchGetResult,
   UpdateAvailable,
   UpdateHoldResult,
+  UpdateReportResult,
   UpdateScheduleState,
 } from "../../../packages/gateway-protocol/src/index.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";

@@ -6,7 +6,6 @@ import {
   buildTelegramModelBrowseChannelData,
   buildTelegramModelsAddProviderChannelData,
   buildTelegramModelsListChannelData,
-  buildTelegramModelsMenuChannelData,
   buildTelegramModelsProviderChannelData,
 } from "./command-ui.js";
 import { telegramDoctor } from "./doctor.js";
@@ -37,7 +36,7 @@ export function createTelegramPluginBase(params: {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: true,
       buildCommandsListChannelData: buildTelegramCommandsListChannelData,
-      buildModelsMenuChannelData: buildTelegramModelsMenuChannelData,
+      buildModelsMenuChannelData: buildTelegramModelsProviderChannelData,
       buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
       buildModelsAddProviderChannelData: buildTelegramModelsAddProviderChannelData,
       buildModelsListChannelData: buildTelegramModelsListChannelData,

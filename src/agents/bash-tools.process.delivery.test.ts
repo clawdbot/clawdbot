@@ -370,7 +370,9 @@ test.each([
     backgrounded: true,
     cursorKeyMode: "unknown",
   });
-  const write = vi.fn((_data: string, callback?: (error?: Error | null) => void) => callback?.());
+  const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, callback) =>
+    callback?.(),
+  );
   session.stdin = { write, end: vi.fn() };
   addSession(session);
 

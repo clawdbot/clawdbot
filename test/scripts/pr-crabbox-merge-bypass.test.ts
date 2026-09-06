@@ -423,6 +423,7 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
       fetch|cat-file|merge-base) exit 0;;
       merge-tree) echo candidate-tree;;
       rev-parse) echo main-tree;;
+      log) echo fixture@example.com;;
       # The trailer parser writes stdin; drain it before exit to avoid EPIPE.
       -c) cat >/dev/null; exit 0;;
       *) echo "unexpected fixture git: $*" >&2; exit 19;;
