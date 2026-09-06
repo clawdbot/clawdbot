@@ -3,6 +3,23 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 
+const mocks = vi.hoisted(() => ({
+  select: vi.fn<() => Promise<string | symbol>>(),
+  confirm: vi.fn<() => Promise<boolean | symbol>>(),
+  prepare:
+    vi.fn<typeof import("../../infra/update-failure-report.js").prepareUpdateFailureReport>(),
+  submit: vi.fn<typeof import("../../infra/update-failure-report.js").submitUpdateFailureReport>(),
+}));
+
+vi.mock("../../commands/configure.shared.js", () => ({
+  select: mocks.select,
+  confirm: mocks.confirm,
+}));
+vi.mock("../../infra/update-failure-report.js", () => ({
+  prepareUpdateFailureReport: mocks.prepare,
+  submitUpdateFailureReport: mocks.submit,
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const failure: UpdateRunResult = {
@@ -33,31 +50,24 @@ function setup(
     title: "Update failure",
     url: "https://github.com/openclaw/openclaw/issues/new",
   };
-  const prepare = vi.fn(async () => prepared);
-  const submit = vi.fn<
-    typeof import("../../infra/update-failure-report.js").submitUpdateFailureReport
-  >(async () => ({
+  const prepare = mocks.prepare.mockReset().mockResolvedValue(prepared);
+  const submit = mocks.submit.mockReset().mockResolvedValue({
     savedReportPath: prepared.savedReportPath,
     status: "created" as const,
     url: "https://github.com/openclaw/openclaw/issues/123",
-  }));
+  });
   const runtime = { log: vi.fn(), error: vi.fn() };
   const actions = Array.isArray(action) ? [...action] : [action];
-  const chooseAction = vi.fn(async () => actions.shift() ?? "dismiss");
+  const chooseAction = mocks.select
+    .mockReset()
+    .mockImplementation(async () => actions.shift() ?? "dismiss");
+  mocks.confirm.mockReset().mockResolvedValue(confirmed);
   const run = () =>
     runInteractiveUpdateFailureAction({
       attemptId: "attempt-cli",
       env: { OPENCLAW_STATE_DIR: stateDir },
       result: failure,
       runtime,
-      dependencies: {
-        prepare,
-        prompts: {
-          chooseAction,
-          confirmSubmission: async () => confirmed,
-        },
-        submit,
-      },
     });
   return { chooseAction, prepare, prepared, run, runtime, submit };
 }
@@ -77,6 +87,7 @@ describe("interactive update failure action", () => {
     await expect(fixture.run()).resolves.toBe("handled");
     expect(fixture.prepare).toHaveBeenCalledOnce();
     expect(fixture.runtime.log).toHaveBeenCalledWith("sanitized preview");
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(fixture.runtime.log).toHaveBeenCalledWith("Update failure report cancelled.");
     expect(fixture.submit).not.toHaveBeenCalled();
   });
@@ -113,6 +124,8 @@ describe("interactive update failure action", () => {
     await expect(fixture.run()).resolves.toBe("handled");
     expect(fixture.prepare).toHaveBeenCalledTimes(2);
     expect(fixture.submit).toHaveBeenCalledTimes(2);
+    expect(fixture.chooseAction).toHaveBeenCalledTimes(2);
+    expect(mocks.confirm).toHaveBeenCalledTimes(2);
     expect(fixture.runtime.log).toHaveBeenCalledWith("spawn gh EAGAIN");
     expect(fixture.runtime.log).toHaveBeenCalledWith(
       "Created GitHub issue: https://github.com/openclaw/openclaw/issues/123",

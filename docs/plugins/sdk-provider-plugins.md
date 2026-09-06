@@ -875,6 +875,16 @@ catalog, API-key auth, and dynamic model resolution.
       - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
+      Bundled and trusted official provider policies can use
+      `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
+      private `openclaw/plugin-sdk/provider-thinking-runtime` helper. It accepts
+      exact `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` values,
+      maps `none` to `off`, and prepends `off` while preserving the first occurrence
+      of each remaining level. The default preference is `medium`, `high`, `low`,
+      then `off`. Missing, null, or empty metadata returns `undefined`; a nonempty
+      list without supported values returns an off-only profile. Keep model-specific
+      overrides and API fallbacks in the provider policy.
+
       Bundled and trusted official plugins can also export
       `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
       artifact. The context contains the final `provider`, `modelId`, `api`, and

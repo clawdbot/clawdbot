@@ -92,6 +92,11 @@ describe("formatMSTeamsMarkdown", () => {
       after: "> Run `status` now.",
     },
     {
+      name: "keeps merged nested quotes aligned with Unicode styles and inline code",
+      before: "> > **😀** `one`\n> > `two` **tail**",
+      after: "> **😀** `one`\n> `two` **tail**",
+    },
+    {
       name: "keeps escaped markdown literal",
       before: String.raw`\*literal\*`,
       after: String.raw`\*literal\*`,
