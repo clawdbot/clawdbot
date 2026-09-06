@@ -1025,11 +1025,22 @@ class NodeRuntimeAgentSelectionTest {
         // but mainSessionKey is not yet reset — it is only re-synced on the next refreshAgentsFromGateway.
         assertNull(ReflectionHelpers.getField<String?>(runtime, "selectedChatAgentId"))
 
-        // Simulate a reconnect to the SAME gateway.
+        // Simulate a reconnect to the SAME gateway — capture the refresh
+        // coroutine's Job so we can await its full completion before asserting
+        // the restored binding. gatewayAgents is published before the session
+        // binding is restored within publishGatewayData, so polling
+        // mainSessionKey can observe the stale pre-disconnect value.
+        val sameGatewayRefreshStarted = CompletableDeferred<Job>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          sameGatewayRefreshStarted.complete(currentCoroutineContext().job)
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"}]}"""
+        }
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
         runtime.refreshAgents()
-        waitUntilAgentBindingRestored(runtime, "scout")
+        val sameGatewayJob = withTimeout(2_000) { sameGatewayRefreshStarted.await() }
+        withTimeout(2_000) { sameGatewayJob.join() }
 
         // The user's explicit agent choice is restored on same-gateway reconnect.
         assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
@@ -1062,11 +1073,19 @@ class NodeRuntimeAgentSelectionTest {
         ReflectionHelpers.setField(runtime, "connectedEndpoint", null)
         assertNull(ReflectionHelpers.getField<String?>(runtime, "selectedChatAgentId"))
 
-        // Reconnect to a DIFFERENT gateway (different stableId) that also has "scout".
+        // Reconnect to a DIFFERENT gateway (different stableId) that also has
+        // "scout". Capture the refresh Job to await its full completion.
+        val diffGatewayRefreshStarted = CompletableDeferred<Job>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          diffGatewayRefreshStarted.complete(currentCoroutineContext().job)
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"}]}"""
+        }
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("10.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
         runtime.refreshAgents()
-        waitUntilAgentBindingRestored(runtime, "main")
+        val diffGatewayJob = withTimeout(2_000) { diffGatewayRefreshStarted.await() }
+        withTimeout(2_000) { diffGatewayJob.join() }
 
         // A different gateway wins its canonical default agent; the stale choice is NOT carried over.
         assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
@@ -1103,11 +1122,19 @@ class NodeRuntimeAgentSelectionTest {
         runtime.selectChatAgent("writer")
         assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
 
-        // Reconnect to the same gateway.
+        // Reconnect to the same gateway — capture the refresh Job to await
+        // its full completion before asserting the restored binding.
+        val explicitRefreshStarted = CompletableDeferred<Job>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          explicitRefreshStarted.complete(currentCoroutineContext().job)
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"},{"id":"writer","name":"Writer"}]}"""
+        }
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
         runtime.refreshAgents()
-        waitUntilAgentBindingRestored(runtime, "writer")
+        val explicitJob = withTimeout(2_000) { explicitRefreshStarted.await() }
+        withTimeout(2_000) { explicitJob.join() }
 
         // The explicit selection while disconnected wins; the stale pending restore is NOT used.
         assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
@@ -1165,11 +1192,19 @@ class NodeRuntimeAgentSelectionTest {
         ReflectionHelpers.setField(runtime, "operatorConnected", false)
         ReflectionHelpers.setField(runtime, "connectedEndpoint", null)
 
-        // Reconnect to the same gateway.
+        // Reconnect to the same gateway — capture the refresh Job to await
+        // its full completion before asserting the restored binding.
+        val repeatedRefreshStarted = CompletableDeferred<Job>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          repeatedRefreshStarted.complete(currentCoroutineContext().job)
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"}]}"""
+        }
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
         runtime.refreshAgents()
-        waitUntilAgentBindingRestored(runtime, "scout")
+        val repeatedJob = withTimeout(2_000) { repeatedRefreshStarted.await() }
+        withTimeout(2_000) { repeatedJob.join() }
 
         // The user's explicit agent choice is restored despite repeated disconnect callbacks.
         assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
@@ -1184,28 +1219,6 @@ class NodeRuntimeAgentSelectionTest {
       Thread.sleep(10)
     }
     error("Expected agents list to be refreshed")
-  }
-
-  /**
-   * Waits until refreshAgentsFromGateway has fully completed, including agent-list
-   * publication AND session-binding restoration. The gatewayAgents list is
-   * published before the selection is restored within publishGatewayData, so
-   * checking only gatewayAgents can observe stale session bindings.
-   */
-  private fun waitUntilAgentBindingRestored(
-    runtime: NodeRuntime,
-    expectedAgentId: String,
-  ) {
-    repeat(500) {
-      if (
-        runtime.gatewayAgents.value.isNotEmpty() &&
-        resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value) == expectedAgentId
-      ) {
-        return
-      }
-      Thread.sleep(10)
-    }
-    error("Expected agent binding to be restored to '$expectedAgentId'")
   }
 
   private fun createConnectedRuntime(): NodeRuntime {
