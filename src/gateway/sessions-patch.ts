@@ -27,6 +27,11 @@ import {
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
+  stripThreadFromSessionRoute,
+  stripThreadIdFromDeliveryContext,
+  stripThreadIdFromOrigin,
+} from "../auto-reply/reply/session-route-reset.js";
+import {
   formatThinkingLevels,
   isThinkingLevelSupported,
   normalizeElevatedLevel,
@@ -74,6 +79,12 @@ import {
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
 import {
   isAgentSessionModelPatchOrigin,
@@ -719,6 +730,17 @@ function* projectSessionPatchSteps(
       }
       next.groupActivation = normalized;
     }
+  }
+
+  // Null-only public repair for stale delivery threads. Setting a new thread
+  // via patch is not a sessions.patch contract; /new already strips internally.
+  // Without this, DMs keep sending message_thread_id until the store is edited.
+  if (patch.threadId === null) {
+    next.delivery = normalizeSessionDeliveryState({
+      route: stripThreadFromSessionRoute(sessionDeliveryRoute(next)),
+      context: stripThreadIdFromDeliveryContext(deliveryContextFromSession(next)),
+      origin: stripThreadIdFromOrigin(sessionDeliveryOrigin(next)),
+    });
   }
 
   // Fresh rows and placeholder aliases have no running model to replace. Model

@@ -10,6 +10,12 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
@@ -2092,6 +2098,65 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("opencode-go");
     expect(entry.modelOverride).toBe("kimi-k2.6");
     expect(entry.authProfileOverride).toBe("work");
+  });
+
+  test("clears persisted delivery thread ids when threadId is null", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-stale-thread",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: "dm:user",
+          threadId: 12345,
+        },
+        origin: {
+          provider: "telegram",
+          to: "dm:user",
+          threadId: 12345,
+        },
+      }),
+    });
+    const before = store[MAIN_SESSION_KEY]!;
+    expect(sessionDeliveryRoute(before)?.thread?.id).toBe(12345);
+    expect(deliveryContextFromSession(before)?.threadId).toBe(12345);
+    expect(sessionDeliveryOrigin(before)?.threadId).toBe(12345);
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, threadId: null },
+      }),
+    );
+
+    expect(sessionDeliveryRoute(entry)?.thread).toBeUndefined();
+    expect(deliveryContextFromSession(entry)?.threadId).toBeUndefined();
+    expect(sessionDeliveryOrigin(entry)?.threadId).toBeUndefined();
+    expect(deliveryContextFromSession(entry)?.channel).toBe("telegram");
+    expect(deliveryContextFromSession(entry)?.to).toBe("dm:user");
+  });
+
+  test("leaves delivery thread ids unchanged when threadId is omitted", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-keep-thread",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: "dm:user",
+          threadId: 12345,
+        },
+      }),
+    });
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, label: "Keep thread" },
+      }),
+    );
+
+    expect(entry.label).toBe("Keep thread");
+    expect(deliveryContextFromSession(entry)?.threadId).toBe(12345);
+    expect(sessionDeliveryRoute(entry)?.thread?.id).toBe(12345);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
