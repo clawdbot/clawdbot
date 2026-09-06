@@ -1,4 +1,5 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errno.js";
@@ -15,6 +16,7 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
+export const LOG_GENERATION_WINDOW_BYTES = 64 * 1024;
 type LogTailLimit = number | "all";
 type LogFileStat = {
   dev: bigint;
@@ -39,6 +41,12 @@ function missingPathToNull(error: unknown): null {
   return null;
 }
 
+function getContentWindowBounds(cursor: number, size: number) {
+  const end = Math.min(Math.max(0, cursor), size);
+  const start = Math.max(0, end - LOG_GENERATION_WINDOW_BYTES);
+  return { start, length: end - start };
+}
+
 /** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
   file: string;
@@ -57,6 +65,9 @@ export type LogFileGeneration = {
   prefix: string;
   prefixLength: number;
   boundary: string;
+  contentHash: string;
+  contentWindowStart: number;
+  contentWindowLength: number;
   mtimeNs: string;
   ctimeNs: string;
 };
@@ -191,12 +202,20 @@ async function readLogSliceAttempt(
     const boundedCursor = Math.min(Math.max(0, generationCursor), size);
     const prefixLength = Math.min(64, size);
     const boundaryStart = Math.max(0, boundedCursor - 64);
+    const contentWindow = getContentWindowBounds(boundedCursor, size);
+    const contentBuffer = Buffer.alloc(contentWindow.length);
+    const contentBytesRead = await readFileWindowFully(handle, contentBuffer, contentWindow.start);
     return {
       identity: `${stat.dev}:${stat.ino}`,
       size,
       prefix: await readWindow(0, prefixLength),
       prefixLength,
       boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
+      contentHash: createHash("sha256")
+        .update(contentBuffer.subarray(0, contentBytesRead))
+        .digest("hex"),
+      contentWindowStart: contentWindow.start,
+      contentWindowLength: contentBytesRead,
       mtimeNs: stat.mtimeNs.toString(),
       ctimeNs: stat.ctimeNs.toString(),
     };

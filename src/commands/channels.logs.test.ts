@@ -581,6 +581,44 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("re-anchors after same-path truncate/regrow with matching edge samples", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldMessage = `${"x".repeat(200)}-old`;
+      const newMessage = `${"x".repeat(200)}-new`;
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: oldMessage }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.writeFile(
+        logPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: newMessage }),
+          logLine({ module: "gateway/channels/slack/send", message: "new-second" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual([oldMessage, newMessage, "new-second"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the cursor stable while a poll observes an append", async () => {
     vi.useFakeTimers();
     try {

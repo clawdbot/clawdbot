@@ -1,4 +1,5 @@
 // Implements channel-scoped tailing of the OpenClaw log file.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -10,7 +11,11 @@ import {
 } from "../../channels/registry.js";
 import { isMissingPathError } from "../../infra/errno.js";
 import { readFileWindowFully } from "../../infra/file-read.js";
-import { readConfiguredParsedLogTail, type LogFileGeneration } from "../../logging/log-tail.js";
+import {
+  LOG_GENERATION_WINDOW_BYTES,
+  readConfiguredParsedLogTail,
+  type LogFileGeneration,
+} from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import {
@@ -44,6 +49,12 @@ type FileCheckpoint = {
   prefixLength: number;
   prefix: string;
   boundary: string;
+  contentHash: string;
+  contentWindowStart: number;
+  contentWindowLength: number;
+  validationContentHash: string;
+  validationContentWindowStart: number;
+  validationContentWindowLength: number;
   validationBoundary: string;
   mtimeNs: string;
   ctimeNs: string;
@@ -51,6 +62,12 @@ type FileCheckpoint = {
 
 function checkpointPrefixLength(size: number): number {
   return Math.min(64, Math.max(0, size));
+}
+
+function contentWindowBounds(cursor: number, size: number) {
+  const end = Math.min(Math.max(0, cursor), size);
+  const start = Math.max(0, end - LOG_GENERATION_WINDOW_BYTES);
+  return { start, length: end - start };
 }
 
 function listManifestChannels(): ManifestChannel[] {
@@ -207,12 +224,27 @@ async function readFileCheckpoint(
       const bytesRead = await readFileWindowFully(handle, buffer, start);
       return buffer.toString("base64", 0, bytesRead);
     };
+    const readContentHash = async (contentCursor: number) => {
+      const window = contentWindowBounds(contentCursor, size);
+      const buffer = Buffer.alloc(window.length);
+      const bytesRead = await readFileWindowFully(handle, buffer, window.start);
+      return {
+        hash: createHash("sha256").update(buffer.subarray(0, bytesRead)).digest("hex"),
+        start: window.start,
+        length: bytesRead,
+      };
+    };
     const boundedCursor = Math.min(Math.max(0, cursor), size);
     const boundedValidationCursor = Math.min(Math.max(0, validationCursor), size);
     const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? size), size);
     const boundaryStart = Math.max(0, boundedCursor - 64);
     const validationBoundaryStart = Math.max(0, boundedValidationCursor - 64);
     const boundary = await readWindow(boundaryStart, boundedCursor - boundaryStart);
+    const content = await readContentHash(boundedCursor);
+    const validationContent =
+      boundedValidationCursor === boundedCursor
+        ? content
+        : await readContentHash(boundedValidationCursor);
     return {
       file,
       identity: `${stat.dev}:${stat.ino}`,
@@ -221,6 +253,12 @@ async function readFileCheckpoint(
       prefixLength: boundedPrefixLength,
       prefix: await readWindow(0, boundedPrefixLength),
       boundary,
+      contentHash: content.hash,
+      contentWindowStart: content.start,
+      contentWindowLength: content.length,
+      validationContentHash: validationContent.hash,
+      validationContentWindowStart: validationContent.start,
+      validationContentWindowLength: validationContent.length,
       validationBoundary:
         validationBoundaryStart === boundaryStart && boundedValidationCursor === boundedCursor
           ? boundary
@@ -255,6 +293,9 @@ function isSameFileGeneration(
     current.size >= previous.size &&
     current.prefixLength >= previous.prefixLength &&
     currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true &&
+    current.validationContentHash === previous.contentHash &&
+    current.validationContentWindowStart === previous.contentWindowStart &&
+    current.validationContentWindowLength === previous.contentWindowLength &&
     (current.size > previous.size ||
       (current.mtimeNs === previous.mtimeNs && current.ctimeNs === previous.ctimeNs))
   );
@@ -277,6 +318,9 @@ function isSameTailGeneration(
     current.prefixLength >= generation.prefixLength &&
     currentPrefix?.subarray(0, generation.prefixLength).equals(generationPrefix) === true &&
     current.boundary === generation.boundary &&
+    current.contentHash === generation.contentHash &&
+    current.contentWindowStart === generation.contentWindowStart &&
+    current.contentWindowLength === generation.contentWindowLength &&
     (current.size > generation.size ||
       (current.mtimeNs === generation.mtimeNs && current.ctimeNs === generation.ctimeNs))
   );
