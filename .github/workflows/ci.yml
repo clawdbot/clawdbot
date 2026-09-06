@@ -4780,6 +4780,7 @@ jobs:
           path: |
             .artifacts/mac-cron-summary-proof/summary.png
             .artifacts/mac-cron-summary-proof/summary-label.txt
+            .artifacts/mac-cron-summary-proof/response.json
           if-no-files-found: error
           retention-days: 7
 

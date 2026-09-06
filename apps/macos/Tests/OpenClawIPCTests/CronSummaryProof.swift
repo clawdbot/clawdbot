@@ -12,6 +12,29 @@ private struct CronSummaryWirePage: Decodable {
 /// Temporary fixture diagnostics: inspect the same bytes the socket will receive, without changing them.
 nonisolated func cronSummaryWireFacts(_ response: Data) -> [String: String] {
     var facts = ["stage": "wire-validation", "phase": "response-frame"]
+    facts["responseBytes"] = String(response.count)
+    if response.count > 256 * 1024 {
+        facts["exportOutcome"] = "over-size-limit"
+    } else {
+        do {
+            var repository = URL(fileURLWithPath: #filePath).resolvingSymlinksInPath()
+            for _ in 0..<5 {
+                repository.deleteLastPathComponent()
+            }
+            let files = FileManager.default
+            let output = repository.appendingPathComponent(".artifacts/mac-cron-summary-proof", isDirectory: true)
+            guard files.fileExists(atPath: repository.appendingPathComponent("pnpm-workspace.yaml").path),
+                  files.fileExists(atPath: repository.appendingPathComponent("apps/macos/Package.swift").path),
+                  output.resolvingSymlinksInPath().path == output.path
+            else { throw CocoaError(.fileWriteNoPermission) }
+            try files.createDirectory(at: output, withIntermediateDirectories: true)
+            try response.write(to: output.appendingPathComponent("response.json"), options: .withoutOverwriting)
+            facts["exportOutcome"] = "written"
+        } catch {
+            facts["exportOutcome"] = "failed"
+            facts["exportErrorCode"] = String((error as NSError).code)
+        }
+    }
     do {
         let frame = try JSONDecoder().decode(ResponseFrame.self, from: response)
         guard let payload = frame.payload else {
@@ -32,23 +55,32 @@ nonisolated func cronSummaryWireFacts(_ response: Data) -> [String: String] {
     } catch {
         let kind: String
         let path: [any CodingKey]
+        let context: DecodingError.Context?
         switch error {
-        case let DecodingError.keyNotFound(key, context):
-            (kind, path) = ("key-not-found", context.codingPath + [key])
-        case let DecodingError.typeMismatch(_, context):
-            (kind, path) = ("type-mismatch", context.codingPath)
-        case let DecodingError.valueNotFound(_, context):
-            (kind, path) = ("value-not-found", context.codingPath)
-        case let DecodingError.dataCorrupted(context):
-            (kind, path) = ("data-corrupted", context.codingPath)
-        case let EncodingError.invalidValue(_, context):
-            (kind, path) = ("invalid-encoding-value", context.codingPath)
+        case let DecodingError.keyNotFound(key, details):
+            (kind, path, context) = ("key-not-found", details.codingPath + [key], details)
+        case let DecodingError.typeMismatch(_, details):
+            (kind, path, context) = ("type-mismatch", details.codingPath, details)
+        case let DecodingError.valueNotFound(_, details):
+            (kind, path, context) = ("value-not-found", details.codingPath, details)
+        case let DecodingError.dataCorrupted(details):
+            (kind, path, context) = ("data-corrupted", details.codingPath, details)
+        case let EncodingError.invalidValue(_, details):
+            (kind, path, context) = ("invalid-encoding-value", details.codingPath, nil)
         default:
-            (kind, path) = ("other", [])
+            (kind, path, context) = ("other", [], nil)
         }
         facts["kind"] = kind
         facts["codingPath"] = path.prefix(8).map(\.stringValue).joined(separator: ".")
             + (path.count > 8 ? ".<truncated>" : "")
+        if let context {
+            facts["decoderDescription"] = String(context.debugDescription.prefix(256))
+            if let underlying = context.underlyingError as NSError?,
+               let diagnostic = underlying.userInfo[NSDebugDescriptionErrorKey] as? String
+            {
+                facts["jsonDescription"] = String(diagnostic.prefix(256))
+            }
+        }
     }
     return facts
 }
