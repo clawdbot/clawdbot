@@ -83,8 +83,10 @@ describe("agent exec command composition", () => {
         vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue(supervisor);
         const spawn = supervisor.spawn.bind(supervisor);
         const admitted = createDeferred<SpawnInput>();
+        let pendingRun: ReturnType<typeof spawn> | undefined;
         vi.spyOn(supervisor, "spawn").mockImplementation((input) => {
           const pending = spawn(input);
+          pendingRun = pending;
           admitted.resolve(input);
           return pending;
         });
@@ -109,18 +111,17 @@ describe("agent exec command composition", () => {
           expect(createSecretData).toHaveBeenCalledOnce();
           expect(input).toMatchObject({
             mode: "child",
-            backendId: "construction-cli",
             timeoutMs: 1_000,
           });
-          const runId = expectDefined(input.runId, "command supervisor run ID");
-          expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+          const processRun = expectDefined(pendingRun, "admitted supervisor process");
+          const settled = vi.fn();
+          void processRun.then(settled, settled);
           await vi.advanceTimersByTimeAsync(999);
-          expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+          expect(settled).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
-          expect(supervisor.getRecord(runId)).toMatchObject({
-            state: "exited",
-            terminationReason: "overall-timeout",
-          });
+          const managed = await processRun;
+          await expect(managed.wait()).resolves.toMatchObject({ reason: "overall-timeout" });
+          expect(managed.activity.resultSettled).toBe(true);
           vi.useRealTimers();
           const finished = await result;
           await waitForDead(commandPid, 5_000);

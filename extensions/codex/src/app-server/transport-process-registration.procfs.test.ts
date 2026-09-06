@@ -1,6 +1,4 @@
-import { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { PassThrough } from "node:stream";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -9,6 +7,7 @@ import {
   terminateCodexAppServerOrphan,
 } from "./transport-process-containment.js";
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
 
 const procfs = vi.hoisted(() => ({ files: new Map<string, string | Error | (() => string)>() }));
@@ -137,26 +136,11 @@ describe("Codex registration procfs boundary", () => {
     "registers a direct child despite an unreadable unrelated process only with usable ownership: %s",
     async (mode, ctx) => {
       addProcess(child.pid, process.pid);
-      const stdin = new PassThrough();
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      const spawned = Object.assign(new ChildProcess(), {
-        pid: child.pid,
-        stdin,
-        stdout,
-        stderr,
-        stdio: [stdin, stdout, stderr, null, null] as [
-          PassThrough,
-          PassThrough,
-          PassThrough,
-          null,
-          null,
-        ],
-      });
+      const spawned = new RegistrationTestChildProcess(child.pid);
       ctx.onTestFinished(() => {
-        stdin.destroy();
-        stdout.destroy();
-        stderr.destroy();
+        spawned.stdin.destroy();
+        spawned.stdout.destroy();
+        spawned.stderr.destroy();
         spawned.removeAllListeners();
       });
       const register = await prepareCodexAppServerProcessRegistration();

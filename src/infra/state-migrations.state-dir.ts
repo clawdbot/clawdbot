@@ -43,23 +43,44 @@ function lstatIfPresent(filePath: string): fs.Stats | null {
   }
 }
 
-export function migrateLegacyProfileWorkspace(params: {
+export function resolveLegacyProfileWorkspaceMigrationPaths(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-}): { changes: string[]; warnings: string[] } {
+}): { source: string; target: string } | undefined {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+    return undefined;
+  }
+  return {
+    source: path.join(resolveProfileStateDir("default", env, homedir), `workspace-${profile}`),
+    target: path.join(resolveProfileStateDir(profile, env, homedir), "workspace"),
+  };
+}
+
+export function resolvePendingLegacyProfileWorkspaceMigrationPaths(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { source: string; target: string } | undefined {
+  const paths = resolveLegacyProfileWorkspaceMigrationPaths(params);
+  // An occupied target remains pending owner work: execution refuses it, so the
+  // read-only plan must retain both endpoints instead of silently omitting it.
+  return paths && lstatIfPresent(paths.source) ? paths : undefined;
+}
+
+export function migrateLegacyProfileWorkspace(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { changes: string[]; warnings: string[] } {
+  const paths = resolveLegacyProfileWorkspaceMigrationPaths(params);
+  if (!paths) {
     return { changes: [], warnings: [] };
   }
 
   try {
-    const legacyDir = path.join(
-      resolveProfileStateDir("default", env, homedir),
-      `workspace-${profile}`,
-    );
-    const targetDir = path.join(resolveProfileStateDir(profile, env, homedir), "workspace");
+    const legacyDir = paths.source;
+    const targetDir = paths.target;
     const legacyStat = lstatIfPresent(legacyDir);
     if (!legacyStat) {
       return { changes: [], warnings: [] };
@@ -175,6 +196,30 @@ function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean
     return false;
   }
   return isLegacyTreeSymlinkMirror(legacyDir, realTargetDir);
+}
+
+export function resolvePendingLegacyStateDirMigrationPaths(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { source: string; target: string } | undefined {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
+    return undefined;
+  }
+  const target = resolveNewStateDir(homedir);
+  const source = resolveLegacyStateDirs(homedir).find((dir) => fs.existsSync(dir));
+  if (!source) {
+    return undefined;
+  }
+  const sourceTarget = resolveSymlinkTarget(source);
+  if (
+    (sourceTarget && path.resolve(sourceTarget) === path.resolve(target)) ||
+    (isDirPath(target) && isLegacyDirSymlinkMirror(source, target))
+  ) {
+    return undefined;
+  }
+  return { source, target };
 }
 
 export async function autoMigrateLegacyStateDir(params: {

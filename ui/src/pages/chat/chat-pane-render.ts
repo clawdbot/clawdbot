@@ -304,7 +304,8 @@ export class ChatPane extends ChatPaneLayoutRender {
           hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
         personalReady:
           !hasAbortableSessionRun(state) &&
-          !isCloudWorkerPlacementState(placement?.state) &&
+          (!isCloudWorkerPlacementState(placement?.state) ||
+            (Boolean(publicationRow.repositoryWorkspaceId) && placement?.state === "active")) &&
           !workspaceConflict,
         isPresented: () => this.presented,
         isCurrent: () => {
@@ -642,7 +643,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.chatReplyTarget = null;
         state.requestUpdate?.();
       },
-      onSetReply: selectedSessionArchived ? undefined : setReply,
+      onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,

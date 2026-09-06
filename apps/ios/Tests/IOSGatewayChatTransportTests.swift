@@ -136,14 +136,18 @@ struct IOSGatewayChatTransportTests {
                 @unknown default: throw URLError(.cannotParseResponse)
                 }
                 let request = try await recorder.record(data)
-                let payload = request.method == "sessions.create" ? #"{"key":"forked"}"# : #"{"entry":{}}"#
+                let payload = switch request.method {
+                case "agents.list": GatewayWebSocketTestSupport.agentCatalogPayload
+                case "sessions.create": #"{"key":"forked"}"#
+                default: #"{"entry":{}}"#
+                }
                 socket.emitReceiveSuccess(.data(Data(
                     #"{"type":"res","id":"\#(request.id)","ok":true,"payload":\#(payload)}"#.utf8)))
             }, receiveHook: { socket, receiveIndex in
                 if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 let hello = GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect",
-                    methods: ["sessions.patch", "sessions.delete", "sessions.create"],
+                    methods: ["agents.list", "sessions.patch", "sessions.delete", "sessions.create"],
                     capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [])
                 guard unreadAckAdvertisement == nil else { return .data(hello) }
                 var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
@@ -172,6 +176,27 @@ struct IOSGatewayChatTransportTests {
         } catch {
             await gateway.disconnect()
             throw error
+        }
+    }
+
+    @Test func `new session roster preserves selectable choices on its captured connection`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            let lease = try #require(await transport.acquireNewSessionRouteLease())
+            let roster = try await lease.listAgents()
+            #expect(roster == OpenClawChatAgentsListResponse(
+                defaultId: "system",
+                agents: [
+                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", workspaceGit: true),
+                    OpenClawChatAgentChoice(id: "legacy"),
+                    OpenClawChatAgentChoice(id: "alpha", workspaceGit: false),
+                ]))
+            await transport.gateway.disconnect()
+            await #expect(throws: Error.self) {
+                _ = try await lease.listAgents()
+            }
+            let requests = await recorder.all()
+            #expect(requests.map(\.method) == ["agents.list"])
+            #expect(requests.first?.params.isEmpty == true)
         }
     }
 

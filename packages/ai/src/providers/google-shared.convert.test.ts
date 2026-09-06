@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { Context, Tool } from "../types.js";
-import { convertMessages, convertTools } from "./google-shared.js";
+import { convertGoogleTools } from "./google-messages.js";
 import {
   assertRecord,
+  convertMessages,
   expectConvertedRoles,
   getFirstToolParameters,
   makeGeminiCliAssistantMessage,
@@ -25,8 +26,8 @@ describe("google-shared convertTools", () => {
       { name: "alpha", description: "First", parameters: { type: "object" } },
     ] as Tool[];
 
-    expect(convertTools(tools)).toEqual(convertTools(tools.toReversed()));
-    expect(convertTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
+    expect(convertGoogleTools(tools)).toEqual(convertGoogleTools(tools.toReversed()));
+    expect(convertGoogleTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
       "alpha",
       "zeta",
     ]);
@@ -46,7 +47,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
@@ -90,7 +91,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
@@ -133,7 +134,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );

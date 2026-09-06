@@ -9,8 +9,8 @@ import {
 import {
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
-  resolvePersistedAuthProfileOwnerAgentDir,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "../agents/auth-profiles/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";

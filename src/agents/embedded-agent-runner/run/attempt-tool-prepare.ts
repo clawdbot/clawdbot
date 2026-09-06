@@ -72,6 +72,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const requireExplicitMessageTarget =
+    attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...attempt,
@@ -171,6 +173,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
         });
   // Rebuild at each call: permission refresh observes the current attempt fields.
   const buildConversationContext = () => ({
+    ...toolRunContext,
+    requireExplicitMessageTarget,
     config: toolSearchRuntimeConfig,
     sessionKey: params.setup.sandboxSessionKey,
     runSessionKey:
@@ -180,26 +184,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
     sessionId: attempt.sessionId,
     runId: attempt.runId,
     agentDir: params.agentDir,
-    agentAccountId: attempt.agentAccountId,
     messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
     messageChannel: attempt.messageChannel,
-    chatType: attempt.chatType,
-    messageTo: attempt.messageTo,
-    messageThreadId: attempt.messageThreadId,
-    currentChannelId: attempt.currentChannelId,
-    currentMessagingTarget: attempt.currentMessagingTarget,
-    currentThreadTs: attempt.currentThreadTs,
-    currentMessageId: attempt.currentMessageId,
-    groupId: attempt.groupId,
-    groupChannel: attempt.groupChannel,
-    groupSpace: attempt.groupSpace,
-    memberRoleIds: attempt.memberRoleIds,
-    spawnedBy: attempt.spawnedBy,
-    senderId: attempt.senderId,
-    senderName: attempt.senderName,
-    senderUsername: attempt.senderUsername,
-    senderE164: attempt.senderE164,
-    senderIsOwner: attempt.senderIsOwner,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
     modelApi: attempt.model.api,
@@ -210,7 +196,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
     spawnWorkspaceDir,
     skillsSnapshot: params.skillsSnapshot,
     runtimeToolAllowlist: effectiveToolsAllow,
-    scheduledToolPolicy: attempt.scheduledToolPolicy,
   });
   const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
     ...buildConversationContext(),
@@ -262,11 +247,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
       : (() => {
           const allTools = createOpenClawCodingTools({
             agentId: params.setup.sessionAgentId,
-            ...toolRunContext,
             ...buildConversationContext(),
-            clientCaps: attempt.clientCaps,
-            pinnedWidgetAuthoring: attempt.pinnedWidgetAuthoring,
-            toolBindings: attempt.toolBindings,
             exec: {
               ...attempt.execOverrides,
               ...(sessionPermissionPolicy
@@ -278,13 +259,10 @@ export function prepareEmbeddedAttemptToolBase(params: {
             sandbox: params.setup.sandbox,
             stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
             sessionPermissionPolicy,
-            nativeChannelId: attempt.chatId,
-            messageActionTurnCapability: attempt.messageActionTurnCapability,
             channelContext: attempt.channelContext,
             allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,
             operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
             conversationRecall: attempt.conversationRecall,
-            approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
             oneShotCliRun: attempt.oneShotCliRun,
             toolSearchCatalogRef,
             codeModeSkills,
@@ -314,15 +292,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
             includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
             toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
-            replyToMode: attempt.replyToMode,
-            hasRepliedRef: attempt.hasRepliedRef,
             computerContextEpoch,
             skillInstructionDeliveryCache,
             registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
-            requireExplicitMessageTarget:
-              attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey),
-            sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-            taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
             inboundEventKind: attempt.currentInboundEventKind,
             disableMessageTool: attempt.disableMessageTool,
             forceMessageTool: attempt.forceMessageTool,
@@ -410,6 +382,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     forceDirectMessageTool,
+    requireExplicitMessageTarget,
     inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,

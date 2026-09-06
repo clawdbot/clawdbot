@@ -76,7 +76,7 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends plugin UI methods without changing the complete legacy method prefix", () => {
+  it("appends plugin UI, update and transcript methods without changing the legacy prefix", () => {
     const methods = listGatewayMethods();
     const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
 
@@ -86,6 +86,17 @@ describe("listGatewayMethods", () => {
       "plugins.controlUi.reload",
       "plugins.controlUi.report",
       "plugins.controlUi.status",
+    ]);
+    expect(methods.slice(legacyCount + 4)).toEqual([
+      "update.runs.get",
+      "update.runs.list",
+      "gateway.suspend.handoff",
+      "transcripts.export",
+      "transcripts.status",
+      "update.report",
+      "skills.workshop.read",
+      "session.publicShare.set",
+      "claws.monitors",
     ]);
   });
 
@@ -147,7 +158,7 @@ describe("listGatewayMethods", () => {
   it("classifies cron mutations as control-plane writes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 
-    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run"]) {
+    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run", "claws.monitors"]) {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",

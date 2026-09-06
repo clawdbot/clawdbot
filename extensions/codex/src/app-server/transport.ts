@@ -25,6 +25,7 @@ export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): bo
 
 /** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
+  maxFrameBytes?: number;
   stdin: {
     write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
     end?: () => unknown;

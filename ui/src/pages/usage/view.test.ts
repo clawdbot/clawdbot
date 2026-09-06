@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
+import { buildUsageFilterOptions } from "./query.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
@@ -548,6 +549,85 @@ describe("renderUsage", () => {
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
 
     expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
+  });
+
+  it("keeps bounded filter inventories in source order across observed and aggregate values", () => {
+    const sessions = ["observed-a", "observed-b", "observed-a"].map((provider, index) =>
+      Object.assign(usageSession(`session-${index}`, "main", provider), {
+        providerOverride: `override-${index}`,
+        modelOverride: "override-only-model",
+        channel: index === 0 ? "" : "Chat",
+      }),
+    );
+    const aggregates = buildAggregatesFromSessions(
+      Array.from({ length: 14 }, (_, index) =>
+        usageSession(`aggregate-${index}`, "other", `aggregate-${index}`),
+      ),
+    );
+    aggregates.tools.tools = Array.from({ length: 14 }, (_, index) => ({
+      name: `tool-${index}`,
+      count: 1,
+    }));
+    const options = buildUsageFilterOptions(sessions, aggregates);
+    expect(options.channel).toEqual(["Chat"]);
+    expect(options.provider).toEqual([
+      "observed-a",
+      "observed-b",
+      "override-0",
+      "override-1",
+      "override-2",
+      ...Array.from({ length: 7 }, (_, index) => `aggregate-${index}`),
+    ]);
+    expect(options.model).toEqual([
+      "observed-a-model",
+      "observed-b-model",
+      ...Array.from({ length: 10 }, (_, index) => `aggregate-${index}-model`),
+    ]);
+    expect(options.tool).toEqual(Array.from({ length: 12 }, (_, index) => `tool-${index}`));
+  });
+
+  it("refreshes filter order and draft selections when chart mode, agent, or source changes", () => {
+    const container = document.createElement("div");
+    const props = createUsageProps();
+    props.data.sessions = [
+      usageSession("first", "main", "first", { totalTokens: 200, totalCost: 1 }),
+      usageSession("second", "other", "second", { totalTokens: 100, totalCost: 2 }),
+    ];
+    props.filters.query = "provider:absent";
+    props.filters.queryDraft = 'label:"Team  Planning" provider:second';
+    props.callbacks.filters.onQueryDraftChange = vi.fn();
+    const providerOptions = () =>
+      [...container.querySelectorAll<HTMLElement>(".usage-filter-select")]
+        .find(
+          (menu) => menu.querySelector(".usage-filter-trigger span")?.textContent === "Provider",
+        )!
+        .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
+    const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["first", "second"]);
+    expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
+      "second",
+    );
+    expect(container.querySelector(".usage-query-suggestion")?.textContent?.trim()).toBe(
+      "provider:second",
+    );
+
+    props.display.chartMode = "cost";
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["second", "first"]);
+    props.filters.agentId = "main";
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["first"]);
+    expect(container.querySelector(".usage-query-suggestion")).toBeNull();
+
+    props.data.sessions = [usageSession("replacement", "main", "second-new")];
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["second-new"]);
+    container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
+    expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
+      'label:"Team  Planning" provider:second-new ',
+    );
   });
 
   it("reports a stalled provider refresh instead of hiding the section", () => {

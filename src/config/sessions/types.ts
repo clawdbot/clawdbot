@@ -371,6 +371,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
+    /** Durable cloud repository owner; never identifies a Gateway filesystem path. */
+    repositoryWorkspaceId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */
@@ -618,6 +620,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Explicit world-readable publication, bound to one transcript generation. */
+  publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
@@ -813,6 +817,9 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;
+  }
+  if (existing.repositoryWorkspaceId !== undefined) {
+    next.repositoryWorkspaceId = existing.repositoryWorkspaceId;
   }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;

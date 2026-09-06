@@ -4,6 +4,10 @@ import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.
 import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  PreparedPostSessionPluginMigration,
+} from "../infra/state-migrations.types.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -36,6 +40,9 @@ type DoctorConfigResult = {
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
+  stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
+  postSessionPluginMigration?: PreparedPostSessionPluginMigration;
+  postSessionPluginMigrationPlanBound?: boolean;
 };
 
 export type DoctorHealthFlowContext = {

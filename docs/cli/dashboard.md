@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw dashboard` (securely open the Control UI)"
 read_when:
   - You want to open or re-pair the Control UI from the Gateway host
   - You want to print the URL without launching a browser
-title: "Dashboard"
+title: "Dashboard CLI"
 ---
 
 # `openclaw dashboard`

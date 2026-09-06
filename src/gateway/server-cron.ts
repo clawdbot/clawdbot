@@ -105,6 +105,7 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
@@ -172,17 +173,6 @@ function formatOnExitRunSummary(exit: CronExitResult): string {
   return output ? `${lines.join("\n")}\n\nOutput:\n${output}` : lines.join("\n");
 }
 
-function addOnExitRunSummary(payload: CronPayload, exit: CronExitResult): CronPayload {
-  const summary = formatOnExitRunSummary(exit);
-  if (payload.kind === "systemEvent") {
-    return { ...payload, text: `${payload.text}\n\n${summary}` };
-  }
-  if (payload.kind === "agentTurn") {
-    return { ...payload, message: `${payload.message}\n\n${summary}` };
-  }
-  return payload;
-}
-
 /**
  * On-exit jobs use the normal force-run path so every payload kind records
  * run state, history, notifications, and delivery outcomes consistently.
@@ -191,11 +181,25 @@ export async function fireOnExitJob(
   job: CronJob,
   exit: CronExitResult,
   deps: {
-    run: (jobId: string, payload?: CronPayload) => Promise<unknown>;
+    run: (jobId: string, payload?: CronPayload) => ReturnType<CronService["run"]>;
   },
 ): Promise<void> {
-  const payload = addOnExitRunSummary(job.payload, exit);
-  await deps.run(job.id, payload === job.payload ? undefined : payload);
+  const summary = formatOnExitRunSummary(exit);
+  const payload = job.payload;
+  const runPayload =
+    payload.kind === "systemEvent"
+      ? { ...payload, text: `${payload.text}\n\n${summary}` }
+      : payload.kind === "agentTurn"
+        ? { ...payload, message: `${payload.message}\n\n${summary}` }
+        : undefined;
+  const result = await deps.run(job.id, runPayload);
+  if (!result.ok || !("ran" in result && result.ran)) {
+    // Retiring a one-shot must not hide refused admission behind a fulfilled callback.
+    // Keep bounded terminal evidence in the watcher's existing failure log.
+    const reason = "reason" in result ? result.reason : "run did not start";
+    const evidence = truncateUtf16WithEllipsis(summary, 2_000);
+    throw new Error(`cron on-exit run was not admitted: ${reason}\n\n${evidence}`);
+  }
 }
 
 /** Fire one source batch through the normal trigger and payload pipeline. */

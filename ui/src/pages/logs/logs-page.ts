@@ -58,14 +58,13 @@ class LogsPage extends OpenClawLightDomElement {
   );
   private contentScrollFrame: number | null = null;
   private logsTaskQuiet = false;
-  private logsTaskArgs(opts?: { reset?: boolean; quiet?: boolean }) {
+  private logsTaskArgs(opts?: { reset?: boolean }) {
     return [
       this.gateway.connected ? this.gateway.gateway : null,
       this.gateway.connected ? this.gateway.client : null,
       opts?.reset ? null : this.logsCursor,
       this.logsFile,
       opts?.reset === true,
-      opts?.quiet === true,
     ] as const;
   }
   private readonly logsTask = new Task(this, {
@@ -73,7 +72,7 @@ class LogsPage extends OpenClawLightDomElement {
     // A cursor belongs to one file; recover source changes inside this task so
     // no mixed-source page can publish between the incremental and reset reads.
     args: () => this.logsTaskArgs(),
-    task: async ([gateway, client, cursor, file, reset, quiet], { signal }) => {
+    task: async ([gateway, client, cursor, file, reset], { signal }) => {
       if (!gateway || !client) {
         return initialState;
       }
@@ -96,9 +95,9 @@ class LogsPage extends OpenClawLightDomElement {
         if (sourceChanged) {
           payload = await requestTail();
         }
-        return { ok: true as const, payload, cursor, reset: reset || sourceChanged, quiet };
+        return { ok: true as const, payload, cursor, reset: reset || sourceChanged };
       } catch (error) {
-        return { ok: false as const, error, quiet };
+        return { ok: false as const, error };
       }
     },
     onComplete: (result) => {
@@ -141,7 +140,7 @@ class LogsPage extends OpenClawLightDomElement {
     },
     invalidateRequests: () => {
       this.logsTaskQuiet = false;
-      void this.logsTask.run([null, null, null, null, false, false]);
+      void this.logsTask.run([null, null, null, null, false]);
     },
     onSnapshot: () => this.syncPolling(),
     // Only connection/identity transitions own automatic resets. Metadata snapshots
@@ -193,7 +192,7 @@ class LogsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.logsTaskQuiet = false;
-    void this.logsTask.run([null, null, null, null, false, false]);
+    void this.logsTask.run([null, null, null, null, false]);
     if (this.contentScrollFrame !== null) {
       cancelAnimationFrame(this.contentScrollFrame);
       this.contentScrollFrame = null;

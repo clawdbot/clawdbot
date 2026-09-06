@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
@@ -16,6 +17,7 @@ import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -31,10 +33,7 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  modelCatalogEntryKey,
-  prepareConfiguredRuntimeFacts,
-} from "./prepared-model-runtime.configured-catalog.js";
+import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
@@ -191,13 +190,13 @@ function createFullModelCatalogAccess(params: {
     );
     projected.entries = dedupeByKey(
       [...projected.entries, ...current.entries],
-      modelCatalogEntryKey,
+      resolveModelCatalogIdentityKey,
     );
     projected.routeVariants = dedupeByKey(
       [...projected.routeVariants, ...current.routeVariants],
       (entry) =>
         JSON.stringify([
-          modelCatalogEntryKey(entry),
+          resolveModelCatalogIdentityKey(entry),
           entry.api,
           entry.baseUrl,
           entry.nativeRuntime,
@@ -422,6 +421,7 @@ function createSnapshot(
     configuredRuntimeModels,
     inlineProviderModels,
     createStores,
+    routeModelResolutionMemo: new Map<string, Promise<Model>>(),
   });
   setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
   setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);
@@ -439,6 +439,7 @@ async function buildSnapshotBatch(
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
   includeCredentialProviders = catalogMode === "live",
+  onStage?: (stage: string) => void,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const generations = groupBuildCandidates(candidates, (candidate) => candidate.pluginGeneration);
   const fresh = generations.get(undefined) ?? [];
@@ -506,6 +507,7 @@ async function buildSnapshotBatch(
         preferBuiltPluginArtifacts,
         includeCredentialProviders,
         getConfiguredHarnessRuntimes,
+        onStage,
       },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
@@ -527,6 +529,7 @@ async function buildSnapshotBatch(
   }
   const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;
   const catalogSourceStartedAt = performance.now();
+  onStage?.("agent catalog sources");
   const catalogSources = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogSource>();
   if (catalogMode === "live") {
     const sourceCandidatesByAgentDir = groupBuildCandidates(
@@ -573,6 +576,7 @@ async function buildSnapshotBatch(
   const preparedCatalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let runtimeRegistryCount = 0;
   const registryStartedAt = performance.now();
+  onStage?.("model registries");
   if (catalogMode === "live") {
     // Explicit live owners still request the complete inventory. Keep those builds sequential
     // instead of multiplying heap and GC pressure when a command names several agents.
@@ -686,6 +690,7 @@ export function startSerializedSnapshotBuildBatch(
   completion: Promise<void>;
 } {
   const agentDirs = [...new Set(candidates.map(({ input }) => input.agentDir))];
+  let stage = "previous generation completion";
   const previousBuildCompletions = agentDirs
     .map((agentDir) => agentBuildCompletions.get(agentDir))
     .filter((completion) => completion !== undefined);
@@ -698,23 +703,22 @@ export function startSerializedSnapshotBuildBatch(
       // retired owner cannot start expensive workspace preparation ahead of its replacement.
       assertPreparedModelRuntimeCandidatesCurrent(candidates);
     }
-    return {
-      actualBuild: buildSnapshotBatch(
-        candidates,
-        catalogMode,
-        agentBuildCompletions,
-        pluginMetadataSnapshot,
-        onBuildStats,
-        includeCredentialProviders,
-      ),
-    };
-  })();
-  const completion = startBuild
-    .then(({ actualBuild }) => actualBuild)
-    .then(
-      () => undefined,
-      () => undefined,
+    return await buildSnapshotBatch(
+      candidates,
+      catalogMode,
+      agentBuildCompletions,
+      pluginMetadataSnapshot,
+      onBuildStats,
+      includeCredentialProviders,
+      (nextStage) => {
+        stage = nextStage;
+      },
     );
+  })();
+  const completion = startBuild.then(
+    () => undefined,
+    () => undefined,
+  );
   for (const agentDir of agentDirs) {
     agentBuildCompletions.set(agentDir, completion);
     void completion.then(() => {
@@ -725,9 +729,9 @@ export function startSerializedSnapshotBuildBatch(
   }
   return {
     pending: runAbortableTimeout(
-      async () => (await startBuild).actualBuild,
+      () => startBuild,
       buildTimeoutMs,
-      "prepared model runtime publication",
+      () => `prepared model runtime publication (${stage})`,
     ),
     completion,
   };

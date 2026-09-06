@@ -128,9 +128,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
-  // Silent helper runs may consume a real finalizer answer internally, but a
-  // host fallback would turn their semantic failure into synthetic success.
-  const terminalFallbackAllowed = input.finalization.preparedAttempt.silentExpected !== true;
+  // A host summary cannot replace a tool failure. Keep its original warning
+  // when recovery produces no answer, including for silent helper runs.
+  const terminalFallbackAllowed =
+    input.finalization.preparedAttempt.silentExpected !== true && !initial.attempt.lastToolError;
   log.warn(
     `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
@@ -170,7 +171,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     if (finalization.outcome === "empty") {
       log.warn(
         `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-          `provider=${errorContext.provider}/${errorContext.model} attempts=${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving silent helper failure"}`,
+          `provider=${errorContext.provider}/${errorContext.model} attempts=${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving original failure"}`,
       );
     }
   } catch (error) {
@@ -188,22 +189,22 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     }
     log.warn(
       `settled-turn finalization failed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving silent helper failure"}`,
+        `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving original failure"}`,
     );
   }
+  if (finalizationOutcome !== "answered" && input.finalization.abortSignal.aborted) {
+    log.warn(
+      `settled-turn finalization was cancelled before terminal delivery: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+        `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
+    );
+    return {
+      ...initial,
+      prepared,
+      lastRunPromptUsage,
+      finalizationOutcome: "failed" as const,
+    };
+  }
   if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
-    if (input.finalization.abortSignal.aborted) {
-      log.warn(
-        `settled-turn fallback was cancelled before transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-          `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
-      );
-      return {
-        ...initial,
-        prepared,
-        lastRunPromptUsage,
-        finalizationOutcome: "failed" as const,
-      };
-    }
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       attempt: input.finalization.preparedAttempt,
       abortSignal: input.finalization.abortSignal,
@@ -231,22 +232,29 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       transcriptIdempotencyKey,
     });
   }
-  // Isolated finalization owns a fresh terminal, never the original abort signal.
-  const terminalState: EmbeddedRunTerminalState = {
-    outcome: resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt,
-      assistant: attempt.currentAttemptAssistant,
-    }),
-    signalOwnedInterruption: false,
-  };
+  // Only an actual recovery replaces a failed tool turn's terminal ownership.
+  const completion =
+    finalizationOutcome !== "answered" && initial.attempt.lastToolError
+      ? initial
+      : {
+          attempt,
+          attemptAssistant: attempt.currentAttemptAssistant,
+          currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
+          terminalState: {
+            outcome: resolveEmbeddedRunAttemptTerminalOutcome({
+              attempt,
+              assistant: attempt.currentAttemptAssistant,
+            }),
+            signalOwnedInterruption: false,
+          },
+          attemptCompactionCount: 0,
+          sessionIdUsed: attempt.sessionIdUsed,
+          sessionFileUsed: attempt.sessionFileUsed,
+        };
   const finalizedPrepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
-    attempt,
-    currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
-    sessionIdUsed: attempt.sessionIdUsed,
-    sessionFileUsed: attempt.sessionFileUsed,
+    ...completion,
     lastRunPromptUsage,
-    terminalState,
   });
   // The isolated finalizer cannot call a message tool. Its answer is
   // host-owned recovery output and must cross that source-reply suppression.
@@ -263,17 +271,15 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     terminalToolFailure: settledTerminalToolFailure,
   };
   return {
-    attempt,
-    attemptAssistant: attempt.currentAttemptAssistant,
-    currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
-    terminalState,
-    attemptCompactionCount: 0,
-    sessionIdUsed: attempt.sessionIdUsed,
-    sessionFileUsed: attempt.sessionFileUsed,
+    ...completion,
     prepared,
     lastRunPromptUsage,
     finalizationOutcome:
-      finalizationOutcome === "empty" ? ("completed-empty" as const) : finalizationOutcome,
+      completion === initial
+        ? ("failed" as const)
+        : finalizationOutcome === "empty"
+          ? ("completed-empty" as const)
+          : finalizationOutcome,
   };
 }
 

@@ -10,6 +10,7 @@ import {
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -510,6 +511,9 @@ describe("runMemoryFlushIfNeeded", () => {
       .mockReset()
       .mockImplementation(
         async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
+          const assistantErrorTranscript = createAssistantErrorTranscript({
+            runId: params.identity.runId,
+          });
           const fallbackResult = (await runWithModelFallbackMock({
             ...params.selection,
             ...params.identity,
@@ -541,6 +545,7 @@ describe("runMemoryFlushIfNeeded", () => {
               options: Parameters<ModelFallbackParams["run"]>[2],
             ) =>
               params.runCandidate(provider, model, {
+                assistantErrorTranscript,
                 classifyResult: () => undefined,
                 allowTransientCooldownProbe: options.allowTransientCooldownProbe,
                 isFinalFallbackAttempt: options.isFinalFallbackAttempt,
@@ -2855,6 +2860,50 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(directTranscriptStats).toEqual([]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes appended transcript growth before persisting fresh usage", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: { input: 40_000, output: 2_000 },
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: `large follow-up ${"x".repeat(450_000)}`,
+          },
+        },
+      ],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+      compactionCount: 0,
+      // A prior flush prevents a new model usage report from hiding the stale anchor.
+      memoryFlush: { kind: "succeeded", compactionCount: 0 },
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    const flushResult = await runDefaultMemoryFlush(sessionEntry, { storePath });
+
+    expect(flushResult.outcome).toBe("skipped");
+    const persistedAfterFlush = loadMainSessionEntry(storePath);
+    expect(persistedAfterFlush.totalTokensFresh).toBe(true);
+    expect(persistedAfterFlush.totalTokens).toBeGreaterThan(80_000);
+
+    await runDefaultPreflight(persistedAfterFlush, { storePath });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalled();
   });
 
   it("fails when required preflight compaction returns an unknown successful no-op", async () => {

@@ -13,11 +13,11 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
+import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerPreparedAuthHandoff,
-} from "./auth-bridge.js";
+} from "./auth-profile.js";
 import {
   assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,

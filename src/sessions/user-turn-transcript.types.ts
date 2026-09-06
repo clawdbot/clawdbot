@@ -177,6 +177,8 @@ export type PersistUserTurnTranscriptParams = {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  /** Authenticated input identity independent of prepared media paths. */
+  pendingInputRequestFingerprint?: string;
   /** Exact admitted source recorders consumed by this collected transcript message. */
   pendingInputSources?: readonly UserTurnTranscriptRecorder[];
   sessionTurnMutation?: SessionTranscriptTurnMutation;

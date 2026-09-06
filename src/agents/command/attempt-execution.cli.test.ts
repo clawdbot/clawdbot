@@ -35,7 +35,7 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
@@ -855,11 +855,13 @@ describe("CLI attempt execution", () => {
         workspaceDir: tmpDir,
         agentDir,
         opts: { pinnedWidgetAuthoring: true },
+        runContext: { replyToMode: "all" },
       });
 
       const run = runtime === "cli" ? firstRunCliAgentArg() : firstEmbeddedAgentArg();
       expect(run.pinnedWidgetAuthoring).toBe(true);
       expect(run.clientCaps).toBeUndefined();
+      expect(run.replyToMode).toBe("all");
     },
   );
 

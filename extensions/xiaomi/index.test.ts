@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
@@ -34,14 +35,7 @@ type ReplayToolCall = {
 };
 
 type RegisteredProvider = RegisteredProviderCollections["providers"][number];
-const emptyUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const emptyUsage = createZeroUsageFixture();
 
 function requireThinkingProfileResolver(
   provider: RegisteredProvider,

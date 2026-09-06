@@ -923,6 +923,8 @@ describe("launchd runtime parsing", () => {
   it.each([
     ['disabled services = {\n\t"ai.openclaw.gateway" => enabled\n}', true],
     ['disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}', false],
+    ['disabled services = {\n\t"ai.openclaw.gateway" => false\n}', true],
+    ['disabled services = {\n\t"ai.openclaw.gateway" => true\n}', false],
     ['disabled services = {\n\t"other.service" => disabled\n}', true],
   ])("parses the LaunchAgent enabled override", (output, expected) => {
     expect(parseLaunchAgentEnabled(output, "ai.openclaw.gateway")).toBe(expected);

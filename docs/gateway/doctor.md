@@ -192,7 +192,7 @@ Flags:
     - Gateway runtime checks (service installed but not running; cached launchd label).
     - Channel status warnings (probed from the running gateway).
     - Channel-specific permission checks live under `openclaw channels capabilities`; for example, Discord voice channel permissions are audited with `openclaw channels capabilities --channel discord --target channel:<channel-id>`.
-    - WhatsApp responsiveness checks for degraded Gateway event-loop health with local TUI clients still running; `--fix` stops only verified local TUI clients.
+    - WhatsApp responsiveness reports Gateway pressure and detected local TUI clients without attributing the pressure to those clients. Inspect [Gateway diagnostics](/gateway/diagnostics) before deciding whether to close clients; Doctor does not stop them.
     - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session/whole-agent runtime pins, and lets the repaired effective route determine whether Codex is compatible.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
@@ -605,6 +605,9 @@ That stages grounded durable candidates into the short-term dreaming store while
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
     Doctor checks whether workspace bootstrap files (for example `AGENTS.md`, `CLAUDE.md`, or other injected context files) are near or over the configured character budget. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`.
+
+    This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
+
   </Accordion>
   <Accordion title="11c. Shell completion">
     Doctor checks whether tab completion is installed for the current shell (zsh, bash, fish, or PowerShell):

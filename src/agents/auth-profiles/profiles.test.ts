@@ -48,14 +48,16 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "./sqlite.js";
 import {
-  captureAuthProfileStorePersistenceSnapshot,
   ensureAuthProfileStoreWithoutExternalProfiles,
-  getRuntimeAuthProfileStoreSnapshot,
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
-  restoreAuthProfileStorePersistenceSnapshot,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   saveAuthProfileStore,
+} from "./store-runtime.js";
+import {
+  captureAuthProfileStorePersistenceSnapshot,
+  getRuntimeAuthProfileStoreSnapshot,
+  restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
 import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";

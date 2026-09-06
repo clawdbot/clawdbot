@@ -11,6 +11,7 @@ import {
 } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
+  updateSessionStore,
   upsertSessionEntry,
   type SessionEntry,
 } from "./session-store-runtime.js";
@@ -68,6 +69,58 @@ const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection"
 void sessionFallbackKeepsThinkingSelectionPrivate;
 
 describe("plugin session writer claim projection", () => {
+  it.each(["patch", "upsert", "whole-store"] as const)(
+    "preserves server publication through %s lifecycle changes while rejecting forged grants",
+    async (method) => {
+      const sessionKey = "agent:main:plugin-publication";
+      const storePath = path.join(tempDirs.make("openclaw-sdk-publication-"), "sessions.json");
+      const publicShare = { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 };
+      const updatedAt = Date.now();
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...privateGenerationEntry(),
+          publicShare,
+          updatedAt,
+        },
+      );
+      const mutate = async (entry: InternalSessionEntry) => {
+        if (method === "patch") {
+          await patchSessionEntry({
+            sessionKey,
+            storePath,
+            replaceEntry: true,
+            update: () => entry,
+          });
+        } else if (method === "upsert") {
+          await upsertSessionEntry({ sessionKey, storePath, entry });
+        } else {
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = entry;
+          });
+        }
+      };
+      await mutate({
+        sessionId: "session-1",
+        lifecycleRevision: "generation-2",
+        updatedAt,
+        publicShare: { ...publicShare, id: "b".repeat(48) },
+      });
+      const sameSession = loadSessionEntry({ sessionKey, storePath });
+      expect(sameSession?.sessionId).toBe("session-1");
+      expect(sameSession?.publicShare).toEqual(publicShare);
+      expectGenerationPrivateFieldsCleared(sameSession);
+
+      await mutate({
+        sessionId: "session-2",
+        lifecycleRevision: "generation-3",
+        updatedAt,
+        publicShare: { ...publicShare, sessionId: "session-2", id: "c".repeat(48) },
+      });
+      expect(loadSessionEntry({ sessionKey, storePath })?.publicShare).toBeUndefined();
+    },
+  );
+
   it("excludes private claims and retired thinking provenance from entries and patches", () => {
     const entry = {
       activeWriterRunId: "run-writer",

@@ -294,6 +294,15 @@ advertised node command.
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
+#### File-watch capacity errors
+
+`getFileWatchCapacityCode(error)` from `openclaw/plugin-sdk/file-access-runtime`
+returns `EMFILE`, `ENFILE`, or `ENOSPC` for a native watch failure, or `undefined`
+for other errors. It requires `syscall: "watch"` because watcher libraries can
+forward directory-scan errors through the same error event. Use the result in
+the watcher lifecycle owner to stop native retries and select an existing
+refresh path.
+
 #### SQLite write admission
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from
@@ -591,6 +600,15 @@ Cron scheduler. Cron owns timing and creates the background task record when the
 turn runs; the Plugin SDK only constrains the target session, plugin-owned
 naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
 turn when the work itself needs durable multi-step Task Flow state.
+
+Within session extensions, `openclaw/plugin-sdk/agent-sessions` provides the host's
+model-selection helpers. Exact provider/model IDs take precedence over case-insensitive
+matches; ambiguous references need exact provider and model IDs. Pass the provider
+separately when distinct identities share a combined reference. Human-name
+matching, alias/date version selection, and case-insensitive glob scopes remain
+available.
+
+Session extension SDK and supported TypeBox imports share the host's modules.
 
 The contracts intentionally split authority:
 

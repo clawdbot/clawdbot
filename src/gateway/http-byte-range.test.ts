@@ -282,27 +282,50 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "not-modified", statusCode: 304 });
   });
 
-  it("includes a leap second when applying the RFC 850 rolling-year boundary", () => {
+  it.each([
+    { name: "the prior second", mtimeMs: Date.UTC(1976, 11, 31, 23, 59, 59), statusCode: 304 },
+    { name: "the following midnight", mtimeMs: Date.UTC(1977, 0, 1), statusCode: 200 },
+  ])("orders the RFC 850 rolling-year leap second against $name", ({ mtimeMs, statusCode }) => {
     expect(
       resolveByteResponse({
         file: { size: 10 },
-        validators: createImmutableFileValidators({ size: 10, mtimeMs: Date.UTC(1977, 0, 1) }),
+        validators: createImmutableFileValidators({ size: 10, mtimeMs }),
         nowMs: Date.UTC(2026, 11, 31, 23, 59, 59),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Friday, 31-Dec-76 23:59:60 GMT" }),
       }),
-    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+    ).toMatchObject({ kind: statusCode === 304 ? "not-modified" : "full", statusCode });
   });
 
-  it("accepts a valid HTTP-date leap second without JavaScript date normalization", () => {
+  it.each([
+    ...[
+      { name: "IMF-fixdate", value: "Sat, 31 Dec 2016 23:59:60 GMT" },
+      { name: "RFC 850", value: "Saturday, 31-Dec-16 23:59:60 GMT" },
+      { name: "asctime", value: "Sat Dec 31 23:59:60 2016" },
+    ].flatMap(({ name, value }) => [
+      { name: `${name} before midnight`, value, mtimeMs: Date.UTC(2017, 0, 1), statusCode: 200 },
+      {
+        name: `${name} after the prior second`,
+        value,
+        mtimeMs: Date.UTC(2016, 11, 31, 23, 59, 59),
+        statusCode: 304,
+      },
+    ]),
+    {
+      name: "the following midnight equality",
+      value: "Sun, 01 Jan 2017 00:00:00 GMT",
+      mtimeMs: Date.UTC(2017, 0, 1),
+      statusCode: 304,
+    },
+  ])("preserves leap second ordering for $name", ({ value, mtimeMs, statusCode }) => {
     expect(
       resolveByteResponse({
         file: { size: 10 },
-        validators: createImmutableFileValidators({ size: 10, mtimeMs: Date.UTC(2017, 0, 1) }),
+        validators: createImmutableFileValidators({ size: 10, mtimeMs }),
         method: "GET",
-        request: createByteRequest({ "if-modified-since": "Sat, 31 Dec 2016 23:59:60 GMT" }),
+        request: createByteRequest({ "if-modified-since": value }),
       }),
-    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+    ).toMatchObject({ kind: statusCode === 304 ? "not-modified" : "full", statusCode });
   });
 
   it.each([

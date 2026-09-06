@@ -27,7 +27,8 @@ export function loadUndiciModule(
   ) {
     return override as typeof import("undici");
   }
-  return requireUndici("undici") as typeof import("undici");
+  // Bun substitutes a partial built-in for bare undici; require the installed API.
+  return requireUndici("undici/index.js") as typeof import("undici");
 }
 
 function createHttp1ProxyClient(origin: URL, poolOptions: object): import("undici").Dispatcher {

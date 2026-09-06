@@ -1,5 +1,6 @@
 // Update failures and control-plane results share one reporting boundary.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
   resolveManagedServiceUpdateFailureExitCode,
@@ -26,6 +27,33 @@ export class UpdateCommandFailure extends Error {
     super(detail ?? result.reason ?? "Update failed", options);
     this.name = "UpdateCommandFailure";
   }
+}
+
+export function mergeWindowsTaskRecoveryFailure(
+  failure: { error: unknown } | undefined,
+  recoveryError: unknown,
+): { error: unknown } {
+  if (failure?.error instanceof UpdateCommandFailure) {
+    // A rejected restore promise can be observed again during unwinding.
+    // Keep the reported failure and never turn cleanup into safe-exit 80.
+    return {
+      error: new UpdateCommandFailure(
+        { ...failure.error.result, status: "error" },
+        1,
+        `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(recoveryError)}`,
+        { cause: recoveryError },
+      ),
+    };
+  }
+  return {
+    error: failure
+      ? new AggregateError(
+          [failure.error, recoveryError],
+          `Update failed (${formatErrorMessage(failure.error)}) and Windows autostart recovery failed (${formatErrorMessage(recoveryError)})`,
+          { cause: failure.error },
+        )
+      : recoveryError,
+  };
 }
 
 export async function reportPreMutationUpdateFailure(params: {

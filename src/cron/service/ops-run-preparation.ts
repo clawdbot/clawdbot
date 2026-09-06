@@ -473,17 +473,16 @@ export async function activatePreparedManualRun(
     });
     const taskRunId = taskRun?.runId;
     const activeJobMarker = markManualCronJobActive(state, job);
-    // Execute against a snapshot so later reload/merge can preserve delivery
-    // target writeback from disk without mutating the running object.
+    // Immediate delivery belongs to the accepted request, not an old timed slot.
+    // Keep execution overrides separate from the admitted cadence and trigger.
     const admittedJob = structuredClone(activatedJob);
-    const executionJob = structuredClone(activatedJob);
-    if (isImmediateCronRunMode(mode) && executionJob.trigger && !prepared.evaluateTrigger) {
-      // Immediate modes run the payload now; strip the gate only from this snapshot
-      // so persisted trigger state and future due evaluations stay intact.
-      delete executionJob.trigger;
-    }
-    if (prepared.payload) {
-      executionJob.payload = structuredClone(prepared.payload);
+    const executionJob = structuredClone({
+      ...activatedJob,
+      payload: prepared.payload ?? activatedJob.payload,
+    });
+    if (isImmediateCronRunMode(mode)) {
+      executionJob.state.nextRunAtMs = prepared.scheduleOwnershipAtMs;
+      executionJob.trigger = prepared.evaluateTrigger ? executionJob.trigger : undefined;
     }
     return {
       ...prepared,

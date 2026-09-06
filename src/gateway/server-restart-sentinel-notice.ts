@@ -11,6 +11,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "../infra/outbound/deliver-log.js";
 import { prepareOutboundPayloadBatch } from "../infra/outbound/deliver-prepare.js";
 import { stageAndEnqueueOutboundDelivery } from "../infra/outbound/deliver-queue-admission.js";
+import { createQueuedDeliveryOwner } from "../infra/outbound/deliver-queue-state.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
 import { runOutboundDeliveryCommitHooks } from "../infra/outbound/delivery-commit-hooks.js";
@@ -23,7 +24,6 @@ import {
   withActiveDeliveryClaim,
 } from "../infra/outbound/delivery-queue-recovery.js";
 import {
-  ackDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
@@ -363,6 +363,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
     }
   };
   return await withActiveDeliveryClaim(params.queueId, async () => {
+    const owner = createQueuedDeliveryOwner({ queueId: params.queueId });
     try {
       const reservation = await reserveDeliveryAttempt(params.queueId, RESTART_NOTICE_MAX_ATTEMPTS);
       if (reservation.status === "exhausted") {
@@ -404,6 +405,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
         bestEffort: false,
         skipQueue: true,
         deliveryQueueId: params.queueId,
+        deliveryQueueOwner: owner,
         deferCommitHooks: true,
         onMessageSentEvent: (event) => messageSentEvents.push(event),
       });
@@ -420,15 +422,14 @@ async function deliverGatewayLifecycleNoticeAttempt(
         onDelivered?.();
       }
       try {
-        await ackDelivery(params.queueId);
+        await owner.ack();
         await flushTerminalObservers(results, pending.preparedBatch.runId);
         return true;
       } catch (err) {
         const error = formatErrorMessage(err);
-        await (results.length > 0 ? failDeliveryAfterPlatformSend : failDelivery)(
-          params.queueId,
-          error,
-        ).catch(() => undefined);
+        await owner
+          .fail(results.length > 0 ? failDeliveryAfterPlatformSend : failDelivery, error)
+          .catch(() => undefined);
         log.warn(`${params.summary}: outbound delivery ack failed; queued for recovery: ${error}`, {
           channel: params.channel,
           to: params.to,
@@ -475,7 +476,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
       const recordFailure = isProvenDeliveryNotSentError(err)
         ? failDeliveryBeforePlatformSend
         : failDelivery;
-      await recordFailure(params.queueId, error).catch(() => undefined);
+      await owner.fail(recordFailure, error).catch(() => undefined);
       log.warn(`${params.summary}: outbound delivery failed; queued for recovery: ${String(err)}`, {
         channel: params.channel,
         to: params.to,

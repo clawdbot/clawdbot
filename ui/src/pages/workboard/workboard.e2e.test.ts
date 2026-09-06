@@ -613,27 +613,41 @@ suite.define(() => {
         .locator('button[aria-label="Edit card"]')
         .click();
       await expect.poll(() => editDialog.isVisible()).toBe(true);
+      const unsavedNotes = "Keep these unfinished Workboard notes";
+      await setWorkboardDraftField(editForm, "Notes", unsavedNotes);
       const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
-      await writableGateway.setMethodResponse(
-        "workboard.cards.list",
-        cardsListResponse([liveRefreshedCard]),
-      );
+      const tasksBeforeLiveRefresh = (await writableGateway.getRequests("tasks.list")).length;
+      const liveRefreshResponse = cardsListResponse([liveRefreshedCard]);
+      liveRefreshResponse.boards.push({
+        id: "live",
+        name: "Live metadata",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+      });
+      await writableGateway.setMethodResponse("workboard.cards.list", liveRefreshResponse);
       await writableGateway.deferNext("workboard.cards.list");
       await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
         revision: 2,
       });
-      await writable.page.waitForTimeout(250);
-      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
-        listBeforeLiveRefresh,
-      );
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
+      await writableGateway.resolveDeferred("workboard.cards.list");
+      await expect
+        .poll(() => writable.page.locator(".workboard-select--toolbar-board").textContent())
+        .toContain("Live metadata");
+      expect(await editForm.getByLabel("Notes").inputValue()).toBe(unsavedNotes);
+      expect(await reviewedCardSurface.textContent()).toContain(reviewedCard.notes);
+      expect(await writableGateway.getRequests("tasks.list")).toHaveLength(tasksBeforeLiveRefresh);
+      const listBeforeDraftClose = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
       await editForm
         .locator(":scope > .workboard-modal__actions")
         .getByRole("button", { name: "Cancel", exact: true })
         .click();
-      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
-      await writableGateway.resolveDeferred("workboard.cards.list");
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeDraftClose);
       await writable.page
         .getByText("Acceptance: live Gateway invalidation refreshed this card")
         .waitFor({ state: "visible" });

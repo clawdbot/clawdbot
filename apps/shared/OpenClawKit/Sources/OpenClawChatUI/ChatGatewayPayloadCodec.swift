@@ -15,6 +15,18 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
+    public static func decodeAgentsList(_ data: Data) throws -> OpenClawChatAgentsListResponse {
+        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        return OpenClawChatAgentsListResponse(
+            defaultId: result.defaultid,
+            agents: result.agents.filter(\.isSelectableAgent).map {
+                OpenClawChatAgentChoice(
+                    id: $0.id,
+                    name: $0.name,
+                    workspaceGit: $0.workspacegit)
+            })
+    }
+
     public static func decodeProgressCard(_ data: Data, agentID: String?) throws -> ProgressCard? {
         let result = try JSONDecoder().decode(ProgressCardGetResult.self, from: data)
         guard !(result.card.value is NSNull) else { return nil }

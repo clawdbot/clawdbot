@@ -73,7 +73,7 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
   // Worker state owns command completion and exec finalizers; its parent owns
   // process placement. This lease does not infer remote or PTY tree extinction.
   const cleanupScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
-    requireProcessTree: false,
+    processTree: "transport-only",
   });
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
