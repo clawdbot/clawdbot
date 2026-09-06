@@ -1776,10 +1776,10 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
-    updateFailureActionMocks.runInteractiveUpdateFailureAction.mockResolvedValue("triage");
     probePortUsage.mockResolvedValue("free");
     serviceEnabled.mockResolvedValue(true);
     serviceDefinitionMutationCapability.mockResolvedValue(undefined);
+    updateFailureActionMocks.runInteractiveUpdateFailureAction.mockResolvedValue("triage");
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
     restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
     writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);

@@ -333,7 +333,7 @@ describe("update failure report", () => {
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
         authorityCurrent = false;
-        await hooks.beforeIssueCreate?.();
+        (await hooks.beforeIssueCreate?.())?.();
         issueCreateCalls += 1;
         return {
           status: "created" as const,
@@ -357,7 +357,7 @@ describe("update failure report", () => {
     const retryCreateIssue = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
-        await hooks.beforeIssueCreate?.();
+        (await hooks.beforeIssueCreate?.())?.();
         issueCreateCalls += 1;
         return {
           status: "created" as const,
@@ -388,7 +388,7 @@ describe("update failure report", () => {
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
         currentAttempt = false;
-        await hooks.beforeIssueCreate?.();
+        (await hooks.beforeIssueCreate?.())?.();
         issueCreateCalls += 1;
         return {
           status: "created" as const,
@@ -411,7 +411,7 @@ describe("update failure report", () => {
     const retryCreateIssue = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
-        await hooks.beforeIssueCreate?.();
+        (await hooks.beforeIssueCreate?.())?.();
         issueCreateCalls += 1;
         return {
           status: "created" as const,
@@ -446,7 +446,7 @@ describe("update failure report", () => {
     const createIssue = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
-        await hooks.beforeIssueCreate?.();
+        (await hooks.beforeIssueCreate?.())?.();
         issueCreateCalls += 1;
         return {
           status: "created" as const,
@@ -468,7 +468,7 @@ describe("update failure report", () => {
     const retryCreateIssue = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
-        await hooks.beforeIssueCreate?.();
+        (await hooks.beforeIssueCreate?.())?.();
         issueCreateCalls += 1;
         return {
           status: "created" as const,
@@ -884,7 +884,7 @@ describe("update failure report", () => {
         successorPublished();
         await successorTransportGate;
         await hooks.afterAuthPreflight?.();
-        await hooks.beforeIssueCreate?.();
+        (await hooks.beforeIssueCreate?.())?.();
         transportCount += 1;
         return {
           status: "created" as const,

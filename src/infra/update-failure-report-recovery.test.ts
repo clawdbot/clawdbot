@@ -56,7 +56,8 @@ function failedUpdate(): UpdateRunResult {
 function mockRetryableNoStartIssue() {
   return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
     await hooks.afterAuthPreflight?.();
-    await hooks.beforeIssueCreate?.();
+    const commitIssueCreate = await hooks.beforeIssueCreate?.();
+    commitIssueCreate?.();
     return {
       cause: "transport-unavailable" as const,
       reason: "fallback-url-too-long" as const,

@@ -6,6 +6,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { submitGithubIssue, type RunGithubCli } from "./github-issue.js";
 import {
   finalizeUpdateFailureReportReceipt,
+  markUpdateFailureReportReceiptPending,
   markUpdateFailureReportReceiptPrepared,
   readUpdateFailureReportReceipt,
   reserveUpdateFailureReportReceipt,
@@ -159,6 +160,96 @@ describe("update report shared transport boundary", () => {
     expect(fixture.runGh).toHaveBeenCalledTimes(2);
   });
 
+  it.each([false, true])(
+    "does not start POST with retired authority after pending, retire=%s",
+    async (retire) => {
+      const fixture = await setup();
+      let current = true;
+      const authorityAtPost: boolean[] = [];
+      const result = await fixture
+        .submit({
+          hasCurrentAuthority: () => current,
+          markPending: (...args) => {
+            const marked = markUpdateFailureReportReceiptPending(...args);
+            expect(marked).toBe(true);
+            if (retire) {
+              queueMicrotask(() => {
+                current = false;
+              });
+            }
+            return marked;
+          },
+          createIssue: (issue, hooks) =>
+            submitGithubIssue(
+              issue,
+              (args, options) => {
+                if (args[0] === "api") {
+                  authorityAtPost.push(current);
+                }
+                return fixture.runGh(args, options);
+              },
+              hooks,
+            ),
+        })
+        .catch((error: unknown) => error);
+      expect.soft(authorityAtPost).not.toContain(false);
+      if (authorityAtPost.length === 0) {
+        expect(retire).toBe(true);
+        expect(result).toBeInstanceOf(Error);
+        expect(fixture.receipt()).toBeNull();
+        await expect(fs.stat(`${fixture.stateDir}/update-reports`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } else {
+        expect(authorityAtPost).toHaveLength(1);
+        expect(result).toMatchObject({ status: "created", url: issueUrl });
+        expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
+        expect(fixture.createCalls).toHaveLength(1);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "rejects retired authority after async preparation returns, retire=%s",
+    async (retire) => {
+      const fixture = await setup();
+      let current = true;
+      const result = await fixture
+        .submit({
+          hasCurrentAuthority: () => current,
+          createIssue: (issue, hooks) =>
+            submitGithubIssue(issue, fixture.runGh, {
+              ...hooks,
+              beforeIssueCreate: async () => {
+                if (!hooks.beforeIssueCreate) {
+                  throw new Error("expected a guarded Report submission");
+                }
+                const commit = await hooks.beforeIssueCreate();
+                if (retire) {
+                  queueMicrotask(() => {
+                    current = false;
+                  });
+                }
+                return commit;
+              },
+            }),
+        })
+        .catch((error: unknown) => error);
+      if (retire) {
+        expect.soft(result).toBeInstanceOf(Error);
+        expect.soft(fixture.createCalls).toHaveLength(0);
+        expect.soft(fixture.receipt()).toBeNull();
+        await expect(fs.stat(`${fixture.stateDir}/update-reports`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } else {
+        expect(result).toMatchObject({ status: "created", url: issueUrl });
+        expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
+        expect(fixture.createCalls).toHaveLength(1);
+      }
+    },
+  );
+
   it.each(["authority", "attempt"] as const)(
     "refuses %s lost while authentication is paused before pending or POST",
     async (change) => {
@@ -216,7 +307,10 @@ describe("update report shared transport boundary", () => {
               ...hooks,
               beforeIssueCreate: () => {
                 insidePreCreate = true;
-                return hooks.beforeIssueCreate?.();
+                if (!hooks.beforeIssueCreate) {
+                  throw new Error("expected a guarded Report submission");
+                }
+                return hooks.beforeIssueCreate();
               },
             }),
           validateCurrentAttempt: () => {

@@ -9,7 +9,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
-import type { RunGithubCli } from "../../../infra/github-issue.js";
+import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github-issue.js";
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
@@ -204,16 +204,10 @@ describe("update report live authority boundary", () => {
     mocks.getLatest.mockReturnValue(failure);
     mocks.refreshLatest.mockResolvedValue(failure);
     mocks.submitGithubIssue.mockImplementation(
-      async (
-        _issue: unknown,
-        _runGh: unknown,
-        hooks: {
-          afterAuthPreflight?: () => Promise<void> | void;
-          beforeIssueCreate?: () => Promise<void> | void;
-        },
-      ) => {
+      async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
-        await hooks.beforeIssueCreate?.();
+        const commitIssueCreate = await hooks.beforeIssueCreate?.();
+        commitIssueCreate?.();
         return {
           status: "created",
           url: "https://github.com/openclaw/openclaw/issues/999999",
@@ -257,13 +251,17 @@ describe("update report live authority boundary", () => {
   );
 
   it.each([
-    { authority: "gateway-owner", retire: true },
-    { authority: "system-admin", retire: true },
-    { authority: "gateway-owner", retire: false },
-    { authority: "system-admin", retire: false },
+    { authority: "gateway-owner", retire: true, boundary: "auth" },
+    { authority: "system-admin", retire: true, boundary: "auth" },
+    { authority: "gateway-owner", retire: false, boundary: "auth" },
+    { authority: "system-admin", retire: false, boundary: "auth" },
+    { authority: "gateway-owner", retire: true, boundary: "prepared" },
+    { authority: "system-admin", retire: true, boundary: "prepared" },
+    { authority: "gateway-owner", retire: false, boundary: "prepared" },
+    { authority: "system-admin", retire: false, boundary: "prepared" },
   ] as const)(
-    "revalidates delegated $authority authority after GitHub auth, retired=$retire",
-    async ({ authority, retire }) => {
+    "revalidates delegated $authority authority at $boundary, retired=$retire",
+    async ({ authority, retire, boundary }) => {
       const transport = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
         "../../../infra/github-issue.js",
       );
@@ -294,6 +292,7 @@ describe("update report live authority boundary", () => {
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
         }
         expect(args).toContain("POST");
+        expect(validateAuthority(identity)).toBe(true);
         return {
           started: true,
           status: 0,
@@ -302,8 +301,21 @@ describe("update report live authority boundary", () => {
           ),
         };
       });
-      mocks.submitGithubIssue.mockImplementationOnce((issue, _runGh, hooks) =>
-        transport.submitGithubIssue(issue, runGh, hooks),
+      mocks.submitGithubIssue.mockImplementationOnce(
+        (issue, _runGh, hooks: GithubIssueSubmitHooks) =>
+          transport.submitGithubIssue(issue, runGh, {
+            ...hooks,
+            beforeIssueCreate: async () => {
+              if (!hooks.beforeIssueCreate) {
+                throw new Error("expected the report preparation hook");
+              }
+              const commitIssueCreate = await hooks.beforeIssueCreate();
+              if (boundary === "prepared" && retire) {
+                queueMicrotask(() => releaseAgentRunDelegatedAuthority(claim));
+              }
+              return commitIssueCreate;
+            },
+          }),
       );
       try {
         expect(validateAuthority(identity)).toBe(true);
@@ -311,15 +323,17 @@ describe("update report live authority boundary", () => {
         const finished = waitForNextHandler();
         const dispatch = dispatchSubmit({ client, harness, id: "runtime-submit", previewDigest });
         await entered.promise;
-        if (retire) {
+        if (retire && boundary === "auth") {
           expect(releaseAgentRunDelegatedAuthority(claim)).toBe(true);
         }
-        expect(validateAuthority(identity)).toBe(!retire);
+        expect(validateAuthority(identity)).toBe(!(retire && boundary === "auth"));
         expect(client.invalidated).not.toBe(true);
         expect(client.connectionSignal?.aborted).not.toBe(true);
         released.resolve();
         await finished;
         await dispatch;
+
+        expect(validateAuthority(identity)).toBe(!retire);
 
         expect
           .soft(runGh.mock.calls.map(([args]) => args[0]))
@@ -455,18 +469,12 @@ describe("update report live authority boundary", () => {
       const releaseAuthPreflight = createDeferredCore();
       let issueCreateCalls = 0;
       mocks.submitGithubIssue.mockImplementationOnce(
-        async (
-          _issue: unknown,
-          _runGh: unknown,
-          hooks: {
-            afterAuthPreflight?: () => Promise<void> | void;
-            beforeIssueCreate?: () => Promise<void> | void;
-          },
-        ) => {
+        async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
           await hooks.afterAuthPreflight?.();
           enteredAuthPreflight.resolve();
           await releaseAuthPreflight.promise;
-          await hooks.beforeIssueCreate?.();
+          const commitIssueCreate = await hooks.beforeIssueCreate?.();
+          commitIssueCreate?.();
           issueCreateCalls += 1;
           return {
             status: "created",

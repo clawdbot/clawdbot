@@ -4,7 +4,8 @@ import type { GithubIssueSubmitHooks, PreparedGithubIssue } from "./github-issue
 export function mockCreatedIssue(url: string) {
   return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
     await hooks.afterAuthPreflight?.();
-    await hooks.beforeIssueCreate?.();
+    const commitIssueCreate = await hooks.beforeIssueCreate?.();
+    commitIssueCreate?.();
     return { status: "created" as const, url };
   });
 }
@@ -29,7 +30,8 @@ export function mockFallbackAfterIssueCreateNoStart(fallbackUrl: string | undefi
   }
   return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
     await hooks.afterAuthPreflight?.();
-    await hooks.beforeIssueCreate?.();
+    const commitIssueCreate = await hooks.beforeIssueCreate?.();
+    commitIssueCreate?.();
     return {
       url: fallbackUrl,
       reason: "transport-unavailable" as const,

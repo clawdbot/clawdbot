@@ -56,7 +56,8 @@ export type GithubIssueReconcileHooks = {
 
 export type GithubIssueSubmitHooks = GithubIssueReconcileHooks & {
   afterAuthPreflight?: () => Promise<void> | void;
-  beforeIssueCreate?: () => Promise<void> | void;
+  /** Prepare asynchronously, then return the synchronous authority and submission claim. */
+  beforeIssueCreate?: () => Promise<() => undefined> | (() => undefined);
 };
 
 const GITHUB_REPOSITORY = "github.com/openclaw/openclaw";
@@ -259,7 +260,9 @@ async function submitGithubIssueOnce(
   if (auth.errorCode || auth.status !== 0) {
     return browserFallbackResult(issue, browserFallbackReason(auth));
   }
-  await hooks.beforeIssueCreate?.();
+  const commitIssueCreate = await hooks.beforeIssueCreate?.();
+  // The caller's live authority and durable claim must not yield before child creation.
+  commitIssueCreate?.();
   const created = await runGh(issueCreateArgs(), {
     input: JSON.stringify({ body: issue.body, title: issue.title }),
   });
