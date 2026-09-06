@@ -58,7 +58,7 @@ function trailers(body) {
 function isMachineCredit(line) {
   // Match published machine addresses, never names or provider domains that
   // can also identify human contributors.
-  return /^Co-authored-by:\s*[^<>]+<(?:noreply@anthropic\.com|cursoragent@cursor\.com|amp@ampcode\.com)>$/i.test(
+  return /^Co-authored-by:\s*[^<>]+<(?:noreply@anthropic\.com|cursoragent@cursor\.com|amp@ampcode\.com|codex@openai\.com)>$/i.test(
     line,
   );
 }
