@@ -29,6 +29,7 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
@@ -506,13 +507,18 @@ async function buildHealthAccountRecord(params: {
 async function runHealthAccountWithinDeadline(
   params: Parameters<typeof buildHealthAccountRecord>[0],
 ): Promise<ChannelAccountHealthSummary> {
-  const release = await acquireHealthOperationPermit(params.deadlineAtMs);
-  if (!release) {
-    return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
-  }
-
-  const operation = buildHealthAccountRecord(params);
-  void operation.then(release, release);
+  // Own permit admission and release too: neither a deadline nor shutdown may orphan a hook.
+  const operation = trackAsyncWork(async () => {
+    const release = await acquireHealthOperationPermit(params.deadlineAtMs);
+    if (!release) {
+      return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+    }
+    try {
+      return await buildHealthAccountRecord(params);
+    } finally {
+      release();
+    }
+  });
   const result = await awaitWithinDeadline(() => operation, params.deadlineAtMs);
   return result === ABSOLUTE_DEADLINE_EXPIRED
     ? buildHealthTimeoutRecord(params.accountId, params.timeoutMs)

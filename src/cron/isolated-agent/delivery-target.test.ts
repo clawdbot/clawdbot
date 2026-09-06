@@ -1,5 +1,6 @@
 // Isolated agent delivery target tests cover target resolution for cron runs.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
 import type {
   ChannelDirectoryEntry,
   ChannelOutboundAdapter,
@@ -8,7 +9,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   forumMessagingForTest,
-  parseTelegramTargetForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";

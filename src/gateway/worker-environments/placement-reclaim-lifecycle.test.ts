@@ -114,7 +114,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           payloadJSON: nodeSupport.workspaceCommandPayload(active.remoteWorkspaceDir, { stdout }),
         };
       });
-      transport.invoke = invoke;
+      transport.invoke = nodeSupport.withWorkspaceDrain(invoke);
       const transfer = nodeSupport.workspaceTransfer();
       transfer.closeAll = vi.fn(async () => {});
       transfer.prepareSync = vi.fn(async () => ({
@@ -136,7 +136,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
         workspaceTransfer: transfer,
       });
       tunnels.bindWorkspaceBindingResolver(async () => ({
-        localPath: support.testState.root,
+        source: { kind: "local", path: support.testState.root },
         remoteWorkspaceDir: active.remoteWorkspaceDir,
         manifestRef: MANIFEST_REF,
       }));
@@ -286,14 +286,16 @@ describe("placement reclaim with provider-owned node teardown", () => {
           await vi.advanceTimersByTimeAsync(1_001);
         }
         const outcome = await result;
-        expect(primaryError).toMatchObject({ code: "provider_failure" });
+        const expectedError =
+          failure === "timeout"
+            ? "Worker provider operation timed out after 1000ms"
+            : "provider destruction is indeterminate";
+        expect(primaryError).toMatchObject({ code: "provider_failure", message: expectedError });
         if (operation === "recovery") {
           expect(outcome).toBeUndefined();
           expect
             .soft(harness.reportWorkspaceResultRecoveryFailure)
-            .toHaveBeenCalledWith(
-              expect.objectContaining({ error: "Worker provider operation failed" }),
-            );
+            .toHaveBeenCalledWith(expect.objectContaining({ error: expectedError }));
           expect(placements.get(active.sessionId)?.state).toBe("draining");
         } else {
           expect.soft(outcome).toBe(primaryError);

@@ -14,6 +14,7 @@ import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
@@ -152,14 +153,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                 api: options.model.api,
                 provider: options.model.provider,
                 model: options.model.id,
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
+                usage: createZeroUsageFixture(),
                 stopReason: turn === 1 ? "toolUse" : "stop",
                 timestamp: Date.now(),
               };

@@ -6,7 +6,8 @@ import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
-import { createFastTestModelSelectionState } from "./model-selection.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
@@ -45,6 +46,7 @@ describe("applyInlineDirectiveOverrides", () => {
       Provider: "webchat",
       Surface: "webchat",
     });
+    const sessionEntry = { sessionId: "global-session", updatedAt: 1 };
     const result = await resolveReplyDirectives({
       ctx,
       cfg: {
@@ -56,11 +58,11 @@ describe("applyInlineDirectiveOverrides", () => {
       workspaceDir: "/tmp/workspace",
       agentCfg: {},
       sessionCtx: ctx,
-      sessionEntry: { sessionId: "global-session", updatedAt: 1 },
+      sessionEntry,
       sessionStore: {},
       sessionKey: "global",
       sessionScope: "global",
-      groupResolution: undefined,
+      conversation: prepareReplyConversation({ ctx, sessionEntry }),
       isGroup: false,
       triggerBodyNormalized: "/elevated on",
       resetTriggered: false,
@@ -191,7 +193,7 @@ describe("applyInlineDirectiveOverrides", () => {
         agentRuntimeOverride: "codex",
         modelSelectionLocked: true,
       };
-      const modelState = createFastTestModelSelectionState({
+      const modelState = createModelSelectionStateFixture({
         agentCfg: {},
         provider: "openai",
         model: "gpt-5.5",
@@ -333,7 +335,7 @@ describe("applyInlineDirectiveOverrides", () => {
         aliasIndex: { byAlias: new Map(), byKey: new Map() },
         provider: "openai",
         model,
-        modelState: createFastTestModelSelectionState({
+        modelState: createModelSelectionStateFixture({
           agentCfg: {},
           provider: "openai",
           model,

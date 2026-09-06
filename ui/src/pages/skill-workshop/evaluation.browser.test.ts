@@ -85,7 +85,6 @@ const proposal: SkillWorkshopProposal = {
   ageLabel: "now",
   supportFiles: [],
   bodyLoaded: true,
-  isNew: false,
 };
 
 function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
@@ -101,9 +100,11 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     error: null,
     inspectingKey: null,
     proposals: [proposal],
+    installedSkills: [],
+    installedSelection: { status: "idle" },
+    onSelectInstalled: vi.fn(),
+    onRetryInstalled: vi.fn(),
     selectedKey: proposal.key,
-    appliedDiffMode: "changes",
-    statusFilter: "pending",
     query: "",
     filePreviewKey: null,
     filePreviewQuery: "",
@@ -118,15 +119,12 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     workshopAgentName: "Research",
     selfLearning: null,
     historyScan: createSkillWorkshopHistoryScanState(),
-    counts: { all: 1, pending: 1, applied: 0, rejected: 0, quarantined: 0, stale: 0 },
-    onStatusFilterChange: vi.fn(),
     onRetry: vi.fn(),
     onQueryChange: vi.fn(),
     onFilePreviewQueryChange: vi.fn(),
     onQueueWidthChange: vi.fn(),
     onModeChange: vi.fn(),
     onSelect: vi.fn(),
-    onAppliedDiffModeChange: vi.fn(),
     onPrev: vi.fn(),
     onNext: vi.fn(),
     onApply: vi.fn(),
@@ -144,11 +142,32 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
 }
 
 describe("Skill Workshop evaluation results (browser)", () => {
+  it.each([800, 390])("keeps embedded images within the suggestion card at %spx", async (width) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1600;
+    canvas.height = 20;
+    const container = document.createElement("div");
+    container.style.width = `${width}px`;
+    const props = propsFor("suggestions");
+    props.proposals = [{ ...proposal, body: `![Diagram](${canvas.toDataURL()})` }];
+    document.body.append(container);
+    try {
+      render(renderSkillWorkshop(props), container);
+      const image = container.querySelector<HTMLImageElement>(".sidebar-markdown img")!;
+      await vi.waitFor(() => expect(image.complete).toBe(true));
+      expect(image.naturalWidth).toBe(1600);
+      const card = container.querySelector(".sw-body-card")!.getBoundingClientRect();
+      expect(image.getBoundingClientRect().right).toBeLessThanOrEqual(card.right);
+      expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
   it.each([
-    ["board", "apply", ".sw-action-bar .sw-btn--primary", "onApply"],
-    ["board", "reject", ".sw-action-bar .sw-btn--danger", "onReject"],
-    ["today", "apply", ".sw-today__big--primary", "onApply"],
-    ["today", "reject", ".sw-today__big--skip", "onReject"],
+    ["suggestions", "apply", ".sw-action-bar .sw-btn--primary", "onApply"],
+    ["suggestions", "reject", ".sw-action-bar .sw-btn--danger", "onReject"],
   ] as const)(
     "captures the rendered revision when %s %s is chosen",
     async (mode, _action, selector, callbackName) => {
@@ -176,14 +195,12 @@ describe("Skill Workshop evaluation results (browser)", () => {
     },
   );
 
-  it.each(["board", "today"] as const)(
-    "renders attributed completed, error, and block results with an Evaluate command in %s",
-    async (mode) => {
+  it.each([800, 390])(
+    "renders attributed evaluator results and an Evaluate command at %spx",
+    async (width) => {
       const container = document.createElement("div");
-      const props = propsFor(mode);
-      if (mode === "today") {
-        container.style.width = "390px";
-      }
+      const props = propsFor("suggestions");
+      container.style.width = `${width}px`;
       document.body.append(container);
 
       try {
@@ -218,9 +235,7 @@ describe("Skill Workshop evaluation results (browser)", () => {
         expect(text).toContain("Policy checks passed.");
         expect(text).toContain("Revise");
         expect(text).toContain("Clarify the activation trigger.");
-        if (mode === "today") {
-          expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
-        }
+        expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
       } finally {
         render(nothing, container);
         container.remove();

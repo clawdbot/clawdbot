@@ -1,11 +1,13 @@
 // Verifies Doctor persists legacy gateway bind repairs through the real config writer.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { repairLegacyConfigForUpdateChannel } from "./doctor/legacy-config-repair.js";
 
 describe("Doctor gateway bind persistence", () => {
   afterEach(() => {
@@ -33,4 +35,47 @@ describe("Doctor gateway bind persistence", () => {
       });
     });
   });
+
+  it.each(["ordinary", "include", "invalid"] as const)(
+    "preserves authored plugin scope during %s update-channel repair",
+    async (scenario) => {
+      await withTempHome(async (home) => {
+        const diagnostics = {
+          otel: { enabled: true, endpoint: "http://collector.test:4317", protocol: "grpc" },
+        };
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local", ...(scenario === "invalid" ? { port: "invalid" } : {}) },
+          diagnostics: scenario === "include" ? { $include: "diagnostics.json" } : diagnostics,
+          plugins: { entries: { canvas: { enabled: true, config: { host: { enabled: false } } } } },
+        });
+        const includePath = path.join(path.dirname(configPath), "diagnostics.json");
+        if (scenario === "include") {
+          await fs.writeFile(includePath, JSON.stringify(diagnostics));
+        }
+        const before = await fs.readFile(configPath, "utf8");
+        const result = await repairLegacyConfigForUpdateChannel({
+          configSnapshot: await readConfigFileSnapshot(),
+          jsonMode: true,
+        });
+        if (scenario === "invalid") {
+          expect(result.repaired).toBe(false);
+          expect(await fs.readFile(configPath, "utf8")).toBe(before);
+          return;
+        }
+        expect(result.repaired).toBe(true);
+        const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+        expect(Object.keys(saved.plugins.entries)).toEqual(["canvas"]);
+        expect(result.snapshot.config.diagnostics?.otel).toEqual({
+          enabled: false,
+          endpoint: "http://collector.test:4317",
+        });
+        if (scenario === "include") {
+          expect(saved.diagnostics).toEqual({ $include: "diagnostics.json" });
+          expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
+            otel: { enabled: false, endpoint: "http://collector.test:4317" },
+          });
+        }
+      });
+    },
+  );
 });

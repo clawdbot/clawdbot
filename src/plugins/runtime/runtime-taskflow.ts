@@ -71,14 +71,12 @@ function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutat
 function applyManagedFlowMutationForOwner(params: {
   flowId: string;
   ownerKey: string;
-  agentId?: string;
   mutate: (flowId: string) => TaskFlowUpdateResult;
 }): ManagedTaskFlowMutationResult {
   // Authorization and mode checks must complete before the mutation can touch persistence.
   const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.ownerKey,
-    callerAgentId: params.agentId,
   });
   if (!flow) {
     return { applied: false, code: "not_found" };
@@ -92,7 +90,6 @@ function applyManagedFlowMutationForOwner(params: {
 
 function createBoundTaskFlowRuntime(params: {
   sessionKey: string;
-  agentId?: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
 }): BoundTaskFlowRuntime {
   const ownerKey = assertSessionKey(
@@ -105,7 +102,6 @@ function createBoundTaskFlowRuntime(params: {
   const tryCreateManaged: BoundTaskFlowRuntime["tryCreateManaged"] = (input) => {
     const flow = createManagedTaskFlow({
       ownerKey,
-      agentId: params.agentId,
       controllerId: input.controllerId,
       requesterOrigin,
       status: input.status,
@@ -137,29 +133,24 @@ function createBoundTaskFlowRuntime(params: {
       getTaskFlowByIdForOwner({
         flowId,
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       }),
     list: () =>
       listTaskFlowsForOwner({
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       }),
     findLatest: () =>
       findLatestTaskFlowForOwner({
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       }),
     resolve: (token) =>
       resolveTaskFlowForLookupTokenForOwner({
         token,
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       }),
     getTaskSummary: (flowId) => {
       const flow = getTaskFlowByIdForOwner({
         flowId,
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       });
       return flow ? getFlowTaskSummary(flow.flowId) : undefined;
     },
@@ -167,7 +158,6 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        agentId: params.agentId,
         mutate: (flowId) =>
           setFlowWaiting({
             flowId,
@@ -184,7 +174,6 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        agentId: params.agentId,
         mutate: (flowId) =>
           resumeFlow({
             flowId,
@@ -199,7 +188,6 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        agentId: params.agentId,
         mutate: (flowId) =>
           finishFlow({
             flowId,
@@ -213,7 +201,6 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        agentId: params.agentId,
         mutate: (flowId) =>
           failFlow({
             flowId,
@@ -229,7 +216,6 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        agentId: params.agentId,
         mutate: (flowId) =>
           requestFlowCancel({
             flowId,
@@ -242,13 +228,11 @@ function createBoundTaskFlowRuntime(params: {
         cfg,
         flowId,
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       }),
     runTask: (input) => {
       const created = runTaskInFlowForOwner({
         flowId: input.flowId,
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
         runtime: input.runtime,
         sourceId: input.sourceId,
         childSessionKey: input.childSessionKey,
@@ -304,7 +288,6 @@ export function createRuntimeTaskFlow(): PluginRuntimeTaskFlow {
     bindSession: (params) =>
       createBoundTaskFlowRuntime({
         sessionKey: params.sessionKey,
-        agentId: params.agentId,
         requesterOrigin: params.requesterOrigin,
       }),
     fromToolContext: (ctx) =>
@@ -313,7 +296,6 @@ export function createRuntimeTaskFlow(): PluginRuntimeTaskFlow {
           ctx.sessionKey,
           "TaskFlow runtime requires tool context with a sessionKey.",
         ),
-        agentId: ctx.agentId,
         requesterOrigin: ctx.deliveryContext,
       }),
   };

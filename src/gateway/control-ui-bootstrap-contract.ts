@@ -57,7 +57,6 @@ export type ControlUiBootstrapConfig = {
    * gateways running unreleased branch code.
    */
   devGitBranch?: string;
-  localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;

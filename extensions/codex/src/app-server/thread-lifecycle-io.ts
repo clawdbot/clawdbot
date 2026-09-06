@@ -476,9 +476,18 @@ export async function startFreshCodexThread(
     typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
       ? startParams.modelProvider
       : undefined;
+  const assertCurrent = () => {
+    throwIfAborted();
+    params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
+  };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
-      return await params.client.request("thread/start", startParams, { signal: params.signal });
+      assertCurrent();
+      return await params.client.request("thread/start", startParams, {
+        signal: params.signal,
+        assertCurrent,
+      });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
         throw new CodexThreadStartRequestError(error);
@@ -488,10 +497,6 @@ export async function startFreshCodexThread(
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
-  const assertCurrent = () => {
-    throwIfAborted();
-    params.params.hostCapabilities.assertActive();
-  };
   const rejectUncommittedThread = async (cause: unknown): Promise<never> => {
     const cleanupConfirmed = await discardUnattestedCodexPluginThread({
       client: params.client,

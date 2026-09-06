@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionsCleanupFailure,
@@ -665,26 +666,40 @@ export async function runSessionsCleanup(params: {
 export async function purgeAgentSessionStoreEntries(
   cfg: OpenClawConfig,
   agentId: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    runDatabaseCleanup?: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
+  } = {},
 ): Promise<boolean> {
   const normalizedAgentId = normalizeAgentId(agentId);
   let storePath = typeof cfg.session?.store === "string" ? cfg.session.store : "<default>";
   try {
     storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
+      env: options.env,
     });
     const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: normalizedAgentId,
       defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+      env: options.env,
     });
     if (!fs.existsSync(sqliteTarget.path)) {
       return false;
     }
-    await purgeDeletedAgentSessionEntries({
-      cfg,
-      agentId: normalizedAgentId,
-      storeAgentId: sqliteTarget.agentId ?? normalizedAgentId,
-      storePath,
-    });
+    const storeAgentId = sqliteTarget.agentId ?? normalizedAgentId;
+    const purge = () =>
+      purgeDeletedAgentSessionEntries({
+        cfg,
+        agentId: normalizedAgentId,
+        storeAgentId,
+        storePath,
+        env: options.env,
+      });
+    if (options.runDatabaseCleanup) {
+      await options.runDatabaseCleanup({ agentId: storeAgentId, path: sqliteTarget.path }, purge);
+    } else {
+      await purge();
+    }
     return false;
   } catch (error) {
     getLogger().warn("session store purge failed during agent deletion", {

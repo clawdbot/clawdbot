@@ -340,7 +340,8 @@ private final class PresenceClearRecorder {
             if self.calls >= expected { return }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        Issue.record("timed out waiting for \(expected) presence clear calls")
+        // The final suspension may have completed the work before this waiter resumes.
+        #expect(self.calls >= expected, "timed out waiting for \(expected) presence clear calls")
     }
 }
 
@@ -373,7 +374,7 @@ private final class SuspendingPresenceSender {
             if self.activityContinuation != nil { return }
             await Task.yield()
         }
-        Issue.record("timed out waiting for suspended activity send")
+        #expect(self.activityContinuation != nil, "timed out waiting for suspended activity send")
     }
 
     func finishActivitySend() {
@@ -386,6 +387,8 @@ private final class SuspendingPresenceSender {
             if self.payloadObjects.filter({ $0["idleSeconds"] != nil }).count >= expected { return }
             await Task.yield()
         }
-        Issue.record("timed out waiting for \(expected) activity samples")
+        #expect(
+            self.payloadObjects.filter { $0["idleSeconds"] != nil }.count >= expected,
+            "timed out waiting for \(expected) activity samples")
     }
 }

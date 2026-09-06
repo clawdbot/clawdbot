@@ -129,7 +129,6 @@ export function registerRecoveryTests(params: {
       });
 
       const activated = await maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: {
           status: "ok",
@@ -150,7 +149,7 @@ export function registerRecoveryTests(params: {
         timeoutMs: 1_000,
       });
 
-      expect(activated).toBe(true);
+      expect(activated).toBe("ok");
       expect(mocks.events).toEqual([
         "native stop",
         "refresh activation",

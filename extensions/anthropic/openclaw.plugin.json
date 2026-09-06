@@ -23,6 +23,9 @@
   },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
+    "modelsDev": {
+      "anthropic": "anthropic"
+    },
     "providers": {
       "claude-cli": {
         "models": [

@@ -174,6 +174,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
   "application/pdf",
   "application/vnd.ms-excel",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

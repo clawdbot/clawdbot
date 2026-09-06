@@ -116,11 +116,12 @@ export type ChatThreadProps = ChatSendStatusActions & {
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  avatarPlacement?: "none";
   basePath?: string;
   resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  localMediaPreviewRoots?: string[];
+  mediaPolicyEpoch?: number;
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;

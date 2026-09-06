@@ -51,20 +51,27 @@ export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | u
 export function resolveProfileUnusableUntil(
   stats: Pick<
     ProfileUsageStats,
-    "blockedUntil" | "blockedModel" | "blockedScope" | "cooldownUntil" | "disabledUntil"
+    | "blockedUntil"
+    | "blockedModel"
+    | "blockedScope"
+    | "cooldownUntil"
+    | "cooldownReason"
+    | "cooldownModel"
+    | "disabledUntil"
   >,
-  forModel?: string,
+  forModel?: string | null,
 ): number | null {
   const blockedUntil = isBlockScopedToDifferentModel(stats, forModel)
     ? undefined
     : stats.blockedUntil;
-  const values = [blockedUntil, stats.cooldownUntil, stats.disabledUntil]
+  const cooldownUntil =
+    forModel === null && isModelScopedCooldownReason(stats.cooldownReason) && stats.cooldownModel
+      ? undefined
+      : stats.cooldownUntil;
+  const values = [blockedUntil, cooldownUntil, stats.disabledUntil]
     .map((value) => asDateTimestampMs(value))
     .filter((value): value is number => value !== undefined && value > 0);
-  if (values.length === 0) {
-    return null;
-  }
-  return Math.max(...values);
+  return values.length > 0 ? Math.max(...values) : null;
 }
 
 /** Returns true when an unusable timestamp is active at the supplied clock time. */
@@ -76,7 +83,7 @@ export function isActiveUnusableWindow(until: number | undefined, now: number): 
 function isBlockedWindowActiveForModel(
   stats: Pick<ProfileUsageStats, "blockedUntil" | "blockedModel" | "blockedScope">,
   now: number,
-  forModel?: string,
+  forModel?: string | null,
 ): boolean {
   return (
     !isBlockScopedToDifferentModel(stats, forModel) &&
@@ -86,15 +93,15 @@ function isBlockedWindowActiveForModel(
 
 function isBlockScopedToDifferentModel(
   stats: Pick<ProfileUsageStats, "blockedModel" | "blockedScope">,
-  forModel?: string,
+  forModel?: string | null,
 ): boolean {
   // Legacy rows carried blockedModel for profile-wide blocks without a scope marker.
   // Only explicit model scope narrows them; unmarked rows stay wide until expiry.
   return Boolean(
-    forModel &&
+    (forModel === null || forModel) &&
     stats.blockedScope === "model" &&
     stats.blockedModel &&
-    stats.blockedModel !== forModel,
+    (forModel === null || stats.blockedModel !== forModel),
   );
 }
 
@@ -109,13 +116,13 @@ function shouldBypassModelScopedCooldown(
     | "disabledUntil"
   >,
   now: number,
-  forModel?: string,
+  forModel?: string | null,
 ): boolean {
   return Boolean(
-    forModel &&
+    (forModel === null || forModel) &&
     isModelScopedCooldownReason(stats.cooldownReason) &&
     stats.cooldownModel &&
-    stats.cooldownModel !== forModel &&
+    (forModel === null || stats.cooldownModel !== forModel) &&
     !isBlockedWindowActiveForModel(stats, now, forModel) &&
     !isActiveUnusableWindow(stats.disabledUntil, now),
   );
@@ -128,7 +135,7 @@ export function isProfileInCooldown(
   store: AuthProfileStore,
   profileId: string,
   now?: number,
-  forModel?: string,
+  forModel?: string | null,
 ): boolean {
   if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
     return false;

@@ -188,7 +188,9 @@ export function handleDesktopObserveUpgrade(
   }
   desktopObserverWss.handleUpgrade(req, socket, head, (ws) => {
     const claimedStream =
-      entry.attachment.kind === "stream" ? deps.registry.claimStream(entry.attachment) : undefined;
+      entry.attachment.kind === "stream"
+        ? deps.registry.claimStream(entry.sourceKey, entry.attachment)
+        : undefined;
     if (entry.attachment.kind === "stream" && !claimedStream) {
       ws.close(1013, "desktop stream unavailable");
       return;

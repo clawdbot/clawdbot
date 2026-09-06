@@ -168,12 +168,7 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `one Gateway profile can own multiple independent windows`() async throws {
-        try await withIsolatedWebChatManager { manager in
-            let profile = try MacGatewayProfile(
-                id: "same-gateway",
-                name: "Same Gateway",
-                url: #require(URL(string: "wss://same.example")))
-
+        try await withIsolatedWebChatProfile { manager, profile in
             try await manager.show(profile: profile)
             try await manager.show(profile: profile)
             let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
@@ -183,18 +178,14 @@ struct WebChatSwiftUISmokeTests {
             manager.resetPrimaryConnections()
             #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
             #expect(manager._testSessionObserverVisible(connection: connection))
-            await manager.closeGatewayWindows(profileID: profile.id)
+            manager.closeGatewayWindows(profileID: profile.id)
             #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
             #expect(!manager._testSessionObserverVisible(connection: connection))
         }
     }
 
     @Test func `closing chat retires a profile window still waiting for its connection`() async throws {
-        try await withIsolatedWebChatManager { manager in
-            let profile = try MacGatewayProfile(
-                id: "pending-window-\(UUID().uuidString)",
-                name: "Pending Gateway",
-                url: #require(URL(string: "wss://pending.example")))
+        try await withIsolatedWebChatProfile { manager, profile in
             let fleet = MacGatewayConnectionFleet.shared
             let release = DispatchSemaphore(value: 0)
             let gateEntered = AsyncStream.makeStream(of: Void.self)
@@ -224,7 +215,7 @@ struct WebChatSwiftUISmokeTests {
                 Issue.record("Pending window failed unexpectedly: \(error)")
             }
             #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
-            await manager.closeGatewayWindows(profileID: profile.id)
+            manager.closeGatewayWindows(profileID: profile.id)
         }
     }
 

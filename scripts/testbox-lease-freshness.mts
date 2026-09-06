@@ -16,7 +16,7 @@ const STATE_VERSION = 1;
 const DEPENDENCY_INPUTS = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc"];
 const ENVIRONMENT_INPUTS = [
   ".crabbox.yaml",
-  ".github/workflows/ci-check-testbox.yml",
+  ".github/actions/prepare-testbox-shell",
   ".node-version",
   "scripts/crabbox-wrapper.mjs",
   "scripts/crabbox-wrapper.mts",
@@ -70,6 +70,11 @@ function digestInputs(repoRoot: string, inputs: readonly string[]) {
 }
 
 function buildTestboxLeaseFingerprint(repoRoot: string, args: readonly string[]) {
+  const workflow = optionValue(
+    args,
+    "--blacksmith-workflow",
+    ".github/workflows/ci-check-testbox.yml",
+  );
   let baseSha;
   try {
     baseSha = git(repoRoot, ["merge-base", "HEAD", "refs/remotes/origin/main"]);
@@ -81,8 +86,8 @@ function buildTestboxLeaseFingerprint(repoRoot: string, args: readonly string[])
     baseSha,
     headSha: git(repoRoot, ["rev-parse", "HEAD"]),
     dependencyDigest: digestInputs(repoRoot, [...DEPENDENCY_INPUTS, "patches"]),
-    environmentDigest: digestInputs(repoRoot, ENVIRONMENT_INPUTS),
-    workflow: optionValue(args, "--blacksmith-workflow", ".github/workflows/ci-check-testbox.yml"),
+    environmentDigest: digestInputs(repoRoot, [...ENVIRONMENT_INPUTS, workflow]),
+    workflow,
     job: optionValue(args, "--blacksmith-job", "check"),
     ref: optionValue(args, "--blacksmith-ref", "main"),
   };

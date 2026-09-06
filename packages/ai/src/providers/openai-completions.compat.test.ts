@@ -52,6 +52,7 @@ import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -944,14 +945,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         },
         { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
       ],
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "toolUse",
       timestamp: 2,
     };

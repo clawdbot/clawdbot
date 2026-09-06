@@ -653,42 +653,52 @@ describe("openshell backend exec workdir validation", () => {
     },
   );
 
-  it("rejects an aborted file write after waiting for mirror publication", async () => {
-    const workspaceDir = await createWorkspace();
-    const backend = await createOpenShellBackendFixture({
-      workspaceDir,
-      scopeKey: "agent:aborted-write",
-    });
-    const bridge = expectDefined(
-      backend.createFsBridge?.({
-        sandbox: createSandboxTestContext({
-          overrides: {
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-            containerWorkdir: backend.workdir,
-            backend,
-          },
+  it.each(["file write", "directory read"])(
+    "rejects an aborted %s after waiting for mirror publication",
+    async (operation) => {
+      const workspaceDir = await createWorkspace();
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        scopeKey: "agent:aborted-write",
+      });
+      const bridge = expectDefined(
+        backend.createFsBridge?.({
+          sandbox: createSandboxTestContext({
+            overrides: {
+              workspaceDir,
+              agentWorkspaceDir: workspaceDir,
+              containerWorkdir: backend.workdir,
+              backend,
+            },
+          }),
         }),
-      }),
-      "mirror bridge",
-    );
-    const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-    const controller = new AbortController();
-    const write = bridge.writeFile({
-      filePath: "cancelled.txt",
-      data: "cancelled",
-      signal: controller.signal,
-    });
-    const rejected = expect(write).rejects.toThrow("cancelled while queued");
-    controller.abort(new Error("cancelled while queued"));
-    await finalize(backend, exec.finalizeToken);
-    await rejected;
-    await expect(fs.stat(path.join(workspaceDir, "cancelled.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await bridge.writeFile({ filePath: "next.txt", data: "next" });
-    await expect(fs.readFile(path.join(workspaceDir, "next.txt"), "utf8")).resolves.toBe("next");
-  });
+        "mirror bridge",
+      );
+      const readDirectory = expectDefined(bridge.readDirectory?.bind(bridge), "directory reader");
+      const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      const controller = new AbortController();
+      const pending =
+        operation === "file write"
+          ? bridge.writeFile({
+              filePath: "cancelled.txt",
+              data: "cancelled",
+              signal: controller.signal,
+            })
+          : readDirectory({ filePath: ".", signal: controller.signal });
+      const rejected = expect(pending).rejects.toThrow("cancelled while queued");
+      controller.abort(new Error("cancelled while queued"));
+      await finalize(backend, exec.finalizeToken);
+      await rejected;
+      await expect(fs.stat(path.join(workspaceDir, "cancelled.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await bridge.writeFile({ filePath: "next.txt", data: "next" });
+      await expect(fs.readFile(path.join(workspaceDir, "next.txt"), "utf8")).resolves.toBe("next");
+      await expect(readDirectory({ filePath: "." })).resolves.toEqual([
+        { name: "next.txt", isDirectory: false },
+      ]);
+    },
+  );
 
   it.each([
     {

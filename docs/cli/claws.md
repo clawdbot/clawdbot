@@ -243,7 +243,9 @@ Cron jobs declare scheduled work for the new agent:
 ```
 
 Claws use the existing Gateway scheduler and bind created jobs to the new
-agent. Preview, provenance, status, and removal cover those jobs without
+agent. Before creating jobs during add or update, Claws wait for the target
+agent to appear in the Gateway's applied configuration. Preview, provenance,
+status, and removal cover those jobs without
 changing the behavior of ordinary cron commands. Removal rereads the live job
 through the Gateway and preserves it when its owned definition changed after
 planning.
@@ -418,12 +420,25 @@ openclaw claws remove incident-triage \
 ```
 
 The default removes eligible managed state and releases referenced state.
+Eligible Claw-owned schedules appear once as removal actions; other attached
+schedules remain blockers.
 Modified files and resources with another current owner are retained or
 blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
 them. Globally installed plugins are retained while this Claw's reference is
 released. Removal reports which retained requirements Claw add introduced; use
 the ordinary plugin lifecycle separately when you intend to uninstall a
 process-wide plugin.
+
+Directories containing another agent's registered database are retained, even
+when that database is closed. If removal reports that an agent database is
+still open, stop the command or restart the Gateway holding it before retrying.
+Removing scheduled jobs still requires a running Gateway. A database-lease
+refusal leaves the agent config, execution approvals, and creation history unchanged.
+
+If session cleanup or transcript archive export fails after the agent is removed
+from config, removal reports `partial` with `session_cleanup_failed` and retains
+its cleanup record. Correct the reported error, preview removal again, and retry
+to finish cleanup before recreating the agent.
 
 To remove unchanged Claw-introduced references that have no other current
 owner, include `--remove-unused` in both preview and apply. To select exact

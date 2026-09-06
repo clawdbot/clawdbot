@@ -11,6 +11,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "../infra/outbound/deliver-log.js";
 import { prepareOutboundPayloadBatch } from "../infra/outbound/deliver-prepare.js";
 import { stageAndEnqueueOutboundDelivery } from "../infra/outbound/deliver-queue-admission.js";
+import { createQueuedDeliveryOwner } from "../infra/outbound/deliver-queue-state.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
 import { runOutboundDeliveryCommitHooks } from "../infra/outbound/delivery-commit-hooks.js";
@@ -23,7 +24,6 @@ import {
   withActiveDeliveryClaim,
 } from "../infra/outbound/delivery-queue-recovery.js";
 import {
-  ackDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
@@ -42,6 +42,7 @@ import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
@@ -103,7 +104,7 @@ export function resolveGatewayLifecycleNoticeRoute(params: {
   };
 }
 
-/** Await one durable attempt; recovery retains failed custody without delaying shutdown. */
+/** Return bounded delivery status while managed scopes retain the complete attempt. */
 export async function sendGatewayLifecycleNotice(
   params: GatewayLifecycleNotice & {
     deps: CliDeps;
@@ -113,7 +114,8 @@ export async function sendGatewayLifecycleNotice(
   let delivered = false;
   try {
     await withTimeout(
-      (async () => {
+      // The response deadline does not end transport or commit-hook ownership.
+      trackAsyncWork(async () => {
         const queued = await enqueueGatewayLifecycleNotice(params, params.deliveryIntentId);
         if (!queued.created) {
           return;
@@ -128,7 +130,7 @@ export async function sendGatewayLifecycleNotice(
             delivered = true;
           },
         );
-      })(),
+      }),
       10_000,
       "update.run notice",
     );
@@ -148,11 +150,12 @@ export async function enqueueRestartSentinelNotice(
   params: GatewayLifecycleNotice & {
     sessionKey: string;
     revision: number;
+    deliveryIntentId?: string;
   },
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   return await enqueueGatewayLifecycleNotice(
     params,
-    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+    params.deliveryIntentId ?? `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
   );
 }
 
@@ -316,8 +319,11 @@ export async function deliverRestartSentinelNotice(
     summary: string;
     queueId: string;
   },
-): Promise<void> {
-  const claim = await deliverGatewayLifecycleNoticeAttempt(params);
+): Promise<boolean> {
+  let delivered = false;
+  const claim = await deliverGatewayLifecycleNoticeAttempt(params, () => {
+    delivered = true;
+  });
   if (claim.status === "claimed-by-other-owner") {
     log.info(`${params.summary}: durable restart notice claimed by recovery`, {
       sessionKey: params.sessionKey,
@@ -326,6 +332,8 @@ export async function deliverRestartSentinelNotice(
   if (claim.status === "claimed-by-other-owner" || !claim.value) {
     await drainFailedRestartSentinelNotice(params);
   }
+  // Only the observed platform send proves delivery; recovery owns its own receipts.
+  return delivered;
 }
 
 async function deliverGatewayLifecycleNoticeAttempt(
@@ -355,6 +363,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
     }
   };
   return await withActiveDeliveryClaim(params.queueId, async () => {
+    const owner = createQueuedDeliveryOwner({ queueId: params.queueId });
     try {
       const reservation = await reserveDeliveryAttempt(params.queueId, RESTART_NOTICE_MAX_ATTEMPTS);
       if (reservation.status === "exhausted") {
@@ -396,6 +405,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
         bestEffort: false,
         skipQueue: true,
         deliveryQueueId: params.queueId,
+        deliveryQueueOwner: owner,
         deferCommitHooks: true,
         onMessageSentEvent: (event) => messageSentEvents.push(event),
       });
@@ -412,15 +422,14 @@ async function deliverGatewayLifecycleNoticeAttempt(
         onDelivered?.();
       }
       try {
-        await ackDelivery(params.queueId);
+        await owner.ack();
         await flushTerminalObservers(results, pending.preparedBatch.runId);
         return true;
       } catch (err) {
         const error = formatErrorMessage(err);
-        await (results.length > 0 ? failDeliveryAfterPlatformSend : failDelivery)(
-          params.queueId,
-          error,
-        ).catch(() => undefined);
+        await owner
+          .fail(results.length > 0 ? failDeliveryAfterPlatformSend : failDelivery, error)
+          .catch(() => undefined);
         log.warn(`${params.summary}: outbound delivery ack failed; queued for recovery: ${error}`, {
           channel: params.channel,
           to: params.to,
@@ -467,7 +476,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
       const recordFailure = isProvenDeliveryNotSentError(err)
         ? failDeliveryBeforePlatformSend
         : failDelivery;
-      await recordFailure(params.queueId, error).catch(() => undefined);
+      await owner.fail(recordFailure, error).catch(() => undefined);
       log.warn(`${params.summary}: outbound delivery failed; queued for recovery: ${String(err)}`, {
         channel: params.channel,
         to: params.to,

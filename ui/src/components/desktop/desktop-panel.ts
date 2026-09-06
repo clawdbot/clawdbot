@@ -612,7 +612,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override render() {
-    if (!this.available) {
+    if (!this.available || (!this.documentMode && !this.embedded && !this.dockLayout.open)) {
       return nothing;
     }
     const notice = renderDesktopNotice(
@@ -652,17 +652,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.connectEnvironment(this.environmentId, this.controlling);
       },
     });
-    const connection = renderDesktopConnection({
-      state: this.state,
-      controlling: this.controlling,
-      desktopApps: this.desktopApps,
-      environmentSelected: this.environmentId !== null,
-      launchingApp: this.launchingApp,
-      showApps: this.source?.kind === "environment",
-      onLaunch: (app) => void this.launchApp(app),
-      onTakeControl: () => void this.connectEnvironment(this.environmentId, true),
-      onDisconnect: () => this.returnToPicker(),
-    });
     if (this.documentMode) {
       return renderDesktopDocumentView({
         state: this.state,
@@ -679,14 +668,22 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         onKeyboardInput: (event) => this.mobileKeyboard.handleInput(event),
         onScaleToggle: () => {
           this.scaleViewport = !this.scaleViewport;
-          this.connection.handle?.setScaleViewport?.(this.scaleViewport);
+          this.connection.handle?.setScaleViewport(this.scaleViewport);
         },
         onClose: () => this.onDocumentClose?.(),
       });
     }
-    if (!this.embedded && !this.dockLayout.open) {
-      return nothing;
-    }
+    const connection = renderDesktopConnection({
+      state: this.state,
+      controlling: this.controlling,
+      desktopApps: this.desktopApps,
+      environmentSelected: this.environmentId !== null,
+      launchingApp: this.launchingApp,
+      showApps: this.source?.kind === "environment",
+      onLaunch: (app) => void this.launchApp(app),
+      onTakeControl: () => void this.connectEnvironment(this.environmentId, true),
+      onDisconnect: () => this.returnToPicker(),
+    });
     const dock = this.dockLayout.dock;
     const style =
       this.embedded || this.fullscreenMode.active

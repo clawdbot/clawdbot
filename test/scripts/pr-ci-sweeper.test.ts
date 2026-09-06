@@ -418,31 +418,41 @@ describe("runPrCiSweeper", () => {
     expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
   });
 
-  it("logs a ci-attached skip with the attached run ids", async () => {
-    const attached = {
-      ...pr(),
-      number: 21,
-      state: "open",
-      head: { sha: "5".repeat(40) },
-    };
-    const { github } = fakeGithub({
-      prs: [attached],
-      runsBySha: {
-        [attached.head.sha]: [{ id: 30105208438, status: "completed", conclusion: "failure" }],
-      },
-    });
-    const { core: loggedCore, logs } = recordingCore();
-    const results = await runPrCiSweeper({
-      github: github as never,
-      context: context as never,
-      core: loggedCore as never,
-      now: NOW,
-    });
-    expect(results).toEqual([
-      { number: 21, sha: "5".repeat(12), action: "skip", reason: "ci-attached" },
-    ]);
-    expect(logs).toContain("pr-ci-sweeper: skip #21 (ci-attached: 30105208438:completed/failure)");
-  });
+  it.each(["failure", "cancelled", "skipped"])(
+    "logs attached %s CI on a non-auto-merge PR without re-firing or reviving it",
+    async (conclusion) => {
+      const attached = {
+        ...pr(),
+        number: 21,
+        state: "open",
+        head: { sha: "5".repeat(40), ref: "automation/refresh" },
+      };
+      const { github, calls } = fakeGithub({
+        prs: [attached],
+        runsBySha: {
+          [attached.head.sha]: [{ id: 100, status: "completed", conclusion }],
+        },
+        checksByRef: { [attached.head.sha]: [githubActionsCheck(100, { conclusion })] },
+        workflowRunsById: { 100: cancelledRun(100, { event: "pull_request", conclusion }) },
+      });
+      const { core: loggedCore, logs } = recordingCore();
+      const results = await runPrCiSweeper({
+        github: github as never,
+        context: context as never,
+        core: loggedCore as never,
+        now: NOW,
+      });
+      expect(results).toEqual([
+        { number: 21, sha: "5".repeat(12), action: "skip", reason: "ci-attached" },
+      ]);
+      expect(logs).toContain(`pr-ci-sweeper: skip #21 (ci-attached: 100:completed/${conclusion})`);
+      expect(
+        calls.filter((call) =>
+          ["pulls.update", "actions.reRunWorkflow", "issues.createComment"].includes(call.method),
+        ),
+      ).toEqual([]);
+    },
+  );
 
   it("logs draft skips so every scanned PR has a decision", async () => {
     const draft = {

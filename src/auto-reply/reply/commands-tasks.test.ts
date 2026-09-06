@@ -6,12 +6,7 @@ import {
   createRunningTaskRunCore,
   failTaskRunByRunIdCore,
 } from "../../tasks/task-executor.js";
-import { createManagedTaskFlow } from "../../tasks/task-flow-registry.js";
-import {
-  configureTaskFlowRegistryRuntime,
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import {
   baseCommandTestConfig,
@@ -48,20 +43,10 @@ describe("handleTasksCommand task board", () => {
     vi.clearAllMocks();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();
-    resetTaskFlowRegistryForTests({ persist: false });
-    configureTaskFlowRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({ flows: new Map() }),
-        saveSnapshot: () => {},
-        upsertFlow: () => {},
-        deleteFlow: () => {},
-      },
-    });
   });
 
   afterEach(() => {
     resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("lists active and recent tasks for the current session", async () => {
@@ -275,97 +260,9 @@ describe("handleTasksCommand task board", () => {
 
     const reply = await buildTasksReplyForTest();
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).not.toContain("stale completed task");
     expect(reply.text).not.toContain("done a while ago");
-  });
-
-  it("lists open owner-bound TaskFlows when no task run is visible", async () => {
-    createManagedTaskFlow({
-      ownerKey: "agent:main:main",
-      controllerId: "commands-tasks-test",
-      goal: "Wait for the approval step",
-      status: "waiting",
-      currentStep: "approval",
-    });
-
-    const reply = await buildTasksReplyForTest();
-
-    expect(reply.text).toContain("No active or recent tasks.");
-    expect(reply.text).toContain("Open TaskFlows: 1");
-    expect(reply.text).toContain("Wait for the approval step");
-    expect(reply.text).toContain("status waiting · current step approval");
-    expect(reply.text).not.toContain("All clear - nothing linked to this session right now.");
-  });
-
-  it("does not duplicate mirrored one-task flows in the open TaskFlows section", async () => {
-    const task = createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:mirrored-board-task",
-      runId: "run-mirrored-board-task",
-      task: "Mirrored task should appear once",
-    });
-
-    expect(task?.parentFlowId).toBeTruthy();
-
-    const reply = await buildTasksReplyForTest();
-
-    expect(reply.text).toContain("Mirrored task should appear once");
-    expect(reply.text).not.toContain("Open TaskFlows:");
-  });
-
-  it("keeps bare-session TaskFlows isolated by agent", async () => {
-    createManagedTaskFlow({
-      ownerKey: "global",
-      agentId: "research",
-      controllerId: "commands-tasks-global-research",
-      goal: "Research global flow",
-      status: "waiting",
-    });
-    createManagedTaskFlow({
-      ownerKey: "global",
-      agentId: "ops",
-      controllerId: "commands-tasks-global-ops",
-      goal: "Ops global flow",
-      status: "waiting",
-    });
-
-    const reply = await buildTasksReplyForTest({
-      sessionKey: "global",
-      agentId: "research",
-      cfg: {
-        ...baseCfg,
-        session: { scope: "global" },
-        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
-      },
-    });
-
-    expect(reply.text).toContain("Research global flow");
-    expect(reply.text).not.toContain("Ops global flow");
-  });
-
-  it("keeps terminal and cross-owner TaskFlows out of the session board", async () => {
-    createManagedTaskFlow({
-      ownerKey: "agent:main:main",
-      controllerId: "commands-tasks-test",
-      goal: "Finished workflow",
-      status: "succeeded",
-      endedAt: Date.now(),
-    });
-    createManagedTaskFlow({
-      ownerKey: "agent:main:other",
-      controllerId: "commands-tasks-test",
-      goal: "Other session workflow",
-      status: "waiting",
-      currentStep: "hidden",
-    });
-
-    const reply = await buildTasksReplyForTest();
-
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
-    expect(reply.text).not.toContain("Finished workflow");
-    expect(reply.text).not.toContain("Other session workflow");
   });
 
   it("falls back to agent-local counts when the current session has no visible tasks", async () => {
@@ -383,7 +280,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:main:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
@@ -408,7 +305,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:main:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden video background task");
     expect(reply.text).not.toContain("Queued video generation");
@@ -429,7 +326,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:target:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("target hidden background task");
   });

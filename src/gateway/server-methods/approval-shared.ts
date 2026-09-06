@@ -1,6 +1,5 @@
 // Approval shared helpers normalize pending exec/plugin approval lookups,
 // decision payloads, turn-source routing, and gateway error responses.
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type {
@@ -15,6 +14,7 @@ import type {
   ExecApprovalRequestPayload,
 } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import {
@@ -285,7 +285,6 @@ export async function handlePendingApprovalRequest<
 >(params: {
   manager: ExecApprovalManager<TPayload>;
   record: ExecApprovalRecord<TPayload>;
-  decisionPromise: Promise<ExecApprovalDecision | null>;
   respond: RespondFn;
   context: GatewayRequestContext;
   clientConnId?: string;
@@ -304,9 +303,37 @@ export async function handlePendingApprovalRequest<
   suppressDelivery?: boolean;
   deliverToApprovalClientsOnly?: boolean;
 }): Promise<void> {
-  // Delivery may outlive the normal resolved-record grace. Keep the executable
-  // binding until the requester response and post-decision handoff finish.
-  const releaseHandoff = params.manager.retainForHandoff(params.record.id);
+  const deliveryReady = createDeferredCore<boolean>();
+  let noRouteWon = false;
+  const handoff = params.manager.registerDecisionHandoff(params.record.id, async (decision) => {
+    if (!(await deliveryReady.promise)) {
+      return;
+    }
+    let projectedDecision = params.manager.projectDecisionIfActive(params.record.id, decision);
+    if (!noRouteWon && params.afterDecision) {
+      try {
+        await params.afterDecision(projectedDecision, params.requestEvent);
+      } catch (err) {
+        params.context.logGateway?.error?.(
+          `${params.afterDecisionErrorLabel ?? "approval follow-up failed"}: ${String(err)}`,
+        );
+      }
+    }
+    projectedDecision = params.manager.projectDecisionIfActive(params.record.id, projectedDecision);
+    params.respond(
+      true,
+      {
+        id: params.record.id,
+        decision: projectedDecision,
+        createdAtMs: params.record.createdAtMs,
+        expiresAtMs: params.record.expiresAtMs,
+      },
+      undefined,
+    );
+  });
+  // Observation can close while delivery is preparing; the registered genuine
+  // handoff remains manager-owned and is joined independently of this observer.
+  void handoff.observation.catch(() => {});
   try {
     const suppressDelivery = params.suppressDelivery === true;
     // Cron/automation cards go only to connected approval surfaces (Control
@@ -352,9 +379,10 @@ export async function handlePendingApprovalRequest<
         ? approvalClientConnIds.size > 0 || internalApprovalSubscriberCount > 0
         : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false) ||
           internalApprovalSubscriberCount > 0;
-    const deliveredResult =
-      suppressDelivery || approvalClientsOnly ? false : params.deliverRequest();
-    const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+    const delivered =
+      suppressDelivery || approvalClientsOnly
+        ? false
+        : await params.manager.trackActiveWork(params.deliverRequest);
     // A turn-source route can approve without an active approval client, so keep
     // the record alive when the originating channel/account can still receive it.
     const hasTurnSourceRoute =
@@ -375,33 +403,6 @@ export async function handlePendingApprovalRequest<
           ? "turn-source"
           : "none";
 
-    const respondWithDecision = async (decision: ExecApprovalDecision | null): Promise<void> => {
-      let projectedDecision = params.manager.projectDecisionIfActive(params.record.id, decision);
-      if (params.afterDecision) {
-        try {
-          await params.afterDecision(projectedDecision, params.requestEvent);
-        } catch (err) {
-          params.context.logGateway?.error?.(
-            `${params.afterDecisionErrorLabel ?? "approval follow-up failed"}: ${String(err)}`,
-          );
-        }
-      }
-      projectedDecision = params.manager.projectDecisionIfActive(
-        params.record.id,
-        projectedDecision,
-      );
-      params.respond(
-        true,
-        {
-          id: params.record.id,
-          decision: projectedDecision,
-          createdAtMs: params.record.createdAtMs,
-          expiresAtMs: params.record.expiresAtMs,
-        },
-        undefined,
-      );
-    };
-
     if (
       params.requireDeliveryRoute !== false &&
       !params.keepPendingWithoutRoute &&
@@ -409,33 +410,15 @@ export async function handlePendingApprovalRequest<
       !hasTurnSourceRoute &&
       !delivered
     ) {
-      let noRouteWon: boolean;
       try {
         noRouteWon = params.manager.expire(params.record.id, "no-approval-route");
       } catch (err) {
+        deliveryReady.resolve(false);
+        handoff.abandon();
         respondApprovalStorageUnavailable({ ...params, operation: "request", error: err });
         return;
       }
-      if (!noRouteWon) {
-        // Delivery can yield while another surface resolves the same approval.
-        // Preserve that first answer instead of reporting a synthetic no-route timeout.
-        await respondWithDecision(await params.decisionPromise);
-        return;
-      }
-      params.respond(
-        true,
-        {
-          id: params.record.id,
-          decision: null,
-          createdAtMs: params.record.createdAtMs,
-          expiresAtMs: params.record.expiresAtMs,
-        },
-        undefined,
-      );
-      return;
-    }
-
-    if (params.twoPhase) {
+    } else if (params.twoPhase) {
       params.respond(
         true,
         {
@@ -450,11 +433,13 @@ export async function handlePendingApprovalRequest<
         undefined,
       );
     }
-
-    await respondWithDecision(await params.decisionPromise);
-  } finally {
-    releaseHandoff?.();
+  } catch (error) {
+    deliveryReady.resolve(false);
+    handoff.abandon();
+    throw error;
   }
+  deliveryReady.resolve(true);
+  await handoff.observation;
 }
 
 function respondRepeatedApprovalResolution<TPayload>(

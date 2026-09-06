@@ -8,6 +8,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -90,6 +91,7 @@ function createLocalGatewayRequestContext(
   });
   const context: GatewayRequestContext = {
     localEmbedded: true,
+    trackExecution: trackAsyncWork,
     deps: params.deps,
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,

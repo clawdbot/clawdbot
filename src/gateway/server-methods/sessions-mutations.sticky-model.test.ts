@@ -213,8 +213,8 @@ afterAll(async () => {
 
 describe("sessions.patch sticky model persistence", () => {
   it.each([
-    { scope: undefined, agentId: "main", target: "defaults" },
-    { scope: undefined, agentId: "work", target: "agent" },
+    { scope: undefined, agentId: "main", target: undefined },
+    { scope: undefined, agentId: "work", target: undefined },
     { scope: "session", agentId: "main", target: undefined },
     { scope: "session", agentId: "work", target: undefined },
     { scope: "agent", agentId: "main", target: "agent" },
@@ -351,6 +351,7 @@ describe("sessions.patch sticky model persistence", () => {
   );
 
   it("returns session success and warns when the sticky config write fails", async () => {
+    cfg.agents!.defaults!.modelSelectionScope = "global";
     const sessionKey = "agent:main:dm:write-failure";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },

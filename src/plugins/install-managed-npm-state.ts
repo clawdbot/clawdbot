@@ -20,10 +20,11 @@ import {
   resolvePluginNpmGenerationProjectDirPrefix,
   resolvePluginNpmProjectDir,
 } from "./install-paths.js";
-import { loadPluginInstallRuntime } from "./install-shared.js";
+import { loadPluginInstallRuntime, resolveEffectiveInstallMode } from "./install-shared.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { listNpmPackageDirs } from "./npm-package-dirs.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 
 const rollbackSnapshotCopyMode = fsConstants.COPYFILE_FICLONE;
@@ -474,50 +475,21 @@ export async function quarantineManagedNpmProjectRebuildArtifacts(params: {
 }
 
 export async function listManagedNpmRootPackageNames(npmRoot: string): Promise<Set<string>> {
-  const nodeModulesDir = path.join(npmRoot, "node_modules");
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(nodeModulesDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Set();
-    }
-    throw error;
-  }
-
-  const packageNames = new Set<string>();
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (entry.name === ".bin" || entry.name === "openclaw") {
-      continue;
-    }
-    if (entry.name.startsWith("@")) {
-      const scopeDir = path.join(nodeModulesDir, entry.name);
-      let scopedEntries: Dirent[];
-      try {
-        scopedEntries = await fs.readdir(scopeDir, { withFileTypes: true });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-      for (const scopedEntry of scopedEntries.toSorted((left, right) =>
-        left.name.localeCompare(right.name),
-      )) {
-        if (scopedEntry.isDirectory() || scopedEntry.isSymbolicLink()) {
-          packageNames.add(`${entry.name}/${scopedEntry.name}`);
-        }
-      }
-      continue;
-    }
-    if (entry.isDirectory() || entry.isSymbolicLink()) {
-      packageNames.add(entry.name);
-    }
-  }
-  return packageNames;
+  const packageDirs = await listNpmPackageDirs(npmRoot, {
+    sortEntries: true,
+    includeEntry: (entry, scoped) =>
+      (scoped || (entry.name !== ".bin" && entry.name !== "openclaw")) &&
+      // Scope reads must still report malformed directories, including regular files.
+      ((!scoped && entry.name.startsWith("@")) || entry.isDirectory() || entry.isSymbolicLink()),
+  });
+  return new Set(
+    packageDirs.map((dir) =>
+      path.relative(path.join(npmRoot, "node_modules"), dir).split(path.sep).join("/"),
+    ),
+  );
 }
 
-export function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
+function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
   return path.join(npmRoot, "node_modules", ...packageName.split("/"));
 }
 
@@ -534,7 +506,7 @@ function resolveManagedNpmRootGenerationKey(params: {
   ].join("\n");
 }
 
-export function resolveManagedNpmRootForInstall(params: {
+function resolveManagedNpmRootForInstall(params: {
   npmBaseDir: string;
   packageName: string;
   npmResolution: NpmSpecResolution;
@@ -556,7 +528,7 @@ export function resolveManagedNpmRootForInstall(params: {
   });
 }
 
-export function resolveManagedNpmInstallRoot(params: {
+function resolveManagedNpmInstallRoot(params: {
   npmBaseDir: string;
   packageName: string;
   npmResolution: NpmSpecResolution;
@@ -620,7 +592,7 @@ async function listManagedNpmPackageDirsForPackage(params: {
   return packageDirs;
 }
 
-export async function resolveManagedNpmGenerationUseForInstall(params: {
+async function resolveManagedNpmGenerationUseForInstall(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   npmBaseDir: string;
   packageName: string;
@@ -652,10 +624,44 @@ export async function resolveManagedNpmGenerationUseForInstall(params: {
       return "retained-install";
     }
   }
-  if (params.requestedMode === "update") {
-    return hasNonRetainedPackageDir ? "update" : "none";
-  }
-  return "none";
+  return generationUse;
+}
+
+export async function resolveManagedNpmInstallPlan(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  npmBaseDir: string;
+  packageName: string;
+  requestedMode: "install" | "update";
+  npmResolution: NpmSpecResolution;
+}): Promise<{
+  npmRoot: string;
+  installRoot: string;
+  targetMode: "install" | "update";
+  policyMode: "install" | "update";
+}> {
+  const generationUse = await resolveManagedNpmGenerationUseForInstall(params);
+  const npmRoot = resolveManagedNpmInstallRoot({
+    ...params,
+    useGeneration: generationUse !== "none",
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
+  const targetMode =
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+      ? "update"
+      : await resolveEffectiveInstallMode({
+          runtime: params.runtime,
+          requestedMode: params.requestedMode,
+          targetPath: installRoot,
+        });
+  // A new artifact directory can still update an installed plugin. Conversely,
+  // reactivating a retained tree requires fresh-install policy, even for --update.
+  const policyMode =
+    generationUse === "update"
+      ? "update"
+      : generationUse === "retained-install"
+        ? "install"
+        : targetMode;
+  return { npmRoot, installRoot, targetMode, policyMode };
 }
 
 export function resolveRequiredPlatformPackageNames(

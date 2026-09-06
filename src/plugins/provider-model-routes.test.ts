@@ -543,9 +543,44 @@ describe("provider model route adapter", () => {
     });
   });
 
-  it("returns null when the provider artifact has no route hook", () => {
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["without a route hook", {}],
+  ] as const)("returns null for a %s route surface despite configured facts", (_label, surface) => {
+    const config = {
+      models: {
+        providers: {
+          "fixture:routes": {
+            api: "openai-completions",
+            baseUrl: "https://provider.example.test/v1",
+            models: [{ id: "demo", api: "openai-responses" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
     expect(
-      resolveProviderModelRoutes({ provider: "fixture", modelId: "demo", surface: {} }),
+      resolveProviderModelRoutes({
+        provider: "fixture:routes",
+        modelId: "demo",
+        api: "openai-responses",
+        baseUrl: "https://observed.example.test/v1",
+        config,
+        env: {},
+        surface,
+      }),
     ).toBeNull();
+  });
+
+  it("keeps a missing route hook captured while fresh resolvers see a later hook", () => {
+    const surface: { resolveModelRoutes?: () => { kind: "indeterminate" } } = {};
+    const resolveRoutes = createProviderModelRoutesResolver({ provider: "fixture", surface });
+    surface.resolveModelRoutes = () => ({ kind: "indeterminate" });
+
+    expect(resolveRoutes({ modelId: "demo" })).toBeNull();
+    expect(resolveProviderModelRoutes({ provider: "fixture", modelId: "demo", surface })).toEqual({
+      kind: "indeterminate",
+    });
   });
 });

@@ -13,6 +13,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import {
@@ -262,11 +263,12 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  const sessionDelivery = deliveryContextFromSession(entry);
   const ownerMode = target === "owner";
   const ownerTurnSource = ownerMode && hasDeliverableHeartbeatTurnSource(params.turnSource);
   const resolvedTurnSource =
     target === "last" || ownerTurnSource
-      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      ? mergeDeliveryContext(params.turnSource, sessionDelivery)
       : undefined;
   const ownerRoute =
     ownerMode && !ownerTurnSource
@@ -280,9 +282,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
       lastAccountId: base.lastAccountId,
     });
   }
-  const ownerSession = ownerRoute?.reuseSessionRoute
-    ? deliveryContextFromSession(entry)
-    : undefined;
+  const ownerSession = ownerRoute?.reuseSessionRoute ? sessionDelivery : undefined;
 
   const resolvedTarget =
     preparedExplicitPlugin && preparedExplicitTo
@@ -380,16 +380,23 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  // Chat type belongs to the stored channel/account/destination, not a later wake route.
+  // A dropped reply thread still shares its parent conversation's chat type.
   const sessionChatTypeHint =
-    (target === "last" && !heartbeat?.to) || ownerRoute?.reuseSessionRoute
+    ((target === "last" && !heartbeat?.to) || ownerRoute?.reuseSessionRoute) &&
+    channelRouteTargetsMatchExact({
+      left: { ...sessionDelivery, threadId: undefined },
+      right: {
+        channel: resolvedTarget.channel,
+        to: resolvedTarget.to,
+        accountId: effectiveAccountId,
+      },
+    })
       ? normalizeChatType(entry?.chatType)
       : undefined;
-  const deliveryChatType = resolveHeartbeatDeliveryChatType({
-    channel: resolvedTarget.channel,
-    to: resolved.to,
-    sessionChatType: sessionChatTypeHint,
-    plugin,
-  });
+  const deliveryChatType =
+    sessionChatTypeHint ??
+    inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({
       reason: "dm-blocked",
@@ -648,22 +655,6 @@ function inferChatTypeFromTarget(params: {
       channel: params.channel,
     });
   return plugin?.messaging?.inferTargetChatType?.({ to }) ?? undefined;
-}
-
-function resolveHeartbeatDeliveryChatType(params: {
-  channel: string;
-  to: string;
-  sessionChatType?: ChatType;
-  plugin?: ChannelPlugin;
-}): ChatType | undefined {
-  if (params.sessionChatType) {
-    return params.sessionChatType;
-  }
-  return inferChatTypeFromTarget({
-    channel: params.channel,
-    to: params.to,
-    plugin: params.plugin,
-  });
 }
 
 function shouldReuseHeartbeatRouteThreadId(params: {

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.js";
 import { normalizeCodexServiceTier } from "./config-utils.js";
@@ -410,5 +411,44 @@ export function readCurrentCodexAppServerBinding(
   }
   return stored?.state === "active" && ownsStoredSessionGeneration(identity, stored)
     ? stored.binding
+    : undefined;
+}
+
+/** Host lineage is recorded in the same transaction as its successor generation. */
+export function readCodexBindingSessionEntry(params: {
+  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  config?: OpenClawConfig;
+  storePath?: string;
+}) {
+  const { identity } = params;
+  return identity.sessionKey?.trim()
+    ? getSessionEntry({
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey.trim(),
+        storePath:
+          params.storePath?.trim() ||
+          resolveStorePath(params.config?.session?.store, { agentId: identity.agentId }),
+        hydrateSkillPromptRefs: false,
+        readConsistency: "latest",
+      })
+    : undefined;
+}
+
+/** Synchronous model selection recognizes the predecessor; admission rewrites its fence. */
+export function readCodexSessionOwnershipBinding(params: {
+  bindingStore: {
+    read(identity: CodexAppServerBindingIdentity): CodexAppServerThreadBinding | undefined;
+  };
+  identity: CodexAppServerBindingIdentity;
+  config?: OpenClawConfig;
+  storePath?: string;
+}): CodexAppServerThreadBinding | undefined {
+  const binding = params.bindingStore.read(params.identity);
+  if (binding || params.identity.kind !== "session") {
+    return binding;
+  }
+  const entry = readCodexBindingSessionEntry({ ...params, identity: params.identity });
+  return entry?.sessionId === params.identity.sessionId && entry.previousSessionId
+    ? params.bindingStore.read({ ...params.identity, sessionId: entry.previousSessionId })
     : undefined;
 }

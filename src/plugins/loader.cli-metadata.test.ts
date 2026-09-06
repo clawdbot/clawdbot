@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { Command } from "commander";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   defineBundledChannelEntry,
@@ -28,6 +29,104 @@ afterAll(() => {
 });
 
 describe("plugin loader CLI metadata", () => {
+  it.each(
+    (["runtime", "cli"] as const).flatMap((surface) =>
+      (["explicit", "auto", "denied", "disabled"] as const).map((policy) => ({
+        surface,
+        policy,
+      })),
+    ),
+  )(
+    "preserves admission before parser registration ($surface, $policy)",
+    async ({ surface, policy }) => {
+      useNoBundledPlugins();
+      const markers = makePluginLoaderTempDir();
+      const targetId = "Admission-Fixture";
+      const command = "admission-fixture";
+      const imported = path.join(markers, "target-imported");
+      const unrelatedImported = path.join(markers, "unrelated-imported");
+      const invoked = path.join(markers, "invoked");
+      const target = writePlugin({
+        id: targetId,
+        filename: "index.cjs",
+        body: `const fs = require("node:fs");
+  fs.writeFileSync(${JSON.stringify(imported)}, "imported");
+  module.exports = { id: ${JSON.stringify(targetId)}, register(api) {
+    api.registerCli(({ program }) => program.command("${command}").action(() => {
+      fs.writeFileSync(${JSON.stringify(invoked)}, api.registrationMode);
+    }), { commands: ["${command}"] });
+  } };`,
+      });
+      const unrelated = writePlugin({
+        id: "unrelated-fixture",
+        filename: "index.cjs",
+        body: `require("node:fs").writeFileSync(${JSON.stringify(unrelatedImported)}, "imported");
+  module.exports = { id: "unrelated-fixture", register() {} };`,
+      });
+      const config = {
+        plugins: {
+          enabled: true,
+          allow: [command, unrelated.id],
+          deny: policy === "denied" ? [command] : [],
+          load: { paths: [target.file, unrelated.file] },
+          entries: { [command]: { enabled: policy !== "disabled" } },
+        },
+      };
+      const options = {
+        config,
+        activate: false,
+        cache: false,
+        onlyPluginIds: [targetId],
+        ...(policy === "auto"
+          ? {
+              activationSourceConfig: { plugins: { enabled: true } },
+              autoEnabledReasons: { [targetId]: ["configured fixture", "selected fixture"] },
+            }
+          : {}),
+      };
+      const registry =
+        surface === "runtime"
+          ? loadOpenClawPlugins(options)
+          : await loadOpenClawPluginCliRegistry(options);
+      const enabled = policy === "explicit" || policy === "auto";
+      const reason =
+        policy === "auto"
+          ? "configured fixture; selected fixture"
+          : policy === "denied"
+            ? "blocked by denylist"
+            : policy === "disabled"
+              ? "disabled in config"
+              : "enabled in config";
+      expect(registry.plugins.map((entry) => entry.id)).toEqual([targetId]);
+      expect(registry.plugins[0]).toMatchObject({
+        enabled,
+        activated: enabled,
+        status: enabled ? "loaded" : "disabled",
+        activationSource: enabled ? policy : "disabled",
+        activationReason: reason,
+      });
+      expect(fs.existsSync(imported)).toBe(enabled);
+      expect(fs.existsSync(unrelatedImported)).toBe(false);
+      expect(registry.cliRegistrars).toHaveLength(enabled ? 1 : 0);
+      if (enabled) {
+        const program = new Command();
+        await registry.cliRegistrars[0]!.register({
+          program,
+          parentPath: [],
+          config,
+          workspaceDir: undefined,
+          logger: { info() {}, warn() {}, error() {} },
+        });
+        await program.parseAsync([command], { from: "user" });
+        expect(fs.readFileSync(invoked, "utf8")).toBe(
+          surface === "runtime" ? "discovery" : "cli-metadata",
+        );
+      } else {
+        expect(fs.existsSync(invoked)).toBe(false);
+      }
+    },
+  );
+
   it("keeps an explicit empty CLI metadata registry authoritative", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

@@ -811,6 +811,9 @@ describe("createCopilotToolBridge", () => {
         attemptParams: {
           agentAccountId: "acct-1",
           toolBindings,
+          clientCaps: ["inline-widgets"],
+          taskSuggestionDeliveryMode: "gateway",
+          approvalReviewerDeviceId: "reviewer-device",
           senderId: "sender-1",
           senderName: "Ada",
           senderUsername: "ada",
@@ -827,6 +830,7 @@ describe("createCopilotToolBridge", () => {
           currentThreadTs: "1700000000.000100",
           currentMessageId: "M-1",
           messageProvider: "slack",
+          pinnedWidgetAuthoring: true,
           messageTo: "U-1",
           messageThreadId: "1700000000.000100",
           replyToMode: "first",
@@ -844,6 +848,9 @@ describe("createCopilotToolBridge", () => {
       expect(opts).toMatchObject({
         agentAccountId: "acct-1",
         toolBindings,
+        clientCaps: ["inline-widgets"],
+        taskSuggestionDeliveryMode: "gateway",
+        approvalReviewerDeviceId: "reviewer-device",
         senderId: "sender-1",
         senderName: "Ada",
         senderUsername: "ada",
@@ -860,6 +867,7 @@ describe("createCopilotToolBridge", () => {
         currentThreadTs: "1700000000.000100",
         currentMessageId: "M-1",
         messageProvider: "slack",
+        pinnedWidgetAuthoring: true,
         messageTo: "U-1",
         messageThreadId: "1700000000.000100",
         replyToMode: "first",
@@ -2121,13 +2129,11 @@ describe("createCopilotToolBridge tool conversion", () => {
 
   it("reports direct tool failures and matching recovery to the host terminal observer", async () => {
     const error = new Error("delivery failed");
-    const execute = vi
-      .fn()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce({
-        content: [{ text: "delivered", type: "text" }],
-        details: { status: "ok" },
-      });
+    const result = {
+      content: [{ text: "delivered", type: "text" }],
+      details: { status: "ok" },
+    };
+    const execute = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(result);
     const observeToolTerminal = vi.fn(() => ({
       executionStarted: true,
       sideEffectEvidence: true,
@@ -2145,6 +2151,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenNthCalledWith(1, {
       toolCallId: "send-1",
       toolName: "message",
+      result: error,
       arguments: args,
       executionStarted: true,
       outcome: "failure",
@@ -2153,6 +2160,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenNthCalledWith(2, {
       toolCallId: "send-2",
       toolName: "message",
+      result,
       arguments: args,
       executionStarted: true,
       outcome: "success",
@@ -2323,8 +2331,9 @@ describe("createCopilotToolBridge tool conversion", () => {
       name: "memory_forget",
       result: textToolResult("unused"),
     });
+    const error = new Error("catalog delete failed");
     target.execute = vi.fn(async () => {
-      throw new Error("catalog delete failed");
+      throw error;
     });
     const args = { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" };
 
@@ -2346,6 +2355,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenCalledWith({
       toolCallId: "catalog-forget-1",
       toolName: "memory_forget",
+      result: error,
       arguments: args,
       executionStarted: true,
       outcome: "failure",

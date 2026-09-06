@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
@@ -25,7 +26,7 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
-import type { ProviderAuthResult } from "../plugins/types.js";
+import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -59,16 +60,27 @@ function buildPreparedProviderTestPlan(params: {
   preparedConfig: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
   selectedProfileId?: string;
+  providerPlugin?: ProviderPlugin;
   modelRef: string;
   pluginId?: string;
   routeAgentId: string;
   agentDir: string;
 }): SetupInferenceTestPlan {
   const ref = parseRef(params.modelRef);
+  // Auth starters are raw provider input; guided discovery already chose its canonical model.
+  ref.model =
+    normalizeOptionalString(
+      params.providerPlugin?.normalizeModelId?.({
+        provider: ref.provider,
+        modelId: ref.model,
+      }),
+    ) ?? ref.model;
+  const modelRef = `${ref.provider}/${ref.model}`;
   const projection = {
     baseConfig: params.cfg,
     preparedConfig: params.preparedConfig,
     modelRef: params.modelRef,
+    targetModelRef: modelRef,
     providerId: ref.provider,
     pluginId: params.pluginId,
     agentId: params.routeAgentId,
@@ -87,13 +99,13 @@ function buildPreparedProviderTestPlan(params: {
   return {
     runner: "embedded",
     ...ref,
-    modelRef: params.modelRef,
+    modelRef,
     agentDir: params.agentDir,
     config: prepared.config,
     agentId: "openclaw",
     routeAgentId: params.routeAgentId,
     ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
-    persistModelRef: params.modelRef,
+    persistModelRef: modelRef,
     manualAuth: {
       profiles: prepared.profiles,
       runtimeConfigBase: params.cfg,
@@ -109,10 +121,11 @@ async function prepareSetupProviderAuthChoice(
   choice: ProviderAuthChoiceMetadata,
 ) {
   // Carry callable auth methods past the lease, never an unbound enabled config.
-  return await withPluginLifecycleLease({}, async () => {
+  return await withPluginLifecycleLease({ signal: params.signal }, async () => {
     const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
     const enableResult = await enablePluginWithCapabilityConsent(params.cfg, choice.pluginId, {
       workspaceDir: params.pluginWorkspaceDir,
+      beforePersistentEffect: params.beforePersistentEffect,
       onCapabilityConsent: params.prompter
         ? createPluginCapabilityConsentPrompter(params.prompter, () =>
             throwIfSetupInferenceCancelled(params),
@@ -159,6 +172,7 @@ export async function buildTestPlan(params: {
   prompter?: WizardPrompter;
   signal?: AbortSignal;
   isCancelled?: () => boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
   codexCliApiKey?: CodexCliApiKeyCredential;
@@ -364,6 +378,7 @@ export async function buildTestPlan(params: {
           ],
           selectedProfileId: "openai:codex-cli-api-key",
           modelRef,
+          targetModelRef: modelRef,
           providerId: ref.provider,
           agentId: routeAgentId,
         });
@@ -661,6 +676,9 @@ export async function buildTestPlan(params: {
         selectedProfileId: matchingProfile?.profileId,
         modelRef,
         pluginId: resolved.provider.pluginId,
+        ...(interactive && choice.appGuidedDiscovery === true
+          ? {}
+          : { providerPlugin: resolved.provider }),
         agentDir: params.agentDir,
         routeAgentId,
       });

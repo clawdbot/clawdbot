@@ -70,15 +70,15 @@ async function maximalCommit(root: string, candidates: readonly string[]): Promi
       .map((line) => line.trim())
       .filter(Boolean),
   );
-  if (independent.has(first)) {
-    return first;
-  }
-  for (const candidate of unique.slice(1)) {
-    if (independent.has(candidate) && (await isAncestor(root, first, candidate))) {
+  const maxima = unique.filter((candidate) => independent.has(candidate));
+  // A sole survivor is also the fallback, so probing its ancestry cannot
+  // change the choice. Keep competing survivors in their original order.
+  for (const candidate of maxima) {
+    if (candidate === first || maxima.length === 1 || (await isAncestor(root, first, candidate))) {
       return candidate;
     }
   }
-  return unique.find((candidate) => independent.has(candidate)) ?? first;
+  return maxima[0] ?? first;
 }
 
 export async function resolveBranchLanding(
@@ -95,7 +95,12 @@ export async function resolveBranchLanding(
     "--quiet",
     `refs/remotes/origin/${params.branch}`,
   ]);
-  const headSha = await gitOutput(root, ["rev-parse", "HEAD"]);
+  const possibleLandings = params.mergedHeads.filter(
+    (head) =>
+      head.baseRef === params.defaultBranch || Boolean(params.defaultBranch && head.mergeCommitSha),
+  );
+  // Only possible landings consume HEAD; keep its read order for those records.
+  const headSha = possibleLandings.length ? await gitOutput(root, ["rev-parse", "HEAD"]) : null;
   // Only merges whose content reached this checkout's default branch prove
   // the tip landed there: a direct default-base merge, or a landing through
   // another branch (feature -> release -> main) whose merge commit is now
@@ -104,7 +109,7 @@ export async function resolveBranchLanding(
   // the snapshot cache, because the cache key has no default branch.
   const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
   const landedHeads: MergedPullHead[] = [];
-  for (const head of params.mergedHeads) {
+  for (const head of possibleLandings) {
     if (head.baseRef === params.defaultBranch) {
       landedHeads.push(head);
     } else if (

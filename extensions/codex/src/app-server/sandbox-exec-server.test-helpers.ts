@@ -4,7 +4,8 @@
  */
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
-import WebSocket from "ws";
+import type { RawData, WebSocket } from "ws";
+import { websocket } from "./sandbox-exec-server.websocket.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type RpcResponse = {
@@ -147,7 +148,7 @@ export function globPath(pattern: string): unknown {
 /** Opens a WebSocket connection and resolves only after the socket is ready. */
 export function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
+    const socket = new websocket.WebSocket(url);
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
   });
@@ -236,7 +237,7 @@ export async function waitForHttpBodyDeltas(
 export function rpc(socket: WebSocket, method: string, params: unknown): Promise<unknown> {
   const id = Math.floor(Math.random() * 1_000_000);
   return new Promise((resolve, reject) => {
-    const onMessage = (data: WebSocket.RawData) => {
+    const onMessage = (data: RawData) => {
       const response = JSON.parse(Buffer.from(data as Buffer).toString("utf8")) as RpcResponse;
       if (response.id !== id) {
         return;

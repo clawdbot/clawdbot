@@ -622,7 +622,6 @@ var contextualProductDestinations = map[string]contextualProductDestinationRule{
 	"fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
 	"Fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
 	"Fireworks":   {hosts: []string{"fireworks.ai"}, routes: []string{"/providers/fireworks", "/plugins/reference/fireworks"}},
-	"Inferrs":     {routes: []string{"/providers/inferrs", "/ericcurtin/inferrs"}},
 	"Meta":        {hosts: []string{"meta.ai", "meta.com"}, routes: []string{"/providers/meta", "/plugins/reference/meta"}},
 	"Runway":      {hosts: []string{"runwayml.com"}, routes: []string{"/providers/runway", "/plugins/reference/runway"}},
 	"Synthetic":   {hosts: []string{"synthetic.new"}, routes: []string{"/providers/synthetic"}},

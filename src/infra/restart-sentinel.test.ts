@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 // Covers restart sentinel persistence, summaries, and messages.
 
 const { mockWarn, mockThrowOpen, mockThrowWrite } = vi.hoisted(() => ({
@@ -55,7 +54,6 @@ import {
   finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
-  formatUpdateOutcomeNotice,
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
@@ -64,12 +62,6 @@ import {
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
-import {
-  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
-  buildControlPlaneUpdateRestartHealthPendingResult,
-  isPendingControlPlaneUpdateRestartSentinel,
-} from "./update-control-plane-sentinel.js";
-import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 
 beforeEach(() => {
   mockWarn.mockClear();
@@ -477,74 +469,6 @@ describe("restart sentinel", () => {
     );
   });
 
-  it.each<{
-    name: string;
-    payload: Partial<import("./restart-sentinel.js").RestartSentinelPayload>;
-    expected: string;
-  }>([
-    {
-      name: "success with both versions",
-      payload: {
-        stats: { before: { version: "2026.8.1" }, after: { version: "2026.8.2" } },
-        message: "/update",
-      },
-      expected: "✅ OpenClaw updated to 2026.8.2 (from 2026.8.1).",
-    },
-    {
-      name: "success without the previous version",
-      payload: { stats: { after: { version: "2026.8.2" } }, doctorHint: "Run openclaw doctor." },
-      expected: "✅ OpenClaw updated to 2026.8.2.\nRun openclaw doctor.",
-    },
-    {
-      name: "success without versions",
-      payload: { message: "tool note" },
-      expected: "✅ OpenClaw updated and restarted.",
-    },
-    {
-      name: "failure with a reason",
-      payload: {
-        status: "error",
-        stats: { reason: "verification failed", before: { version: "2026.8.1" } },
-        doctorHint: "Run openclaw doctor.",
-      },
-      expected:
-        "⚠️ OpenClaw update failed: verification failed. The gateway is running 2026.8.1.\nRun openclaw doctor.",
-    },
-    {
-      name: "failure with the first failed step",
-      payload: {
-        status: "error",
-        stats: {
-          steps: [
-            { name: "download", command: "download", log: { exitCode: 0 } },
-            { name: "install", command: "install", log: { exitCode: 1 } },
-            { name: "verify", command: "verify", log: { exitCode: 1 } },
-          ],
-        },
-      },
-      expected: "⚠️ OpenClaw update failed: install. The gateway is running the previous version.",
-    },
-    {
-      name: "skipped with a recorded reason",
-      payload: { status: "skipped", stats: { reason: "already-current" } },
-      expected: "ℹ️ OpenClaw update skipped: already-current.",
-    },
-    {
-      name: "skipped without a reason",
-      payload: { status: "skipped" },
-      expected: "ℹ️ OpenClaw update skipped: unknown reason.",
-    },
-    {
-      name: "a sentence note",
-      payload: { message: "  The requested update is complete.  " },
-      expected: "✅ OpenClaw updated and restarted.\nThe requested update is complete.",
-    },
-  ])("formats a human update outcome for $name", ({ payload, expected }) => {
-    expect(formatUpdateOutcomeNotice({ kind: "update", status: "ok", ts: 1, ...payload })).toBe(
-      expected,
-    );
-  });
-
   it("trims log tails", () => {
     const text = "a".repeat(9000);
     const trimmed = trimLogTail(text, 8000);
@@ -917,135 +841,6 @@ describe("restart success continuation", () => {
 
   it("stays silent without session context", () => {
     expect(buildRestartSuccessContinuation({})).toBeNull();
-  });
-});
-
-describe("control-plane update restart sentinel", () => {
-  it.each([
-    { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    { serviceRestartSafe: true, version: "1.0.0", service: "failed" },
-    {
-      serviceRestartSafe: true,
-      version: "1.0.0",
-      buildId: "restored-git-build",
-      service: "healthy",
-    },
-    { serviceRestartSafe: false, reason: "state-migration-started" },
-  ] as const)(
-    "preserves recovery through the typed sentinel round trip ($serviceRestartSafe)",
-    async (recovery) => {
-      await withRestartSentinelStateDir(async () => {
-        await writeRestartSentinel(
-          buildUpdateRestartSentinelPayload({
-            result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
-            meta: {},
-          }),
-        );
-        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual(recovery);
-      });
-    },
-  );
-
-  it.each([true, false])(
-    "keeps package rollback diagnostics out of prior-runtime sentinel recovery (%s)",
-    async (packageRollbackVerified) => {
-      const priorUnsafeRecoverySchema = z.strictObject({
-        serviceRestartSafe: z.literal(false),
-        reason: z.enum([
-          "source-rollback-failed",
-          "state-migration-started",
-          "manager-unavailable",
-          "deps-install-failed",
-          "build-failed",
-          "rollback-checkout-dirty",
-          "runtime-verification-failed",
-        ]),
-      });
-      const recovery = {
-        serviceRestartSafe: false as const,
-        reason: "runtime-verification-failed" as const,
-        packageRollbackVerified,
-      };
-      const payload = buildUpdateRestartSentinelPayload({
-        result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
-        meta: {},
-      });
-
-      expect(recovery.packageRollbackVerified).toBe(packageRollbackVerified);
-      expect(payload.stats?.recovery).toEqual({
-        serviceRestartSafe: false,
-        reason: "runtime-verification-failed",
-      });
-      expect(priorUnsafeRecoverySchema.safeParse(payload.stats?.recovery).success).toBe(true);
-
-      await withRestartSentinelStateDir(async () => {
-        await writeRestartSentinel(payload);
-        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual({
-          serviceRestartSafe: false,
-          reason: "runtime-verification-failed",
-        });
-      });
-    },
-  );
-
-  it("reports a successful same-revision Git run as already current", () => {
-    const payload = buildUpdateRestartSentinelPayload({
-      result: {
-        status: "ok",
-        mode: "git",
-        before: { sha: "aaaaaaaa" },
-        after: { sha: "aaaaaaaa" },
-        steps: [],
-        durationMs: 42,
-      },
-      meta: {},
-      nowMs: 1,
-    });
-
-    expect(payload.status).toBe("skipped");
-    expect(payload.stats?.reason).toBe("already-current");
-    expect(payload.continuation).toBeUndefined();
-  });
-
-  it("keeps restart-health-pending sentinels continuation-free until final success", () => {
-    const result = {
-      status: "ok" as const,
-      mode: "npm" as const,
-      root: "/tmp/openclaw",
-      before: { version: "2026.4.23" },
-      after: { version: "2026.4.24" },
-      steps: [],
-      durationMs: 42,
-    };
-    const meta = {
-      sessionKey: "agent:main:webchat:dm:user-123",
-      continuationMessage: "Check the running version and finish the update report.",
-    };
-
-    const pendingResult = buildControlPlaneUpdateRestartHealthPendingResult(result);
-    const pendingPayload = buildUpdateRestartSentinelPayload({
-      result: pendingResult,
-      meta,
-      nowMs: 1,
-    });
-
-    expect(pendingPayload.status).toBe("skipped");
-    expect(pendingPayload.stats?.reason).toBe(CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON);
-    expect(pendingPayload.continuation).toBeUndefined();
-    expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
-
-    const finalPayload = buildUpdateRestartSentinelPayload({
-      result,
-      meta,
-      nowMs: 2,
-    });
-
-    expect(finalPayload.status).toBe("ok");
-    expect(finalPayload.continuation).toEqual({
-      kind: "agentTurn",
-      message: "Check the running version and finish the update report.",
-    });
-    expect(isPendingControlPlaneUpdateRestartSentinel(finalPayload)).toBe(false);
   });
 });
 

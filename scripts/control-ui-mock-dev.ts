@@ -1355,6 +1355,21 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       "Refactored the render guard and reran the suite; all 12 tests pass.",
       workTurnBase + 172_000,
     ),
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "mock-work-yield",
+          name: "yield",
+          arguments: {
+            message:
+              "Waiting for the two visible implementation owners; resume on progress/completion to coordinate shared review and verification.",
+          },
+        },
+      ],
+      timestamp: workTurnBase + 173_000,
+    },
   );
 
   return messages;

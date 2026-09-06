@@ -56,6 +56,7 @@ const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
       async (input: { argv?: string[]; onStdout?: (chunk: string) => void }) => {
         input.onStdout?.(`${input.argv?.join(" ") ?? ""}\n`);
         return {
+          activity: { resultSettled: true, lastOutputAtMs: Date.now() },
           runId: "safe-bins-test-run",
           pid: 1234,
           startedAtMs: Date.now(),
@@ -107,7 +108,6 @@ vi.mock("../process/supervisor/index.js", () => ({
     spawn: supervisorSpawnMock,
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   }),
 }));
 

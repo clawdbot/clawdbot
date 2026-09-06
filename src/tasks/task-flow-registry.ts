@@ -3,7 +3,6 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   getTaskFlowRegistryObservers,
   getTaskFlowRegistryStore,
@@ -67,7 +66,6 @@ type FlowRecordPatch = Omit<
 
 type FlowRecordCreateFields = {
   ownerKey: string;
-  agentId?: string;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
   status?: TaskFlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
@@ -111,6 +109,11 @@ type TaskFlowSyncResult =
       current: TaskFlowRecord;
     };
 
+export type PreparedTaskMirroredFlowSync = {
+  current: TaskFlowRecord;
+  next: TaskFlowRecord;
+};
+
 function cloneStructuredValue<T>(value: T | undefined): T | undefined {
   if (value === undefined) {
     return undefined;
@@ -137,13 +140,10 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
     syncMode === "managed"
       ? (normalizeOptionalString(record.controllerId) ?? "core/legacy-restored")
       : undefined;
-  const ownerKey = assertFlowOwnerKey(record.ownerKey);
-  const agentId = resolveFlowAgentId({ ownerKey, agentId: record.agentId });
   return {
     ...record,
     syncMode,
-    ownerKey,
-    ...(agentId ? { agentId } : {}),
+    ownerKey: assertFlowOwnerKey(record.ownerKey),
     ...(record.requesterOrigin
       ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
       : {}),
@@ -191,21 +191,6 @@ function assertFlowOwnerKey(ownerKey: string): string {
     throw new Error("Flow ownerKey is required.");
   }
   return normalized;
-}
-
-function normalizeFlowAgentId(value: string | null | undefined): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized ? normalizeAgentId(normalized) : undefined;
-}
-
-function resolveFlowAgentId(params: {
-  ownerKey: string;
-  agentId?: string | null;
-}): string | undefined {
-  return (
-    normalizeFlowAgentId(params.agentId) ??
-    normalizeFlowAgentId(parseAgentSessionKey(params.ownerKey)?.agentId)
-  );
 }
 
 function assertControllerId(controllerId?: string | null): string {
@@ -409,13 +394,10 @@ function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
   const now = params.createdAt ?? Date.now();
   const syncMode = params.syncMode ?? "managed";
   const controllerId = syncMode === "managed" ? assertControllerId(params.controllerId) : undefined;
-  const ownerKey = assertFlowOwnerKey(params.ownerKey);
-  const agentId = resolveFlowAgentId({ ownerKey, agentId: params.agentId });
   return {
     flowId: crypto.randomUUID(),
     syncMode,
-    ownerKey,
-    ...(agentId ? { agentId } : {}),
+    ownerKey: assertFlowOwnerKey(params.ownerKey),
     ...(params.requesterOrigin
       ? { requesterOrigin: cloneStructuredValue(params.requesterOrigin)! }
       : {}),
@@ -514,7 +496,6 @@ export function createTaskFlowForTask(params: {
   task: Pick<
     TaskRecord,
     | "ownerKey"
-    | "requesterAgentId"
     | "taskId"
     | "notifyPolicy"
     | "status"
@@ -537,7 +518,6 @@ export function createTaskFlowForTask(params: {
   return createFlowRecord({
     syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
-    agentId: params.task.requesterAgentId,
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
     notifyPolicy: params.task.notifyPolicy,
@@ -550,18 +530,6 @@ export function createTaskFlowForTask(params: {
     updatedAt: timing.updatedAt,
     ...(timing.endedAt !== undefined ? { endedAt: timing.endedAt } : {}),
   });
-}
-
-function updateFlowRecordByIdUnchecked(
-  flowId: string,
-  patch: FlowRecordPatch,
-): TaskFlowRecord | null {
-  ensureTaskFlowRegistryReady();
-  const current = flows.get(flowId);
-  if (!current) {
-    return null;
-  }
-  return writeFlowRecord(applyFlowPatch(current, patch), current);
 }
 
 export function updateFlowRecordByIdExpectedRevision(params: {
@@ -747,6 +715,22 @@ export function syncFlowFromTaskResult(
   if (flow.syncMode !== "task_mirrored") {
     return { ok: true, flow };
   }
+  const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, flow);
+  const updated = writeFlowRecord(prepared.next, prepared.current);
+  if (!updated) {
+    return {
+      ok: false,
+      reason: "persist_failed",
+      current: flow,
+    };
+  }
+  return { ok: true, flow: updated };
+}
+
+function prepareTaskMirroredFlowSyncFromCurrent(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+  flow: TaskFlowRecord,
+): PreparedTaskMirroredFlowSync {
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
   const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
   const timing = resolveTaskMirroredFlowTiming(
@@ -757,7 +741,7 @@ export function syncFlowFromTaskResult(
     },
     isTerminal,
   );
-  const updated = updateFlowRecordByIdUnchecked(flowId, {
+  const next = applyFlowPatch(flow, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
@@ -772,14 +756,36 @@ export function syncFlowFromTaskResult(
         }
       : { endedAt: null }),
   });
-  if (!updated) {
-    return {
-      ok: false,
-      reason: "persist_failed",
-      current: flow,
-    };
+  return { current: cloneFlowRecord(flow), next };
+}
+
+export function prepareTaskMirroredFlowSync(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+): PreparedTaskMirroredFlowSync | undefined {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return undefined;
   }
-  return { ok: true, flow: updated };
+  const flow = getTaskFlowById(flowId);
+  return flow?.syncMode === "task_mirrored"
+    ? prepareTaskMirroredFlowSyncFromCurrent(task, flow)
+    : undefined;
+}
+
+/** Publishes a mirrored flow record already committed by a shared-state transaction. */
+export function publishTaskFlowAfterAtomicStore(
+  prepared: PreparedTaskMirroredFlowSync,
+  deferredObserverEvents: Array<() => void>,
+): void {
+  const next = cloneFlowRecord(prepared.next);
+  flows.set(next.flowId, next);
+  deferredObserverEvents.push(() =>
+    emitFlowRegistryObserverEvent(() => ({
+      kind: "upserted",
+      flow: cloneFlowRecord(next),
+      previous: cloneFlowRecord(prepared.current),
+    })),
+  );
 }
 
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {

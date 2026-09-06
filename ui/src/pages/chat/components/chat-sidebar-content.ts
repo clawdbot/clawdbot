@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
@@ -13,7 +12,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
-  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
   type SessionLinkTarget,
@@ -450,9 +448,7 @@ export function handleSidebarClick(event: MouseEvent, callbacks: SidebarNavigati
     callbacks.onOpenWorkspaceFile?.(target);
     return;
   }
-  const sessionTarget =
-    markdownSessionLinkFromEvent(event) ??
-    markdownSessionHref(event, sessionRefFromPath, callbacks.basePath);
+  const sessionTarget = markdownSessionLinkFromEvent(event, callbacks.basePath);
   if (sessionTarget && shouldHandleNavigationClick(event)) {
     event.preventDefault();
     callbacks.onOpenSessionLink?.(sessionTarget);
@@ -465,13 +461,8 @@ export function handleSidebarKeydown(event: KeyboardEvent, callbacks: SidebarNav
     callbacks.onOpenWorkspaceFile?.(target);
     return;
   }
-  const sessionTarget =
-    markdownSessionLinkFromKeyboardEvent(event) ??
-    (event.key === "Enter"
-      ? markdownSessionHref(event, sessionRefFromPath, callbacks.basePath)
-      : null);
+  const sessionTarget = markdownSessionLinkFromKeyboardEvent(event, callbacks.basePath);
   if (sessionTarget) {
-    event.preventDefault();
     callbacks.onOpenSessionLink?.(sessionTarget);
   }
 }

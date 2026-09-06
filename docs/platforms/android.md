@@ -19,6 +19,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
 - Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a supported [GitHub Release](https://github.com/openclaw/openclaw/releases), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
+- Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. Use **Refresh** to recheck model availability.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -383,6 +384,8 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 ### 9. Workspace files (read-only)
 
 Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
+
+If the app cannot prepare a file or open the share sheet, it shows **Could not share file** and keeps the preview open so you can retry or go back.
 
 ## Review command approvals
 

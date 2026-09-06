@@ -27,6 +27,7 @@ import {
   expireStaleReplyOperation,
   forceClearReplyOperation,
   forceClearReplyRunBySessionId,
+  hasCommittedReplyOperationOutcome,
   isReplyRunEvidenceStale,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
@@ -1685,6 +1686,21 @@ describe("reply run registry", () => {
     operation.complete();
     expect(replyRunRegistry.isActive("agent:main:delivery-finalizing")).toBe(false);
     expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
+  });
+
+  it("reports a committed terminal outcome only while delivery is still finalizing", () => {
+    const operation = createTestReplyOperation({
+      sessionKey: "agent:main:committed-outcome",
+      sessionId: "session-committed-outcome",
+    });
+    operation.setPhase("running");
+    expect(hasCommittedReplyOperationOutcome(operation)).toBe(false);
+
+    operation.freezeAbort();
+    expect(hasCommittedReplyOperationOutcome(operation)).toBe(true);
+
+    operation.complete();
+    expect(hasCommittedReplyOperationOutcome(operation)).toBe(false);
   });
 
   it("expires finalization when its owner stops making progress", async () => {

@@ -311,7 +311,7 @@ export type LlmCompleteResult = {
 
 type RuntimeRunEmbeddedAgentParams = Omit<
   import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
-  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
+  "admittedRunContext" | "preparedRunAdmission"
 >;
 
 type RuntimeRunEmbeddedAgent = (
@@ -541,6 +541,7 @@ export type PluginRuntimeCore = {
         providerId: string;
         baseUrl: string;
         headers?: HeadersInit;
+        reconcile?: import("../provider-plugin.types.js").ProviderPlugin["reconcileLocalService"];
       },
       signal?: AbortSignal | null,
     ) => Promise<{ release: () => void } | undefined>;

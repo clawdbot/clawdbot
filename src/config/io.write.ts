@@ -1,5 +1,6 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
@@ -194,7 +195,7 @@ export async function writeConfigFileFromContext(
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
     const result = validateConfigObjectRawWithPlugins(candidate, {
-      env: deps.env,
+      ...context.pathResolution,
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
       semanticValidation: "strict",
       preservedLegacyRootKeys: options.preservedLegacyRootKeys,
@@ -377,13 +378,17 @@ export async function writeConfigFileFromContext(
   const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons, options);
   if (blockingReasons.length > 0 && options.allowDestructiveWrite !== true) {
     const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
-    await deps.fs.promises
+    // Only the completed exclusive create proves this payload is available for inspection.
+    const rejectedSave = await deps.fs.promises
       .writeFile(rejectedPath, json, { encoding: "utf-8", mode: 0o600, flag: "wx" })
-      .catch(() => {});
-    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). Rejected payload saved to ${rejectedPath}.`;
+      .then(ok, err);
+    const saveDetail = rejectedSave.ok
+      ? `Rejected payload saved to ${rejectedPath}.`
+      : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
+    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
     const error = Object.assign(new Error(message), {
       code: "CONFIG_WRITE_REJECTED",
-      rejectedPath,
+      ...(rejectedSave.ok ? { rejectedPath } : {}),
       reasons: blockingReasons,
     });
     deps.logger.warn(message);

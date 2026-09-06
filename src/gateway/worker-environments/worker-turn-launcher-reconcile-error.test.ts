@@ -9,7 +9,11 @@ import { installWorkerPlacementReconcileGuard } from "../server-worker-placement
 import { StaleWorkerBuildError } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
-import { transport, workspaceTransfer } from "./node-worker-tunnel.test-support.js";
+import {
+  transport,
+  withWorkspaceDrain,
+  workspaceTransfer,
+} from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -42,12 +46,13 @@ describe("worker turn recovery after environment reconciliation errors", () => {
     };
     const nodeTransport = transport();
     let rejectStop = true;
-    const stopRequests = vi.spyOn(nodeTransport, "invoke").mockImplementation(async (request) => {
+    const stopRequests = vi.fn<typeof nodeTransport.invoke>(async (request) => {
       expect(request.command).toBe(NODE_WORKER_ENVIRONMENT_STOP_COMMAND);
       return rejectStop
         ? { ok: false, error: { code: "UNAVAILABLE" } }
         : { ok: true, payloadJSON: "null" };
     });
+    vi.spyOn(nodeTransport, "invoke").mockImplementation(withWorkspaceDrain(stopRequests));
     const transfer = workspaceTransfer();
     transfer.closeAll = vi.fn(async () => {});
     const nodeTunnelManager = createNodeWorkerTunnelManager({
@@ -81,16 +86,17 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         runnerAvailability: { read: () => undefined, version: () => 0 },
         workspaceOperations,
         runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-        runRecoveryBarrier: async ({ run }) => await run(root),
+        runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
         runActivationBarrier: async ({ activate }) => activate(),
         runMoveBarrier: async ({ begin }) => begin(),
         resolveMoveDestination: async () => undefined,
         runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-        runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
+        runReclaimBarrier: async ({ begin, reclaim }) =>
+          await reclaim({ kind: "local", path: root }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspacePath: async () => root,
+        resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
         reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => undefined,
+        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       }),
       (_request, run) => run(),
     );

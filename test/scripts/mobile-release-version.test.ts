@@ -177,6 +177,43 @@ describe("mobile release cutter", () => {
     ).toEqual([]);
   });
 
+  it("filters already aligned outputs without shrinking the five-path contract", () => {
+    const rootDir = fixture({
+      androidVersion: "2026.8.2",
+      androidVersionCode: 2026080201,
+    });
+    const before = snapshot(rootDir);
+    const prepare = planMobileRelease({
+      gatewayVersion: "2026.8.2",
+      phase: "prepare",
+      rootDir,
+    });
+
+    expect(prepare.releasePaths).toEqual(MOBILE_RELEASE_PATHS);
+    expect(prepare.changes.map((change) => path.relative(rootDir, change.path)).toSorted()).toEqual(
+      [
+        "apps/android/Config/Version.properties",
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+        "apps/mobile/version.json",
+      ],
+    );
+    applyMobileReleasePlan(prepare);
+    applyMobileReleasePlan(
+      planMobileRelease({
+        gatewayVersion: "2026.8.2",
+        iosPlan: iosPlan(),
+        phase: "finalize",
+        rootDir,
+      }),
+    );
+
+    expect(changedPaths(before, snapshot(rootDir))).toEqual(
+      MOBILE_RELEASE_PATHS.filter(
+        (releasePath) => releasePath !== "apps/android/version.json",
+      ).toSorted(),
+    );
+  });
+
   it.each(["prepare", "finalize"] as const)(
     "bounds %s notes by uploaded Unicode characters before writing",
     (phase) => {

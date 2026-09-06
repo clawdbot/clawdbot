@@ -24,6 +24,7 @@ import {
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
@@ -252,7 +253,11 @@ export function createSubagentRegistryRestorer(config: {
           runId,
           maxConcurrent: currentSwarmConfig.maxConcurrent,
           activeRunIds: groupRuns
-            .filter((candidate) => candidate.execution.status === "running")
+            .filter(
+              (candidate) =>
+                candidate.execution.status === "running" ||
+                candidate.execution.status === "interrupted",
+            )
             .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
           start: async () => {
             await runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -317,13 +322,17 @@ export function createSubagentRegistryRestorer(config: {
         });
         continue;
       }
-      // An aborted persisted session belongs to orphan recovery. Waiting on its
-      // pre-restart run can terminalize it before the replacement turn starts.
+      const sessionEntry = loadSubagentSessionEntry({
+        childSessionKey: entry.childSessionKey,
+        storeCache: restoredSessionCache,
+      });
+      // Orphan recovery owns aborted sessions and exact still-running retired
+      // executions. Completed sessions must resume normal settlement and delivery.
       if (
-        loadSubagentSessionEntry({
-          childSessionKey: entry.childSessionKey,
-          storeCache: restoredSessionCache,
-        })?.abortedLastRun === true
+        sessionEntry?.abortedLastRun === true ||
+        (sessionEntry?.status === "running" &&
+          sessionEntry.lifecycleRunId === entry.runId &&
+          isRetiredSubagentExecution(entry))
       ) {
         continue;
       }

@@ -28,6 +28,7 @@ import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -65,29 +66,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -358,24 +350,28 @@ fun ShellScreen(
         CommandPalette(
           viewModel = viewModel,
           onDismiss = { commandOpen = false },
-          onOpenChat = {
-            nav.selectTab(Tab.Chat)
-            commandOpen = false
-          },
-          onOpenVoice = {
-            nav.selectTab(Tab.Chat)
-            commandOpen = false
-          },
-          onOpenSessions = {
-            nav.openDetailTab(Tab.Sessions)
-            commandOpen = false
-          },
-          onOpenProviders = {
-            nav.openDetailTab(Tab.ProvidersModels)
-            commandOpen = false
-          },
-          onOpenSettings = {
-            nav.openSettingsRoute(SettingsRoute.Home)
+          onOpen = { action ->
+            when (action) {
+              CommandAction.Chat, CommandAction.Voice -> {
+                nav.selectTab(Tab.Chat)
+              }
+
+              CommandAction.Sessions -> {
+                nav.openDetailTab(Tab.Sessions)
+              }
+
+              is CommandAction.Settings -> {
+                when {
+                  // Keep the provider command on its standalone screen; entering
+                  // Settings detail would also start the Home summary refreshes.
+                  action.route == SettingsRoute.ProvidersModels -> nav.openDetailTab(Tab.ProvidersModels)
+
+                  action.route != SettingsRoute.Home && nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Home -> nav.openSettingsRouteFromHome(action.route)
+
+                  else -> nav.openSettingsRoute(action.route)
+                }
+              }
+            }
             commandOpen = false
           },
           onOpenSession = { sessionKey, ownerAgentId ->
@@ -1551,37 +1547,32 @@ private fun SettingsShellScreen(
       }
 
       val settingsRows =
-        listOfNotNull(
+        listOf(
           SettingsRow(
-            nativeText("Gateway"),
+            SettingsRoute.Gateway,
             verbatimText(gatewaySummary(gatewayConnectionDisplay)),
-            Icons.Default.Cloud,
             status = gatewayConnectionDisplay.isConnected,
-            route = SettingsRoute.Gateway,
           ),
-          SettingsRow(nativeText("Nodes & Devices"), verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
-          SettingsRow(nativeText("Channels"), channelsState.summaryText(::channelsSummaryText), Icons.Default.Notifications, status = if (channelsState.errorText != null) false else channelsSummary?.let(::channelsStatus), route = SettingsRoute.Channels),
-          SettingsRow(nativeText("Agents"), if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+          SettingsRow(SettingsRoute.NodesDevices, verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), status = nodesDevicesStatus(nodesDevicesSummary)),
+          SettingsRow(SettingsRoute.Channels, channelsState.summaryText(::channelsSummaryText), status = if (channelsState.errorText != null) false else channelsSummary?.let(::channelsStatus)),
+          SettingsRow(SettingsRoute.Agents, if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), status = agents.isNotEmpty()),
           SettingsRow(
-            nativeText("OpenClaw"),
+            SettingsRoute.SystemAgent,
             nativeText("Setup, status, and repair"),
-            Icons.Default.Bolt,
             status =
               when (systemAgentChatState.access) {
                 SystemAgentChatAccess.Ready -> true
                 SystemAgentChatAccess.CheckingGateway -> null
                 else -> false
               },
-            route = SettingsRoute.SystemAgent,
           ),
           SettingsRow(
-            nativeText("Providers & Models"),
+            SettingsRoute.ProvidersModels,
             when {
               readyProviderCount > 0 -> nativeText("\$readyProviderCount ready", readyProviderCount)
               unknownProviderCount > 0 -> nativeText("Availability unknown")
               else -> nativeText("Review readiness")
             },
-            Icons.Outlined.Inventory2,
             status =
               when {
                 !isConnected -> false
@@ -1589,41 +1580,32 @@ private fun SettingsShellScreen(
                 unknownProviderCount > 0 -> null
                 else -> false
               },
-            route = SettingsRoute.ProvidersModels,
           ),
-          SettingsRow(nativeText("Approvals"), verbatimText(approvalsSummary(pendingApprovalsCount)), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
-          SettingsRow(nativeText("Automations"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
-          SettingsRow(nativeText("Usage"), usageState.summaryText { usageSummaryText(it.providers.size) }, Icons.Default.Storage, status = if (usageState.errorText != null) false else true.takeIf { usageSummary?.providers?.isNotEmpty() == true }, route = SettingsRoute.Usage),
-          SettingsRow(nativeText("Skills"), skillsState.summaryText { skillsSummaryText(it.skills) }, Icons.Default.Settings, status = if (skillsState.errorText != null) false else skillsSummary?.skills?.let(::skillsStatus), route = SettingsRoute.Skills),
+          SettingsRow(SettingsRoute.Approvals, verbatimText(approvalsSummary(pendingApprovalsCount)), status = approvalsStatus(pendingApprovalsCount)),
+          SettingsRow(SettingsRoute.CronJobs, verbatimText(cronJobsSummary(cronStatus.jobs)), status = if (cronStatus.jobs > 0) cronStatus.enabled else null),
+          SettingsRow(SettingsRoute.Usage, usageState.summaryText { usageSummaryText(it.providers.size) }, status = if (usageState.errorText != null) false else true.takeIf { usageSummary?.providers?.isNotEmpty() == true }),
+          SettingsRow(SettingsRoute.Skills, skillsState.summaryText { skillsSummaryText(it.skills) }, status = if (skillsState.errorText != null) false else skillsSummary?.skills?.let(::skillsStatus)),
           SettingsRow(
-            nativeText("Skill Workshop"),
+            SettingsRoute.SkillWorkshop,
             verbatimText(skillWorkshopSummaryText(skillWorkshopSummary)),
-            Icons.Default.Settings,
             status = skillWorkshopStatus(skillWorkshopSummary),
-            route = SettingsRoute.SkillWorkshop,
           ),
-          SettingsRow(nativeText("Dreaming"), dreamingState.summaryText(::dreamingSummaryText), Icons.Default.Storage, status = if (dreamingState.errorText != null) false else dreamingSummary?.let(::dreamingStatus), route = SettingsRoute.Dreaming),
-          SettingsRow(nativeText("Terminal"), nativeText("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
-          if (desktopObserveAvailable) {
-            SettingsRow(nativeText("Desktop"), nativeText("View a machine screen"), Icons.Outlined.DesktopWindows, status = isConnected, route = SettingsRoute.Desktop)
-          } else {
-            null
-          },
-          SettingsRow(nativeText("Voice"), if (speakerEnabled) nativeText("Speaker on") else nativeText("Speaker muted"), Icons.Default.Mic, route = SettingsRoute.Voice),
-          SettingsRow(nativeText("Notifications"), if (notificationForwardingEnabled) nativeText("Smart delivery") else nativeText("Off"), Icons.Default.Notifications, route = SettingsRoute.Notifications),
-          SettingsRow(nativeText("Phone Capabilities"), if (cameraEnabled) nativeText("Camera enabled") else nativeText("Locked"), Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
+          SettingsRow(SettingsRoute.Dreaming, dreamingState.summaryText(::dreamingSummaryText), status = if (dreamingState.errorText != null) false else dreamingSummary?.let(::dreamingStatus)),
+          SettingsRow(SettingsRoute.Terminal, nativeText("Shell in the agent workspace"), status = isConnected),
+          SettingsRow(SettingsRoute.Desktop, nativeText("View a machine screen"), status = isConnected),
+          SettingsRow(SettingsRoute.Voice, if (speakerEnabled) nativeText("Speaker on") else nativeText("Speaker muted")),
+          SettingsRow(SettingsRoute.Notifications, if (notificationForwardingEnabled) nativeText("Smart delivery") else nativeText("Off")),
+          SettingsRow(SettingsRoute.PhoneCapabilities, if (cameraEnabled) nativeText("Camera enabled") else nativeText("Locked"), status = !cameraEnabled),
           SettingsRow(
-            nativeText("Appearance"),
+            SettingsRoute.Appearance,
             joinedNativeText(
               separator = " · ",
               parts = listOf(verbatimText(appearanceThemeSummary(appearanceThemeMode)), verbatimText(appLanguage.displayName)),
             ),
-            Icons.Default.Palette,
-            route = SettingsRoute.Appearance,
           ),
-          SettingsRow(nativeText("About"), nativeText("Version and update"), Icons.Default.Storage, route = SettingsRoute.About),
-          SettingsRow(nativeText("Health"), nativeText("Diagnostics"), Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
-        )
+          SettingsRow(SettingsRoute.About, nativeText("Version and update")),
+          SettingsRow(SettingsRoute.Health, nativeText("Diagnostics"), status = isConnected),
+        ).filter { it.route.isAvailable(desktopObserveAvailable) }
 
       settingsSections(settingsRows).forEach { section ->
         item {
@@ -1638,11 +1620,15 @@ private fun SettingsShellScreen(
         SettingsSectionTitle(nativeText("Account"))
       }
       item {
-        SettingsGroup(
-          rows = listOf(SettingsRow(nativeText("Sign Out"), nativeText("Return to setup"), Icons.AutoMirrored.Filled.ExitToApp)),
-          onOpen = { },
-          onAction = { viewModel.pairNewGateway() },
-        )
+        ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+          SettingsListRow(
+            title = nativeText("Sign Out"),
+            value = nativeText("Return to setup"),
+            icon = Icons.AutoMirrored.Filled.ExitToApp,
+            opensRoute = false,
+            onClick = viewModel::pairNewGateway,
+          )
+        }
       }
 
       item {
@@ -1650,7 +1636,7 @@ private fun SettingsShellScreen(
       }
       item {
         SettingsGroup(
-          rows = listOf(SettingsRow(nativeText("Licenses"), verbatimText(""), Icons.Default.Storage, route = SettingsRoute.Licenses)),
+          rows = listOf(SettingsRow(SettingsRoute.Licenses, verbatimText(""))),
           onOpen = onRouteChange,
         )
       }
@@ -1821,11 +1807,9 @@ private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
   }
 
 internal data class SettingsRow(
-  val title: NativeText,
+  val route: SettingsRoute,
   val value: NativeText,
-  val icon: ImageVector,
   val status: Boolean? = null,
-  val route: SettingsRoute? = null,
 )
 
 internal data class SettingsSection(
@@ -1834,54 +1818,9 @@ internal data class SettingsSection(
 )
 
 internal fun settingsSections(rows: List<SettingsRow>): List<SettingsSection> =
-  settingsSectionOrder.mapNotNull { title ->
-    val sectionRows = rows.filter { row -> row.route?.let(::settingsSectionTitleForRoute) == title }
-    if (sectionRows.isEmpty()) null else SettingsSection(title = title, rows = sectionRows)
-  }
-
-private val settingsSectionOrder =
-  listOf(
-    nativeText("Connection"),
-    nativeText("Agents & automation"),
-    nativeText("Phone context & privacy"),
-    nativeText("Profile & device"),
-    nativeText("Diagnostics"),
-  )
-
-internal fun settingsSectionTitleForRoute(route: SettingsRoute): NativeText =
-  when (route) {
-    SettingsRoute.Gateway,
-    SettingsRoute.NodesDevices,
-    SettingsRoute.Channels,
-    -> nativeText("Connection")
-
-    SettingsRoute.Agents,
-    SettingsRoute.SystemAgent,
-    SettingsRoute.ProvidersModels,
-    SettingsRoute.Approvals,
-    SettingsRoute.CronJobs,
-    SettingsRoute.Usage,
-    SettingsRoute.Skills,
-    SettingsRoute.SkillWorkshop,
-    SettingsRoute.Dreaming,
-    SettingsRoute.Terminal,
-    SettingsRoute.Desktop,
-    -> nativeText("Agents & automation")
-
-    SettingsRoute.Voice,
-    SettingsRoute.Notifications,
-    SettingsRoute.PhoneCapabilities,
-    -> nativeText("Phone context & privacy")
-
-    SettingsRoute.Profile,
-    SettingsRoute.Appearance,
-    SettingsRoute.About,
-    SettingsRoute.Licenses,
-    -> nativeText("Profile & device")
-
-    SettingsRoute.Health -> nativeText("Diagnostics")
-
-    SettingsRoute.Home -> nativeText("Diagnostics")
+  SettingsCategory.entries.mapNotNull { category ->
+    val sectionRows = rows.filter { row -> row.route.category == category }
+    if (sectionRows.isEmpty()) null else SettingsSection(title = category.title, rows = sectionRows)
   }
 
 @Composable
@@ -1943,21 +1882,15 @@ private fun ProfilePanel(
 private fun SettingsGroup(
   rows: List<SettingsRow>,
   onOpen: (SettingsRoute) -> Unit,
-  onAction: (() -> Unit)? = null,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsListRow(
-        row = row,
-        showDisclosure = row.route != null || onAction != null,
-        onClick = {
-          val rowRoute = row.route
-          if (rowRoute == null) {
-            onAction?.invoke()
-          } else {
-            onOpen(rowRoute)
-          }
-        },
+        title = row.route.title,
+        value = row.value,
+        icon = row.route.icon,
+        status = row.status,
+        onClick = { onOpen(row.route) },
       )
     }
   }
@@ -1965,42 +1898,35 @@ private fun SettingsGroup(
 
 @Composable
 private fun SettingsListRow(
-  row: SettingsRow,
-  showDisclosure: Boolean,
+  title: NativeText,
+  value: NativeText,
+  icon: ImageVector,
+  status: Boolean? = null,
+  opensRoute: Boolean = true,
   onClick: () -> Unit,
 ) {
-  val localizedTitle = row.title.resolveNativeTextResource()
-  val localizedValue = row.value.resolveNativeTextResource()
-  Row(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .heightIn(min = 54.dp)
-        .clip(RoundedCornerShape(ClawTheme.radii.row))
-        .clickable(onClick = onClick)
-        .padding(horizontal = 0.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
-  ) {
-    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
-    Text(text = localizedTitle, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      if (localizedValue.isNotBlank()) {
-        Text(text = localizedValue, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      }
-      row.status?.let { active ->
-        Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
-      }
-      if (showDisclosure) {
+  val localizedTitle = title.resolveNativeTextResource()
+  ClawListItem(
+    title = localizedTitle,
+    subtitle = value.resolveNativeTextResource().takeIf { it.isNotBlank() },
+    leading = {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
+    },
+    trailing = {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        status?.let { active ->
+          Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
+        }
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = row.route != null),
+          contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = opensRoute),
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )
       }
-    }
-  }
+    },
+    onClick = onClick,
+  )
 }
 
 internal fun settingsRowDisclosureDescription(

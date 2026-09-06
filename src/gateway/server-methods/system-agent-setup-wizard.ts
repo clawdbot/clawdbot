@@ -54,6 +54,12 @@ export async function startSetupActivationWizard(params: {
             onCommitStarted: () => runnerSession.lockCancellation(),
           });
           if (!result.ok) {
+            if (result.disposition === "rejected-before-promotion") {
+              runnerSession.setActivationRejection({
+                disposition: result.disposition,
+                status: result.status,
+              });
+            }
             throw new Error(result.error);
           }
           runnerSession.setModelActivation({

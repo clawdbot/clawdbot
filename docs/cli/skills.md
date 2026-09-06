@@ -167,7 +167,7 @@ Notes:
 | `curator --json`                 | Accepted before or after a Curator leaf command, for example `curator --json status` or `curator status --json`.                                                                                                                                                                                                                  |
 | `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                                                                    |
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
-| `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events and the latest collection and experience review outcomes per workspace.                                                                                                                                                                               |
+| `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events, collection review outcomes per agent, and experience review outcomes per agent and workspace.                                                                                                                                                        |
 | `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
 
 ## Release trust
@@ -309,8 +309,8 @@ existing session. Removal preserves already selected revisions. See
 
 ## Skill Workshop
 
-`openclaw skills workshop` manages pending skill proposals in the selected
-workspace. Proposals are not active skills until applied. For proposal
+`openclaw skills workshop` manages pending skill proposals for the selected
+agent. Proposals are not active skills until applied. For proposal
 storage, support-file safeguards, Gateway methods, and approval policy, see
 [Skill Workshop](/tools/skill-workshop).
 

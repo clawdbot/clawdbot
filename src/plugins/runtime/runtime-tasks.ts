@@ -121,7 +121,6 @@ function createBoundTaskRunsRuntime(params: {
 
 function createBoundTaskFlowsRuntime(params: {
   sessionKey: string;
-  agentId?: string;
   requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
 }): BoundTaskFlowsRuntime {
   const ownerKey = assertSessionKey(
@@ -136,7 +135,6 @@ function createBoundTaskFlowsRuntime(params: {
     const flow = getTaskFlowByIdForOwner({
       flowId,
       callerOwnerKey: ownerKey,
-      callerAgentId: params.agentId,
     });
     if (!flow) {
       return undefined;
@@ -156,12 +154,10 @@ function createBoundTaskFlowsRuntime(params: {
     list: () =>
       listTaskFlowsForOwner({
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       }).map((flow) => mapTaskFlowView(flow)),
     findLatest: () => {
       const flow = findLatestTaskFlowForOwner({
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       });
       return flow ? getDetail(flow.flowId) : undefined;
     },
@@ -169,7 +165,6 @@ function createBoundTaskFlowsRuntime(params: {
       const flow = resolveTaskFlowForLookupTokenForOwner({
         token,
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       });
       return flow ? getDetail(flow.flowId) : undefined;
     },
@@ -177,7 +172,6 @@ function createBoundTaskFlowsRuntime(params: {
       const flow = getTaskFlowByIdForOwner({
         flowId,
         callerOwnerKey: ownerKey,
-        callerAgentId: params.agentId,
       });
       return flow ? mapTaskRunAggregateSummary(getFlowTaskSummary(flow.flowId)) : undefined;
     },
@@ -209,7 +203,6 @@ function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
     bindSession: (params) =>
       createBoundTaskFlowsRuntime({
         sessionKey: params.sessionKey,
-        agentId: params.agentId,
         requesterOrigin: params.requesterOrigin,
       }),
     fromToolContext: (ctx) =>
@@ -218,7 +211,6 @@ function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
           ctx.sessionKey,
           "TaskFlow runtime requires tool context with a sessionKey.",
         ),
-        agentId: ctx.agentId,
         requesterOrigin: ctx.deliveryContext,
       }),
   };
