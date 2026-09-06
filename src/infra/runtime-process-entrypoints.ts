@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const runtimeProcessEntrypoints = {
+  stateMigrationSnapshot: {
+    currentModuleUrl,
+    sourceWorkerName: "state-migrations.snapshot.worker",
+    distWorkerPath: "infra/state-migrations.snapshot.worker.js",
+  },
   githubExec: {
     currentModuleUrl,
     sourceWorkerName: "../agents/github-exec-launcher",
