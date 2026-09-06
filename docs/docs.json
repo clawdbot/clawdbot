@@ -2279,13 +2279,25 @@
                 "group": "Plugin SDK reference",
                 "pages": [
                   "plugins/sdk-overview",
+                  "plugins/manifest",
+                  {
+                    "group": "Plugin manifest",
+                    "pages": [
+                      "plugins/manifest/models",
+                      "plugins/manifest/providers",
+                      "plugins/manifest/setup-and-auth",
+                      "plugins/manifest/capabilities",
+                      "plugins/manifest/surfaces",
+                      "plugins/manifest/config-and-secrets",
+                      "plugins/manifest/package-json"
+                    ]
+                  },
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
                   "plugins/sdk-runtime",
                   "plugins/sdk-agent-harness",
                   "plugins/sdk-setup",
-                  "plugins/sdk-testing",
-                  "plugins/manifest"
+                  "plugins/sdk-testing"
                 ]
               },
               {

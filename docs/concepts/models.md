@@ -334,7 +334,7 @@ The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
 At publish time, it also hydrates model ids and metadata from models.dev for
 providers whose owning plugin explicitly opts in with
-[`modelCatalog.modelsDev`](/plugins/manifest#modelcatalog-reference). Each mapping
+[`modelCatalog.modelsDev`](/plugins/manifest/models#modelcatalog-reference). Each mapping
 names the upstream provider once, rather than mapping individual models; there
 is no central provider fallback. Manifest values remain authoritative, so
 hydration only fills undefined metadata and never supplies transport settings
