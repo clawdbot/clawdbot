@@ -68,13 +68,12 @@ function resolveBoardEmptyState(
         title: t("skillWorkshop.empty.staleTitle"),
         body: t("skillWorkshop.empty.staleBody"),
       };
-    case "all":
-      return {
-        icon: "search",
-        title: t("skillWorkshop.empty.allTitle"),
-        body: t("skillWorkshop.empty.allBody"),
-      };
   }
+  return {
+    icon: "search",
+    title: t("skillWorkshop.empty.allTitle"),
+    body: t("skillWorkshop.empty.allBody"),
+  };
 }
 
 const emptyStateIcons: Record<SkillWorkshopEmptyIcon, (typeof icons)[keyof typeof icons]> = {
