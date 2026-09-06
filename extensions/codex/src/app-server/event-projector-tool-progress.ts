@@ -315,7 +315,11 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultSummary(item: CodexThreadItem | undefined): void {
-    if (!item || !this.params.onToolResult || !this.shouldEmitToolResult()) {
+    // Dynamic requests own their transcript progress; native notifications only confirm it.
+    if (!item || item.type === "dynamicToolCall") {
+      return;
+    }
+    if (!this.params.onToolResult || !this.shouldEmitToolResult()) {
       return;
     }
     if (this.resultSummaryItemIds.has(item.id)) {
@@ -337,7 +341,10 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultOutput(item: CodexThreadItem | undefined): void {
-    if (!item || !this.params.onToolResult || !this.shouldEmitToolOutput()) {
+    if (!item || item.type === "dynamicToolCall") {
+      return;
+    }
+    if (!this.params.onToolResult || !this.shouldEmitToolOutput()) {
       return;
     }
     if (this.resultOutputItemIds.has(item.id) || this.resultOutputStreamedItemIds.has(item.id)) {

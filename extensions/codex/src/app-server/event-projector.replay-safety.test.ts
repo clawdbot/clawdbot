@@ -34,24 +34,44 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       });
       const success = terminalType === "completed";
       const text = success ? "Progress card updated" : "Card write unavailable";
-      projector.recordDynamicToolCall({
-        callId: "card-outcome",
+      const item = {
+        type: "dynamicToolCall",
+        id: "card-outcome",
         tool: "progress_card",
         arguments: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+        status: "inProgress",
+      };
+      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      expect(onToolResult).not.toHaveBeenCalled();
+      projector.recordDynamicToolCall({
+        callId: item.id,
+        tool: item.tool,
+        arguments: item.arguments,
       });
       expect(onToolResult).not.toHaveBeenCalled();
 
-      projector.recordDynamicToolResult({
-        callId: "card-outcome",
-        tool: "progress_card",
+      const result = {
+        callId: item.id,
+        tool: item.tool,
         success,
         terminalType,
-        contentItems: [{ type: "inputText", text }],
-      });
+        contentItems: [{ type: "inputText" as const, text }],
+      };
+      projector.recordDynamicToolResult(result);
+      projector.recordDynamicToolResult(result);
+      const completedItem = {
+        ...item,
+        status: success ? "completed" : "failed",
+        success,
+        contentItems: result.contentItems,
+      };
+      await projector.handleNotification(forCurrentTurn("item/completed", { item: completedItem }));
+      await projector.handleNotification(turnCompleted([completedItem]));
 
       if (success) {
         expect(onToolResult).not.toHaveBeenCalled();
       } else {
+        expect(onToolResult).toHaveBeenCalledTimes(2);
         expect(onToolResult).toHaveBeenCalledWith({
           text: expect.stringContaining(text),
           isError: true,
