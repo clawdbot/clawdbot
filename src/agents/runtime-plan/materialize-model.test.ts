@@ -410,3 +410,52 @@ describe("materializePreparedRuntimeModel", () => {
     ).rejects.toThrow(/prepared subscription route/u);
   });
 });
+
+describe("provider-resolved model aliases", () => {
+  it("accepts a catalog alias the owning provider resolved to its canonical model", async () => {
+    // xAI's OAuth catalog generates an `auto` entry carrying its canonical target, and the
+    // provider resolves it during normalization. Before this was tolerated, materialization
+    // compared the resolved id against the requested alias and refused its own resolution.
+    const aliasPlan: AgentRuntimeAuthPlan = {
+      providerForAuth: "xai",
+      authProfileProviderForAuth: "xai",
+      forwardedAuthProfileId: "xai:oauth",
+      selectedAuthMode: "token",
+    };
+    const canonical = {
+      provider: "xai",
+      id: "grok-4.6",
+      params: { canonicalModelId: "grok-4.6" },
+    };
+
+    const materialized = await materializePreparedRuntimeModel({
+      plan: aliasPlan,
+      provider: "xai",
+      modelId: "auto",
+      forceResolve: true,
+      resolveModel: async () => ({ model: canonical as never }),
+    });
+
+    expect(materialized?.id).toBe("grok-4.6");
+  });
+
+  it("still refuses a resolved model the provider did not derive from the request", async () => {
+    const aliasPlan: AgentRuntimeAuthPlan = {
+      providerForAuth: "xai",
+      authProfileProviderForAuth: "xai",
+      forwardedAuthProfileId: "xai:oauth",
+      selectedAuthMode: "token",
+    };
+    const unrelated = { provider: "xai", id: "grok-4.6", params: {} };
+
+    await expect(
+      materializePreparedRuntimeModel({
+        plan: aliasPlan,
+        provider: "xai",
+        modelId: "grok-4.5",
+        forceResolve: true,
+        resolveModel: async () => ({ model: unrelated as never }),
+      }),
+    ).rejects.toThrow(/Unable to rematerialize/);
+  });
+});

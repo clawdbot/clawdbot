@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { FailoverError } from "../failover/error.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../model-suppression.js";
 import {
@@ -135,11 +136,33 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
         })
       : resolveProviderModelMaterializationAuthMode(params.plan.selectedAuthMode),
   });
+  // A provider may legitimately resolve a catalog alias to its canonical model, so the
+  // requested id and the resolved id differ for a correct resolution. Ask the owning
+  // provider whether it produced this id from the requested one rather than encoding
+  // any provider's alias table here. A genuine mismatch still fails: normalizing a
+  // different requested id does not yield the resolved id.
+  const resolvedFromRequestedAlias =
+    resolved.model &&
+    canonicalizeProviderModelId(params.provider, resolved.model.id ?? "") !==
+      canonicalizeProviderModelId(params.provider, params.modelId)
+      ? normalizeProviderResolvedModelWithPlugin({
+          provider: params.provider,
+          modelId: params.modelId,
+          ...(params.config ? { config: params.config } : {}),
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          context: {
+            provider: params.provider,
+            modelId: params.modelId,
+            model: { ...resolved.model, id: params.modelId } as never,
+          },
+        })?.id === resolved.model.id
+      : false;
   if (
     !resolved.model ||
     normalizeProviderId(resolved.model.provider ?? "") !== normalizeProviderId(params.provider) ||
-    canonicalizeProviderModelId(params.provider, resolved.model.id ?? "") !==
-      canonicalizeProviderModelId(params.provider, params.modelId) ||
+    (!resolvedFromRequestedAlias &&
+      canonicalizeProviderModelId(params.provider, resolved.model.id ?? "") !==
+        canonicalizeProviderModelId(params.provider, params.modelId)) ||
     (route &&
       !modelMatchesPreparedTarget({
         model: resolved.model,
