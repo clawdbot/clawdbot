@@ -274,11 +274,17 @@ internal fun formatCompactTokenCount(
   }
 
   return when {
-    count >= 1_000_000L -> millions()
+    count >= 1_000_000L -> {
+      millions()
+    }
+
     count >= 1_000L -> {
       val thousands = decimal(count / 1_000.0)
       if (count >= 999_950L) millions() else nativeString("\${thousands}k", thousands)
     }
-    else -> count.toString()
+
+    else -> {
+      count.toString()
+    }
   }
 }

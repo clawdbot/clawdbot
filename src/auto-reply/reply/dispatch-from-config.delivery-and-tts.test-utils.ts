@@ -1,5 +1,9 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,7 +14,12 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -40,6 +49,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -89,6 +99,172 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
     );
+  });
+
+  it.each([true, false])(
+    "keeps a held native final with its delivery owner (primary=%s)",
+    async (primary) => {
+      setNoAbort();
+      const error = Object.assign(
+        new OutboundDeliveryError("still queued", {
+          cause: new PlatformMessageNotDispatchedError("offline before dispatch", {
+            cause: undefined,
+          }),
+        }),
+        { queueCustody: "held" as const },
+      );
+      const deliver = vi.fn(async () => {
+        throw error;
+      });
+      const dispatcher = createReplyDispatcher({ deliver, propagateRetryableNoSendFailure: true });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => (primary ? { text: "Held answer." } : undefined),
+      });
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(receipt).toMatchObject({ anyVisibleDelivered: false, hasPendingDelivery: true });
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    },
+  );
+
+  it("keeps a pending routed fallback ineligible for another fallback", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, ambiguous: true });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => undefined,
+    });
+    expect(mocks.routeReply).toHaveBeenCalledOnce();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it.each([
+    { name: "channel-owned final", outcomes: ["channel_transform"], fallback: false },
+    { name: "ordinary invisible final", outcomes: ["no_visible_result"], fallback: true },
+    {
+      name: "later invisible final",
+      outcomes: ["channel_transform", "no_visible_result"],
+      fallback: true,
+    },
+    {
+      name: "later cancelled final",
+      outcomes: ["channel_transform", "cancelled"],
+      fallback: true,
+    },
+    {
+      name: "later pre-send failure",
+      outcomes: ["channel_transform", "failed"],
+      fallback: true,
+    },
+  ])("preserves post-hook suppression without masking $name", async ({ outcomes, fallback }) => {
+    setNoAbort();
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: (payload) => {
+        if (payload.text === "cancelled") {
+          return null;
+        }
+        if (payload.text === "failed") {
+          throw new Error("pre-send failure");
+        }
+        return { ...payload, text: `checked:${payload.text}` };
+      },
+      deliver: async (payload) => {
+        delivered.push(payload);
+        return {
+          visibleReplySent: false,
+          suppression: {
+            reason:
+              payload.text === "checked:channel_transform"
+                ? "channel_transform"
+                : "no_visible_result",
+          },
+        };
+      },
+    });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:main:discord:direct:owner",
+        CommandSource: "native",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => outcomes.map((text) => ({ text }))),
+    });
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(
+      delivered.filter((payload) => payload.text === "checked:channel_transform"),
+    ).toHaveLength(outcomes.includes("channel_transform") ? 1 : 0);
+    expect(delivered.some((payload) => payload.text?.includes("No reply was generated"))).toBe(
+      fallback,
+    );
+    expect(result.noVisibleReplyFallbackEligible === true).toBe(fallback);
+    expect(receipt?.anyVisibleDelivered).toBe(false);
+  });
+
+  it("does not dispatch a settled final reply after its session writer is replaced", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      lifecycleRevision: "revision-a",
+      activeWriterRunId: "run-settled",
+      updatedAt: 0,
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "settled fallback" },
+      {
+        assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
+        sessionWriterDeliveryAuthority: {
+          expectedLifecycleRevision: "revision-a",
+          expectedSessionId: "s1",
+          expectedWriterRunId: "run-settled",
+          sessionKey: "agent:main:telegram:direct:123",
+          storePath: "/tmp/mock-sessions.json",
+        },
+      },
+    );
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main:telegram:direct:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { runId: "run-settled" },
+      replyResolver: vi.fn(async () => {
+        sessionStoreMocks.currentEntry = {
+          ...sessionStoreMocks.currentEntry,
+          activeWriterRunId: "replacement-run",
+        };
+        return payload;
+      }),
+    });
+
+    expect(result).toMatchObject({ queuedFinal: false });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
   });
 
   it("keeps a block-only channel transform veto terminal", async () => {
@@ -214,7 +390,11 @@ describe("dispatchReplyFromConfig", () => {
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-denied");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-escape-denied",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({ content: "/codex detach" }),
@@ -278,7 +458,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+    });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
     expect(
       getReplyPayloadMetadata(
@@ -289,6 +473,93 @@ describe("dispatchReplyFromConfig", () => {
       )?.sourceReplyTranscriptMirror,
     ).toBeUndefined();
     expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("aborts plugin-bound completion while reply delivery is still settling", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true, reply: { text: "Codex native reply" } },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-reply-abort-1",
+      targetSessionKey: "plugin-binding:codex:reply-abort-123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex",
+      },
+    } satisfies SessionBindingRecord);
+    let markDeliveryStarted: (() => void) | undefined;
+    let releaseDelivery: (() => void) | undefined;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryRelease = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        markDeliveryStarted?.();
+        await deliveryRelease;
+        throw new Error("delivery failed after abort");
+      },
+    });
+    const abortController = new AbortController();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const dispatch = withDispatchProcessedOutcomeSink(() =>
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "discord:channel:1481858418548412579",
+          To: "discord:channel:1481858418548412579",
+          AccountId: "default",
+          SenderId: "user-9",
+          SenderUsername: "ada",
+          CommandAuthorized: true,
+          WasMentioned: false,
+          CommandBody: "who are you",
+          RawBody: "who are you",
+          Body: "who are you",
+          MessageSid: "msg-claim-plugin-reply-abort",
+          SessionKey: "agent:main:discord:channel:1481858418548412579",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { abortSignal: abortController.signal },
+        replyResolver,
+      }),
+    );
+
+    await deliveryStarted;
+    abortController.abort();
+    try {
+      const { result, processedOutcome } = await dispatch;
+
+      expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } });
+      expect(processedOutcome).toEqual({ outcome: "skipped", reason: "reply_operation_aborted" });
+      expect(replyResolver).not.toHaveBeenCalled();
+    } finally {
+      releaseDelivery?.();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
   });
 
   it("persists Gateway plugin-bound turns and routed replies in the binding session", async () => {
@@ -373,7 +644,11 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+    });
     expect(persistApproved).toHaveBeenCalledWith({
       target: expect.objectContaining({
         sessionId: "bound-session-id",
@@ -438,7 +713,11 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(rotatedResult).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(rotatedResult).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+    });
     const rotatedRoutedCall = firstMockArg(mocks.routeReply, "rotated plugin binding route") as {
       payload: ReplyPayload;
       sessionKey: string;
@@ -500,6 +779,179 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockedDispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "handled reply route delivers",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: true, delivered: true, messageId: "routed-binding-1" },
+      processedReason: "plugin-bound-handled",
+      expectObservedDelivery: true,
+    },
+    {
+      name: "handled reply route delivers before abort",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: true, delivered: true, messageId: "routed-binding-aborted-1" },
+      processedReason: "reply_operation_aborted",
+      expectObservedDelivery: true,
+      abortAfterRoute: true,
+    },
+    {
+      name: "handled reply route is hook-suppressed",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: true, delivered: false, suppressed: true },
+      processedReason: "plugin-bound-handled",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "handled reply route fails",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: false, delivered: false, error: "transport down" },
+      processedReason: "plugin-bound-handled",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "declined notice route delivers",
+      claimOutcome: { status: "declined" },
+      routeResult: { ok: true, delivered: true, messageId: "routed-declined-1" },
+      processedReason: "plugin-bound-declined",
+      expectObservedDelivery: true,
+    },
+    {
+      name: "declined notice route is hook-suppressed",
+      claimOutcome: { status: "declined" },
+      routeResult: { ok: true, delivered: false, suppressed: true },
+      processedReason: "plugin-bound-declined",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "declined notice route fails",
+      claimOutcome: { status: "declined" },
+      routeResult: { ok: false, delivered: false, error: "transport down" },
+      processedReason: "plugin-bound-declined",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "error notice route delivers",
+      claimOutcome: { status: "error", error: "boom" },
+      routeResult: { ok: true, delivered: true, messageId: "routed-error-1" },
+      processedReason: "plugin-bound-error",
+      expectObservedDelivery: true,
+    },
+    {
+      name: "error notice route is hook-suppressed",
+      claimOutcome: { status: "error", error: "boom" },
+      routeResult: { ok: true, delivered: false, suppressed: true },
+      processedReason: "plugin-bound-error",
+      expectObservedDelivery: false,
+    },
+    {
+      name: "error notice route fails",
+      claimOutcome: { status: "error", error: "boom" },
+      routeResult: { ok: false, delivered: false, error: "transport down" },
+      processedReason: "plugin-bound-error",
+      expectObservedDelivery: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    claimOutcome: PluginTargetedInboundClaimOutcome;
+    routeResult: {
+      ok: boolean;
+      delivered: boolean;
+      messageId?: string;
+      suppressed?: boolean;
+      error?: string;
+    };
+    processedReason: string;
+    expectObservedDelivery: boolean;
+    abortAfterRoute?: boolean;
+  }>)(
+    "attests observed delivery only when the routed binding turn delivered: $name",
+    async (params) => {
+      setNoAbort();
+      hookMocks.runner.hasHooks.mockImplementation(
+        ((hookName?: string) =>
+          hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+      );
+      hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue(params.claimOutcome);
+      const abortController = new AbortController();
+      mocks.routeReply.mockImplementation(async () => {
+        if (params.abortAfterRoute) {
+          abortController.abort();
+        }
+        return params.routeResult;
+      });
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        bindingId: "binding-routed-attest-1",
+        targetSessionKey: "plugin-binding:codex:routed-attest",
+        targetKind: "session",
+        conversation: {
+          channel: "slack",
+          accountId: "default",
+          conversationId: "user:U123",
+        },
+        status: "active",
+        boundAt: 1710000000000,
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "openclaw-codex-app-server",
+          pluginRoot: "/plugins/codex",
+        },
+      } satisfies SessionBindingRecord);
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+      const { result, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
+        dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "openclaw",
+            Surface: "openclaw",
+            OriginatingChannel: "slack",
+            OriginatingTo: "user:U123",
+            To: "user:U123",
+            AccountId: "default",
+            CommandAuthorized: true,
+            Body: "continue",
+            RawBody: "continue",
+            MessageSid: `msg-routed-attest-${params.name.replace(/\s+/g, "-")}`,
+            SessionKey: "agent:main:main",
+          }),
+          cfg: emptyConfig,
+          dispatcher,
+          replyOptions: { abortSignal: abortController.signal },
+          replyResolver,
+        }),
+      );
+
+      // A hook-suppressed or failed route reached no recipient, so the result
+      // must stay warning-eligible instead of reading as a visible delivery.
+      expect(result).toEqual({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        ...(params.expectObservedDelivery ? { observedReplyDelivery: true } : {}),
+      });
+      expect(processedOutcome).toEqual({
+        outcome: params.abortAfterRoute ? "skipped" : "completed",
+        reason: params.processedReason,
+      });
+      expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
@@ -553,7 +1005,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-dm-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-dm-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
       | [
@@ -574,7 +1030,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("falls back to OpenClaw once per startup when a bound plugin is missing", async () => {
+  it("notifies once per binding owner when a bound plugin is missing", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -583,7 +1039,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "missing_plugin",
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const binding: SessionBindingRecord = {
       bindingId: "binding-missing-1",
       targetSessionKey: "plugin-binding:codex:missing123",
       targetKind: "session",
@@ -601,62 +1057,52 @@ describe("dispatchReplyFromConfig", () => {
         pluginRoot: "/Users/huntharo/github/openclaw-app-server",
         detachHint: "/codex_detach",
       },
-    } satisfies SessionBindingRecord);
+    };
 
-    const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
+    const cases = [
+      { channel: "discord", accountId: "default", notice: true },
+      { channel: "discord", accountId: "default", notice: false },
+      { channel: "telegram", accountId: "default", notice: true },
+      { channel: "discord", accountId: "work", notice: true },
+    ];
+    for (const [index, { channel, accountId, notice }] of cases.entries()) {
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        ...binding,
+        conversation: { ...binding.conversation, channel, accountId },
+      });
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(
+        async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload,
+      );
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: channel,
+          Surface: channel,
+          OriginatingChannel: channel,
+          OriginatingTo: `${channel}:channel:missing-plugin`,
+          To: `${channel}:channel:missing-plugin`,
+          AccountId: accountId,
+          MessageSid: `msg-missing-plugin-${index}`,
+          SessionKey: `agent:main:${channel}:${accountId}:channel:missing-plugin`,
+          CommandBody: "hello",
+          RawBody: "hello",
+          Body: "hello",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
 
-    const firstDispatcher = createDispatcher();
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:missing-plugin",
-        To: "discord:channel:missing-plugin",
-        AccountId: "default",
-        MessageSid: "msg-missing-plugin-1",
-        SessionKey: "agent:main:discord:channel:missing-plugin",
-        CommandBody: "hello",
-        RawBody: "hello",
-        Body: "hello",
-      }),
-      cfg: emptyConfig,
-      dispatcher: firstDispatcher,
-      replyResolver,
-    });
-
-    const firstNotice = (firstDispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(firstNotice?.text).toContain("is not currently loaded.");
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
-
-    replyResolver.mockClear();
-    hookMocks.runner.runInboundClaim.mockClear();
-
-    const secondDispatcher = createDispatcher();
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:missing-plugin",
-        To: "discord:channel:missing-plugin",
-        AccountId: "default",
-        MessageSid: "msg-missing-plugin-2",
-        SessionKey: "agent:main:discord:channel:missing-plugin",
-        CommandBody: "still there?",
-        RawBody: "still there?",
-        Body: "still there?",
-      }),
-      cfg: emptyConfig,
-      dispatcher: secondDispatcher,
-      replyResolver,
-    });
-
-    expect(secondDispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+      if (notice) {
+        const payload = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
+          .calls[0]?.[0] as ReplyPayload | undefined;
+        expect(payload?.text).toContain("is not currently loaded.");
+      } else {
+        expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      }
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    }
   });
 
   it("falls back to OpenClaw when the bound plugin is loaded but has no inbound_claim handler", async () => {
@@ -1076,7 +1522,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "UTC" } },
-      messages: { suppressToolErrors: true },
+      messages: { responsePrefix: "[test]" },
     } satisfies OpenClawConfig;
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
@@ -1127,7 +1573,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(receivedCfg).not.toBe(overrideCfg);
     expect(receivedCfg).toMatchObject({
       agents: { defaults: { userTimezone: "America/New_York" } },
-      messages: { suppressToolErrors: true },
+      messages: { responsePrefix: "[test]" },
     });
     expect(receivedPreparedRuntime).toBeUndefined();
   });
@@ -1417,13 +1863,15 @@ describe("dispatchReplyFromConfig", () => {
     expect(result.counts).toEqual({ tool: 0, block: 1, final: 0 });
   });
 
-  it("keeps the final fallback when an identical block delivery fails", async () => {
+  it("keeps the final fallback when an identical block is proven unsent", async () => {
     setNoAbort();
     const delivered: Array<{ kind: string; text?: string }> = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload, info) => {
         if (info.kind === "block") {
-          throw new Error("block delivery failed");
+          throw new PlatformMessageNotDispatchedError("block delivery failed before dispatch", {
+            cause: undefined,
+          });
         }
         delivered.push({ kind: info.kind, text: payload.text });
       },
@@ -1953,6 +2401,384 @@ describe("dispatchReplyFromConfig", () => {
       audioAsVoice: true,
     });
   });
+
+  it.each([
+    { ok: true, delivered: false, ambiguous: true },
+    { ok: false, delivered: false, queueCustody: "held" as const },
+  ])("keeps a pending routed caption with its delivery owner ($ok)", async (pending) => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    mocks.routeReply.mockResolvedValue(pending);
+    const dispatcher = createDispatcher();
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "One captioned answer." }),
+    });
+
+    expect(mocks.routeReply.mock.calls.map(([call]) => call.payload)).toEqual([
+      expect.objectContaining({
+        text: "One captioned answer.",
+        mediaUrl: "https://example.com/tts-synth.opus",
+      }),
+    ]);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.counts.final).toBe(0);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it.each([
+    { final: "same", audio: false, native: false },
+    { final: "different", audio: false, native: false },
+    { final: "same", audio: true, native: false },
+    { final: "same", audio: false, native: true },
+    { final: "different", audio: false, native: true },
+    { final: "same", audio: true, native: true },
+    { final: "same", audio: false, native: "identityless" },
+    { final: "different", audio: false, native: "identityless" },
+    { final: "same", audio: true, native: "identityless" },
+    { final: "same", audio: false, native: "deferred" },
+    { final: "different", audio: false, native: "deferred" },
+    { final: "same", audio: true, native: "deferred" },
+    { final: "same", audio: false, native: "ambiguous" },
+    { final: "different", audio: false, native: "ambiguous" },
+    { final: "same", audio: true, native: "ambiguous" },
+    { final: "same", audio: false, native: "partial" },
+    { final: "different", audio: false, native: "partial" },
+    { final: "same", audio: true, native: "partial" },
+    { final: "same", audio: false, native: "partial-envelope" },
+    { final: "different", audio: false, native: "partial-envelope" },
+    { final: "same", audio: true, native: "partial-envelope" },
+  ])(
+    "preserves uncovered final content after a pending block ($final, audio=$audio, native=$native)",
+    async ({ final, audio, native }) => {
+      setNoAbort();
+      ttsMocks.state.synthesizeFinalAudio = audio;
+      mocks.routeReply
+        .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
+        .mockResolvedValue({ ok: true, delivered: true });
+      const nativePayloads: ReplyPayload[] = [];
+      const dispatcher = native
+        ? createReplyDispatcher({
+            deliver: async (reply, info) => {
+              nativePayloads.push(reply);
+              if (info.kind === "block") {
+                if (native === "ambiguous") {
+                  throw new Error("provider response lost after dispatch");
+                }
+                if (native === "partial") {
+                  const error = new OutboundDeliveryError("later media failed", {
+                    cause: new Error("provider response lost"),
+                    results: [{ channel: "telegram", messageId: "accepted-prefix" }],
+                  });
+                  error.queueCustody = "released";
+                  throw createChannelPartialDeliveryError(error, {
+                    visibleReplySent: true,
+                    messageIds: ["accepted-prefix"],
+                  });
+                }
+                if (native === "partial-envelope") {
+                  throw createChannelPartialDeliveryError(
+                    new PlatformMessageNotDispatchedError("later media rejected", {
+                      cause: undefined,
+                      retryable: false,
+                    }),
+                    { visibleReplySent: true, messageIds: ["accepted-prefix"] },
+                  );
+                }
+                if (native === "identityless") {
+                  return {
+                    visibleReplySent: false,
+                    suppression: { reason: "adapter_returned_no_identity" },
+                  };
+                }
+                const error = Object.assign(
+                  new OutboundDeliveryError("queued block", {
+                    cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+                  }),
+                  {
+                    queueCustody: "held" as const,
+                  },
+                );
+                if (native === "deferred") {
+                  return { finalization: Promise.reject(error) };
+                }
+                throw error;
+              }
+              return { visibleReplySent: true };
+            },
+          })
+        : createDispatcher();
+      const onBlockReplyQueued = vi.fn();
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: native ? "telegram" : "slack",
+          Surface: native ? "telegram" : "slack",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:999",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { onBlockReplyQueued },
+        replyResolver: async (_ctx, opts) => {
+          await opts?.onBlockReply?.({ text: "same" });
+          return { text: final };
+        },
+      });
+
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(
+        native ? nativePayloads : mocks.routeReply.mock.calls.map(([call]) => call.payload),
+      ).toEqual([
+        { text: "same" },
+        ...(audio
+          ? [
+              expect.objectContaining({
+                text: undefined,
+                mediaUrl: "https://example.com/tts-synth.opus",
+              }),
+            ]
+          : final === "different"
+            ? [{ text: "different" }]
+            : []),
+      ]);
+      expect(onBlockReplyQueued).not.toHaveBeenCalled();
+      expect(result.counts.final).toBe(audio || final === "different" ? 1 : 0);
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+      expect(result.observedReplyDelivery).toBeUndefined();
+    },
+  );
+
+  it("shares a deferred native block settlement with its callback before admitting a final", async () => {
+    setNoAbort();
+    const blockStarted = createDeferred();
+    const releaseBlock = createDeferred();
+    const finalPrepared = createDeferred();
+    const attempted: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        attempted.push({ kind: info.kind, text: payload.text });
+        if (info.kind === "block") {
+          blockStarted.resolve();
+          await releaseBlock.promise;
+          throw Object.assign(
+            new OutboundDeliveryError("queued block", {
+              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+            }),
+            { queueCustody: "held" as const },
+          );
+        }
+      },
+    });
+    const admitFinal = vi.spyOn(dispatcher, "sendFinalReply");
+    const onBlockReplyQueued = vi.fn();
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (input: unknown) => {
+      const params = input as { kind: string; payload: ReplyPayload };
+      if (params.kind === "final") {
+        finalPrepared.resolve();
+      }
+      return params.payload;
+    });
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { onBlockReplyQueued },
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "same" });
+        return { text: "same" };
+      },
+    });
+    try {
+      await Promise.all([blockStarted.promise, finalPrepared.promise]);
+      // Drain runnable promise continuations while the transport remains explicitly held.
+      await nextEventLoopTurn();
+      expect(admitFinal).not.toHaveBeenCalled();
+    } finally {
+      releaseBlock.resolve();
+      await dispatch;
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
+    expect(attempted).toEqual([{ kind: "block", text: "same" }]);
+    expect(onBlockReplyQueued).not.toHaveBeenCalled();
+  });
+
+  it("does not borrow an unrelated native block's pending custody to suppress a final", async () => {
+    setNoAbort();
+    const attempted: Array<{ kind: string; text?: string }> = [];
+    const onBlockReplyQueued = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        attempted.push({ kind: info.kind, text: payload.text });
+        if (info.kind === "block") {
+          throw Object.assign(
+            new OutboundDeliveryError("offline", {
+              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+            }),
+            { queueCustody: payload.text === "A" ? ("held" as const) : ("released" as const) },
+          );
+        }
+      },
+    });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { onBlockReplyQueued },
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "A" });
+        await opts?.onBlockReply?.({ text: "B" });
+        return { text: "B" };
+      },
+    });
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(attempted).toEqual([
+      { kind: "block", text: "A" },
+      { kind: "block", text: "B" },
+      { kind: "final", text: "B" },
+    ]);
+    expect(onBlockReplyQueued).not.toHaveBeenCalled();
+    expect(result.counts.final).toBe(1);
+    expect(receipt?.hasPendingDelivery).toBe(true);
+  });
+
+  it("delivers independent durable updates immediately without mixing them into the final Telegram voice reply", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.(
+        { text: "Which environment should I use?" },
+        { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:question" },
+      );
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+        text: "Which environment should I use?",
+      });
+      await opts?.onBlockReply?.({ text: "The selected environment is ready." });
+      return { text: "Deployment complete." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
+      text: "The selected environment is ready.\nDeployment complete.",
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
+  });
+
+  it.each([
+    { completionState: "prepared", audio: false, native: false },
+    { completionState: "queued", audio: false, native: false },
+    { completionState: "unknown", audio: false, native: false },
+    { completionState: "prepared", audio: true, native: false },
+    { completionState: "queued", audio: true, native: false },
+    { completionState: "unknown", audio: true, native: false },
+    { completionState: "prepared", audio: false, native: true },
+    { completionState: "queued", audio: false, native: true },
+    { completionState: "unknown", audio: false, native: true },
+    { completionState: "prepared", audio: true, native: true },
+    { completionState: "queued", audio: true, native: true },
+    { completionState: "unknown", audio: true, native: true },
+  ] as const)(
+    "preserves completion ownership for a pending block ($completionState, audio=$audio, native=$native)",
+    async ({ completionState, audio, native }) => {
+      setNoAbort();
+      ttsMocks.state.synthesizeFinalAudio = audio;
+      const pending = {
+        kind: "replayable",
+        text: "same",
+        createdAt: 1,
+        intentId: "pending-block",
+        deliveries: [{ id: "original", state: completionState }],
+      };
+      sessionStoreMocks.currentEntry = { sessionId: "session-1", pendingFinalDelivery: pending };
+      const onFinalDeliverySuccess = vi.fn();
+      const payload = setReplyPayloadMetadata(
+        { text: "same" },
+        {
+          pendingFinalDeliveryCompletion: {
+            deliveryId: "original",
+            intentId: "pending-block",
+            sessionId: "session-1",
+            sessionKey: "agent:main:slack:direct:123",
+            storePath: "/tmp/mock-sessions.json",
+          },
+          onFinalDeliverySuccess,
+        },
+      );
+      mocks.routeReply
+        .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
+        .mockResolvedValue({ ok: true, delivered: true });
+      const nativePayloads: ReplyPayload[] = [];
+      const dispatcher = native
+        ? createReplyDispatcher({
+            deliver: async (reply, info) => {
+              nativePayloads.push(reply);
+              if (info.kind === "block") {
+                throw Object.assign(
+                  new OutboundDeliveryError("queued block", {
+                    cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+                  }),
+                  { queueCustody: "held" as const },
+                );
+              }
+            },
+          })
+        : createDispatcher();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: native ? "telegram" : "slack",
+          Surface: native ? "telegram" : "slack",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:999",
+          SessionKey: "agent:main:slack:direct:123",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          await opts?.onBlockReply?.({ text: "same" });
+          return payload;
+        },
+      });
+
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      const attempted = native
+        ? nativePayloads
+        : mocks.routeReply.mock.calls.map(([call]) => call.payload);
+      expect(attempted).toHaveLength(audio ? 2 : 1);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+        completionState === "prepared" ? undefined : pending,
+      );
+      expect(onFinalDeliverySuccess).not.toHaveBeenCalled();
+      if (audio) {
+        const supplement = expectDefined(attempted[1], "audio supplement");
+        expect(supplement).toMatchObject({
+          text: undefined,
+          mediaUrl: "https://example.com/tts-synth.opus",
+        });
+        expect(getReplyPayloadMetadata(supplement)?.pendingFinalDeliveryCompletion).toBeUndefined();
+      }
+    },
+  );
 
   it("delivers deferred Telegram text when synthesis produces no audio", async () => {
     setNoAbort();

@@ -8,6 +8,7 @@ import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtim
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readJsonBodyWithLimit,
+  sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
@@ -110,7 +111,7 @@ function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
 async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
   const body = await readJsonBodyWithLimit(req, {
     // Admin responses are part of the client contract. The response-first profile
-    // defers destruction so closeRequestAfterResponse can flush the JSON error.
+    // defers destruction so the transport owner can flush the JSON error.
     ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
     emptyObjectOnEmpty: false,
   });
@@ -133,21 +134,6 @@ async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResu
     message: body.error,
     closeAfterResponse: body.code !== "CONNECTION_CLOSED",
   };
-}
-
-function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
-  const once = (res as { once?: ServerResponse["once"] }).once;
-  if (typeof once !== "function") {
-    return;
-  }
-  res.setHeader("Connection", "close");
-  once.call(res, "finish", () => {
-    // Timeout/size failures must flush JSON first; destroying before finish drops
-    // the HTTP response on real partial-body sockets.
-    if (!req.destroyed) {
-      req.destroy();
-    }
-  });
 }
 
 function readRpcRequestBody(body: unknown):
@@ -246,12 +232,22 @@ export async function handleAdminHttpRpcRequest(
   const body = await readAdminJsonBody(req);
   if (!body.ok) {
     if (body.closeAfterResponse) {
-      closeRequestAfterResponse(req, res);
+      if (!res.headersSent) {
+        res.setHeader("Cache-Control", "no-store");
+      }
+      await sendHttpRequestRejection(
+        req,
+        res,
+        body.status,
+        JSON.stringify({ ok: false, error: { type: "invalid_request", message: body.message } }),
+        "application/json; charset=utf-8",
+      );
+    } else {
+      sendError(res, body.status, {
+        type: "invalid_request",
+        message: body.message,
+      });
     }
-    sendError(res, body.status, {
-      type: "invalid_request",
-      message: body.message,
-    });
     return true;
   }
 

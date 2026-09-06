@@ -8,7 +8,10 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { XAI_BASE_URL } from "./model-definitions.js";
+import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import {
@@ -18,7 +21,6 @@ import {
 } from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
-const PAYLOAD_CAPTURE_TIMEOUT_MS = 5_000;
 
 function xaiAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
   return {
@@ -27,14 +29,7 @@ function xaiAssistantMessage(content: AssistantMessage["content"]): AssistantMes
     api: "openai-responses" as const,
     provider: "xai",
     model: "grok-4.3",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: 1,
   };
@@ -101,6 +96,7 @@ function runXaiToolPayloadWrapper(params: {
   modelId?: string;
   input?: string[];
   provider?: string;
+  baseUrl?: string;
 }) {
   const baseStreamFn: StreamFn = (_model, _context, options) => {
     options?.onPayload?.(params.payload, {} as Model<XaiStreamApi>);
@@ -116,6 +112,7 @@ function runXaiToolPayloadWrapper(params: {
     {
       api,
       provider: params.provider ?? "xai",
+      baseUrl: params.baseUrl ?? "https://proxy.example/v1",
       id:
         params.modelId ??
         (api === "openai-completions" ? "grok-4-1-fast-reasoning" : "grok-4-fast"),
@@ -149,10 +146,6 @@ async function captureXaiResponsesPayloadWithThinking(
   } as Model<"openai-responses">);
 
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("provider payload callback was not invoked")),
-      PAYLOAD_CAPTURE_TIMEOUT_MS,
-    );
     const stream = streamSimple(
       model,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -161,13 +154,15 @@ async function captureXaiResponsesPayloadWithThinking(
         cacheRetention: "none",
         reasoning,
         onPayload: (payload) => {
-          clearTimeout(timeout);
           resolve(structuredClone(payload as Record<string, unknown>));
           throw new Error("stop after payload capture");
         },
       },
     );
-    void stream.result();
+    void stream.result().then(
+      () => reject(new Error("provider payload callback was not invoked")),
+      (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
+    );
   });
 
   return await payloadPromise;
@@ -590,7 +585,32 @@ describe("xai stream wrappers", () => {
     expect(payload.reasoning).toEqual({ effort: "none" });
   }, 10_000);
 
-  it("moves image-bearing tool results out of function_call_output payloads", () => {
+  it.each([
+    ["xai", XAI_BASE_URL],
+    ["x-ai", ` ${XAI_BASE_URL}/// `],
+  ])("preserves native Responses image output arrays for %s", (provider, baseUrl) => {
+    const callId = `${"a".repeat(63)}🙈`;
+    const input = [
+      {
+        type: "function_call_output",
+        call_id: callId,
+        output: [
+          { type: "input_text", text: "Read image" },
+          {
+            type: "input_image",
+            detail: "auto",
+            image_url: "data:image/png;base64,QUJDRA==",
+          },
+        ],
+      },
+    ];
+    const payload: Record<string, unknown> = { input: structuredClone(input) };
+    runXaiToolPayloadWrapper({ payload, input: ["text", "image"], provider, baseUrl });
+
+    expect(payload.input).toEqual(input);
+  });
+
+  it("moves custom-endpoint image tool results out of function_call_output payloads", () => {
     const payload: Record<string, unknown> = {
       input: [
         {
@@ -619,7 +639,7 @@ describe("xai stream wrappers", () => {
         type: "message",
         role: "user",
         content: [
-          { type: "input_text", text: "Attached image(s) from tool result:" },
+          { type: "input_text", text: "Image(s) from tool result #1:" },
           {
             type: "input_image",
             detail: "auto",
@@ -662,7 +682,7 @@ describe("xai stream wrappers", () => {
         type: "message",
         role: "user",
         content: [
-          { type: "input_text", text: "Attached image(s) from tool result:" },
+          { type: "input_text", text: "Image(s) from tool result #1:" },
           {
             type: "input_image",
             source: {
@@ -676,30 +696,112 @@ describe("xai stream wrappers", () => {
     ]);
   });
 
-  it("keeps multiple tool outputs contiguous before replaying collected images", () => {
+  it.each([
+    { text: ["first", "second"], output: "firstsecond" },
+    { text: ["", " "], output: " " },
+    { text: ["", ""], output: "(see attached image)" },
+    { text: ["\ud83d", "\ude48"], output: "🙈" },
+  ])("preserves interleaved text and image references for $output", ({ text, output }) => {
+    const firstImage = {
+      type: "input_image",
+      source: { type: "url", url: "https://example.com/first.png" },
+    };
+    const secondImage = { type: "input_image", image_url: "data:image/png;base64,QkJCQg==" };
+    const originalParts = [
+      { type: "input_text", text: text[0] },
+      firstImage,
+      { type: "input_text", text: text[1] },
+      secondImage,
+    ];
+    const originalBytes = JSON.stringify(originalParts);
+    const payload: Record<string, unknown> = {
+      input: [{ type: "function_call_output", call_id: "call_1", output: originalParts }],
+    };
+    runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
+
+    const input = payload.input as Array<Record<string, unknown>>;
+    expect(input[0]).toEqual({ type: "function_call_output", call_id: "call_1", output });
+    expect(input[1]).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "Image(s) from tool result #1:" },
+        firstImage,
+        secondImage,
+      ],
+    });
+    const replayParts = input[1]?.content as unknown[];
+    expect(replayParts[1]).toBe(firstImage);
+    expect(replayParts[2]).toBe(secondImage);
+    expect(JSON.stringify(originalParts)).toBe(originalBytes);
+  });
+
+  it.each([
+    ["Grok OAuth proxy", XAI_GROK_OAUTH_BASE_URL],
+    ["custom endpoint", "https://proxy.example/v1"],
+  ])("counts every function output before replaying sparse images for %s", (_label, baseUrl) => {
+    const callIds = ["a", "b", "c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`);
+    const firstImage = {
+      type: "input_image",
+      detail: "auto",
+      image_url: "data:image/png;base64,QUFBQQ==",
+    };
+    const secondImage = { ...firstImage, image_url: "data:image/png;base64,QkJCQg==" };
+    const payload: Record<string, unknown> = {
+      input: [
+        { type: "message", role: "user", content: "Read the tool results" },
+        { type: "function_call_output", call_id: callIds[0], output: "No image" },
+        {
+          type: "function_call_output",
+          call_id: callIds[1],
+          output: [{ type: "input_text", text: "first" }, structuredClone(firstImage)],
+        },
+        {
+          type: "function_call_output",
+          call_id: callIds[2],
+          output: [{ type: "input_text", text: "Still no image" }],
+        },
+        {
+          type: "function_call_output",
+          call_id: callIds[3],
+          output: [{ type: "input_text", text: "second" }, structuredClone(secondImage)],
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({ payload, input: ["text", "image"], baseUrl });
+
+    expect(payload.input).toEqual([
+      { type: "message", role: "user", content: "Read the tool results" },
+      { type: "function_call_output", call_id: callIds[0], output: "No image" },
+      { type: "function_call_output", call_id: callIds[1], output: "first" },
+      { type: "function_call_output", call_id: callIds[2], output: "Still no image" },
+      { type: "function_call_output", call_id: callIds[3], output: "second" },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Image(s) from tool result #2:" },
+          firstImage,
+          { type: "input_text", text: "Image(s) from tool result #4:" },
+          secondImage,
+        ],
+      },
+    ]);
+  });
+
+  it("preserves full Unicode call identifiers while using ordinal image labels", () => {
+    const astralCallId = "a".repeat(63) + "🙈";
     const payload: Record<string, unknown> = {
       input: [
         {
           type: "function_call_output",
-          call_id: "call_1",
+          call_id: astralCallId,
           output: [
-            { type: "input_text", text: "first" },
+            { type: "input_text", text: "ok" },
             {
               type: "input_image",
               detail: "auto",
-              image_url: "data:image/png;base64,QUFBQQ==",
-            },
-          ],
-        },
-        {
-          type: "function_call_output",
-          call_id: "call_2",
-          output: [
-            { type: "input_text", text: "second" },
-            {
-              type: "input_image",
-              detail: "auto",
-              image_url: "data:image/png;base64,QkJCQg==",
+              image_url: "data:image/png;base64,QUJDRA==",
             },
           ],
         },
@@ -707,35 +809,14 @@ describe("xai stream wrappers", () => {
     };
     runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
 
-    expect(payload.input).toEqual([
-      {
-        type: "function_call_output",
-        call_id: "call_1",
-        output: "first",
-      },
-      {
-        type: "function_call_output",
-        call_id: "call_2",
-        output: "second",
-      },
-      {
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: "Attached image(s) from tool result:" },
-          {
-            type: "input_image",
-            detail: "auto",
-            image_url: "data:image/png;base64,QUFBQQ==",
-          },
-          {
-            type: "input_image",
-            detail: "auto",
-            image_url: "data:image/png;base64,QkJCQg==",
-          },
-        ],
-      },
-    ]);
+    const userMessage = (payload.input as Array<Record<string, unknown>>).find(
+      (item) => item.type === "message",
+    );
+    const content = userMessage?.content as Array<Record<string, unknown>>;
+    const labelText = (content[0] as { text?: string }).text ?? "";
+
+    expect(labelText).toBe("Image(s) from tool result #1:");
+    expect((payload.input as Array<Record<string, unknown>>)[0]?.call_id).toBe(astralCallId);
   });
 
   it("drops image blocks and uses fallback text for models without image input", () => {

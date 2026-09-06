@@ -1,6 +1,7 @@
 import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -22,6 +23,18 @@ function createChild() {
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.kill = vi.fn(() => true);
+  child.once("exit", (code, signal) => {
+    let closed = false;
+    const close = () => {
+      if (!closed && child.stdout.closed && child.stderr.closed) {
+        closed = true;
+        child.emit("close", code, signal);
+      }
+    };
+    child.stdout.once("close", close);
+    child.stderr.once("close", close);
+    close();
+  });
   return child;
 }
 
@@ -62,6 +75,33 @@ describe("worker SSH process runner", () => {
     await expect(process.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
     await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
   });
+
+  it.each(["same turn", "after poll"])(
+    "rejects a post-exit ready marker while retaining the final redacted diagnostic (%s)",
+    async (delivery) => {
+      const child = createChild();
+      spawnMock.mockReturnValue(child);
+      const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+      const bearer = "secret-credential-value";
+
+      child.emit("exit", 255, null);
+      if (delivery === "after poll") {
+        await setImmediate();
+      }
+      child.stdout.write(`${WORKER_TUNNEL_READY_MARKER}\n`);
+      child.stderr.write(`Authorization: Bearer ${bearer}\nconnection refused`);
+      child.emit("close", 255, null);
+
+      await expect(process.ready).rejects.toThrow("connection refused");
+      const exit = await process.exited;
+      expect(exit).toMatchObject({
+        code: 255,
+        signal: null,
+        stderrTail: expect.stringContaining("connection refused"),
+      });
+      expect(exit.stderrTail).not.toContain(bearer);
+    },
+  );
 
   it("fails stop when a SIGKILLed child never reports exit", async () => {
     vi.useFakeTimers();

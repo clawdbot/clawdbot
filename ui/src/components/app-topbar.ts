@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { property } from "lit/decorators.js";
+import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
@@ -11,12 +12,14 @@ import "./tooltip.ts";
  * Desktop hides it entirely (layout.css) — the sidebar owns navigation there. */
 class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
-  @property({ attribute: false }) basePath = "";
+  @property({ attribute: false }) resourceBasePath = "";
+  @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) onToggleDrawer!: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette!: () => void;
 
   override render() {
     const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
+    // The brand row asks the Mac host to drag the window, replacing its native drag strip.
     return html`
       <header class="topbar">
         <div class="topnav-shell">
@@ -32,17 +35,19 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
             </button>
           </openclaw-tooltip>
-          <!-- The Mac app used to float a native drag strip over this brand
-               row; the web now asks the host to move the window itself. -->
           <div class="topnav-shell__content" @mousedown=${beginNativeWindowDrag}>
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
                 class="topbar-brand__logo"
-                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.resourceBasePath)}
                 alt=""
                 aria-hidden="true"
               />
               <span class="topbar-brand__title">OpenClaw</span>
+              ${
+                this.environment &&
+                html`<span class="control-ui-environment-pill">${this.environment.label}</span>`
+              }
             </div>
           </div>
           <div class="topnav-shell__actions">

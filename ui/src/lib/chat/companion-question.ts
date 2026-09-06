@@ -7,11 +7,6 @@ function collapseChatSelectionSnippet(text: string): string {
   return truncateUtf16Safe(collapsed, CHAT_SELECTION_SNIPPET_MAX_CHARS);
 }
 
-export function buildMoreDetailsCompanionQuestion(selection: string): string | null {
-  const snippet = collapseChatSelectionSnippet(selection);
-  return snippet ? `Explain "${snippet}" from this conversation in more detail.` : null;
-}
-
 export function buildCompanionQuestionPrefill(selection: string): string | null {
   const snippet = collapseChatSelectionSnippet(selection);
   return snippet ? `Regarding "${snippet}": ` : null;

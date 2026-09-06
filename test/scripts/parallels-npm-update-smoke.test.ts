@@ -1,5 +1,6 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,12 +96,158 @@ function extractWindowsBackgroundControlMarkers(decoded: string): {
   };
 }
 
+function runPrerequisiteCli(args: string[], env: NodeJS.ProcessEnv = {}) {
+  const childEnv = { ...process.env };
+  for (const name of ["ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "OPENAI_API_KEY"]) {
+    delete childEnv[name];
+  }
+  return spawnSync(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...childEnv,
+      ...env,
+      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS: "invalid",
+      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "invalid",
+      OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S: "invalid",
+    },
+    timeout: 10_000,
+  });
+}
+
+function runFrozenPrerequisiteHelper(env: NodeJS.ProcessEnv = {}) {
+  const source = readFileSync("scripts/e2e/parallels/provider-auth-prerequisite.mjs", "utf8");
+  const dataUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  const emptyCwd = tempDirs.make("openclaw-parallels-prerequisite-cwd-");
+  const childEnv = { ...process.env };
+  delete childEnv.OPENAI_API_KEY;
+  const program = `
+const helper = await import(process.argv[1]);
+const exports = Object.keys(helper).sort();
+if (JSON.stringify(exports) !== '["parsePlatformList","resolveParallelsProviderAuth","runParallelsPrerequisiteEval"]') {
+  throw new Error("unexpected helper exports");
+}
+const writes = [];
+const code = helper.runParallelsPrerequisiteEval(
+  ["--prerequisite-check", "--json"],
+  process.env,
+  { write: (value) => writes.push(value) },
+);
+if (writes.length !== 1) {
+  throw new Error("unexpected prerequisite write count");
+}
+process.stdout.write(writes[0]);
+process.exitCode = code;
+`;
+  return spawnSync(process.execPath, ["--input-type=module", "--eval", program, dataUrl], {
+    cwd: emptyCwd,
+    encoding: "utf8",
+    env: { ...childEnv, ...env },
+    timeout: 10_000,
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
   tempDirs.cleanup();
 });
 
 describe("parallels npm update smoke", () => {
+  it("reports exact ready prerequisites for default and explicit providers", () => {
+    const defaultSecret = "sentinel-default-provider-secret";
+    const defaultResult = runPrerequisiteCli(["--prerequisite-check", "--json"], {
+      OPENAI_API_KEY: defaultSecret,
+    });
+    expect(defaultResult.status).toBe(0);
+    expect(defaultResult.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
+    );
+    expect(defaultResult.stderr).toBe("");
+    expect(defaultResult.stdout).not.toContain(defaultSecret);
+
+    const explicitSecret = "sentinel-explicit-provider-secret";
+    const explicitResult = runPrerequisiteCli(
+      [
+        "--",
+        "--prerequisite-check",
+        "--only",
+        "linux",
+        "--provider",
+        "anthropic",
+        "--model",
+        "anthropic/custom",
+        "--api-key-env",
+        "CUSTOM_ANTHROPIC_KEY",
+        "--json",
+      ],
+      { CUSTOM_ANTHROPIC_KEY: explicitSecret },
+    );
+    expect(explicitResult.status).toBe(0);
+    expect(explicitResult.stdout).toBe(defaultResult.stdout);
+    expect(explicitResult.stderr).toBe("");
+    expect(`${explicitResult.stdout}${explicitResult.stderr}`).not.toContain(explicitSecret);
+    expect(explicitResult.stdout).not.toContain("CUSTOM_ANTHROPIC_KEY");
+    expect(explicitResult.stdout).not.toContain("anthropic/custom");
+  });
+
+  it("blocks missing credentials before smoke-only validation or side effects", () => {
+    const root = tempDirs.make("openclaw-parallels-prerequisite-");
+    const binDir = path.join(root, "bin");
+    const marker = path.join(root, "side-effect");
+    mkdirSync(binDir);
+    for (const command of ["bash", "git", "npm", "prlctl"]) {
+      const commandPath = path.join(binDir, command);
+      writeFileSync(
+        commandPath,
+        `#!/bin/sh\nprintf invoked >>${JSON.stringify(marker)}\nexit 99\n`,
+      );
+      chmodSync(commandPath, 0o755);
+    }
+    const result = runPrerequisiteCli(
+      [
+        "--prerequisite-check",
+        "--provider",
+        "minimax",
+        "--api-key-env",
+        "CUSTOM_MISSING_KEY",
+        "--json",
+      ],
+      {
+        CUSTOM_MISSING_KEY: "",
+        OPENAI_API_KEY: "sentinel-unselected-provider-secret",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"blocked","reason":"credential_missing"}\n',
+    );
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("CUSTOM_MISSING_KEY");
+    expect(result.stdout).not.toContain("sentinel-unselected-provider-secret");
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("runs the exact helper source with plain Node from an empty cwd", () => {
+    const ready = runFrozenPrerequisiteHelper({
+      OPENAI_API_KEY: "sentinel-frozen-helper-secret",
+    });
+    expect(ready.status).toBe(0);
+    expect(ready.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
+    );
+    expect(ready.stderr).toBe("");
+    expect(ready.stdout).not.toContain("sentinel-frozen-helper-secret");
+
+    const blocked = runFrozenPrerequisiteHelper();
+    expect(blocked.status).toBe(1);
+    expect(blocked.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"blocked","reason":"credential_missing"}\n',
+    );
+    expect(blocked.stderr).toBe("");
+  });
+
   it("accepts one prepared tarball target for update and fresh install", () => {
     expect(
       parseArgs([
@@ -137,6 +284,45 @@ describe("parallels npm update smoke", () => {
       platforms: new Set(["macos"]),
     });
   });
+
+  it("accepts an explicit Windows VM at the aggregate CLI", () => {
+    const result = hostCommandRun(
+      process.execPath,
+      ["--import", "tsx", SCRIPT_PATH, "--windows-vm", "Windows Test Guest", "--help"],
+      { check: false, quiet: true },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the selected Windows VM for same-guest update transport",
+    async () => {
+      const root = tempDirs.make("openclaw-parallels-windows-selection-");
+      const logPath = path.join(root, "prlctl.log");
+      const prlctlPath = path.join(root, "prlctl");
+      writeFileSync(
+        prlctlPath,
+        `#!/usr/bin/env bash\nprintf '%s|%s|%s\\n' "$1" "$2" "$3" >'${logPath}'\ncat >/dev/null\nexit 7\n`,
+      );
+      chmodSync(prlctlPath, 0o755);
+
+      await withEnvAsync(
+        { OPENAI_API_KEY: "test-key", PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}` },
+        async () => {
+          const smoke = new NpmUpdateSmoke({ ...parseArgs([]), windowsVm: "Windows Test Guest" });
+          const guestWindows = Reflect.get(smoke, "guestWindows") as (
+            script: string,
+            timeoutMs: number,
+            ctx: { append: (chunk: string) => void },
+          ) => Promise<void>;
+          await expect(
+            guestWindows.call(smoke, "Write-Output update", 180_000, { append: () => undefined }),
+          ).rejects.toThrow("background script write failed");
+        },
+      );
+      expect(readFileSync(logPath, "utf8")).toBe("exec|Windows Test Guest|--current-user\n");
+    },
+  );
 
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
@@ -246,13 +432,17 @@ exit 1
     expect(log.match(/^cleanup$/gm)).toHaveLength(1);
   });
 
-  it("uses one macOS guest identity to write and execute update scripts", async () => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const logPath = path.join(root, "prlctl.log");
-    const prlctlPath = path.join(root, "prlctl");
-    writeFileSync(
-      prlctlPath,
-      `#!/usr/bin/env bash
+  it.each([0, 7])(
+    "uses one macOS guest identity through upload, streamed exit %i, and cleanup",
+    async (exitCode) => {
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
+      const logPath = path.join(root, "prlctl.log");
+      const runArgsPath = path.join(root, "run-args");
+      const uploadedScriptPath = path.join(root, "uploaded-script");
+      const prlctlPath = path.join(root, "prlctl");
+      writeFileSync(
+        prlctlPath,
+        `#!/usr/bin/env bash
 set -euo pipefail
 log_path=${JSON.stringify(logPath)}
 printf '%s\\n' "$*" >>"$log_path"
@@ -262,7 +452,7 @@ if [[ "$args" == *" --current-user whoami "* ]]; then
   exit 0
 fi
 if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
-  cat >/dev/null
+  cat >${JSON.stringify(uploadedScriptPath)}
   exit 0
 fi
 if [[ "$args" == *" /bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
@@ -271,62 +461,86 @@ fi
 if [[ "$args" == *" /usr/sbin/chown desktop-user /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
   exit 0
 fi
+if [[ "$args" == *" /bin/bash /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  printf '%s\\0' "$@" >${JSON.stringify(runArgsPath)}
+  printf 'update-output\\n'
+  printf 'update-diagnostic\\n' >&2
+  exit ${exitCode}
+fi
 if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
   exit 0
 fi
 exit 1
 `,
-    );
-    chmodSync(prlctlPath, 0o755);
+      );
+      chmodSync(prlctlPath, 0o755);
+      const output: string[] = [];
 
-    await withEnvAsync(
-      {
-        OPENAI_API_KEY: "test-key",
-        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      async () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["macos"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const stream = vi.fn().mockResolvedValue(0);
-        Reflect.set(smoke, "runStreamingToJobLog", stream);
-        const guestMacos = Reflect.get(smoke, "guestMacos") as (
-          script: string,
-          timeoutMs: number,
-          ctx: { append: (chunk: string) => void },
-        ) => Promise<void>;
-        const ctx = { append: vi.fn() };
+      await withEnvAsync(
+        {
+          OPENAI_API_KEY: "test-key",
+          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        async () => {
+          const smoke = new NpmUpdateSmoke({
+            ...TEST_AUTH,
+            dependencyTarballs: [],
+            registryPackageTarballs: [],
+            json: false,
+            packageSpec: "openclaw@latest",
+            platforms: new Set<Platform>(["macos"]),
+            provider: "openai",
+            updateTarget: "local-main",
+          });
+          const guestMacos = Reflect.get(smoke, "guestMacos") as (
+            script: string,
+            timeoutMs: number,
+            ctx: {
+              append: (chunk: string | Uint8Array) => void;
+              logPath: string;
+              signal: AbortSignal;
+            },
+          ) => Promise<void>;
+          const result = guestMacos.call(smoke, "echo update", 30_000, {
+            append: (chunk) =>
+              output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
+            logPath: path.join(root, "update.log"),
+            signal: new AbortController().signal,
+          });
+          if (exitCode === 0) {
+            await expect(result).resolves.toBeUndefined();
+          } else {
+            await expect(result).rejects.toThrow(
+              `macOS update command failed with exit code ${exitCode}`,
+            );
+          }
+        },
+      );
 
-        await guestMacos.call(smoke, "echo update", 30_000, ctx);
-
-        const call = stream.mock.calls.at(0);
-        expect(call?.[0]).toBe("prlctl");
-        expect(call?.[1]).toEqual([
-          "exec",
-          "macOS Tahoe",
-          "--current-user",
-          "/usr/bin/env",
-          expect.stringMatching(/^PATH=/),
-          "/bin/bash",
-          expect.stringMatching(/^\/tmp\/openclaw-parallels-npm-update-macos-/),
-        ]);
-      },
-    );
-
-    const log = readFileSync(logPath, "utf8");
-    expect(log).toContain("--current-user whoami");
-    expect(log).toContain("--current-user /usr/bin/env PATH=");
-    expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
-    expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
-    expect(log).toContain("/usr/sbin/chown desktop-user");
-  });
+      expect(readFileSync(runArgsPath, "utf8").split("\0").slice(0, -1)).toEqual([
+        "exec",
+        "macOS Tahoe",
+        "--current-user",
+        "/usr/bin/env",
+        expect.stringMatching(/^PATH=/),
+        "/bin/bash",
+        expect.stringMatching(/^\/tmp\/openclaw-parallels-npm-update-macos-/),
+      ]);
+      expect(readFileSync(uploadedScriptPath, "utf8")).toBe("echo update");
+      expect(output.join("")).toContain("update-output\n");
+      expect(output.join("")).toContain("update-diagnostic\n");
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("--current-user whoami");
+      expect(log).toContain("--current-user /usr/bin/env PATH=");
+      expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
+      expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
+      expect(log).toContain("/usr/sbin/chown desktop-user");
+      expect(log.match(/\/bin\/bash \/tmp\/openclaw-parallels-npm-update-macos-/g)).toHaveLength(1);
+      expect(log.trim().split("\n").at(-1)).toMatch(
+        /^exec macOS Tahoe \/bin\/rm -f \/tmp\/openclaw-parallels-npm-update-macos-/,
+      );
+    },
+  );
 
   it("has a one-command beta validation mode with fresh target coverage", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
@@ -339,37 +553,93 @@ exit 1
     expect(script).toContain("freshTargetStatus");
   });
 
-  it("serves a prepared package set for both proof phases", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+  it.runIf(process.platform !== "win32").each([
+    ["macos", macosUpdateScript],
+    ["linux", linuxUpdateScript],
+  ] as const)(
+    "keeps the %s candidate registry available through gateway shutdown and the local turn",
+    (platform, buildScript) => {
+      const root = tempDirs.make("openclaw-parallels-update-registry-");
+      const logPath = path.join(root, "registry.log");
+      const lifecycleLog = path.join(root, "lifecycle.log");
+      const gatewayOwner = path.join(root, "gateway-owner");
+      const gatewayTitle = platform === "macos" ? "openclaw-gateway        " : "openclaw-gateway";
+      const registry = "http://192.0.2.2:48123";
+      const script = buildScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.7.1-beta.3",
+        npmRegistry: registry,
+        updateTarget: "2026.7.1-beta.3",
+      }).replaceAll(
+        `/tmp/openclaw-parallels-${platform}-gateway.log`,
+        path.join(root, "gateway.log"),
+      );
+      const result = hostCommandRun(
+        "bash",
+        [
+          "-c",
+          `
+export HOME='${root}'
+unset OPENCLAW_WORKSPACE_DIR
+node() { cat >/dev/null; }
+python3() { cat >/dev/null; }
+function /usr/bin/env() { cat >/dev/null; }
+release_gateway_owner() {
+  if [ -f '${gatewayOwner}' ]; then
+    printf 'stop\\n' >>'${lifecycleLog}'
+    rm '${gatewayOwner}'
+  fi
+}
+pkill() {
+  if [ "$1" = '-f' ] && printf '%s\\n' '${gatewayTitle}' | grep -Eq "$2"; then
+    release_gateway_owner
+  else
+    return 1
+  fi
+}
+pgrep() { return 1; }
+lsof() { :; }
+sleep() { :; }
+setsid() { :; }
+openclaw() {
+  case "$1 \${2-}" in
+    "gateway stop")
+      if [[ " $* " == *" --help "* ]]; then echo '--force'; return 0; fi
+      release_gateway_owner
+      return 0 ;;
+    "gateway status")
+      touch '${gatewayOwner}'
+      printf 'ready\\n' >>'${lifecycleLog}' ;;
+    "agent --local")
+      if [ -f '${gatewayOwner}' ]; then echo 'gateway owns state' >&2; return 73; fi
+      printf 'local-turn\\n' >>'${lifecycleLog}'
+      echo '{"finalAssistantVisibleText":"OK"}' ;;
+    "gateway run"|"models set"|"config set") return 0 ;;
+  esac
+  printf '%s|%s|%s\\n' "$1" "\${NPM_CONFIG_REGISTRY-}" "\${npm_config_registry-}" >>'${logPath}'
+  case "$1" in
+    --version) echo 'OpenClaw 2026.7.1-beta.3' ;;
+  esac
+}
+${script}`,
+        ],
+        { check: false, quiet: true, timeoutMs: 5000 },
+      );
 
-    expect(script).toContain("--target-tarball <path>");
-    expect(script).toContain("--dependency-tarball <path>");
-    expect(script).toContain("--registry-package-tarball <path>");
-    expect(script).toContain('label: "prepared candidate tgz"');
-    expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
-    expect(script).toContain("startNpmRegistryServer");
-    expect(script).toContain("...this.targetRegistryPackages");
-    expect(script).toContain("this.updateTargetEffective = this.targetTarballVersion");
-    expect(script).toContain("this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`");
-    expect(script).toContain("NPM_CONFIG_REGISTRY: this.targetRegistryHostUrl");
-    expect(script).toContain("npm_config_registry: this.targetRegistryHostUrl");
-    expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
-    expect(script).toContain('readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)');
-  });
-
-  it("routes update installs through the prepared package registry", () => {
-    const registry = "http://192.0.2.2:48123";
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.1-beta.3",
-      npmRegistry: registry,
-      updateTarget: "2026.7.1-beta.3",
-    };
-
-    expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
-    expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
-    expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
-  });
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+        `update|${registry}|${registry}`,
+        `--version|${registry}|${registry}`,
+        `gateway|${registry}|${registry}`,
+        `agent|${registry}|${registry}`,
+      ]);
+      expect(readFileSync(lifecycleLog, "utf8").trim().split("\n")).toEqual([
+        "ready",
+        "stop",
+        "local-turn",
+      ]);
+    },
+  );
 
   it("restarts POSIX gateways only after an exact current-launch migration refusal", () => {
     const input = {
@@ -1166,16 +1436,6 @@ exit 7
     );
   });
 
-  it("writes macOS update scripts through the desktop user transport", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("const macosUpdateExec = this.resolveMacosUpdateExec(ctx)");
-    expect(script).toContain('{ execArgs: macosUpdateExec.execArgs, mode: "700" }');
-    expect(script).toContain('["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath]');
-    expect(script).toContain('["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath]');
-    expect(script).toContain("ownerUser: user");
-  });
-
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
     const windowsScript = windowsUpdateScript({
@@ -1281,14 +1541,15 @@ exit 7
     }
     expect(staleImportLine).toContain("$updateText -match 'ERR_MODULE_NOT_FOUND'");
     expect(staleImportLine).toContain(`$updateText -match '${staleImportPattern}'`);
-    expect(staleImportPattern).toBe(
-      String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`,
-    );
     expect(staleImportPattern).not.toContain("node_modules\\openclaw\\dist\\");
     expect(staleImportPattern.match(/\\\\/g)).toHaveLength(4);
-    const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.js' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
     const generatedRegex = new RegExp(staleImportPattern);
-    expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
-    expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.js`)).toBe(false);
+    for (const extension of ["js", "mjs"]) {
+      const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.${extension}' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
+      expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
+      expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.${extension}`)).toBe(
+        false,
+      );
+    }
   });
 });

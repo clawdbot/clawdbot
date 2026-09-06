@@ -17,7 +17,9 @@ import {
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
+  isAnthropicOAuthApiKey,
   resolveAnthropicPayloadPolicy,
+  resolveAnthropicServerCompactionPlan,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -74,14 +76,7 @@ function mergeAnthropicBetaHeader(
   return merged;
 }
 
-/**
- * Claude subscription credentials are OAuth access tokens rather than API keys.
- * Anthropic authenticates them through `Authorization: Bearer`, so every caller
- * that builds request auth must branch on this instead of assuming `x-api-key`.
- */
-export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
-  return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
-}
+export { isAnthropicOAuthApiKey } from "openclaw/plugin-sdk/provider-stream-shared";
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
   return enabled ? "auto" : "standard_only";
@@ -217,36 +212,24 @@ export function createAnthropicFastModeWrapper(
   };
 }
 
-/** Wrap a direct Anthropic API stream with opt-in server-side compaction. */
+/** Pass opt-in server compaction to the shared request payload policy. */
 function createAnthropicCompactionWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  const payloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload, model }) => {
-    const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: readStringValue(model.provider),
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      contextWindow: model.contextWindow,
-      enableServerCompaction: true,
-      extraParams,
-    });
-    applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
-  });
   return (model, context, options) => {
-    if (
-      extraParams?.anthropicServerCompaction !== true ||
-      isAnthropicOAuthApiKey(options?.apiKey) ||
-      !isDirectAnthropicApiModel(model)
-    ) {
+    const compaction = resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey);
+    if (!compaction.enabled) {
       return underlying(model, context, options);
     }
-    return payloadWrapper(model, context, {
+    const requestOptions = {
       ...options,
       anthropicServerCompaction: true,
+      anthropicCompactThreshold: compaction.threshold,
       headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
-    } as Parameters<StreamFn>[2]);
+    };
+    return underlying(model, context, requestOptions);
   };
 }
 

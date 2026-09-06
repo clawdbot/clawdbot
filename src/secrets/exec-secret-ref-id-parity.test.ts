@@ -210,7 +210,7 @@ describe("exec SecretRef id parity", () => {
     if (id.startsWith("talk.")) {
       return "talk";
     }
-    if (id.startsWith("tts.providers.")) {
+    if (id.startsWith("tts.")) {
       return "tts";
     }
     if (id.startsWith("tools.web.fetch.")) {
@@ -237,13 +237,13 @@ describe("exec SecretRef id parity", () => {
       if (token.kind === "literal") {
         return [];
       }
-      return [token.kind === "array" ? "0" : "sample"];
+      return [token.kind === "array" ? 0 : "sample"];
     });
     const segments = materializePathTokens(tokens, captures);
     if (!segments) {
       throw new Error(`failed to sample path segments for pattern "${entry.pathPattern}"`);
     }
-    return segments;
+    return segments.map(String);
   }
 
   const registryPlanTargets = listSecretTargetRegistryEntries().filter(
@@ -276,7 +276,7 @@ describe("exec SecretRef id parity", () => {
 
   function planAcceptsExecRefForSample(params: {
     type: string;
-    configFile: "openclaw.json" | "auth-profiles.json";
+    configFile: "openclaw.json" | "auth-profile-store";
     pathSegments: string[];
     id: string;
   }): boolean {
@@ -291,7 +291,7 @@ describe("exec SecretRef id parity", () => {
           path: params.pathSegments.join("."),
           pathSegments: params.pathSegments,
           ref: { source: "exec", provider: "vault", id: params.id },
-          ...(params.configFile === "auth-profiles.json" ? { agentId: "main" } : {}),
+          ...(params.configFile === "auth-profile-store" ? { agentId: "main" } : {}),
         },
       ],
     });

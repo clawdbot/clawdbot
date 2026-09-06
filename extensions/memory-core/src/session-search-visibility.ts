@@ -1,11 +1,13 @@
-// Memory Core plugin module implements session search visibility behavior.
-import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  buildSessionEntry,
+  loadArchivedSessions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   resolveCanonicalMainSessionKey,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -20,14 +22,14 @@ import {
   resolveSandboxSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
 import {
+  normalizeOptionalLowercaseString as normalizeAgentIdForCompare,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   readSessionArchiveReasonFromHitPath,
   readSessionResetRecallCutoffMetadata,
   type SessionResetRecallCutoff,
 } from "./session-reset-recall-metadata.js";
-
-function normalizeAgentIdForCompare(value: string | undefined): string | undefined {
-  return value?.trim().toLowerCase() || undefined;
-}
 
 function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boolean {
   return cfg.session?.scope === "global" && key.trim().toLowerCase() === "global";
@@ -38,23 +40,18 @@ type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversa
 type SessionStore = ReturnType<typeof loadCombinedSessionStoreForGateway>["store"];
 
 function isSameStoredTranscript(
-  anchor: SessionStore[string] | undefined,
-  candidate: SessionStore[string] | undefined,
+  // Keep the existing file-alias privacy check even though the public store type omits locators.
+  anchor: (SessionStore[string] & { sessionFile?: unknown }) | undefined,
+  candidate: (SessionStore[string] & { sessionFile?: unknown }) | undefined,
 ): boolean {
   if (!anchor || !candidate) {
     return false;
   }
   const anchorSessionId = anchor.sessionId?.trim();
-  if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
-    return true;
-  }
-  const anchorSessionFile = (anchor as { sessionFile?: unknown }).sessionFile;
-  const candidateSessionFile = (candidate as { sessionFile?: unknown }).sessionFile;
-  return (
-    typeof anchorSessionFile === "string" &&
-    anchorSessionFile.trim().length > 0 &&
-    typeof candidateSessionFile === "string" &&
-    candidateSessionFile.trim() === anchorSessionFile.trim()
+  const anchorSessionFile = normalizeOptionalString(anchor.sessionFile);
+  return Boolean(
+    (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) ||
+    (anchorSessionFile && normalizeOptionalString(candidate.sessionFile) === anchorSessionFile),
   );
 }
 
@@ -157,7 +154,7 @@ function filterSessionKeysByScopedAgent(params: {
     if (isGlobalSessionKeyForSharedScope(params.cfg, key)) {
       return true;
     }
-    const ownerAgentId = resolveSessionAgentId({
+    const ownerAgentId = resolveSessionAgentIdStrict({
       sessionKey: key,
       config: params.cfg,
     });
@@ -175,13 +172,18 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   /** Trusted control-plane calls may authorize only hits already scoped to this agent. */
   trustedAgentScope?: boolean;
 }): Promise<MemorySearchResult[]> {
+  // Session visibility owns transcript hits only. Loading the catalog here for
+  // memory-only results decodes every saved session prompt on the Gateway loop.
+  if (!params.hits.some((hit) => hit.source === "sessions")) {
+    return params.conversationRecall?.corpus === "sessions" ? [] : params.hits;
+  }
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: params.cfg,
     sandboxed: params.sandboxed,
   });
   const a2aPolicy = createAgentToAgentPolicy(params.cfg);
   const requesterAgentId = params.requesterSessionKey
-    ? resolveSessionAgentId({
+    ? resolveSessionAgentIdStrict({
         sessionKey: params.requesterSessionKey,
         config: params.cfg,
         agentId: params.agentId,
@@ -211,6 +213,24 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );
+  const archiveNames = [
+    ...new Set(
+      params.hits.flatMap((hit) => {
+        const identity =
+          hit.source === "sessions"
+            ? extractTranscriptIdentityFromSessionsMemoryHit(hit.path)
+            : undefined;
+        const archiveName = hit.path.replace(/\\/g, "/").split("/").at(-1);
+        return identity?.archived && archiveName ? [archiveName] : [];
+      }),
+    ),
+  ];
+  const archivedSessionsByName = new Map(
+    loadArchivedSessions({ agentId: scopedAgentId, archiveNames, storePath }).map((archive) => [
+      archive.archiveName,
+      archive,
+    ]),
+  );
 
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(
@@ -218,7 +238,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   );
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
   const recallAgentId = anchorSessionKey
-    ? resolveSessionAgentId({ sessionKey: anchorSessionKey, config: params.cfg })
+    ? resolveSessionAgentIdStrict({ sessionKey: anchorSessionKey, config: params.cfg })
     : undefined;
   const anchorEntry = anchorSessionKey ? combinedSessionStore[anchorSessionKey] : undefined;
   let anchorResetCutoffPromise: Promise<SessionResetRecallCutoff> | undefined;
@@ -290,7 +310,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ) {
       return false;
     }
-    const candidateAgentId = resolveSessionAgentId({ sessionKey: key, config: params.cfg });
+    const candidateAgentId = resolveSessionAgentIdStrict({ sessionKey: key, config: params.cfg });
     if (
       normalizeAgentIdForCompare(candidateAgentId) !== normalizeAgentIdForCompare(recallAgentId)
     ) {
@@ -373,11 +393,16 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     const archivedOwnerAgentId = archivedOwnerMatchesScope
       ? (identity.ownerAgentId ?? scopedAgentId)
       : undefined;
-    const resolvedKeys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionStore,
-      stem: identity.stem,
-      ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-    });
+    const canonicalArchive = identity.archived
+      ? archivedSessionsByName.get(hit.path.replace(/\\/g, "/").split("/").at(-1) ?? "")
+      : undefined;
+    const resolvedKeys = canonicalArchive?.sessionKey
+      ? [canonicalArchive.sessionKey]
+      : resolveTranscriptStemToSessionKeys({
+          store: combinedSessionStore,
+          stem: canonicalArchive?.sessionId ?? identity.stem,
+          ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+        });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,

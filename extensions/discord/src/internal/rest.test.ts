@@ -881,7 +881,8 @@ describe("RequestClient", () => {
         expect(req.headers["content-type"]).toMatch(/^multipart\/form-data; boundary=/);
         req.resume();
         req.on("end", () => {
-          res.writeHead(200, { "Content-Type": "application/json" });
+          // Retire the native fetch socket before a later test installs fake timers.
+          res.writeHead(200, { "Content-Type": "application/json", Connection: "close" });
           res.end(JSON.stringify({ id: "msg" }));
         });
       });

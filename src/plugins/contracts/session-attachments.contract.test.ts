@@ -5,7 +5,7 @@ import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -475,19 +475,21 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("uses the live runtime config when a captured API sends an attachment", async () => {
+  it("uses replacement runtime config when captured async session hooks resume", async () => {
     await withSessionStore(async ({ stateDir, storePath, filePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
 
       const staleStorePath = path.join(stateDir, "stale-sessions.json");
+      await writeSessionEntry(staleStorePath);
       const registrationConfig = { session: { store: staleStorePath } };
       const liveConfig = { session: { store: storePath } };
+      let runtimeConfig = registrationConfig;
       const registry = createPluginRegistry({
         logger: createSilentPluginLogger(),
         runtime: {
           config: {
-            current: () => liveConfig,
+            current: () => runtimeConfig,
           },
         } as unknown as PluginRuntime,
       });
@@ -506,13 +508,40 @@ describe("plugin session attachments", () => {
       });
       setActivePluginRegistry(registry.registry);
 
-      const result = await capturedApi?.sendSessionAttachment({
+      const attachment = capturedApi?.sendSessionAttachment({
         sessionKey: MAIN_SESSION_KEY,
         files: [{ path: filePath }],
       });
+      const injection = capturedApi?.enqueueNextTurnInjection({
+        sessionKey: MAIN_SESSION_KEY,
+        text: "resume with current config",
+        idempotencyKey: "live-config-injection",
+      });
+      runtimeConfig = liveConfig;
+
+      const result = await attachment;
       expectTelegramAttachmentResult(result, 1);
       expect(workflowMocks.sendMessage).toHaveBeenCalledTimes(1);
       expect(requireFirstSendMessageParams().cfg).toBe(liveConfig);
+      await expect(injection).resolves.toEqual({
+        enqueued: true,
+        id: "live-config-injection",
+        sessionKey: MAIN_SESSION_KEY,
+      });
+      expect(
+        loadSessionEntry({ storePath, sessionKey: MAIN_SESSION_KEY })?.pluginNextTurnInjections?.[
+          "live-config-attachment-plugin"
+        ],
+      ).toEqual([
+        expect.objectContaining({
+          id: "live-config-injection",
+          text: "resume with current config",
+        }),
+      ]);
+      expect(
+        loadSessionEntry({ storePath: staleStorePath, sessionKey: MAIN_SESSION_KEY })
+          ?.pluginNextTurnInjections,
+      ).toBeUndefined();
     });
   });
 

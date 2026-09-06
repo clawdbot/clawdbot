@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -74,6 +75,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
     isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
     resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
       isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
+    resolveEmbeddedAgentSessionProgressState: (...args: unknown[]) =>
+      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
   };
 });
 
@@ -81,6 +84,10 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", () => ({
   clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
 }));
 
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
@@ -210,6 +217,29 @@ function expectSessionsListActiveRun(respond: RespondFn, hasActiveRun: boolean):
   );
 }
 
+function mockListedSession(row: {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  hasActiveRun?: boolean;
+}): void {
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    targetsBySessionKey: new Map([
+      [
+        row.key,
+        {
+          agentId: row.agentId,
+          storeTarget: { agentId: row.agentId, storePath: "/tmp/openclaw-sessions.json" },
+        },
+      ],
+    ]),
+    durableTargets: [],
+    storePath: "/tmp/openclaw-sessions.json",
+    store: { [row.key]: { sessionId: row.sessionId, updatedAt: 1 } },
+  });
+  listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [row] });
+}
+
 async function expectListedGlobalSessionActiveRun(params: {
   activeRun: ActiveRun;
   runId: string;
@@ -222,8 +252,11 @@ async function expectListedGlobalSessionActiveRun(params: {
     globalScope: true,
     extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
   });
-  listSessionsFromStoreAsyncMock.mockResolvedValue({
-    sessions: [{ key: "global", agentId: params.agentId, hasActiveRun: false }],
+  mockListedSession({
+    key: "global",
+    agentId: params.agentId,
+    sessionId: `sess-${params.agentId}-global`,
+    hasActiveRun: false,
   });
   const respond = await callSessions(
     "sessions.list",
@@ -247,6 +280,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -285,12 +319,84 @@ describe("sessions.abort agent scope", () => {
     });
   });
 
+  it("aborts the exact embedded owner without entering chat.abort", async () => {
+    const sessionKey = "agent:main:telegram:direct:user";
+    const abort = vi.fn();
+    const handle: EmbeddedAgentQueueHandle = {
+      runId: "run-embedded",
+      abort,
+      isAborted: () => false,
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    setActiveEmbeddedRun("session-embedded", handle, sessionKey);
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "session-embedded" },
+    }));
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: sessionKey, runId: "run-embedded" },
+        {
+          context: createContext({
+            extra: { getSessionEventSubscriberConnIds: () => new Set() },
+          }),
+        },
+      );
+
+      expect(chatAbortMock).not.toHaveBeenCalled();
+      expect(abort).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        abortedRunId: "run-embedded",
+        status: "aborted",
+      });
+    } finally {
+      clearActiveEmbeddedRun("session-embedded", handle, sessionKey);
+    }
+  });
+
+  it("rejects an embedded run ID owned by another session", async () => {
+    const ownerKey = "agent:main:telegram:direct:owner";
+    const requestedKey = "agent:main:telegram:direct:other";
+    const abort = vi.fn();
+    const handle: EmbeddedAgentQueueHandle = {
+      runId: "run-embedded",
+      abort,
+      isAborted: () => false,
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    setActiveEmbeddedRun("session-owner", handle, ownerKey);
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: requestedKey,
+      entry: { sessionId: "session-other" },
+    }));
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: requestedKey, runId: "run-embedded" },
+        { context: createContext() },
+      );
+
+      expect(abort).not.toHaveBeenCalled();
+      expectRespondErrorMessage(respond, "runId does not match session");
+    } finally {
+      clearActiveEmbeddedRun("session-owner", handle, ownerKey);
+    }
+  });
+
   it("marks listed sessions active when the embedded or channel reply run registry owns the session id", async () => {
     const context = createContext({
       extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
     });
-    listSessionsFromStoreAsyncMock.mockResolvedValue({
-      sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
+    mockListedSession({
+      key: "agent:main:openclaw-weixin:direct:user",
+      agentId: "main",
+      sessionId: "sess-weixin",
     });
     isEmbeddedAgentRunInProgressMock.mockImplementation(
       (sessionId: string) => sessionId === "sess-weixin",

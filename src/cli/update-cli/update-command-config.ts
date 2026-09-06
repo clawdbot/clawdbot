@@ -1,9 +1,7 @@
 // Config snapshots and pre/post-update config restoration.
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import {
   mutateConfigFileWithRetry,
   parseConfigJson5,
@@ -12,22 +10,18 @@ import {
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
-import { CONFIG_PATH, resolveIncludeRoots } from "../../config/paths.js";
+import { resolveIncludeRoots } from "../../config/paths.js";
 import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { shouldWarnOnTouchedVersion } from "../../config/version.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
+import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-export async function createUpdateConfigSnapshot(): Promise<void> {
-  await createPreUpdateConfigSnapshot({
-    configPath: CONFIG_PATH,
-    fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-  });
-}
 
 export function normalizePluginInstallRecordMap(
   value: unknown,
@@ -235,6 +229,22 @@ function resolveRestoredAuthoredChannels(params: {
     return restoredModelOverrides.channels;
   }
   return changed ? restoredChannels : undefined;
+}
+
+export async function persistValidatedDowngradeConfig(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): Promise<void> {
+  if (
+    snapshot.valid &&
+    shouldWarnOnTouchedVersion(VERSION, snapshot.sourceConfig.meta?.lastTouchedVersion)
+  ) {
+    // Strict target validation permits this write even when Doctor execution failed.
+    // Committing unchanged config through its normal writer stamps the target version,
+    // so same-channel downgrades retain ordinary restart eligibility.
+    await withPluginLifecycleLease({}, async () => {
+      await mutateConfigFileWithRetry({ mutate: () => undefined });
+    });
+  }
 }
 
 export async function persistRequestedUpdateChannel(params: {

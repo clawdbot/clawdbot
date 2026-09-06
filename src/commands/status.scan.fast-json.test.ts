@@ -89,11 +89,32 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
       createStatusMemorySearchConfig(),
       process.env,
-      { includeChannelTargets: false },
     );
     expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
+  });
+
+  it("carries invalid config diagnostics through the lean JSON scan", async () => {
+    const config = createStatusMemorySearchConfig();
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [
+        {
+          path: "gateway.port",
+          message: "Invalid input: expected number, received string",
+        },
+      ],
+    };
+    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
+      config,
+      sourceConfig: config,
+      configDiagnostics,
+    });
+
+    const result = await scanStatusJsonFast({}, {} as never);
+
+    expect(result.configDiagnostics).toEqual(configDiagnostics);
   });
 
   it("keeps resolved and source channel configs available without loading runtime plugins", async () => {
@@ -125,6 +146,18 @@ describe("scanStatusJsonFast", () => {
 
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalled();
+  });
+
+  it.each([
+    { opts: {}, expected: 1000 },
+    { opts: { timeoutMs: 1500 }, expected: 1500 },
+    { opts: { all: true }, expected: 5000 },
+    { opts: { all: true, timeoutMs: 700 }, expected: 700 },
+  ])("bounds gateway secret resolution to $expected ms for $opts", async ({ opts, expected }) => {
+    await scanStatusJsonFast(opts, {} as never);
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewaySecretResolveTimeoutMs: expected }),
+    );
   });
 
   it("skips plugin compatibility loading even when configured channels are present", async () => {
@@ -250,6 +283,7 @@ describe("scanStatusJsonFast", () => {
       cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
+      inspectSources: true,
     });
   });
 

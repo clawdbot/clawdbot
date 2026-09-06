@@ -2,13 +2,13 @@
  * Canvas setup entrypoint that exposes config migrations.
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { migrateLegacyCanvasHostConfig } from "./src/config-migration.js";
+import { migrateCanvasHostConfig } from "./src/config-migration.js";
 
 export default definePluginEntry({
   id: "canvas",
   name: "Canvas Setup",
   description: "Lightweight Canvas setup hooks",
   register(api) {
-    api.registerConfigMigration((config) => migrateLegacyCanvasHostConfig(config));
+    api.registerConfigMigration((config) => migrateCanvasHostConfig(config));
   },
 });

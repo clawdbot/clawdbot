@@ -9,9 +9,12 @@ import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -23,7 +26,7 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-a2ui";
-const screenshotPath = "/tmp/pr-b-shots/a2ui-board.png";
+const scrollbarProofLabel = process.env.OPENCLAW_WIDGET_SCROLLBAR_PROOF_LABEL;
 const basicCatalog = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
 
 let browser: Browser;
@@ -39,6 +42,10 @@ async function openDashboard(page: Page): Promise<void> {
   const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
   await page.addInitScript(
     ({ key, storageKey }) => {
+      // Init scripts also run in opaque widget frames; only the dashboard owns settings.
+      if (window !== window.top) {
+        return;
+      }
       const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
         string,
         unknown
@@ -48,7 +55,7 @@ async function openDashboard(page: Page): Promise<void> {
     },
     { key: sessionKey, storageKey: settingsKey },
   );
-  await page.goto(`${controlUi.baseUrl}dashboard`);
+  await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
   await page.locator(".board-session-surface").waitFor();
 }
 
@@ -80,7 +87,10 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
     });
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    browser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      ignoreDefaultArgs: ["--hide-scrollbars"],
+    });
   }, 120_000);
 
   afterAll(async () => {
@@ -101,132 +111,180 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     await controlUi?.close();
   });
 
-  it("renders a v0.9 widget and routes its action to a tier-1 state event", async () => {
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      permissions: ["local-network-access"],
-      viewport: { width: 1280, height: 800 },
-    });
-    contexts.add(context);
-    const page = await context.newPage();
-    const origin = new URL(controlUi.baseUrl).origin;
-    const rendererUrl = `${rendererOrigin}/__openclaw__/cap/canvas-proof/__openclaw__/a2ui/a2ui-v0.9.bundle.js`;
-    const messages = [
-      {
-        version: "v0.9",
-        createSurface: { surfaceId: "main", catalogId: basicCatalog },
-      },
-      {
-        version: "v0.9",
-        updateComponents: {
-          surfaceId: "main",
-          components: [
-            { id: "root", component: "Column", children: ["title", "action"] },
-            { id: "title", component: "Text", text: "A2UI board widget" },
-            {
-              id: "action",
-              component: "Button",
-              child: "action-label",
-              variant: "primary",
-              action: { event: { name: "refresh", context: {} } },
-            },
-            { id: "action-label", component: "Text", text: "Refresh data" },
-          ],
+  for (const colorScheme of ["dark", "light"] as const) {
+    it(`renders a v0.9 widget with the ${colorScheme} scrollbar theme`, async () => {
+      const context = await browser.newContext({
+        colorScheme,
+        permissions: ["local-network-access"],
+        viewport: { width: 1280, height: 800 },
+      });
+      contexts.add(context);
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      const origin = new URL(controlUi.baseUrl).origin;
+      const rendererUrl = `${rendererOrigin}/__openclaw__/cap/canvas-proof/__openclaw__/a2ui/a2ui-v0.9.bundle.js`;
+      const messages = [
+        {
+          version: "v0.9",
+          createSurface: { surfaceId: "main", catalogId: basicCatalog },
         },
-      },
-    ];
-    const boot = JSON.stringify({ messages, actionTier: "state" }).replaceAll("<", "\\u003c");
-    const documentHtml = buildWidgetDocument(
-      "A2UI controls",
-      `<script>globalThis.openclawA2UIBoot=${boot};</script><style>html,body{height:100%;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script src="${rendererUrl}"></script>`,
-      { scriptOrigins: [rendererOrigin] },
-    );
-    const frameUrl = `${origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/a2ui-controls/index.html?bt=ticket`;
-    await page.route("**/__openclaw__/board/**", (route) =>
-      route.fulfill({ status: 200, contentType: "text/html", body: documentHtml }),
-    );
-    const gateway = await installMockGateway(page, {
-      sessionKey,
-      featureMethods: ["board.event", "board.get", "chat.metadata", "chat.startup"],
-      methodResponses: {
-        "board.get": {
-          sessionKey,
-          revision: 1,
-          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-          widgets: [
-            {
-              name: "a2ui-controls",
-              tabId: "main",
-              title: "A2UI controls",
-              contentKind: "plugin",
-              pluginKind: "canvas:a2ui",
-              kindLabel: "A2UI",
-              sizeW: 8,
-              sizeH: 5,
-              position: 0,
-              grantState: "none",
-              revision: 1,
-              instanceId: "a2ui-instance",
-              frameUrl,
-              viewTicket: "ticket",
-              viewTicketTtlMs: 1_200_000,
-              viewGeneration: "0123456789abcdef0123456789abcdef",
-              sandboxUrl: buildBoardWidgetSandboxPath({
+        {
+          version: "v0.9",
+          updateComponents: {
+            surfaceId: "main",
+            components: [
+              { id: "root", component: "Column", children: ["title", "action"] },
+              { id: "title", component: "Text", text: "A2UI board widget" },
+              {
+                id: "action",
+                component: "Button",
+                child: "action-label",
+                variant: "primary",
+                action: { event: { name: "refresh", context: {} } },
+              },
+              { id: "action-label", component: "Text", text: "Refresh data" },
+            ],
+          },
+        },
+      ];
+      const boot = JSON.stringify({ messages, actionTier: "state" }).replaceAll("<", "\\u003c");
+      const documentHtml = buildWidgetDocument(
+        "A2UI controls",
+        `<script>globalThis.openclawA2UIBoot=${boot};</script><style>html,body{height:100%;background:var(--surface)}body{min-height:2400px}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script src="${rendererUrl}"></script>`,
+        { scriptOrigins: [rendererOrigin] },
+      );
+      const frameUrl = `${origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/a2ui-controls/index.html?bt=ticket`;
+      await page.route("**/__openclaw__/board/**", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html", body: documentHtml }),
+      );
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        featureMethods: ["board.event", "board.get", "chat.metadata", "chat.startup"],
+        methodResponses: {
+          "board.get": {
+            sessionKey,
+            revision: 1,
+            tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+            widgets: [
+              {
+                name: "a2ui-controls",
+                tabId: "main",
+                title: "A2UI controls",
+                contentKind: "plugin",
+                pluginKind: "canvas:a2ui",
+                kindLabel: "A2UI",
+                sizeW: 8,
+                sizeH: 5,
+                heightMode: "fixed",
+                position: 0,
                 grantState: "none",
-                resourceOrigins: [rendererOrigin],
-              }),
-              sandboxPort,
-            },
-          ],
+                revision: 1,
+                instanceId: "a2ui-instance",
+                frameUrl,
+                viewTicket: "ticket",
+                viewTicketTtlMs: 1_200_000,
+                viewGeneration: "0123456789abcdef0123456789abcdef",
+                sandboxUrl: buildBoardWidgetSandboxPath({
+                  grantState: "none",
+                  resourceOrigins: [rendererOrigin],
+                }),
+                sandboxPort,
+              },
+            ],
+          },
+          "board.event": { ok: true, appended: true },
         },
-        "board.event": { ok: true, appended: true },
-      },
-    });
+      });
 
-    await openDashboard(page);
-    const outer = page.locator(".board-widget__frame");
-    await outer.waitFor();
-    const outerFrame = await outer.elementHandle().then((handle) => handle?.contentFrame());
-    await expect
-      .poll(
-        async () => {
-          const child = outerFrame?.childFrames()[0];
-          if (!child) {
-            return false;
-          }
-          try {
-            return await child.evaluate(() =>
-              Boolean(
-                customElements.get("openclaw-a2ui-host") && Reflect.get(globalThis, "openclawA2UI"),
-              ),
-            );
-          } catch {
-            return false;
-          }
+      await openDashboard(page);
+      const outer = page.locator(".board-widget__frame");
+      await outer.waitFor();
+      const outerFrame = await outer.elementHandle().then((handle) => handle?.contentFrame());
+      await expect
+        .poll(
+          async () => {
+            const child = outerFrame?.childFrames()[0];
+            if (!child) {
+              return false;
+            }
+            try {
+              return await child.evaluate(() =>
+                Boolean(
+                  customElements.get("openclaw-a2ui-host") &&
+                  Reflect.get(globalThis, "openclawA2UI"),
+                ),
+              );
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+      const widgetFrame = outerFrame!.childFrames()[0]!;
+      await widgetFrame.getByText("A2UI board widget").waitFor();
+      await expect
+        .poll(() => outer.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      expect(await outer.getAttribute("inert")).toBeNull();
+      await clickBoardWidgetControl(page, widgetFrame.getByText("Refresh data"));
+      await expect.poll(async () => (await gateway.getRequests("board.event")).length).toBe(1);
+      expect((await gateway.getRequests("board.event"))[0]?.params).toMatchObject({
+        ticket: "ticket",
+        payload: {
+          eventType: "a2ui.action",
+          action: { name: "refresh", surfaceId: "main", sourceComponentId: "action" },
         },
-        { timeout: 30_000 },
-      )
-      .toBe(true);
-    const widgetFrame = outerFrame!.childFrames()[0]!;
-    await widgetFrame.getByText("A2UI board widget").waitFor();
-    await widgetFrame.getByText("Refresh data").click();
+      });
+      await page.mouse.move(40, 40);
 
-    await expect.poll(async () => (await gateway.getRequests("board.event")).length).toBe(1);
-    expect((await gateway.getRequests("board.event"))[0]?.params).toMatchObject({
-      ticket: "ticket",
-      payload: {
-        eventType: "a2ui.action",
-        action: { name: "refresh", surfaceId: "main", sourceComponentId: "action" },
-      },
+      const scrollbar = await widgetFrame.evaluate(() => {
+        const root = document.documentElement;
+        const probe = document.createElement("div");
+        probe.style.background = "var(--scrollbar-thumb)";
+        document.body.append(probe);
+        const expectedThumb = getComputedStyle(probe).backgroundColor;
+        probe.style.background = "var(--scrollbar-thumb-hover)";
+        const expectedThumbHover = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        const styles = getComputedStyle(root);
+        return {
+          background: getComputedStyle(root, "::-webkit-scrollbar").backgroundColor,
+          colorScheme: styles.colorScheme,
+          expectedBackground: getComputedStyle(document.body).backgroundColor,
+          expectedThumb,
+          expectedThumbHover,
+          ratio: root.clientHeight / root.scrollHeight,
+          size: styles.getPropertyValue("--scrollbar-size"),
+          thumbBackground: getComputedStyle(root, "::-webkit-scrollbar-thumb").backgroundColor,
+          trackBackground: getComputedStyle(root, "::-webkit-scrollbar-track").backgroundColor,
+          width: getComputedStyle(root, "::-webkit-scrollbar").width,
+        };
+      });
+      expect(scrollbar).toMatchObject({
+        colorScheme,
+        expectedBackground: expect.any(String),
+        expectedThumb: expect.not.stringMatching(/^(?:rgba\(0, 0, 0, 0\)|transparent)$/),
+        expectedThumbHover: expect.not.stringMatching(/^(?:rgba\(0, 0, 0, 0\)|transparent)$/),
+        size: "12px",
+        trackBackground: "rgba(0, 0, 0, 0)",
+        width: "12px",
+      });
+      expect(scrollbar.background).toBe(scrollbar.expectedBackground);
+      expect([scrollbar.expectedThumb, scrollbar.expectedThumbHover]).toContain(
+        scrollbar.thumbBackground,
+      );
+      expect(scrollbar.ratio).toBeLessThan(0.2);
+      expect(pageErrors).toEqual([]);
+      if (scrollbarProofLabel) {
+        const screenshotPath = path.resolve(
+          createControlUiE2eArtifactDir("widget-scrollbar"),
+          `${scrollbarProofLabel}-${colorScheme}.png`,
+        );
+        await mkdir(path.dirname(screenshotPath), { recursive: true });
+        await page.screenshot({ animations: "disabled", path: screenshotPath, fullPage: true });
+      }
     });
-    await expect
-      .poll(() =>
-        widgetFrame.evaluate(() =>
-          getComputedStyle(document.documentElement).getPropertyValue("--surface"),
-        ),
-      )
-      .not.toBe("");
-    await mkdir(path.dirname(screenshotPath), { recursive: true });
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-  });
+  }
 });

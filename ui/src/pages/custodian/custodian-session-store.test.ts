@@ -9,6 +9,14 @@ import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 import { custodianErrorMessage } from "./transcript.ts";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("CustodianSessionStore", () => {
   beforeEach(() => {
     installSafeLocalStorageForTesting(window).clear();
@@ -209,6 +217,67 @@ describe("CustodianSessionStore", () => {
     expect(store.messages[0]?.question?.id).toBe("repair");
   });
 
+  it("coalesces concurrent transcript refreshes", async () => {
+    const pending = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
+    let historyCall = 0;
+    const request = vi.fn((method: string, params: { sessionId?: string }) => {
+      if (method === "openclaw.chat.history") {
+        historyCall += 1;
+        if (historyCall === 1) {
+          return Promise.resolve({ turns: [] });
+        }
+        return pending.promise;
+      }
+      return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
+    });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.sending).toBe(false));
+
+    const firstRefresh = store.refreshTranscriptIfIdle();
+    const secondRefresh = store.refreshTranscriptIfIdle();
+    expect(historyCall).toBe(2);
+    pending.resolve({ turns: [{ role: "assistant", text: "Fresh history", at: 2 }] });
+    await Promise.all([firstRefresh, secondRefresh]);
+
+    expect(store.messages.map((message) => message.text)).toEqual(["Fresh history"]);
+  });
+
+  it("keeps a transcript failure visible when a user turn invalidates its retry", async () => {
+    const retry = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
+    const reply = deferred<{ sessionId: string; reply: string; action: "none" }>();
+    let historyCall = 0;
+    const request = vi.fn((method: string, params: { sessionId?: string; message?: string }) => {
+      if (method === "openclaw.chat.history") {
+        historyCall += 1;
+        if (historyCall === 1) {
+          return Promise.reject(new Error("history unavailable"));
+        }
+        return retry.promise;
+      }
+      if (params.message) {
+        return reply.promise;
+      }
+      return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
+    });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.sending).toBe(false));
+    expect(store.transcript.status.error).toContain("history unavailable");
+
+    const refresh = store.refreshTranscriptIfIdle();
+    const send = store.send("Continue");
+    retry.resolve({ turns: [{ role: "assistant", text: "Stale history", at: 2 }] });
+    await refresh;
+
+    expect(store.transcript.status.error).toContain("history unavailable");
+    expect(store.messages.some((message) => message.text === "Stale history")).toBe(false);
+    reply.resolve({ sessionId: "session-after-send", reply: "Continued.", action: "none" });
+    await send;
+  });
+
   it("refreshes durable history after reconnect and clears the abandoned outcome", async () => {
     const initialRequest = vi.fn(
       (
@@ -349,34 +418,112 @@ describe("CustodianSessionStore", () => {
     expect(store.messages.at(-1)?.text).toBe("Ready.");
   });
 
-  it("blocks messages until inference setup succeeds", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "OpenClaw requires working inference: no configured model",
-          details: { code: "system_agent_inference_unavailable" },
-        }),
-      )
-      .mockResolvedValueOnce({
+  it.each([
+    new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "The configured runtime could not start. Repair the launcher and retry.",
+      details: { code: "system_agent_inference_unavailable" },
+    }),
+    new Error("The greeting could not start. Retry after repairing the runtime."),
+  ])(
+    "keeps startup failures in the conversation and blocks sends until verified: %s",
+    async (error) => {
+      const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce({
         sessionId: "shared-session",
         reply: "Ready.",
         action: "none",
       });
+      const { context } = createContext(request);
+      const store = new CustodianSessionStore();
+
+      store.connect(context, "caretaker");
+      await waitForFast(() => expect(store.error).toBe(error.message));
+      expect(store.setupRequired).toBe(false);
+      await expect(store.send("should not send")).resolves.toBe("rejected");
+      expect(request).toHaveBeenCalledOnce();
+
+      store.setInput("Keep my draft");
+      store.retry();
+      await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Ready."));
+      expect(store.input).toBe("Keep my draft");
+      expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+      expect(store.error).toBeNull();
+    },
+  );
+
+  it.each([
+    { edits: [], expected: "Original question" },
+    { edits: ["New question"], expected: "New question" },
+    { edits: ["New question", ""], expected: "" },
+  ])(
+    "preserves the latest ordinary draft after an unsent failure: $edits",
+    async ({ edits, expected }) => {
+      const pending = deferred<void>();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ sessionId: "draft-session", reply: "Ready." })
+        .mockImplementationOnce(() =>
+          pending.promise.then(() => {
+            throw new Error("Request was not sent.");
+          }),
+        );
+      const { context } = createContext(request);
+      const store = new CustodianSessionStore();
+      store.connect(context, "caretaker");
+      await waitForFast(() => expect(store.canSend).toBe(true));
+      store.setInput("Original question");
+      const sending = store.send();
+      expect(store.input).toBe("");
+      for (const edit of edits) {
+        store.setInput(edit);
+      }
+      pending.resolve();
+      await expect(sending).resolves.toBe("rejected");
+      expect(store.input).toBe(expected);
+      expect(store.hasRealUserTurn()).toBe(false);
+      expect(store.error).toBe("Request was not sent.");
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("rechecks failed inference without replaying a user turn", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "shared-session",
+        reply: "Ready.",
+        action: "none",
+      })
+      .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+        options?.onSent?.();
+        return Promise.reject(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Runtime verification failed.",
+            details: { code: "system_agent_inference_unavailable" },
+          }),
+        );
+      })
+      .mockResolvedValueOnce({
+        sessionId: "shared-session",
+        reply: "Recovered.",
+        action: "none",
+      });
     const { context } = createContext(request);
     const store = new CustodianSessionStore();
-
     store.connect(context, "caretaker");
-    await waitForFast(() => expect(store.setupRequired).toBe(true));
-    expect(store.setupIssue).toBe("unavailable");
-
-    await expect(store.send("should not send")).resolves.toBe("rejected");
-    expect(request).toHaveBeenCalledOnce();
-
+    await waitForFast(() => expect(store.sending).toBe(false));
+    await store.send("Check this system");
+    expect(store.error).toBe("Runtime verification failed.");
+    expect(store.messages.map((message) => message.text)).toContain("Check this system");
+    await expect(store.send("Do not send yet")).resolves.toBe("rejected");
+    store.setInput("Next question");
     store.retry();
-    await waitForFast(() => expect(store.setupRequired).toBe(false));
-    await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Ready."));
+    await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Recovered."));
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
+    expect(store.messages.map((message) => message.text)).toContain("Check this system");
+    expect(store.input).toBe("Next question");
   });
 
   it("shows setup before starting chat when the default agent has no model", async () => {
@@ -394,7 +541,6 @@ describe("CustodianSessionStore", () => {
     store.connect(context, "caretaker");
 
     expect(store.setupRequired).toBe(true);
-    expect(store.setupIssue).toBe("missing");
     expect(store.sending).toBe(false);
     expect(request).not.toHaveBeenCalled();
     await expect(store.send("should not send")).resolves.toBe("rejected");
@@ -485,7 +631,7 @@ describe("CustodianSessionStore", () => {
     store.connect(context, "caretaker");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
-    store.openModelSetup();
+    store.exitSetup("model-setup");
     expect(requestSignal?.aborted).toBe(true);
     expect(store.sending).toBe(false);
     resolveReply({

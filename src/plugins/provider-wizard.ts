@@ -42,6 +42,7 @@ type ProviderWizardProvidersResolver = (params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }) => ProviderPlugin[];
 
 let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
@@ -134,6 +135,7 @@ function resolveProviderWizardProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }): ProviderPlugin[] {
   if (providerWizardProvidersResolverForTest) {
     return providerWizardProvidersResolverForTest(params);
@@ -143,6 +145,7 @@ function resolveProviderWizardProviders(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
+    ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
 }
 
@@ -308,6 +311,7 @@ export async function runProviderModelSelectedHookCore(params: {
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  preparedProvider?: ProviderPlugin;
 }): Promise<void> {
   const rawModel = params.model.trim();
   if (!rawModel) {
@@ -322,18 +326,26 @@ export async function runProviderModelSelectedHookCore(params: {
     return;
   }
 
-  const setupProvider = resolvePluginSetupProviderCore({
-    provider: selectedProviderId,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const preparedProvider =
+    params.preparedProvider &&
+    normalizeProviderId(params.preparedProvider.id) === selectedProviderId
+      ? params.preparedProvider
+      : undefined;
+  const setupProvider =
+    preparedProvider ??
+    resolvePluginSetupProviderCore({
+      provider: selectedProviderId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
   const provider =
     setupProvider ??
     resolveProviderWizardProviders({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      providerRefs: [selectedProviderId],
     }).find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;

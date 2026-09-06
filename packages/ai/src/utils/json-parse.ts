@@ -140,3 +140,26 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
     }
   }
 }
+
+const TOOL_ARGUMENT_PREVIEW_FIRST_CHECKPOINT_CHARS = 512;
+
+/** Returns true when the streamed argument buffer crossed its next preview checkpoint. */
+export type ToolArgumentPreviewSchedule = (accumulatedChars: number) => boolean;
+
+/**
+ * Streamed tool-call arguments are preview-only; the terminal parse re-reads
+ * the full buffer authoritatively at content_block_stop. Reparsing every delta
+ * scans an ever-growing buffer and makes assembly quadratic in the argument
+ * size, so refresh previews on a geometric length schedule instead — bounded
+ * staleness, linear total parse work.
+ */
+export function createToolArgumentPreviewSchedule(): ToolArgumentPreviewSchedule {
+  let nextCheckpointChars = TOOL_ARGUMENT_PREVIEW_FIRST_CHECKPOINT_CHARS;
+  return (accumulatedChars: number): boolean => {
+    if (accumulatedChars < nextCheckpointChars) {
+      return false;
+    }
+    nextCheckpointChars = accumulatedChars * 2;
+    return true;
+  };
+}

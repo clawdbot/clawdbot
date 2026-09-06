@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
-  requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
 
@@ -30,16 +29,12 @@ describe("isLiveProfileKeyModeEnabled", () => {
 
 describe("live credential precedence", () => {
   it("uses profile-first auth for OpenAI even when the global live mode is env-first", () => {
-    // OpenAI live tests exercise profile auth by default so registry/provider
-    // routing matches normal agent execution instead of raw env-only calls.
+    // Prefer stored OpenAI profiles without excluding the documented env fallback.
     expect(resolveLiveCredentialPrecedence("openai", false)).toBe("profile-first");
-    expect(requiresLiveProfileCredential("openai", false)).toBe(true);
   });
 
   it("keeps env-first auth for normal providers unless profile keys are required", () => {
     expect(resolveLiveCredentialPrecedence("anthropic", false)).toBe("env-first");
     expect(resolveLiveCredentialPrecedence("anthropic", true)).toBe("profile-first");
-    expect(requiresLiveProfileCredential("anthropic", false)).toBe(false);
-    expect(requiresLiveProfileCredential("anthropic", true)).toBe(true);
   });
 });

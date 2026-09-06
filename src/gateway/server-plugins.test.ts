@@ -1,10 +1,12 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -18,8 +20,11 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { withEnv } from "../test-utils/env.js";
+import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
@@ -57,9 +62,15 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
 }));
 
-vi.mock("../plugins/runtime/load-context.js", () => ({
-  createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
-}));
+vi.mock("../plugins/runtime/load-context.js", async (importOriginal) => {
+  const { buildPluginRuntimeLoadOptions, setPluginRuntimeLoadContext } =
+    await importOriginal<typeof import("../plugins/runtime/load-context.js")>();
+  return {
+    buildPluginRuntimeLoadOptions,
+    setPluginRuntimeLoadContext,
+    createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
+  };
+});
 
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable,
@@ -89,6 +100,7 @@ vi.mock("./server-methods.js", () => ({
 
 vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
   dispatchReplyFromConfig,
+  dispatchLowLevelChannelReplyFromConfig: dispatchReplyFromConfig,
 }));
 
 vi.mock("./agent-turn/internal-facade.js", () => ({
@@ -169,25 +181,38 @@ function addLoadedPlugin(
   return registry;
 }
 
+function createDuplexPluginRegistry(command = "image.bridge"): PluginRegistry {
+  const registry = addLoadedPlugin(createRegistry([]), { id: "duplex-plugin" });
+  registry.nodeHostCommands.push({
+    pluginId: "duplex-plugin",
+    pluginName: "Duplex plugin",
+    command: { command, duplex: true, handle: async () => "{}" },
+    source: "test",
+  });
+  return registry;
+}
+
 function createLookUpTableForTest(params: {
   installRecords?: PluginLookUpTable["index"]["installRecords"];
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
   pluginIds?: readonly string[];
   workerProviderIds?: readonly string[];
 }): PluginLookUpTable {
+  const index: PluginLookUpTable["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 1,
+    installRecords: params.installRecords ?? {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "test",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 1,
-      installRecords: params.installRecords ?? {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: params.manifestRegistry ?? { plugins: [], diagnostics: [] },
     plugins: [],
@@ -203,6 +228,7 @@ function createLookUpTableForTest(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     startup: {
       channelPluginIds: [],
@@ -255,7 +281,18 @@ function createTestLog() {
 }
 
 function createTestContext(label: string): GatewayRequestContext {
-  return { label } as unknown as GatewayRequestContext;
+  const config = {};
+  return bindTestAgentTurns({
+    label,
+    getRuntimeConfig: () => config,
+  } as unknown as GatewayRequestContext);
+}
+
+function bindTestAgentTurns(context: GatewayRequestContext): GatewayRequestContext {
+  context.trackExecution = trackAsyncWork;
+  context.createAgentTurnFacade ??= (principal) =>
+    createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+  return context;
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -347,6 +384,7 @@ async function loadTestModules() {
       resolveTestGatewayContext = () => undefined;
     },
     setFallbackGatewayContext: (context) => {
+      bindTestAgentTurns(context);
       resolveTestGatewayContext = () => context;
       return () => {
         if (resolveTestGatewayContext() === context) {
@@ -355,9 +393,13 @@ async function loadTestModules() {
       };
     },
     setFallbackGatewayContextResolver: (resolve) => {
-      resolveTestGatewayContext = resolve;
+      const boundResolve = () => {
+        const context = resolve();
+        return context ? bindTestAgentTurns(context) : undefined;
+      };
+      resolveTestGatewayContext = boundResolve;
       return () => {
-        if (resolveTestGatewayContext === resolve) {
+        if (resolveTestGatewayContext === boundResolve) {
           resolveTestGatewayContext = () => undefined;
         }
       };
@@ -394,6 +436,12 @@ async function createSubagentRuntime(
   loadGatewayStartupPluginsForTest({
     cfg,
   });
+  return createRuntimeFromLastGatewayLoad().subagent;
+}
+
+async function createRequestScopedSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
+  loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+  loadGatewayStartupPluginsForTest({ resolveGatewayContext: undefined });
   return createRuntimeFromLastGatewayLoad().subagent;
 }
 
@@ -530,6 +578,25 @@ describe("loadGatewayPlugins", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  test("logs warn-level plugin diagnostics through the warn sink, not info", () => {
+    const diagnostics: PluginDiagnostic[] = [
+      {
+        level: "warn",
+        pluginId: "beads",
+        source: "/tmp/beads/index.ts",
+        message: 'typed hook "before_prompt_build" blocked by policy',
+      },
+    ];
+    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
+    const log = loadGatewayStartupPluginsForTest();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      '[plugins] typed hook "before_prompt_build" blocked by policy (plugin=beads, source=/tmp/beads/index.ts)',
+    );
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("[plugins] typed hook"));
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   test("does not re-log a quarantined plugin verification diagnostic", () => {
     const diagnostic: PluginDiagnostic = {
       level: "error",
@@ -584,12 +651,29 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("binds channel reply dispatch to the owning Gateway context", async () => {
+    const terminalSessions = { listAgent: vi.fn(() => []) };
     const context = {
       label: "channel-reply-owner",
       workerSessionPlacementService: { getMany: vi.fn(() => new Map()) },
+      terminalSessions,
     } as unknown as GatewayRequestContext;
     serverPluginsModule.setFallbackGatewayContext(context);
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    dispatchReplyFromConfig.mockImplementationOnce(async () => {
+      const result = await createTerminalTool({
+        agentId: "main",
+        agentSessionKey: "agent:main:telegram:direct:123",
+        sessionId: "session-123",
+      }).execute("terminal-list", { action: "list" });
+      expect(result.details).toEqual({ sessions: [] });
+      expect(terminalSessions.listAgent).toHaveBeenCalledWith({
+        kind: "agent",
+        agentId: "main",
+        agentSessionKey: "agent:main:telegram:direct:123",
+        agentSessionId: "session-123",
+      });
+      return { counts: {}, queuedFinal: false };
+    });
 
     loadGatewayPluginsForTest();
     const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as
@@ -607,6 +691,99 @@ describe("loadGatewayPlugins", () => {
       ...params,
       sessionWorkerPlacementContext: context,
     });
+  });
+
+  test("captures retired plugin reply owners through their canonical Gateway binding", async () => {
+    const { admitReplyTurn } = await import("../auto-reply/reply/reply-turn-admission.js");
+    const { captureGatewayReplyRunRestartAbort } =
+      await import("../auto-reply/reply/reply-run-registry.js");
+    const { captureGatewaySessionWorkAdmissions } =
+      await import("../sessions/session-lifecycle-admission.js");
+    const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
+    const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-restart-owner-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const context = createTestContext("same-context-distinct-owners");
+    const closingResolver = vi.fn(() => context);
+    const otherResolver = vi.fn(() => context);
+    const operations: import("../auto-reply/reply/reply-run-registry.js").ReplyOperation[] = [];
+    const runtimes: ReturnType<ServerPluginsModule["loadGatewayPlugins"]>[] = [];
+    try {
+      for (const [name, resolver] of [
+        ["closing", closingResolver],
+        ["other", otherResolver],
+      ] as const) {
+        const sessionKey = `agent:main:plugin-${name}`;
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          { sessionId: name, updatedAt: Date.now() },
+        );
+        loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+        runtimes.push(
+          serverPluginsModule.loadGatewayPlugins({
+            cfg: {},
+            workspaceDir: stateDir,
+            log: createTestLog(),
+            baseMethods: [],
+            pluginIds: ["test-channel"],
+            resolveGatewayContext: resolver,
+          }),
+        );
+        const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as Parameters<
+          PluginRuntimeModule["createPluginRuntime"]
+        >[0];
+        const dispatch = runtimeOptions?.dispatchReplyFromConfig;
+        if (!dispatch) {
+          throw new Error("Expected bound channel dispatch");
+        }
+        dispatchReplyFromConfig.mockImplementationOnce(async () => {
+          const admission = await admitReplyTurn({
+            sessionKey,
+            sessionId: name,
+            storePath,
+            kind: "visible",
+            resetTriggered: false,
+          });
+          if (admission.status !== "owned") {
+            throw new Error("Expected an owned reply");
+          }
+          operations.push(admission.operation);
+          return { counts: {}, queuedFinal: false };
+        });
+        await dispatch({} as Parameters<typeof dispatch>[0]);
+      }
+      const capturedResolver = gatewayRequestScopeModule.getGatewayContextResolver(operations[0]!);
+      expect(capturedResolver?.()).toBe(context);
+      runtimes[0]!.retireGatewayRuntimeBindings();
+      expect(capturedResolver?.()).toBeUndefined();
+      closingResolver.mockImplementation(() => {
+        throw new Error("Retired resolver must not be invoked");
+      });
+      otherResolver.mockClear();
+      const admissions = captureGatewaySessionWorkAdmissions(closingResolver);
+      const aborted = captureGatewayReplyRunRestartAbort(closingResolver)(() => {});
+      expect({
+        closing: admissions.isActive({
+          scope: storePath,
+          sessionKey: "agent:main:plugin-closing",
+          sessionId: "closing",
+        }),
+        other: admissions.isActive({
+          scope: storePath,
+          sessionKey: "agent:main:plugin-other",
+          sessionId: "other",
+        }),
+        aborted,
+        signals: operations.map((operation) => operation.abortSignal.aborted),
+      }).toEqual({ closing: true, other: false, aborted: 1, signals: [true, false] });
+      expect(otherResolver).not.toHaveBeenCalled();
+    } finally {
+      operations.forEach((operation) => operation.complete());
+      runtimes.forEach((runtime) => runtime.retireGatewayRuntimeBindings());
+      await Promise.resolve();
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   test("injects the process HOME-isolation fact into registry construction", () => {
@@ -1296,6 +1473,7 @@ describe("loadGatewayPlugins", () => {
           nodeId: "node-1",
           command: "browser.proxy",
           params: { method: "GET", path: "/profiles" },
+          sessionKey: "agent:main:trusted",
           scopes: ["operator.admin"],
         }),
     );
@@ -1307,11 +1485,14 @@ describe("loadGatewayPlugins", () => {
     });
     expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+    expect(getLastDispatchedClientInternal().nodeInvokeApprovalSessionKey).toBe(
+      "agent:main:trusted",
+    );
   });
 
   test("honors trusted plugin node scopes inside a narrower Gateway request", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "opencode" }));
-    loadGatewayStartupPluginsForTest();
+    loadGatewayStartupPluginsForTest({ resolveGatewayContext: undefined });
     const scope = {
       context: createTestContext("nodes-invoke-read-caller"),
       client: {
@@ -1385,7 +1566,7 @@ describe("loadGatewayPlugins", () => {
 
   test("does not inherit admin scope for trusted plugin gateway requests", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
-    loadGatewayStartupPluginsForTest();
+    loadGatewayStartupPluginsForTest({ resolveGatewayContext: undefined });
     const scope = {
       context: createTestContext("plugin-gateway-request-admin-caller"),
       client: {
@@ -1473,6 +1654,7 @@ describe("loadGatewayPlugins", () => {
           nodeId: "node-1",
           command: "browser.proxy",
           params: { method: "GET", path: "/profiles" },
+          sessionKey: "agent:main:untrusted",
           scopes: ["operator.admin"],
         }),
     );
@@ -1485,11 +1667,436 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("third-party");
+    expect(getLastDispatchedClientInternal()).not.toHaveProperty("nodeInvokeApprovalSessionKey");
+  });
+
+  test("rejects an owned non-duplex node command before invoking its handler", async () => {
+    const handle = vi.fn(async () => '{"ok":true}');
+    const registry = addLoadedPlugin(createRegistry([]), { id: "duplex-plugin" });
+    registry.nodeHostCommands.push({
+      pluginId: "duplex-plugin",
+      pluginName: "Duplex plugin",
+      command: { command: "image.bridge", handle },
+      source: "test",
+    });
+    loadOpenClawPlugins.mockReturnValue(registry);
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext({
+      nodeRegistry: { sendInvokeInput: vi.fn() },
+    } as unknown as GatewayRequestContext);
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      await handle();
+      opts.respond(true, { ok: true });
+    });
+    const runtime = createRuntimeFromLastGatewayLoad();
+
+    const error = await gatewayRequestScopeModule.withPluginRuntimeRegistryScope(registry, () =>
+      gatewayRequestScopeModule
+        .withPluginRuntimePluginScope({ pluginId: "duplex-plugin", pluginOrigin: "bundled" }, () =>
+          runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+        )
+        .catch((reason: unknown) => reason),
+    );
+
+    expect(handle).not.toHaveBeenCalled();
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/declare.*duplex: true/i);
+  });
+
+  test.each([
+    { label: "unknown command", owners: [] },
+    { label: "another plugin's duplex command", owners: ["another-plugin"] },
+    { label: "ambiguous plugin ownership", owners: ["duplex-plugin", "another-plugin"] },
+    { label: "duplicate caller-owned declarations", owners: ["duplex-plugin", "duplex-plugin"] },
+    { label: "missing scoped registry", owners: ["duplex-plugin"], scopedRegistry: false },
+  ])("rejects a $label before node dispatch", async ({ owners, scopedRegistry }) => {
+    const registry = addLoadedPlugin(createRegistry([]), { id: "duplex-plugin" });
+    registry.nodeHostCommands.push(
+      ...owners.map((pluginId) => ({
+        pluginId,
+        pluginName: pluginId,
+        command: { command: "image.bridge", duplex: true, handle: vi.fn(async () => "{}") },
+        source: "test",
+      })),
+    );
+    loadOpenClawPlugins.mockReturnValue(registry);
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext({
+      nodeRegistry: { sendInvokeInput: vi.fn() },
+    } as unknown as GatewayRequestContext);
+    const runtime = createRuntimeFromLastGatewayLoad();
+    const openDuplex = () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+        () => runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+      );
+
+    await expect(
+      scopedRegistry === false
+        ? openDuplex()
+        : gatewayRequestScopeModule.withPluginRuntimeRegistryScope(registry, openDuplex),
+    ).rejects.toThrow(/registered exactly once.*duplex: true/i);
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test.each(["operator.read", "no scopes"])(
+    "does not elevate a scoped %s caller when forcing a synthetic duplex client",
+    async (scopeLabel) => {
+      const scopes = scopeLabel === "no scopes" ? [] : ["operator.read"];
+      const registry = createDuplexPluginRegistry();
+      loadOpenClawPlugins.mockReturnValue(registry);
+      loadGatewayStartupPluginsForTest();
+      const context = {
+        nodeRegistry: { sendInvokeInput: vi.fn() },
+      } as unknown as GatewayRequestContext;
+      serverPluginsModule.setFallbackGatewayContext(context);
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        opts.respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: "missing operator.write scope",
+        });
+      });
+      const requestScope = {
+        context,
+        client: { connect: { scopes } } as GatewayRequestOptions["client"],
+        isWebchatConnect: () => false,
+        pluginRegistry: registry,
+      } satisfies PluginRuntimeGatewayRequestScope;
+      const runtime = createRuntimeFromLastGatewayLoad();
+
+      await expect(
+        gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(requestScope, () =>
+          gatewayRequestScopeModule.withPluginRuntimePluginScope(
+            { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+            () => runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+          ),
+        ),
+      ).rejects.toThrow("missing operator.write scope");
+      expect(getLastDispatchedClientScopes()).toEqual(scopes);
+      expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("duplex-plugin");
+      expect(getLastDispatchedParams()).not.toHaveProperty("nodeInvokeStream");
+    },
+  );
+
+  test.each([
+    { callerScope: "operator.read", requestedScope: "operator.write" },
+    { callerScope: "no scopes", requestedScope: "operator.write" },
+    { callerScope: "operator.write", requestedScope: "operator.admin" },
+    { callerScope: "operator.write", requestedScope: "operator.approvals" },
+  ] as const)(
+    "rejects explicit $requestedScope duplex escalation from an authenticated $callerScope caller",
+    async ({ callerScope, requestedScope }) => {
+      const scopes = callerScope === "no scopes" ? [] : [callerScope];
+      const callerAbort = new AbortController();
+      const registry = createDuplexPluginRegistry();
+      loadOpenClawPlugins.mockReturnValue(registry);
+      loadGatewayStartupPluginsForTest();
+      const context = {
+        nodeRegistry: { sendInvokeInput: vi.fn() },
+      } as unknown as GatewayRequestContext;
+      serverPluginsModule.setFallbackGatewayContext(context);
+      const requestScope = {
+        context,
+        client: { connect: { scopes } } as GatewayRequestOptions["client"],
+        isWebchatConnect: () => false,
+        pluginRegistry: registry,
+      } satisfies PluginRuntimeGatewayRequestScope;
+      const runtime = createRuntimeFromLastGatewayLoad();
+
+      await expect(
+        gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(requestScope, () =>
+          gatewayRequestScopeModule.withPluginRuntimePluginScope(
+            { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+            () =>
+              runtime.nodes.openDuplex({
+                nodeId: "node-1",
+                command: "image.bridge",
+                scopes: [requestedScope],
+                signal: callerAbort.signal,
+              }),
+          ),
+        ),
+      ).rejects.toThrow("exceed the authenticated Gateway caller's authority");
+      expect(handleGatewayRequest).not.toHaveBeenCalled();
+      callerAbort.abort(new Error("denied invocation caller retired"));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    },
+  );
+
+  test("waits for framed readiness and carries binary messages through canonical invoke transport", async () => {
+    const registry = createDuplexPluginRegistry();
+    loadOpenClawPlugins.mockReturnValue(registry);
+    loadGatewayStartupPluginsForTest();
+    const sendInvokeInput = vi.fn();
+    const context = {
+      nodeRegistry: { sendInvokeInput },
+    } as unknown as GatewayRequestContext;
+    serverPluginsModule.setFallbackGatewayContext(context);
+    let invokeOptions: HandleGatewayRequestOptions | undefined;
+    let finishInvoke: (() => void) | undefined;
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      invokeOptions = opts;
+      opts.client?.internal?.nodeInvokeStream?.onDispatchReady("duplex-ready-invoke");
+      await new Promise<void>((resolve) => {
+        finishInvoke = () => {
+          opts.respond(true, { ok: true, payload: { complete: true } });
+          resolve();
+        };
+      });
+    });
+    const runtime = createRuntimeFromLastGatewayLoad();
+    const requestScope = {
+      context,
+      client: {
+        connect: { scopes: ["operator.read", "operator.write"] },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+      pluginRegistry: registry,
+    } satisfies PluginRuntimeGatewayRequestScope;
+    let settled = false;
+    const opening = gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(
+      requestScope,
+      () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+          () =>
+            runtime.nodes.openDuplex({
+              nodeId: "node-1",
+              command: "image.bridge",
+              scopes: ["operator.write"],
+            }),
+        ),
+    );
+    void opening.then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(invokeOptions).toBeDefined());
+    expect(settled).toBe(false);
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+
+    const stream = invokeOptions?.client?.internal?.nodeInvokeStream;
+    stream?.onProgress(JSON.stringify({ v: 1, kind: "ready" }));
+    const channel = await opening;
+    const onMessage = vi.fn();
+    channel.onMessage(onMessage);
+    stream?.onProgress(
+      JSON.stringify({ v: 1, kind: "data", message: 0, index: 0, last: true, data: "BAU=" }),
+    );
+    await channel.send(Uint8Array.of(1, 2, 3));
+
+    expect(onMessage).toHaveBeenCalledWith(Uint8Array.of(4, 5));
+    expect(sendInvokeInput).toHaveBeenCalledWith(
+      "duplex-ready-invoke",
+      expect.objectContaining({ kind: "data", message: 0, index: 0, data: "AQID" }),
+    );
+    expect(stream?.idleTimeoutMs).toBe(30_000);
+    finishInvoke?.();
+    await expect(channel.closed).resolves.toEqual({ ok: true, payload: { complete: true } });
+    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/closed/i);
+  });
+
+  test.each(["listener rejection", "caller cancellation"])(
+    "waits for terminal asynchronous message delivery and handles %s",
+    async (terminalAction) => {
+      const registry = createDuplexPluginRegistry();
+      loadOpenClawPlugins.mockReturnValue(registry);
+      loadGatewayStartupPluginsForTest();
+      serverPluginsModule.setFallbackGatewayContext({
+        nodeRegistry: { sendInvokeInput: vi.fn() },
+      } as unknown as GatewayRequestContext);
+      let invokeOptions: HandleGatewayRequestOptions | undefined;
+      let finishInvoke: (() => void) | undefined;
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        invokeOptions = opts;
+        opts.client?.internal?.nodeInvokeStream?.onDispatchReady("duplex-terminal-delivery");
+        await new Promise<void>((resolve) => {
+          finishInvoke = () => {
+            opts.respond(true, { ok: true });
+            resolve();
+          };
+        });
+      });
+      const runtime = createRuntimeFromLastGatewayLoad();
+      const opening = gatewayRequestScopeModule.withPluginRuntimeRegistryScope(registry, () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+          () => runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+        ),
+      );
+      await vi.waitFor(() => expect(invokeOptions).toBeDefined());
+      const stream = invokeOptions?.client?.internal?.nodeInvokeStream;
+      stream?.onProgress(JSON.stringify({ v: 1, kind: "ready" }));
+      const channel = await opening;
+      let rejectDelivery: ((error: Error) => void) | undefined;
+      channel.onMessage(
+        async () =>
+          await new Promise<void>((_resolve, reject) => {
+            rejectDelivery = reject;
+          }),
+      );
+
+      stream?.onProgress(
+        JSON.stringify({ v: 1, kind: "data", message: 0, index: 0, last: true, data: "AQ==" }),
+      );
+      finishInvoke?.();
+      let closedSettled = false;
+      void channel.closed.then(
+        () => {
+          closedSettled = true;
+        },
+        () => {
+          closedSettled = true;
+        },
+      );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closedSettled).toBe(false);
+
+      if (terminalAction === "listener rejection") {
+        rejectDelivery?.(new Error("terminal message listener rejected"));
+        await expect(channel.closed).rejects.toThrow("terminal message listener rejected");
+      } else {
+        channel.close();
+        await expect(channel.closed).rejects.toThrow(/closed|cancel/i);
+      }
+    },
+  );
+
+  test("cancels a retained duplex invocation when its delegated caller authority closes", async () => {
+    const registry = createDuplexPluginRegistry();
+    loadOpenClawPlugins.mockReturnValue(registry);
+    loadGatewayStartupPluginsForTest();
+    const sendInvokeInput = vi.fn();
+    const validateAgentRuntimeApprovalAuthority = vi.fn(() => true);
+    const context = {
+      nodeRegistry: { sendInvokeInput },
+      validateAgentRuntimeApprovalAuthority,
+    } as unknown as GatewayRequestContext;
+    serverPluginsModule.setFallbackGatewayContext(context);
+    let invokeSignal: AbortSignal | undefined;
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      invokeSignal = opts.signal;
+      opts.client?.internal?.nodeInvokeStream?.onDispatchReady("delegated-duplex");
+      opts.client?.internal?.nodeInvokeStream?.onProgress(JSON.stringify({ v: 1, kind: "ready" }));
+      await new Promise<void>((resolve) => {
+        opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const operationalRunInstance = {
+      instanceId: "delegated-instance",
+      runId: "delegated-run",
+    };
+    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+    client.internal = {
+      ...client.internal,
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:delegated",
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          lifecycleGeneration: "delegated-generation",
+          claimId: "delegated-claim",
+          operationalRunInstance,
+        },
+      },
+    };
+    const requestScope = {
+      context,
+      client,
+      isWebchatConnect: () => false,
+      pluginRegistry: registry,
+    } satisfies PluginRuntimeGatewayRequestScope;
+    const runtime = createRuntimeFromLastGatewayLoad();
+    const channel = await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(
+      requestScope,
+      () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+          () => runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+        ),
+    );
+
+    validateAgentRuntimeApprovalAuthority.mockReturnValue(false);
+
+    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/authority.*no longer current/i);
+    expect(invokeSignal?.aborted).toBe(true);
+    expect(sendInvokeInput).not.toHaveBeenCalled();
+    await expect(channel.closed).rejects.toThrow(/authority.*no longer current/i);
+    expect(() => channel.onMessage(vi.fn())).toThrow(/authority.*no longer current/i);
+  });
+
+  test("cancels an open node duplex invocation before retiring its plugin runtime", async () => {
+    const registry = createDuplexPluginRegistry("plugin.duplex.v1");
+    loadOpenClawPlugins.mockReturnValue(registry);
+    const context = {
+      nodeRegistry: { sendInvokeInput: vi.fn() },
+    } as unknown as GatewayRequestContext;
+    serverPluginsModule.setFallbackGatewayContext(context);
+    const loaded = serverPluginsModule.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      pluginIds: ["duplex-plugin"],
+      resolveGatewayContext: () => resolveTestGatewayContext(),
+    });
+    runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
+
+    let invokeSignal: AbortSignal | undefined;
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      invokeSignal = opts.signal;
+      const stream = opts.client?.internal as
+        | {
+            nodeInvokeStream?: {
+              onDispatchReady: (invokeId: string) => void;
+              onProgress: (chunk: string) => void;
+            };
+          }
+        | undefined;
+      stream?.nodeInvokeStream?.onDispatchReady("duplex-retire-invoke");
+      stream?.nodeInvokeStream?.onProgress(JSON.stringify({ v: 1, kind: "ready" }));
+      await new Promise<void>((resolve) => {
+        opts.signal?.addEventListener(
+          "abort",
+          () => {
+            opts.respond(false, undefined, { code: "ABORTED", message: "node invoke cancelled" });
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    });
+
+    const runtime = createRuntimeFromLastGatewayLoad();
+    const nodes = runtime.nodes as PluginRuntime["nodes"] & {
+      openDuplex: (params: { nodeId: string; command: string }) => Promise<{
+        closed: Promise<unknown>;
+        send: (message: Uint8Array) => Promise<void>;
+      }>;
+    };
+    const channel = await gatewayRequestScopeModule.withPluginRuntimeRegistryScope(registry, () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
+        () => nodes.openDuplex({ nodeId: "node-1", command: "plugin.duplex.v1" }),
+      ),
+    );
+
+    loaded.retireGatewayRuntimeBindings();
+
+    expect(invokeSignal?.aborted).toBe(true);
+    await expect(channel.closed).rejects.toThrow(/retired|cancel/i);
+    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/retired|closed/i);
   });
 
   test("forwards provider and model overrides when the request scope is authorized", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("request-scope-forward-overrides"),
       client: {
@@ -1683,7 +2290,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("clears inherited additive grants when a scoped plugin run requests none", async () => {
-    const runtime = await createSubagentRuntime(serverPluginsModule);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("clear-tools-also-allow"),
       client: {
@@ -1715,7 +2322,7 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoffId).toBeUndefined();
   });
 
-  test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
+  test("forwards bounded context options on subagent run", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("light-context-forward"));
@@ -1724,6 +2331,7 @@ describe("loadGatewayPlugins", () => {
       sessionKey: "s-light-context",
       message: "hello",
       lightContext: true,
+      promptMode: "minimal",
       lane: "dreaming-narrative:s-light-context",
       deliver: false,
     });
@@ -1733,6 +2341,7 @@ describe("loadGatewayPlugins", () => {
     expect(params.message).toBe("hello");
     expect(params.lane).toBe("dreaming-narrative:s-light-context");
     expect(params.bootstrapContextMode).toBe("lightweight");
+    expect(params.promptMode).toBe("minimal");
     expect(params.deliver).toBe(false);
   });
 
@@ -1983,6 +2592,26 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
+  test.each([
+    { origin: "bundled" as const, expectedActor: { kind: "system" } },
+    { origin: "global" as const, expectedActor: undefined },
+  ])(
+    "limits background system session reads to trusted $origin plugins",
+    async ({ origin, expectedActor }) => {
+      const runtime = await createSubagentRuntime(serverPluginsModule);
+      serverPluginsModule.setFallbackGatewayContext(createTestContext(`background-read-${origin}`));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        expect(opts.client?.internal?.operatorRoleActor).toEqual(expectedActor);
+        opts.respond(true, { messages: [] });
+      });
+
+      await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: `background-${origin}`, pluginOrigin: origin },
+        () => runtime.getSessionMessages({ sessionKey: "agent:main:background" }),
+      );
+    },
+  );
+
   test("rejects fallback session deletion without minting admin scope", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
@@ -2046,8 +2675,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("allows session deletion when the request scope already has admin", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("request-scope-delete-session"),
       client: {
@@ -2071,8 +2699,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("keeps plugin owner metadata on admin-scoped plugin session cleanup", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("request-scope-plugin-delete-session"),
       client: {

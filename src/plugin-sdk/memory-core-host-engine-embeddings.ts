@@ -22,6 +22,7 @@ export {
   classifyMemoryMultimodalPath,
   createRemoteEmbeddingProvider,
   debugEmbeddingsLog,
+  embeddingProviderOwnsDestination,
   EmbeddingBatchUnavailableError,
   EMBEDDING_BATCH_ENDPOINT,
   enforceEmbeddingMaxInputTokens,
@@ -40,6 +41,7 @@ export {
   normalizeEmbeddingModelWithPrefixes,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
+  resolveEmbeddingEndpointUrl,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   resolveRemoteEmbeddingBearerClient,
@@ -49,6 +51,7 @@ export {
   sanitizeEmbeddingCacheHeaders,
   throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
+  waitForEmbeddingBatch,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
@@ -69,7 +72,6 @@ export {
   listRegisteredMemoryEmbeddingProviderAdapters,
 } from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
-export { adaptMemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,

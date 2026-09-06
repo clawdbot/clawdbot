@@ -1,8 +1,9 @@
 // Descendant-settle wake replaces an ended nested orchestrator run while
 // preserving lifecycle ownership.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import {
@@ -64,6 +65,7 @@ export async function runDescendantWake(params: {
   isChildSessionEffectsAllowed: () => boolean;
   hasUsableSessionEntry: UsableSessionEntryGuard;
   deps: DescendantWakeDeps;
+  resolveGatewayContext?: GatewayContextResolver;
   signal?: AbortSignal;
 }): Promise<boolean> {
   if (
@@ -103,13 +105,17 @@ export async function runDescendantWake(params: {
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.childSessionKey,
-              sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+              sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
               sourceTool: "subagent_announce",
             },
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
           },
           {
+            cancelOnDeadline: true,
+            operatorRoleActor: { kind: "system" },
+            signal: params.signal,
             timeoutMs: announceTimeoutMs,
+            resolveGatewayContext: params.resolveGatewayContext,
           },
         );
       },

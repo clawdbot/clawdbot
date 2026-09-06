@@ -39,6 +39,7 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     loading: false,
     error: null,
     tasks: [],
+    activeCount: 0,
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",
@@ -110,6 +111,7 @@ describe("subagent activity rows", () => {
       '[data-subagent-task-id="clickable-subagent"]',
     );
     expect(row?.tagName).toBe("BUTTON");
+    expect(row?.querySelector(".chat-subagent-activity__label")?.textContent).toBe("Subagent");
     expect(row?.getAttribute("aria-label")).toBe("Open subagent details for Map codebase");
     row?.click();
     expect(onOpenTaskDetail).toHaveBeenCalledWith(task);
@@ -263,8 +265,7 @@ describe("subagent activity rows", () => {
     renderCurrent();
     expect(container.textContent).toContain("Subagent finished");
     expect(container.textContent).toContain("Final report complete");
-    expect(container.querySelector(".chat-diffstat__add")?.textContent).toBe("+12");
-    expect(container.querySelector(".chat-diffstat__del")?.textContent).toBe("-3");
+    expect(container.querySelector(".chat-diffstat")).toBeNull();
 
     requestUpdate.mockClear();
     vi.advanceTimersByTime(TERMINAL_RETENTION_MS - 1);

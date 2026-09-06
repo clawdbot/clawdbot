@@ -46,6 +46,7 @@ const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
 // proxy for module-loading throughput on a disk-contended host.
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
+  "config",
   "doctor",
   "gateway",
   "models",
@@ -262,8 +263,6 @@ function resolveNodesHelpSourceSignature(sourceRootDir: string = rootDir): strin
     [
       path.join(sourceRootDir, "extensions/canvas/cli-metadata.ts"),
       path.join(sourceRootDir, "extensions/canvas/index.ts"),
-      path.join(sourceRootDir, "extensions/canvas/src/a2ui-jsonl.ts"),
-      path.join(sourceRootDir, "extensions/canvas/src/cli-helpers.ts"),
       path.join(sourceRootDir, "extensions/canvas/src/cli.ts"),
       path.join(sourceRootDir, "src/cli/program/help.ts"),
       path.join(sourceRootDir, "src/cli/program/context.ts"),
@@ -284,6 +283,7 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/program/context.ts"),
       path.join(sourceRootDir, "src/cli/banner.ts"),
       path.join(sourceRootDir, "src/cli/help-format.ts"),
+      path.join(sourceRootDir, "src/cli/config-cli.ts"),
       path.join(sourceRootDir, "src/cli/daemon-cli/register-service-commands.ts"),
       path.join(sourceRootDir, "src/cli/program/register.maintenance.ts"),
       path.join(sourceRootDir, "src/cli/program/register.status-health-sessions.ts"),

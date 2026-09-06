@@ -1,10 +1,12 @@
-import fs from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
   CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
-} from "../pages/chat/session-snapshot-invalidation.ts";
+} from "../pages/chat/session-snapshot-database.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -27,10 +29,10 @@ function historyMessage(seq: number, text: string) {
 
 suite.define(() => {
   it("discards stale transcript geometry before restored history bootstrap", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-history-stale-geometry", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -62,6 +64,7 @@ suite.define(() => {
         },
       },
       sessionKey: "agent:main:main",
+      sessions: [{ key: "agent:main:main", sessionId }],
     });
 
     try {
@@ -75,10 +78,12 @@ suite.define(() => {
       );
       expect(rowKeys.length).toBeGreaterThan(0);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "00-prior-narrow-transcript.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "00-prior-narrow-transcript.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText("Restored message 18:", { exact: false }),
+          ]),
+        );
       }
       await expect
         .poll(
@@ -179,10 +184,12 @@ suite.define(() => {
         )
         .toBeLessThanOrEqual(1);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "01-restored-without-phantom-gap.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "01-restored-without-phantom-gap.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText("Older 1", { exact: true }),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

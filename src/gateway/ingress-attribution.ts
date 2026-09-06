@@ -6,7 +6,7 @@ import {
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveClientIp,
-  resolveRequestClientIp,
+  resolveRequestClientIpFromHeaders,
 } from "./net.js";
 
 export const PROXY_ATTRIBUTION_REQUIRED_REASON = "proxy_attribution_required";
@@ -162,7 +162,7 @@ function resolveManagedTailscaleIngress(params: {
   }
   const funnelMarker = headerValue(req.headers?.["tailscale-funnel-request"]);
   if (mode === "funnel") {
-    return funnelMarker === "?1"
+    return !funnelMarker || funnelMarker === "?1"
       ? attributed("tailscale-funnel", clientIp)
       : unattributableProxy(remoteAddress);
   }
@@ -226,7 +226,7 @@ function resolveGatewayIngressAttribution(params: {
     return attributed("direct-local", remoteAddress);
   }
   if (isTrustedProxyAddress(remoteAddress, params.trustedProxies)) {
-    const clientIp = resolveRequestClientIp(
+    const clientIp = resolveRequestClientIpFromHeaders(
       req,
       params.trustedProxies,
       params.allowRealIpFallback === true,

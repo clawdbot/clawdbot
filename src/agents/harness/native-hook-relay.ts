@@ -4,9 +4,11 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { retainBeforeToolCallForNativeHookRelay } from "./host-capability.js";
+import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
+import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 import {
   clearNativeHookRelayBridgesForTests,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
@@ -23,15 +25,7 @@ import {
   normalizeNativeHookToolName,
   readNativeHookRelayApprovalMode,
 } from "./native-hook-relay-codec.js";
-import {
-  buildNativeHookRelayCommandWithStateDatabase,
-  resolveNativeHookRelayCommandTimeoutMs,
-} from "./native-hook-relay-command.js";
-import {
-  nativeHookRelayEventHasLocalWork,
-  nativeHookRelayEventToolMatcher,
-  processNativeHookRelayInvocation,
-} from "./native-hook-relay-events.js";
+import { processNativeHookRelayInvocation } from "./native-hook-relay-events.js";
 import {
   clearNativeHookRelayPermissionsForTests,
   formatPermissionApprovalDescriptionForTests as formatPermissionApprovalDescriptionForTestsImpl,
@@ -44,6 +38,7 @@ import {
   setNativeHookRelayPermissionApprovalRequesterForTests as setNativeHookRelayPermissionApprovalRequesterForTestsImpl,
 } from "./native-hook-relay-permissions.js";
 import type { NativeHookRelayDeferredToolApprovalRequester } from "./native-hook-relay-permissions.js";
+import { buildNativeHookRelayCommandPlan } from "./native-hook-relay-plan.js";
 import {
   MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
   nativeHookRelayState,
@@ -109,6 +104,7 @@ type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
 function readRelayLifetime(
   registration: ActiveNativeHookRelayRegistration,
 ): RelayLifetime | undefined {
+  // SAFETY: this private symbol-keyed expando is installed only by setRelayLifetime below.
   return (registration as ActiveNativeHookRelayRegistration & { [RELAY_LIFETIME]?: RelayLifetime })[
     RELAY_LIFETIME
   ];
@@ -205,6 +201,18 @@ function registerNativeHookRelayInternal(
       sessionId: params.sessionId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params.config ? { config: params.config } : {}),
+      deferMcpToolApprovals:
+        params.autoApproveMcpTools === true ||
+        // Native hook names lose raw identity; let Codex apply the prepared per-tool config.
+        (params.agentId ? loadMcpToolGrants(params.agentId).length > 0 : false) ||
+        Object.keys({ ...params.projectedMcpServers, ...params.config?.mcp?.servers }).some(
+          (serverName) =>
+            resolveProjectedMcpCodexToolApprovalMode(
+              serverName,
+              params.config?.mcp?.servers?.[serverName] ?? {},
+              params.projectedMcpServers?.[serverName],
+            ) !== undefined,
+        ),
       runId: params.runId,
       ...(params.channelId ? { channelId: params.channelId } : {}),
       ...(params.requester ? { requester: params.requester } : {}),
@@ -217,6 +225,7 @@ function registerNativeHookRelayInternal(
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
+      // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
     partialRegistration = registration;
     relays.set(relayId, registration);
@@ -240,23 +249,7 @@ function registerNativeHookRelayInternal(
     scheduleNativeHookRelayExpiry(relayId, registration);
     const handle: ActiveNativeHookRelayRegistrationHandle = {
       ...registration,
-      shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
-      toolMatcherForEvent: (event) => nativeHookRelayEventToolMatcher(registration, event),
-      commandForEvent: (event, options) =>
-        buildNativeHookRelayCommandWithStateDatabase({
-          provider: params.provider,
-          relayId,
-          stateDbPath,
-          generation: registration.generation,
-          event,
-          nice: params.command?.nice,
-          timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
-            params.command?.timeoutMs,
-            options?.timeoutMs,
-          ),
-          executable: params.command?.executable,
-          nodeExecutable: params.command?.nodeExecutable,
-        }),
+      ...buildNativeHookRelayCommandPlan({ ...params, relayId, generation }),
       renew: (ttlMs) => {
         const current = relays.get(relayId);
         if (current !== registration) {
@@ -328,6 +321,7 @@ function unregisterNativeHookRelay(
   }
   lifetime?.removeAbortListener?.();
   lifetime?.retained?.release();
+  // SAFETY: this deletes the same private expando installed by setRelayLifetime.
   delete (registration as ActiveNativeHookRelayRegistration & { [RELAY_LIFETIME]?: RelayLifetime })[
     RELAY_LIFETIME
   ];

@@ -1,8 +1,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { t } from "../i18n/index.ts";
-import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
+import { isCriticalObserverHealth, pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 
@@ -11,12 +10,13 @@ type SidebarSessionSubtitle = {
   narration: string | undefined;
 };
 
-/** Resolves the single subtitle slot without displacing pending attention. */
+/** Resolves the single subtitle slot without displacing visible status. */
 export function resolveSidebarSessionSubtitle(params: {
   session: SidebarRecentSession;
   hasDisplay: boolean;
   displaySubtitle: string | undefined;
   sidebarLiveActivity: boolean;
+  showPreview: boolean;
   narrationLine: string | undefined;
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -24,12 +24,13 @@ export function resolveSidebarSessionSubtitle(params: {
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;
+  // Question attention owns the leading hand tooltip; repeating or replacing
+  // it with lower-priority activity here makes the action row needlessly tall.
+  if (session.attention.kind === "question") {
+    return { subtitle: undefined, narration: undefined };
+  }
   const attention = sessionAttentionSubtitle(session.attention);
-  // Agent-declared status (sessions tool) outranks live narration: it is an
-  // explicit message to the user, not ambient activity.
-  const agentStatus = session.agentStatusNote || undefined;
   const running = session.hasActiveRun;
-  const queued = session.status === "queued" ? t("sessionsView.waitingForConcurrency") : undefined;
   const activeRunIds = session.activeRunIds ?? [];
   const digestMatchesActiveRun = (
     digest: typeof params.observerDigest,
@@ -50,6 +51,20 @@ export function resolveSidebarSessionSubtitle(params: {
     (session.lastReadAt ?? 0) < projectedDigest.updatedAt,
   );
   const observer = running || finalDigestUnread ? projectedDigest?.headline : undefined;
+  // Preview off hides ambient text only. Subtitle-owned attention and a critical
+  // observer headline survive the toggle: errors, pending approvals, and the
+  // stuck / waiting-on-user
+  // health states are things the operator must act on. isCriticalObserverHealth owns
+  // that classification and the chat pane announces the same two states, so a display
+  // preference must not silence them here — that would turn a visible non-outcome into
+  // a silent one.
+  if (!params.showPreview) {
+    const critical = isCriticalObserverHealth(projectedDigest?.health) ? observer : undefined;
+    return { subtitle: attention ?? critical, narration: undefined };
+  }
+  // Agent-declared status (sessions tool) outranks live narration: it is an
+  // explicit message to the user, not ambient activity.
+  const agentStatus = session.agentStatusNote || undefined;
   const narration =
     attention || agentStatus || observer || !params.sidebarLiveActivity || !running
       ? undefined
@@ -62,7 +77,7 @@ export function resolveSidebarSessionSubtitle(params: {
   const finalReply =
     !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
   const subtitle = running
-    ? (attention ?? agentStatus ?? queued ?? observer ?? narration ?? workSubtitle)
+    ? (attention ?? agentStatus ?? observer ?? narration ?? workSubtitle)
     : (attention ?? agentStatus ?? observer ?? finalReply ?? workSubtitle);
   return { subtitle, narration };
 }

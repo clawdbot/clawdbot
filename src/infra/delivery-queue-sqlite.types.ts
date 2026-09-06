@@ -105,6 +105,21 @@ export type DeliveryQueueEntryState = {
   recoveryState?: string;
 };
 
+/** Additional work needs a live claim; settling an observed outcome only needs exact ownership. */
+export function hasLiveDeliveryQueueClaim(
+  entry: DeliveryQueueEntryState,
+  claimId: string,
+  now: number,
+): boolean {
+  const unexpired = typeof entry.availableAt === "number" && entry.availableAt > now;
+  return entry.recoveryState === "producer_claimed"
+    ? entry.producerClaimId === claimId && unexpired
+    : (entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send") &&
+        entry.platformSendAttemptId === claimId &&
+        (entry.requiresProducerClaim !== true || unexpired);
+}
+
 /** Strip a terminal queue row to the producer policy needed for admission. */
 export function projectDeliveryQueueTerminalEntry(
   entry: Pick<DeliveryQueueEntryState, "id" | "retryCount">,

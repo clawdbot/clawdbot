@@ -31,6 +31,31 @@ function requireGroupScopeMainFinding(findings: ReturnType<typeof audit>) {
 }
 
 describe("security audit trust model findings", () => {
+  it.each([
+    { name: "inherited", groupPolicy: undefined, expected: true },
+    { name: "explicitly disabled", groupPolicy: "disabled", expected: false },
+  ] as const)("audits account group targets with $name policy", ({ groupPolicy, expected }) => {
+    const findings = collectLikelyMultiUserSetupFindings({
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          accounts: {
+            work: { ...(groupPolicy ? { groupPolicy } : {}), guilds: { "1234567890": {} } },
+          },
+        },
+      },
+    });
+    const finding = findings.find(
+      (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
+    );
+    expect(Boolean(finding)).toBe(expected);
+    if (expected) {
+      expect(finding?.detail).toContain(
+        'channels.discord.accounts.work.groupPolicy="allowlist" with configured group targets',
+      );
+    }
+  });
+
   it("evaluates trust-model exposure findings", () => {
     const cases = [
       {

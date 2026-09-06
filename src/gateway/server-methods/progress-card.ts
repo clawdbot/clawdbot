@@ -3,12 +3,11 @@ import {
   errorShape,
   validateProgressCardGetParams,
   validateProgressCardPutParams,
+  type ProgressCard,
+  type ProgressCardGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   normalizeProgressCardInput,
-  PROGRESS_CARD_MAX_STEP_UTF8_BYTES,
-  PROGRESS_CARD_MAX_STEPS,
-  PROGRESS_CARD_MAX_UTF8_BYTES,
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
 import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
@@ -18,46 +17,56 @@ import { resolveSessionStoreKey } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export { PROGRESS_CARD_MAX_STEP_UTF8_BYTES, PROGRESS_CARD_MAX_STEPS, PROGRESS_CARD_MAX_UTF8_BYTES };
-
-function resolveProgressCardSessionKey(
-  sessionKey: string,
+function resolveProgressCardSession(
+  params: ProgressCardGetParams,
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
-): string | undefined {
+): { sessionKey: string; agentId: string; scopeKey: string } | undefined {
   const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedSessionAgentId(cfg, sessionKey, undefined);
+  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
   if (!requested.ok) {
     respond(false, undefined, requested.error);
     return undefined;
   }
   const canonicalKey = resolveSessionStoreKey({
     cfg,
-    sessionKey,
+    sessionKey: params.sessionKey,
     storeAgentId: requested.agentId,
   });
-  return sessionObserverScopeKey(canonicalKey, requested.agentId);
+  return {
+    sessionKey: canonicalKey,
+    agentId: requested.agentId,
+    scopeKey: sessionObserverScopeKey(canonicalKey, requested.agentId),
+  };
+}
+
+function projectProgressCard(card: ProgressCard | null, scopeKey: string): ProgressCard | null {
+  // Wire identities distinguish owners; SQLite cards reference the canonical session row.
+  return card ? { ...card, sessionKey: scopeKey } : null;
 }
 
 export function createProgressCardHandlers(
   store: ProgressCardStore = progressCardStore,
 ): GatewayRequestHandlers {
   return {
-    "progressCard.get": ({ params, respond, context }) => {
+    "progressCard.get": ({ params, respond, context, sessionMutationAuthorization }) => {
       if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {
         return;
       }
-      const sessionKey = resolveProgressCardSessionKey(params.sessionKey, context, respond);
-      if (!sessionKey) {
+      const session = resolveProgressCardSession(params, context, respond);
+      if (!session) {
         return;
       }
+      // Lazy handler preparation can outlive the session authorized by the router.
+      sessionMutationAuthorization?.assertCurrent();
       try {
-        respond(true, { card: store.get(sessionKey) }, undefined);
+        const card = store.get(session.sessionKey, session.agentId);
+        respond(true, { card: projectProgressCard(card, session.scopeKey) }, undefined);
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },
-    "progressCard.put": ({ params, respond, context }) => {
+    "progressCard.put": ({ params, respond, context, sessionMutationAuthorization }) => {
       if (!assertValidParams(params, validateProgressCardPutParams, "progressCard.put", respond)) {
         return;
       }
@@ -82,22 +91,28 @@ export function createProgressCardHandlers(
         );
         return;
       }
-      const sessionKey = resolveProgressCardSessionKey(params.sessionKey, context, respond);
-      if (!sessionKey) {
+      const session = resolveProgressCardSession(params, context, respond);
+      if (!session) {
         return;
       }
+      sessionMutationAuthorization?.assertCurrent();
       try {
-        const result = store.put(sessionKey, {
-          ...input,
-          expectedRevision: params.expectedRevision,
-        });
+        const result = store.put(
+          session.sessionKey,
+          { ...input, expectedRevision: params.expectedRevision },
+          session.agentId,
+        );
         if (params.expectedRevision === undefined || result.card === null) {
-          context.broadcast("progressCard.changed", {
-            sessionKey,
-            revision: result.card?.revision ?? null,
-          });
+          context.broadcast(
+            "progressCard.changed",
+            {
+              sessionKey: session.scopeKey,
+              revision: result.card?.revision ?? null,
+            },
+            { sessionKeys: [session.sessionKey], agentId: session.agentId },
+          );
         }
-        respond(true, result, undefined);
+        respond(true, { card: projectProgressCard(result.card, session.scopeKey) }, undefined);
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }

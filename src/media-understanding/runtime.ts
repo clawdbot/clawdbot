@@ -1,11 +1,10 @@
 // Public file-oriented media-understanding runtime for image, audio, video, and
 // structured extraction calls outside normal channel message handling.
 import path from "node:path";
-import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -14,7 +13,7 @@ import {
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
-import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
+import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -180,6 +179,9 @@ export async function runMediaUnderstandingFile(
   const decisionBase = {
     capability: params.capability,
     attachments: [],
+    attachmentProcessing: Object.fromEntries(
+      attachments.map(({ index }) => [index, "omitted" as const]),
+    ),
     ...(params.capability === "image" ? { nativeVisionActive: false } : {}),
   };
   if (attachments.length === 0) {
@@ -331,25 +333,11 @@ async function readImageDescriptionInput(params: {
   cfg: OpenClawConfig;
   timeoutMs: number;
 }): Promise<{ buffer: Buffer; fileName: string; mime?: string }> {
-  const remoteRef =
-    params.mediaUrl ??
-    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
-  if (!remoteRef) {
-    const { buffer } = await readLocalFileSafely({ filePath: params.filePath });
-    return {
-      buffer,
-      fileName: basenameFromMediaReference(params.filePath),
-      mime: await detectMime({
-        buffer,
-        filePath: params.filePath,
-        headerMime: concreteMime(params.mime),
-      }),
-    };
-  }
   const attachments = normalizeMediaAttachments(
     buildFileContext({ ...params, capability: "image" }),
   );
   const cache = createMediaAttachmentCache(attachments, {
+    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
   });
   try {
@@ -360,7 +348,7 @@ async function readImageDescriptionInput(params: {
     });
     return {
       buffer: media.buffer,
-      fileName: media.fileName || basenameFromMediaReference(remoteRef),
+      fileName: media.fileName || basenameFromMediaReference(params.mediaUrl ?? params.filePath),
       // The attachment cache has already resolved MIME from bytes, filename, and headers.
       // Keep the caller hint only as a fallback for cache implementations with no MIME result.
       mime: media.mime ?? concreteMime(params.mime),
@@ -405,6 +393,32 @@ export async function describeVideoFile(
   params: DescribeVideoFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "video" });
+}
+
+/** Prepares the largest input that any configured transcription fallback can accept. */
+export async function resolveAudioInputBudget(params: {
+  cfg: OpenClawConfig;
+}): Promise<{ enabled: false } | { enabled: true; maxBytes: number }> {
+  const { cfg } = params;
+  const config = cfg.tools?.media?.audio;
+  if (config?.enabled === false) {
+    return { enabled: false };
+  }
+  const capability = "audio";
+  const entries = resolveModelEntries({
+    cfg,
+    capability,
+    config,
+    providerRegistry: buildProviderRegistry(undefined, cfg),
+  }).map(({ entry }) => entry);
+  // Auto-detected provider and CLI entries inherit the capability limit.
+  const candidates = entries.length > 0 ? entries : [{}];
+  return {
+    enabled: true,
+    maxBytes: Math.max(
+      ...candidates.map((entry) => resolveMaxBytes({ cfg, capability, config, entry })),
+    ),
+  };
 }
 
 /** Transcribes one audio file or URL through the configured audio-understanding pipeline. */

@@ -1,4 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import type { ReactiveControllerHost } from "lit";
+import { afterEach, expect, it, vi, type Mock } from "vitest";
 import { AuthenticatedAvatarRouteLoader } from "./authenticated-avatar-route.ts";
 
 afterEach(() => {
@@ -6,6 +7,22 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+function createLoader(
+  onUpdate: Mock<() => void>,
+  options?: ConstructorParameters<typeof AuthenticatedAvatarRouteLoader>[1],
+) {
+  const host: ReactiveControllerHost = {
+    addController: vi.fn(),
+    removeController: vi.fn(),
+    requestUpdate: onUpdate,
+    updateComplete: Promise.resolve(true),
+  };
+  const loader = new AuthenticatedAvatarRouteLoader(host, options);
+  loader.hostConnected();
+  onUpdate.mockClear();
+  return loader;
+}
 
 it("cancels an advertised retry when the last consumer releases the route", async () => {
   vi.useFakeTimers();
@@ -15,13 +32,14 @@ it("cancels an advertised retry when the last consumer releases the route", asyn
     headers: new Headers({ "retry-after": "1" }),
   } as Response);
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const loader = new AuthenticatedAvatarRouteLoader(vi.fn(), { retryUnavailable: true });
+  const loader = createLoader(vi.fn(), { retryUnavailable: true });
 
   expect(loader.resolve("/avatar/retrying", ["token"])).toBeNull();
   await Promise.resolve();
   expect(fetchMock).toHaveBeenCalledOnce();
 
-  loader.reset();
+  loader.hostDisconnected();
+  expect(loader.resolve("/avatar/retrying", ["token"])).toBeNull();
   await vi.advanceTimersByTimeAsync(1_000);
 
   expect(fetchMock).toHaveBeenCalledOnce();
@@ -35,7 +53,7 @@ it("backs off after one retry window before a later render can recover", async (
     headers: new Headers({ "retry-after": "1" }),
   } as Response);
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const loader = new AuthenticatedAvatarRouteLoader(vi.fn(), { retryUnavailable: true });
+  const loader = createLoader(vi.fn(), { retryUnavailable: true });
 
   expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
   await vi.advanceTimersByTimeAsync(10_000);
@@ -70,7 +88,7 @@ it("shares pending fetches and revokes the resolved blob on reset", async () => 
   );
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   const onUpdate = vi.fn();
-  const loader = new AuthenticatedAvatarRouteLoader(onUpdate);
+  const loader = createLoader(onUpdate);
 
   expect(loader.resolve("/avatar/main", ["token"])).toBeNull();
   expect(loader.resolve("/avatar/main", ["token"])).toBeNull();
@@ -102,7 +120,7 @@ it("leaves misses retryable for a later identity update", async () => {
     .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   const onUpdate = vi.fn();
-  const loader = new AuthenticatedAvatarRouteLoader(onUpdate);
+  const loader = createLoader(onUpdate);
 
   expect(loader.resolve("/avatar/main", ["token"])).toBeNull();
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -144,7 +162,7 @@ it("releases resolved and pending routes that leave the active render", async ()
     }) as unknown as typeof fetch,
   );
   const onUpdate = vi.fn();
-  const loader = new AuthenticatedAvatarRouteLoader(onUpdate);
+  const loader = createLoader(onUpdate);
 
   expect(loader.withActiveRoutes(() => loader.resolve("/avatar/first", ["token"]))).toBeNull();
   pending[0]?.resolve({ ok: true, blob: async () => new Blob(["avatar"]) } as Response);
@@ -177,7 +195,7 @@ it("falls through to the next credential when the first is rejected", async () =
     .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   const onUpdate = vi.fn();
-  const loader = new AuthenticatedAvatarRouteLoader(onUpdate);
+  const loader = createLoader(onUpdate);
 
   expect(loader.resolve("/avatar/main", ["stale-token", "session-password"])).toBeNull();
   await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));

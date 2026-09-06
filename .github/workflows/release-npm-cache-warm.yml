@@ -1,0 +1,45 @@
+name: Release npm Cache Warm
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * *"
+
+permissions:
+  contents: read
+
+# Push-time Vitest warming must not replace a pending release download seed.
+concurrency:
+  group: release-npm-cache-warm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  warm-release-npm:
+    # New release-ci refs cannot read a sibling ref's cache. Scheduled main runs
+    # publish portable npm downloads without executing package lifecycle hooks.
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
+      - name: Warm release npm downloads
+        env:
+          NPM_CONFIG_CACHE: ${{ github.workspace }}/.cache/openclaw-cross-os-npm-cache
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/openclaw-npm-seed-prefix" \
+            openclaw@latest --ignore-scripts --omit=dev --no-audit --no-fund
+
+      # Start each seed fresh so it contains only the current baseline graph.
+      # The relative path and cross-OS archive flag must match every consumer.
+      - name: Save release npm download seed
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/openclaw-cross-os-npm-cache/_cacache
+          key: openclaw-cross-os-npm-v1-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          enableCrossOsArchive: true

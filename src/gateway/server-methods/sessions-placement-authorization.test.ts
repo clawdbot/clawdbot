@@ -45,22 +45,33 @@ describe("placement session authorization", () => {
 
   it("rejects queued placement mutations after session participation is revoked", async () => {
     const scenarios = [
-      {
-        name: "dispatch",
+      ...(
+        [
+          ["profile dispatch", { profileId: "test" }],
+          ["device dispatch", { deviceId: "device-1" }],
+        ] as const
+      ).map(([name, target]) => ({
+        name,
         placement: undefined,
         invoke: (
           context: ReturnType<typeof makeDispatchTestContext>,
           authorization: SessionMutationAuthorization,
-        ) => invokeSessionDispatch(context, { profileId: "test" }, authorization),
+        ) => invokeSessionDispatch(context, target, authorization),
         service: (afterWait: (authorize?: () => void) => Promise<void>) => ({
           dispatch: vi.fn(async (_request, _onTransition, authorize?: () => void) => {
             await afterWait(authorize);
             return activePlacement();
           }),
         }),
-      },
-      {
-        name: "move",
+      })),
+      ...(
+        [
+          ["gateway move", { kind: "gateway" }],
+          ["profile move", { kind: "profile", profileId: "test" }],
+          ["device move", { kind: "device", deviceId: "device-1" }],
+        ] as const
+      ).map(([name, target]) => ({
+        name,
         placement: activePlacement(),
         invoke: (
           context: ReturnType<typeof makeDispatchTestContext>,
@@ -70,7 +81,7 @@ describe("placement session authorization", () => {
             context,
             {
               expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-              target: { kind: "gateway" },
+              target,
             },
             authorization,
           ),
@@ -81,7 +92,7 @@ describe("placement session authorization", () => {
             return { state: "local" as const, generation: 5 };
           }),
         }),
-      },
+      })),
       ...(["active", "failed"] as const).map((state) => ({
         name: `${state} reclaim`,
         placement:

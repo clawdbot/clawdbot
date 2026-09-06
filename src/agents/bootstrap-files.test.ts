@@ -1,13 +1,17 @@
-/** Tests agent bootstrap file discovery, filtering, and injected context modes. */
+/**
+ * Tests agent bootstrap file discovery, filtering, injected context modes, and the
+ * doctor-side diagnostics resolution with its bundled hook projection gate.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -21,6 +25,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { resolveBootstrapContextForDiagnostics } from "./bootstrap-files-diagnostics.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
@@ -34,9 +39,17 @@ import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 import {
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_USER_FILENAME,
   loadExtraBootstrapFilesWithDiagnostics,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+
+const memoryRuntimeMocks = vi.hoisted(() => ({ classifyWorkspacePaths: vi.fn() }));
+
+vi.mock("../plugins/memory-runtime.js", () => ({
+  classifyActiveMemoryWorkspacePaths: (...args: unknown[]) =>
+    memoryRuntimeMocks.classifyWorkspacePaths(...args),
+}));
 
 let testState: OpenClawTestState | undefined;
 
@@ -208,10 +221,76 @@ describe("resolveBootstrapFilesForRun", () => {
   beforeEach(async () => {
     clearInternalHooks();
     resetLegacyWorkspaceStateCheckForTest();
+    memoryRuntimeMocks.classifyWorkspacePaths
+      .mockReset()
+      .mockResolvedValue({ status: "unavailable" });
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-bootstrap-state-",
     });
+  });
+
+  it("excludes lower-trust root memory before hooks while preserving trusted user context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-memory-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "tainted memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "trusted user", "utf8");
+    registerNamedBootstrapFileHook(DEFAULT_MEMORY_FILENAME);
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({
+      status: "classified",
+      classifications: [
+        { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "untrusted" },
+        { relativePath: DEFAULT_USER_FILENAME, originClass: "owner" },
+      ],
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).toContain(DEFAULT_USER_FILENAME);
+  });
+
+  it("fails closed when the memory runtime omits a requested root classification", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-missing-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "user", "utf8");
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({
+      status: "classified",
+      classifications: [{ relativePath: DEFAULT_MEMORY_FILENAME, originClass: "agent" }],
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    expect(files.map((file) => file.name)).toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
+  });
+
+  it("excludes root memory for a selected runtime without provenance support", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-unsupported-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "user", "utf8");
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({ status: "unsupported" });
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
+    expect(warnings).toContain(
+      "excluding automatic memory context: selected memory runtime does not support provenance classification",
+    );
   });
   afterEach(async () => {
     clearInternalHooks();
@@ -648,6 +727,112 @@ describe("resolveBootstrapContextForRun", () => {
 
     expectHeartbeatExcludedAndAgentsKept(files);
   });
+});
+
+describe("resolveBootstrapContextForDiagnostics", () => {
+  beforeEach(() => clearInternalHooks());
+  afterEach(() => clearInternalHooks());
+
+  function createExtraFilesConfig(hooksEnabled?: boolean): OpenClawConfig {
+    return {
+      hooks: {
+        internal: {
+          enabled: hooksEnabled,
+          entries: {
+            "bootstrap-extra-files": { enabled: true, paths: ["packages/*/AGENTS.md"] },
+          },
+        },
+      },
+    };
+  }
+
+  async function makeWorkspaceWithExtraAgentsFile(): Promise<{
+    workspaceDir: string;
+    extraPath: string;
+  }> {
+    const workspaceDir = await fs.realpath(await makeTempWorkspace("openclaw-bootstrap-diag-"));
+    const extraPath = path.join(workspaceDir, "packages", "core", "AGENTS.md");
+    await fs.mkdir(path.dirname(extraPath), { recursive: true });
+    await fs.writeFile(extraPath, "extra agents", "utf8");
+    return { workspaceDir, extraPath };
+  }
+
+  it("projects bootstrap-extra-files additions without a registered handler", async () => {
+    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+
+    const result = await resolveBootstrapContextForDiagnostics({
+      workspaceDir,
+      config: createExtraFilesConfig(),
+    });
+
+    expect(result.bootstrapFiles.map((file) => file.path)).toContain(extraPath);
+    expect(result.contextFiles.find((file) => file.path === extraPath)?.content).toBe(
+      "extra agents",
+    );
+  });
+
+  it("does not execute registered hooks while projecting declared files", async () => {
+    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+    const handler = vi.fn(() => {
+      throw new Error("diagnostics must not execute hook code");
+    });
+    registerInternalHook("agent:bootstrap", handler);
+
+    const result = await resolveBootstrapContextForDiagnostics({
+      workspaceDir,
+      config: createExtraFilesConfig(),
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.contextFiles).toContainEqual({ path: extraPath, content: "extra agents" });
+  });
+
+  it("projects nothing while the hook system is disabled", async () => {
+    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+
+    const result = await resolveBootstrapContextForDiagnostics({
+      workspaceDir,
+      config: createExtraFilesConfig(false),
+    });
+
+    expect(result.bootstrapFiles.map((file) => file.path)).not.toContain(extraPath);
+  });
+
+  it.each([
+    { label: "a loadable handler", handler: "export default async () => {};", projects: false },
+    { label: "an invalid export", handler: "export default 42;", projects: false },
+    { label: "an import failure", handler: 'throw new Error("must not import");', projects: false },
+    { label: "no readable handler", handler: undefined, projects: true },
+  ])(
+    "matches fresh-start selection for a managed hook with $label",
+    async ({ handler, projects }) => {
+      const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+      const managedHooksDir = await makeTempWorkspace("openclaw-managed-hooks-");
+      const replacementDir = path.join(managedHooksDir, "bootstrap-extra-files");
+      await fs.mkdir(replacementDir, { recursive: true });
+      await fs.writeFile(
+        path.join(replacementDir, "HOOK.md"),
+        [
+          "---",
+          "name: bootstrap-extra-files",
+          "description: managed replacement",
+          'metadata: { "openclaw": { "events": ["agent:bootstrap"] } }',
+          "---",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      if (handler !== undefined) {
+        await fs.writeFile(path.join(replacementDir, "handler.js"), handler, "utf8");
+      }
+      const config = createExtraFilesConfig();
+      config.hooks!.internal!.load = { extraDirs: [managedHooksDir] };
+
+      const result = await resolveBootstrapContextForDiagnostics({ workspaceDir, config });
+
+      expect(result.bootstrapFiles.some((file) => file.path === extraPath)).toBe(projects);
+    },
+  );
 });
 
 describe("hasCompletedBootstrapTurn", () => {

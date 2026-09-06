@@ -9,13 +9,22 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
+import type { GatewayHelloOk } from "../../api/gateway.ts";
+import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings } from "../../app/settings.ts";
+import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { SESSION_NAVIGATION_INTENT_EVENT } from "../../lib/sessions/navigation-handoff.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
+import { routeDraft } from "./route-draft.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 
 type RenderedPane = HTMLElement & {
   active: boolean;
+  draft?: string;
   focusComposer: boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   onPaneSessionChange?: (
@@ -43,9 +52,13 @@ function setNavigationContext(page: ChatPage) {
   };
   const context = {
     basePath: "",
-    sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
+    sessions: { ...createChatPageSessions(), patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
+    gateway: {
+      snapshot: { hello: null },
+      setSessionKey: vi.fn(),
+      subscribe: () => () => undefined,
+    },
     navigate,
     replace,
     agentSelection: {
@@ -57,7 +70,15 @@ function setNavigationContext(page: ChatPage) {
     chatAttachmentHandoff,
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { chatAttachmentHandoff, navigate, patch, replace };
+  return { chatAttachmentHandoff, context, navigate, patch, replace };
+}
+
+function getRouteDraftForActivePane(page: ChatPage): string | undefined {
+  const state = page as unknown as {
+    data: SessionChatRouteData;
+    consumedDraftData: SessionChatRouteData | null;
+  };
+  return routeDraft(state.data, state.consumedDraftData);
 }
 
 function stubMatchMedia() {
@@ -110,6 +131,85 @@ describe("chat page retained sessions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps route ownership on the selected split pane while dock input is active", async () => {
+    const page = new ChatPage();
+    const workSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const { context } = setNavigationContext(page);
+    page.data = { sessionKey: workSessionKey, agentId: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    chatInputOwnerForContext(context).claim("dock");
+    const otherSession = "agent:research:review";
+    window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, {
+        detail: {
+          command: { kind: "split", direction: "right", sessionKey: otherSession },
+          sessionKey: workSessionKey,
+        },
+        cancelable: true,
+      }),
+    );
+    await page.updateComplete;
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(otherSession);
+    expect(context.agentSelection.set).toHaveBeenLastCalledWith("research");
+    page
+      .querySelector<HTMLElement>(".chat-split-view__cell")
+      ?.dispatchEvent(new Event("pointerdown"));
+    await page.updateComplete;
+
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(workSessionKey);
+    expect(loadSettings()).toMatchObject({
+      sessionKey: workSessionKey,
+      lastActiveSessionKey: workSessionKey,
+    });
+    expect(context.agentSelection.set).toHaveBeenLastCalledWith("main");
+    expect(chatInputOwnerForContext(context).current).toBe("dock");
+  });
+
+  it("binds newly resolved Home defaults even when the canonical route is equivalent", async () => {
+    const page = new ChatPage();
+    const { context, navigate, replace } = setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    context.gateway.snapshot.hello = {
+      snapshot: { sessionDefaults: { mainKey: "main", mainSessionKey: "agent:main:main" } },
+    } as GatewayHelloOk;
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane")!;
+
+    pane.onPaneSessionChange?.(pane.paneId, "agent:main:main");
+
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith("agent:main:main");
+    expect(loadSettings().sessionKey).toBe("agent:main:main");
+    expect(navigate).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("hands each route-provided draft to the active pane only once", async () => {
+    window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
+    page.data = firstRouteData;
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+
+    document.body.append(page);
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
+
+    expect(getRouteDraftForActivePane(page)).toBeUndefined();
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      pathname: sessionNavigationTarget({
+        face: "chat",
+        sessionKey: "main",
+        fallbackAgentId: "main",
+      }).options.pathname,
+      search: "?panel=details",
+      hash: "#pane",
+    });
+    page.data = { ...firstRouteData };
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+  });
+
   it("retains three session panes and reactivates them without remounting", async () => {
     const { page, paneFor, panes } = await mountRetainedPage("agent:main:a");
     const paneA = paneFor("agent:main:a");
@@ -139,6 +239,72 @@ describe("chat page retained sessions", () => {
         .toSorted(),
     ).toEqual(["agent:main:a", "agent:main:c", "agent:main:d"]);
     expect(paneB?.isConnected).toBe(false);
+  });
+
+  it.each([
+    { retainedSessionKey: "main", routeSessionKey: "agent:main:main" },
+    { retainedSessionKey: "agent:main:main", routeSessionKey: "main" },
+  ])(
+    "delivers a one-shot route draft and composer focus across the $retainedSessionKey alias",
+    async ({ retainedSessionKey, routeSessionKey }) => {
+      const { navigation, page, paneFor } = await mountRetainedPage(retainedSessionKey);
+      const pane = expectDefined(paneFor(retainedSessionKey), "retained main chat pane");
+      const receivedDrafts: Array<string | undefined> = [];
+      const focusRequests: boolean[] = [];
+
+      Object.defineProperties(pane, {
+        draft: {
+          configurable: true,
+          get: () => receivedDrafts.at(-1),
+          set: (value: string | undefined) => receivedDrafts.push(value),
+        },
+        focusComposer: {
+          configurable: true,
+          get: () => focusRequests.at(-1) ?? false,
+          set: (value: boolean) => focusRequests.push(value),
+        },
+      });
+
+      page.data = {
+        sessionKey: routeSessionKey,
+        draft: "What can you do?",
+        focusComposer: true,
+      };
+      await page.updateComplete;
+      await Promise.resolve();
+      await page.updateComplete;
+
+      expect(paneFor(retainedSessionKey)).toBe(pane);
+      expect(receivedDrafts.filter((draft) => draft !== undefined)).toEqual(["What can you do?"]);
+      expect(focusRequests).toContain(true);
+      expect(navigation.replace).toHaveBeenCalledOnce();
+
+      page.data = { sessionKey: routeSessionKey };
+      await page.updateComplete;
+    },
+  );
+
+  it.each([
+    { routeSessionKey: "agent:main:main", paneSessionKey: "" },
+    { routeSessionKey: "agent:main:main", paneSessionKey: "global" },
+    { routeSessionKey: "agent:main:main", paneSessionKey: "agent:research:main" },
+    {
+      routeSessionKey: "agent:ops:matrix:channel:!Room:Example.Org",
+      paneSessionKey: "agent:ops:matrix:channel:!room:example.org",
+    },
+    {
+      routeSessionKey: "agent:ops:signal:group:AbC123=",
+      paneSessionKey: "agent:ops:signal:group:abc123=",
+    },
+  ])("never sends a route draft to a different session", ({ routeSessionKey, paneSessionKey }) => {
+    expect(
+      routeDraft({ sessionKey: routeSessionKey, draft: "private draft" }, null, paneSessionKey),
+    ).toBeUndefined();
+  });
+
+  it("never replays a consumed route draft through an equivalent main alias", () => {
+    const data = { sessionKey: "agent:main:main", draft: "already delivered" };
+    expect(routeDraft(data, data, "main")).toBeUndefined();
   });
 
   it("hands route-owned focus to the final page across pane replacement", async () => {

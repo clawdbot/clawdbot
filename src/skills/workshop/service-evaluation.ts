@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginHookSkillEvaluationFinding,
   PluginHookSkillProposalEvaluateResult,
@@ -21,11 +22,7 @@ import {
 import { readRequiredProposal } from "./service-query.js";
 import { readSkillProposalEvents, recordSkillProposalEvaluation } from "./store-evaluation.js";
 import { assertSkillProposalEvaluationWithinLimit } from "./store-record.js";
-import {
-  hashSkillProposalContent,
-  readProposalSupportFiles,
-  withSkillProposalTargetLock,
-} from "./store.js";
+import { hashSkillProposalContent, withSkillProposalTargetLock } from "./store.js";
 import type {
   SkillProposalEvaluateInput,
   SkillProposalEvaluateResult,
@@ -39,27 +36,33 @@ const MAX_EVALUATION_METRICS = 64;
 
 export class SkillProposalCreateTargetConflictError extends Error {}
 
+export class SkillProposalRevisionChangedError extends Error {
+  constructor(
+    readonly expectedRevisionHash: string,
+    readonly currentRevisionHash: string,
+  ) {
+    super(
+      `Skill proposal revision changed (expected ${expectedRevisionHash}, current ${currentRevisionHash}); reload and retry.`,
+    );
+    this.name = "SkillProposalRevisionChangedError";
+  }
+}
+
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
 ): Promise<SkillProposalEvaluateResult> {
   const correlationId = normalizeSkillProposalCorrelationId(input.correlationId);
   const shouldRunEvaluators = hasSkillProposalEvaluators();
-  const initial = await readRequiredProposal(
-    input.proposalId,
-    input.workspaceDir,
-    input.env,
-    input.agentId,
-  );
+  const initial = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+    config: input.config,
+  });
   const snapshot = await withSkillProposalTargetLock(
     initial.record,
     async () => {
-      const read = await readRequiredProposal(
-        input.proposalId,
-        input.workspaceDir,
-        input.env,
-        input.agentId,
-        { reconcile: false },
-      );
+      const read = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+        config: input.config,
+        reconcile: false,
+      });
       if (read.record.status !== "pending") {
         throw new Error(
           `Only pending proposals can be evaluated. Current status: ${read.record.status}.`,
@@ -69,7 +72,6 @@ export async function evaluateSkillProposal(
       if (hashSkillProposalContent(read.content) !== read.record.draftHash) {
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
-      const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
       if (
         shouldRunEvaluators &&
         read.record.kind === "create" &&
@@ -84,12 +86,12 @@ export async function evaluateSkillProposal(
         bundles: shouldRunEvaluators
           ? await buildSkillProposalEvaluationBundles({
               proposal: read,
-              supportFiles,
+              supportFiles: read.supportFiles ?? [],
             })
           : undefined,
       };
     },
-    storeOptions(input.env),
+    storeOptions(input.env, input.agentId, input.config),
   );
   const { read, bundles } = snapshot;
   const startedAt = new Date().toISOString();
@@ -152,24 +154,16 @@ export async function evaluateSkillProposal(
   const stored = await withSkillProposalTargetLock(
     read.record,
     async () => {
-      const current = await readRequiredProposal(
-        input.proposalId,
-        input.workspaceDir,
-        input.env,
-        input.agentId,
-        { reconcile: false },
-      );
+      const current = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+        config: input.config,
+        reconcile: false,
+      });
       if (
         current.record.status !== "pending" ||
         current.record.proposedVersion !== read.record.proposedVersion ||
         current.revisionHash !== read.revisionHash ||
         hashSkillProposalContent(current.content) !== current.record.draftHash
       ) {
-        throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
-      }
-      try {
-        await readProposalSupportFiles(current.record, storeOptions(input.env));
-      } catch {
         throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
       }
       if (bundles) {
@@ -191,10 +185,10 @@ export async function evaluateSkillProposal(
         expectedRevisionHash: read.revisionHash,
         evaluation,
         event: eventInput,
-        store: storeOptions(input.env),
+        store: storeOptions(input.env, input.agentId, input.config),
       });
     },
-    storeOptions(input.env),
+    storeOptions(input.env, input.agentId, input.config),
   );
   await dispatchSkillProposalChanged({
     event: stored.event,
@@ -209,15 +203,13 @@ export async function evaluateSkillProposal(
 export function listSkillProposalEvents(
   input: SkillProposalEventsListInput,
 ): SkillProposalEventsListResult {
-  return readSkillProposalEvents(input, storeOptions(input.env));
+  return readSkillProposalEvents(input, storeOptions(input.env, input.agentId, input.config));
 }
 
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {
   const normalized = normalizeOptionalString(expected);
   if (normalized && normalized !== actual) {
-    throw new Error(
-      `Skill proposal revision changed (expected ${normalized}, current ${actual}); reload and retry.`,
-    );
+    throw new SkillProposalRevisionChangedError(normalized, actual);
   }
 }
 
@@ -363,6 +355,14 @@ function boundedOptional(value: string | undefined, maxLength: number): string |
   return normalized === undefined ? undefined : truncateUtf16Safe(normalized, maxLength);
 }
 
-function storeOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
+function storeOptions(
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  config: OpenClawConfig,
+) {
+  return {
+    ...(env ? { env } : {}),
+    ...(agentId ? { agentId } : {}),
+    config,
+  };
 }

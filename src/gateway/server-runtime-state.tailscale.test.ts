@@ -145,7 +145,7 @@ describe("managed Tailscale gateway ingress", () => {
     expect(managed.status).toBe(200);
   });
 
-  it("requires the Funnel marker on the dedicated Funnel listener", async () => {
+  it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
       getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
@@ -174,9 +174,16 @@ describe("managed Tailscale gateway ingress", () => {
       path: "/ready",
       headers: { ...baseHeaders, "tailscale-funnel-request": "?1" },
     });
+    const malformedMarker = await requestStatus({
+      host: endpoint.host,
+      port: endpoint.port,
+      path: "/ready",
+      headers: { ...baseHeaders, "tailscale-funnel-request": "true" },
+    });
 
-    expect(missingMarker.status).toBe(403);
+    expect(missingMarker.status).toBe(200);
     expect(marked.status).toBe(200);
+    expect(malformedMarker.status).toBe(403);
   });
 
   it("rejects external Funnel ingress when gateway auth is disabled", async () => {

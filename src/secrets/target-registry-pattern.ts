@@ -1,4 +1,5 @@
 /** Compiles, matches, and expands secret target registry path patterns. */
+import type { ConcreteConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord, parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -19,8 +20,8 @@ export type CompiledTargetRegistryEntry = SecretTargetRegistryEntry & {
 
 /** Concrete config value matched by expanding a path pattern. */
 type ExpandedPathMatch = {
-  segments: string[];
-  captures: string[];
+  segments: ConcreteConfigPathSegment[];
+  captures: ConcreteConfigPathSegment[];
   value: unknown;
 };
 
@@ -31,8 +32,8 @@ function countDynamicPatternTokens(tokens: PathPatternToken[]): number {
 /**
  * Parses a dotted target pattern into literal, wildcard, and array traversal tokens.
  */
-function parsePathPattern(pathPattern: string): PathPatternToken[] {
-  const segments = parseDotPath(pathPattern);
+function parsePathPattern(pathPattern: string, pathSegments?: string[]): PathPatternToken[] {
+  const segments = pathSegments ?? parseDotPath(pathPattern);
   return segments.map((segment) => {
     if (segment === "*") {
       return { kind: "wildcard" } as const;
@@ -54,7 +55,7 @@ function parsePathPattern(pathPattern: string): PathPatternToken[] {
 export function compileTargetRegistryEntry(
   entry: SecretTargetRegistryEntry,
 ): CompiledTargetRegistryEntry {
-  const pathTokens = parsePathPattern(entry.pathPattern);
+  const pathTokens = parsePathPattern(entry.pathPattern, entry.pathPatternSegments);
   const pathDynamicTokenCount = countDynamicPatternTokens(pathTokens);
   const refPathTokens = entry.refPathPattern ? parsePathPattern(entry.refPathPattern) : undefined;
   const refPathDynamicTokenCount = refPathTokens ? countDynamicPatternTokens(refPathTokens) : 0;
@@ -79,16 +80,17 @@ export function compileTargetRegistryEntry(
  * Matches concrete path segments against compiled pattern tokens and returns dynamic captures.
  */
 export function matchPathTokens(
-  segments: string[],
+  segments: readonly ConcreteConfigPathSegment[],
   tokens: PathPatternToken[],
+  options?: { allowLegacyArrayString?: boolean },
 ): {
-  captures: string[];
+  captures: ConcreteConfigPathSegment[];
 } | null {
-  const captures: string[] = [];
+  const captures: ConcreteConfigPathSegment[] = [];
   let index = 0;
   for (const token of tokens) {
     if (token.kind === "literal") {
-      if (segments[index] !== token.value) {
+      if (typeof segments[index] !== "string" || segments[index] !== token.value) {
         return null;
       }
       index += 1;
@@ -96,7 +98,7 @@ export function matchPathTokens(
     }
     if (token.kind === "wildcard") {
       const value = segments[index];
-      if (!value) {
+      if (value === undefined || value === "") {
         return null;
       }
       // Capture order must match materializePathTokens for sibling ref path reconstruction.
@@ -108,10 +110,16 @@ export function matchPathTokens(
       return null;
     }
     const next = segments[index + 1];
-    if (!next || parseConfigPathArrayIndex(next) === undefined) {
+    const arrayIndex =
+      typeof next === "number"
+        ? next
+        : options?.allowLegacyArrayString && typeof next === "string"
+          ? parseConfigPathArrayIndex(next)
+          : undefined;
+    if (arrayIndex === undefined || parseConfigPathArrayIndex(String(arrayIndex)) !== arrayIndex) {
       return null;
     }
-    captures.push(next);
+    captures.push(arrayIndex);
     index += 2;
   }
   return index === segments.length ? { captures } : null;
@@ -122,9 +130,9 @@ export function matchPathTokens(
  */
 export function materializePathTokens(
   tokens: PathPatternToken[],
-  captures: string[],
-): string[] | null {
-  const out: string[] = [];
+  captures: ConcreteConfigPathSegment[],
+): ConcreteConfigPathSegment[] | null {
+  const out: ConcreteConfigPathSegment[] = [];
   let captureIndex = 0;
   for (const token of tokens) {
     if (token.kind === "literal") {
@@ -133,7 +141,7 @@ export function materializePathTokens(
     }
     if (token.kind === "wildcard") {
       const value = captures[captureIndex];
-      if (!value) {
+      if (value === undefined || value === "") {
         return null;
       }
       out.push(value);
@@ -141,7 +149,10 @@ export function materializePathTokens(
       continue;
     }
     const arrayIndex = captures[captureIndex];
-    if (!arrayIndex || parseConfigPathArrayIndex(arrayIndex) === undefined) {
+    if (
+      typeof arrayIndex !== "number" ||
+      parseConfigPathArrayIndex(String(arrayIndex)) !== arrayIndex
+    ) {
       return null;
     }
     out.push(token.field, arrayIndex);
@@ -158,8 +169,8 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
   const walk = (
     node: unknown,
     tokenIndex: number,
-    segments: string[],
-    captures: string[],
+    segments: ConcreteConfigPathSegment[],
+    captures: ConcreteConfigPathSegment[],
   ): void => {
     const token = tokens[tokenIndex];
     if (!token) {
@@ -188,10 +199,13 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
     }
 
     if (token.kind === "wildcard") {
-      if (!isRecord(node)) {
+      if (!Array.isArray(node) && !isRecord(node)) {
         return;
       }
-      for (const [key, value] of Object.entries(node)) {
+      const entries: Iterable<[ConcreteConfigPathSegment, unknown]> = Array.isArray(node)
+        ? node.entries()
+        : Object.entries(node);
+      for (const [key, value] of entries) {
         if (isLeaf) {
           out.push({
             segments: [...segments, key],
@@ -214,21 +228,15 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
     }
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
-      const indexString = String(index);
       if (isLeaf) {
         out.push({
-          segments: [...segments, token.field, indexString],
-          captures: [...captures, indexString],
+          segments: [...segments, token.field, index],
+          captures: [...captures, index],
           value: item,
         });
         continue;
       }
-      walk(
-        item,
-        tokenIndex + 1,
-        [...segments, token.field, indexString],
-        [...captures, indexString],
-      );
+      walk(item, tokenIndex + 1, [...segments, token.field, index], [...captures, index]);
     }
   };
   walk(root, 0, [], []);

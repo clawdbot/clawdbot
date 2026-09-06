@@ -90,8 +90,6 @@ describe("runPluginsListCommand", () => {
     vi.doUnmock("../plugins/status.js");
     vi.doUnmock("../plugins/status-snapshot.js");
     vi.doUnmock("../plugins/source-display.js");
-    vi.doUnmock("../terminal/table.js");
-    vi.doUnmock("../terminal/theme.js");
     vi.doUnmock("../../packages/terminal-core/src/table.js");
     vi.doUnmock("../../packages/terminal-core/src/theme.js");
     vi.doUnmock("./command-format.js");
@@ -129,45 +127,7 @@ describe("runPluginsListCommand", () => {
         diagnostics: [],
       }),
     }));
-    vi.doMock("../plugins/source-display.js", () => {
-      importedHumanModules.push("source-display");
-      return {
-        formatPluginSourceForTable: vi.fn(),
-        resolvePluginSourceRoots: vi.fn(),
-      };
-    });
-    vi.doMock("../terminal/table.js", () => {
-      importedHumanModules.push("table");
-      return {
-        getTerminalTableWidth: vi.fn(),
-        renderTable: vi.fn(),
-      };
-    });
-    vi.doMock("../terminal/theme.js", () => {
-      importedHumanModules.push("theme");
-      return {
-        theme: {
-          muted: (value: string) => value,
-          heading: (value: string) => value,
-          command: (value: string) => value,
-          error: (value: string) => value,
-          success: (value: string) => value,
-          warn: (value: string) => value,
-        },
-      };
-    });
-    vi.doMock("./command-format.js", () => {
-      importedHumanModules.push("command-format");
-      return {
-        formatCliCommand: (value: string) => value,
-      };
-    });
-    vi.doMock("./plugins-list-format.js", () => {
-      importedHumanModules.push("plugins-list-format");
-      return {
-        formatPluginLine: vi.fn(),
-      };
-    });
+    mockHumanListModules(importedHumanModules);
 
     const { runPluginsListCommand } = await import("./plugins-list-command.js");
     const writes: unknown[] = [];

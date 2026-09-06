@@ -48,6 +48,7 @@ export type RuntimeConfigCapability = {
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
+  retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
   /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
@@ -61,7 +62,7 @@ export type RuntimeConfigCapability = {
    */
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions,
+    options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: RuntimeConfigState) => void) => () => void;
@@ -142,10 +143,11 @@ export function createRuntimeConfigCapability(
       state.connected &&
       state.configNeedsApply &&
       state.configSnapshot?.appliedConfigHash !== undefined,
-    refresh: (isCurrent) => loadOnce("config", () => loadConfig(state, {}, isCurrent)),
+    refresh: (isCurrent) =>
+      loadOnce("config", () => loadConfig(state, { background: true }, isCurrent)),
   });
-  const refreshConnectionState = () => {
-    const config = run(() => loadConfig(state));
+  const refreshConnectionState = (beforeApplySnapshot?: () => void) => {
+    const config = run(() => loadConfig(state, { beforeApplySnapshot }));
     void trackLoad("config", config);
     if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
       void trackLoad(
@@ -247,6 +249,7 @@ export function createRuntimeConfigCapability(
     setWritesSuspended: writes.setWritesSuspended,
     waitForPendingWrites: writes.waitForPendingWrites,
     save: writes.save,
+    retry: writes.retry,
     apply: writes.apply,
     openFile: () =>
       canCallConfigMethod("config.openFile", { requireAdvertisement: false })

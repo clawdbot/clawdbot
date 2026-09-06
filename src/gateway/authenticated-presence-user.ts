@@ -1,5 +1,5 @@
 import type { SystemPresence } from "../infra/system-presence.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 
 type AuthenticatedPresenceProfile = {
   profileId: string;
@@ -12,10 +12,10 @@ export function buildAuthenticatedPresenceUser(params: {
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedUserProfile?: AuthenticatedPresenceProfile;
 }): SystemPresence["user"] | undefined {
-  if (!params.authenticatedUserId) {
-    return undefined;
-  }
   if (!params.authenticatedUserProfile) {
+    if (!params.authenticatedUserId) {
+      return undefined;
+    }
     return {
       id: params.authenticatedUserId,
       ...(params.authenticatedUserIsTailscaleProvider ? {} : { email: params.authenticatedUserId }),
@@ -23,13 +23,16 @@ export function buildAuthenticatedPresenceUser(params: {
   }
   return {
     id: params.authenticatedUserProfile.profileId,
-    ...(params.authenticatedUserIsTailscaleProvider ? {} : { email: params.authenticatedUserId }),
+    identity: { type: "profile", id: params.authenticatedUserProfile.profileId },
+    ...(params.authenticatedUserId && !params.authenticatedUserIsTailscaleProvider
+      ? { email: params.authenticatedUserId }
+      : {}),
     ...(params.authenticatedUserProfile.displayName
       ? { name: params.authenticatedUserProfile.displayName }
       : {}),
     // This authenticated route resolves uploaded avatars first and then the
     // gateway-side Gravatar proxy, so it remains present without an upload.
-    avatarUrl: formatUserProfileAvatarPath(
+    avatarUrl: buildControlUiUserAvatarPath(
       params.authenticatedUserProfile.profileId,
       params.authenticatedUserProfile.avatarRevision,
     ),

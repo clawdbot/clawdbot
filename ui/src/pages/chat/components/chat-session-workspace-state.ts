@@ -179,11 +179,6 @@ export function loadSessionWorkspace(
     } finally {
       if (isCurrentSessionWorkspace(state, workspace)) {
         workspace.loading = false;
-        const reload = workspace.pendingReload;
-        workspace.pendingReload = false;
-        if (reload) {
-          loadSessionWorkspace(state, workspace);
-        }
       }
       requestWorkspaceUpdate(state);
     }
@@ -191,7 +186,10 @@ export function loadSessionWorkspace(
 }
 
 /** Refresh workspace facts after a run, which may have created a git checkout. */
-export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boolean {
+export function refreshSessionWorkspaceState(
+  state: SessionWorkspaceHost,
+  refreshFiles: boolean,
+): boolean {
   const workspace = state.sessionWorkspaceState;
   if (!workspace || workspace.sessionKey !== state.sessionKey) {
     return false;
@@ -199,6 +197,10 @@ export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boole
   const diffOpen =
     workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
   delete workspace.diffContent;
+  if (!refreshFiles) {
+    workspace.pendingReload = true;
+    return diffOpen;
+  }
   if (workspace.loading) {
     workspace.pendingReload = true;
   } else {
@@ -217,8 +219,5 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   clearWorkspaceTimer(current);
   const next = createSessionWorkspaceState(state, current);
   state.sessionWorkspaceState = next;
-  if (state.client && state.connected) {
-    loadSessionWorkspace(state, next);
-  }
   requestWorkspaceUpdate(state);
 }

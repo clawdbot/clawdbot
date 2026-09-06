@@ -8,6 +8,7 @@ import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
+import { listNpmPackageDirs } from "./npm-package-dirs.js";
 
 type PluginPeerLinkLogger = {
   info?: (message: string) => void;
@@ -104,43 +105,9 @@ async function readPackageOpenClawLinkDependencies(
 }
 
 async function listManagedNpmRootPackageDirs(npmRoot: string): Promise<string[]> {
-  const nodeModulesDir = path.join(npmRoot, "node_modules");
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await fs.readdir(nodeModulesDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-
-  const packageDirs: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === ".bin") {
-      continue;
-    }
-    const entryPath = path.join(nodeModulesDir, entry.name);
-    if (entry.name.startsWith("@")) {
-      const scopedEntries = await fs
-        .readdir(entryPath, { withFileTypes: true })
-        .catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return [];
-          }
-          throw error;
-        });
-      for (const scopedEntry of scopedEntries) {
-        if (scopedEntry.isDirectory()) {
-          packageDirs.push(path.join(entryPath, scopedEntry.name));
-        }
-      }
-      continue;
-    }
-    if (!entry.name.startsWith(".")) {
-      packageDirs.push(entryPath);
-    }
-  }
+  const packageDirs = await listNpmPackageDirs(npmRoot, {
+    includeEntry: (entry, scoped) => entry.isDirectory() && (scoped || !entry.name.startsWith(".")),
+  });
   return packageDirs.toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -352,17 +319,21 @@ export async function linkOpenClawPeerDependencies(params: {
   installedDir: string;
   peerDependencies: Record<string, string>;
   logger: PluginPeerLinkLogger;
+  /** Explicit source setup uses its selected checkout instead of the running host. */
+  hostRoot?: string;
 }): Promise<{ repaired: number; skipped: number }> {
   const peers = Object.keys(params.peerDependencies).filter((name) => name === "openclaw");
   if (peers.length === 0) {
     return { repaired: 0, skipped: 0 };
   }
 
-  const hostRoot = resolveOpenClawPackageRootSync({
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
-    cwd: process.cwd(),
-  });
+  const hostRoot =
+    params.hostRoot ??
+    resolveOpenClawPackageRootSync({
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      cwd: process.cwd(),
+    });
   if (!hostRoot) {
     params.logger.warn?.(
       "Could not locate openclaw package root to symlink peerDependencies; plugin may fail to resolve openclaw at runtime.",

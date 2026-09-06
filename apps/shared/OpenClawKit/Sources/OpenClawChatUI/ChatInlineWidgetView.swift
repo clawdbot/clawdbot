@@ -390,6 +390,7 @@ struct ChatInlineWidgetView: View {
     private func renderedWidget(resource: OpenClawChatWidgetResource) -> some View {
         ChatInlineWidgetWebView(
             resource: resource,
+            loadGeneration: self.loadGeneration,
             allowsScripts: self.preview.sandbox == "scripts",
             snapshotRequest: self.snapshotRequest,
             onFailure: { self.handleLoadFailure(resource: resource) },
@@ -429,16 +430,20 @@ struct ChatInlineWidgetView: View {
     }
 
     private func requestSnapshot(for action: ChatInlineWidgetSnapshotRequest.Action) {
-        self.snapshotRequest = ChatInlineWidgetSnapshotRequest(action: action)
+        guard let resource = self.resolvedResource else { return }
+        self.snapshotRequest = ChatInlineWidgetSnapshotRequest(
+            action: action,
+            generation: self.loadGeneration,
+            resource: resource)
     }
 
     private func handleSnapshot(_ outcome: ChatInlineWidgetSnapshotOutcome) {
         switch outcome {
         case let .failure(request):
-            self.clearSnapshotRequest(ifMatching: request)
+            guard self.consumeSnapshotRequest(request) else { return }
             self.exportErrorMessage = String(localized: "The widget image could not be captured.")
         case let .success(request, image):
-            self.clearSnapshotRequest(ifMatching: request)
+            guard self.consumeSnapshotRequest(request) else { return }
             switch request.action {
             case .copy:
                 self.copySnapshot(image)
@@ -448,9 +453,13 @@ struct ChatInlineWidgetView: View {
         }
     }
 
-    private func clearSnapshotRequest(ifMatching completedRequest: ChatInlineWidgetSnapshotRequest) {
-        guard self.snapshotRequest?.id == completedRequest.id else { return }
+    private func consumeSnapshotRequest(_ request: ChatInlineWidgetSnapshotRequest) -> Bool {
+        guard self.snapshotRequest == request,
+              request.generation == self.loadGeneration,
+              request.resource == self.resolvedResource
+        else { return false }
         self.snapshotRequest = nil
+        return true
     }
 
     #if os(iOS)
@@ -500,7 +509,7 @@ struct ChatInlineWidgetView: View {
     private func reset(path: String?) {
         self.loadGeneration = UUID()
         self.activePath = path
-        self.resolvedResource = nil
+        self.setResolvedResource(nil)
         self.recoveryAttempts = 0
         self.refreshInFlight = false
         self.unavailable = false
@@ -517,8 +526,17 @@ struct ChatInlineWidgetView: View {
               self.loadGeneration == generation
         else { return }
         let resource = candidate?.hasValidTLSBinding == true ? candidate : nil
-        self.resolvedResource = resource
+        self.setResolvedResource(resource)
         self.unavailable = resource == nil
+    }
+
+    private func setResolvedResource(_ resource: OpenClawChatWidgetResource?) {
+        #if canImport(WebKit) && (os(iOS) || os(macOS))
+        if self.resolvedResource != resource || resource == nil {
+            self.snapshotRequest = nil
+        }
+        #endif
+        self.resolvedResource = resource
     }
 
     private func handleLoadFailure(resource: OpenClawChatWidgetResource) {
@@ -527,7 +545,7 @@ struct ChatInlineWidgetView: View {
               !self.refreshInFlight
         else { return }
         guard self.recoveryAttempts < 3 else {
-            self.resolvedResource = nil
+            self.setResolvedResource(nil)
             self.unavailable = true
             return
         }
@@ -549,27 +567,6 @@ extension OpenClawChatWidgetResource {
 }
 
 #if canImport(WebKit) && (os(iOS) || os(macOS))
-#if os(iOS)
-private typealias ChatInlineWidgetSnapshotImage = UIImage
-#elseif os(macOS)
-private typealias ChatInlineWidgetSnapshotImage = NSImage
-#endif
-
-private struct ChatInlineWidgetSnapshotRequest: Equatable {
-    enum Action: Equatable {
-        case copy
-        case save
-    }
-
-    let id = UUID()
-    let action: Action
-}
-
-private enum ChatInlineWidgetSnapshotOutcome {
-    case success(ChatInlineWidgetSnapshotRequest, ChatInlineWidgetSnapshotImage)
-    case failure(ChatInlineWidgetSnapshotRequest)
-}
-
 enum ChatInlineWidgetTLSPin {
     static func normalize(_ raw: String) -> String? {
         let stripped = raw.replacingOccurrences(
@@ -618,6 +615,7 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         didSet {
             if self.resource != oldValue {
                 self.contentProcessRecovery.reset()
+                self.snapshotCapture.invalidate()
             }
         }
     }
@@ -625,7 +623,7 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
     let onFailure: @MainActor @Sendable () -> Void
     var onSnapshot: @MainActor @Sendable (ChatInlineWidgetSnapshotOutcome) -> Void
     private var contentProcessRecovery = ChatInlineWidgetContentProcessRecovery()
-    private var lastSnapshotRequestID: UUID?
+    let snapshotCapture = ChatInlineWidgetSnapshotCapture()
 
     init(
         resource: OpenClawChatWidgetResource,
@@ -635,21 +633,6 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         self.resource = resource
         self.onFailure = onFailure
         self.onSnapshot = onSnapshot
-    }
-
-    func captureSnapshot(_ request: ChatInlineWidgetSnapshotRequest?, from webView: WKWebView) {
-        guard let request, request.id != self.lastSnapshotRequestID else { return }
-        self.lastSnapshotRequestID = request.id
-
-        let configuration = WKSnapshotConfiguration()
-        webView.takeSnapshot(with: configuration) { [weak self] image, _ in
-            guard let self else { return }
-            if let image {
-                self.onSnapshot(.success(request, image))
-            } else {
-                self.onSnapshot(.failure(request))
-            }
-        }
     }
 
     func webView(
@@ -766,6 +749,7 @@ private func makeChatInlineWidgetWebView(
 #if os(iOS)
 private struct ChatInlineWidgetWebView: UIViewRepresentable {
     let resource: OpenClawChatWidgetResource
+    let loadGeneration: UUID
     let allowsScripts: Bool
     let snapshotRequest: ChatInlineWidgetSnapshotRequest?
     let onFailure: @MainActor @Sendable () -> Void
@@ -791,10 +775,16 @@ private struct ChatInlineWidgetWebView: UIViewRepresentable {
             context.coordinator.resource = self.resource
             webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
-        context.coordinator.captureSnapshot(self.snapshotRequest, from: webView)
+        context.coordinator.snapshotCapture.capture(
+            self.snapshotRequest,
+            from: webView,
+            generation: self.loadGeneration,
+            resource: self.resource,
+            onSnapshot: context.coordinator.onSnapshot)
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
+        coordinator.snapshotCapture.invalidate()
         webView.stopLoading()
         webView.navigationDelegate = nil
     }
@@ -802,6 +792,7 @@ private struct ChatInlineWidgetWebView: UIViewRepresentable {
 #elseif os(macOS)
 private struct ChatInlineWidgetWebView: NSViewRepresentable {
     let resource: OpenClawChatWidgetResource
+    let loadGeneration: UUID
     let allowsScripts: Bool
     let snapshotRequest: ChatInlineWidgetSnapshotRequest?
     let onFailure: @MainActor @Sendable () -> Void
@@ -827,10 +818,16 @@ private struct ChatInlineWidgetWebView: NSViewRepresentable {
             context.coordinator.resource = self.resource
             webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
-        context.coordinator.captureSnapshot(self.snapshotRequest, from: webView)
+        context.coordinator.snapshotCapture.capture(
+            self.snapshotRequest,
+            from: webView,
+            generation: self.loadGeneration,
+            resource: self.resource,
+            onSnapshot: context.coordinator.onSnapshot)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
+        coordinator.snapshotCapture.invalidate()
         webView.stopLoading()
         webView.navigationDelegate = nil
     }

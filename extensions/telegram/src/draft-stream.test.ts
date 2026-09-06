@@ -460,99 +460,6 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now");
   });
 
-  it("finalizeToPreview edits the live window message in place without deleting", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    stream.update("🛠️ Exec: pnpm test");
-    await stream.flush();
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBe(17);
-    // The window message is EDITED into the bar, never deleted (no focus-jump).
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("finalizeToPreview materializes a still-pending window before editing", async () => {
-    // A throttled preview may not have been sent yet when the collapse runs;
-    // finalizeToPreview must send it first so there is a message to edit into
-    // the bar, rather than returning undefined and forcing a delete + repost.
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      throttleMs: 10_000,
-    });
-
-    stream.update("🛠️ Exec: pnpm test");
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBe(17);
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("finalizeToPreview returns undefined when no window ever rendered", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBeUndefined();
-    expect(api.sendMessage).not.toHaveBeenCalled();
-    expect(api.editMessageText).not.toHaveBeenCalled();
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("finalizeToPreview returns undefined when the in-place collapse edit does not apply", async () => {
-    // Red-team F2: a flood-wait (429) on the collapse edit makes the underlying
-    // send return false without applying. finalizeToPreview must report that as
-    // "not collapsed in place" (undefined) so the dispatch falls back to posting
-    // a durable bar — otherwise it assumes success, clears state, posts no bar,
-    // and the tall window is left on screen.
-    const api = createMockDraftApi();
-    api.editMessageText.mockRejectedValueOnce(
-      Object.assign(
-        new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 5)"),
-        { error_code: 429, parameters: { retry_after: 5 } },
-      ),
-    );
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    stream.update("🛠️ Exec: pnpm test");
-    await stream.flush();
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBeUndefined();
-    expect(api.editMessageText).toHaveBeenCalledTimes(1);
-    // The live window is NOT deleted (the caller posts the bar below it instead).
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("does not replay a rejected pending edit after collapse fallback", async () => {
-    const api = createMockDraftApi();
-    const retryableEditError = () =>
-      Object.assign(new Error("429: retry after 1"), {
-        error_code: 429,
-        parameters: { retry_after: 1 },
-      });
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    stream.update("working");
-    await stream.flush();
-    api.editMessageText
-      .mockRejectedValueOnce(retryableEditError())
-      .mockRejectedValueOnce(retryableEditError());
-    stream.update("pending update");
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBeUndefined();
-    expect(api.editMessageText).toHaveBeenCalledTimes(2);
-    await stream.stop();
-    await stream.flush();
-    expect(api.editMessageText).toHaveBeenCalledTimes(2);
-  });
-
   it("deletes message preview on clear after finalization", async () => {
     vi.useFakeTimers();
     try {
@@ -2094,6 +2001,41 @@ describe("draft stream initial message debounce", () => {
   });
 
   describe("minInitialChars threshold", () => {
+    it.each([false, true])(
+      "sends short complete progress and resumes after clear (richMessages=%s)",
+      async (richMessages) => {
+        const api = createMockApi();
+        const stream = createDraftStream(api, { richMessages, minInitialChars: 30 });
+        const send = richMessages ? api.raw.sendRichMessage : api.sendMessage;
+        const progress = (text: string) => ({
+          text,
+          complete: true as const,
+          ...(richMessages ? { richMessage: buildTelegramRichMarkdown(text) } : {}),
+        });
+
+        stream.updatePreview(progress("0/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        await stream.clear();
+        stream.forceNewMessage();
+        stream.update("Hi");
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        stream.updatePreview(progress("1/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledTimes(2);
+
+        stream.update("Done");
+        await stream.stop();
+        const edits = richMessages ? api.raw.editMessageText : api.editMessageText;
+        expect(edits).toHaveBeenCalled();
+        await vi.runOnlyPendingTimersAsync();
+        expect(api.deleteMessage).toHaveBeenCalledOnce();
+      },
+    );
+
     it("does not send first message below threshold", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);

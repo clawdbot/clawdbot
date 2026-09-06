@@ -3,8 +3,6 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
 import { hasAnthropicVertexAvailableAuth } from "./region.js";
 
-const PROVIDER_ID = "anthropic-vertex";
-
 /** Merge an implicit Anthropic Vertex provider with explicit user config. */
 export function mergeImplicitAnthropicVertexProvider(params: {
   existing?: ModelProviderConfig;
@@ -43,9 +41,6 @@ export async function runAnthropicVertexCatalog(ctx: ProviderCatalogContext) {
     return null;
   }
   return {
-    provider: mergeImplicitAnthropicVertexProvider({
-      existing: ctx.config.models?.providers?.[PROVIDER_ID],
-      implicit,
-    }),
+    provider: implicit,
   };
 }

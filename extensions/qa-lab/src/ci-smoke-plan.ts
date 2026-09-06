@@ -54,16 +54,10 @@ function estimateScenarioCost(scenario: QaSmokeCiScenario) {
   return scenario.execution.kind === "flow" && scenario.execution.isolationReason ? 4 : 1;
 }
 
-function listQaSmokeCiDeclaredChannels(scenario: QaSmokeCiScenario): readonly string[] {
-  if (scenario.execution.channel) {
-    return [scenario.execution.channel];
-  }
-  return scenario.execution.kind === "flow" ? (scenario.execution.channels ?? []) : [];
-}
-
 export function selectQaSmokeCiEligibilityChannel(scenario: QaSmokeCiScenario): string | undefined {
-  const declaredChannels = listQaSmokeCiDeclaredChannels(scenario);
-  return QA_SMOKE_CI_CHANNELS.find((channel) => declaredChannels.includes(channel));
+  return QA_SMOKE_CI_CHANNELS.find(
+    (channel) => scenario.execution.channels?.includes(channel) === true,
+  );
 }
 
 export function createQaSmokeCiPart(
@@ -101,7 +95,7 @@ export function createQaSmokeCiPart(
   const supportedChannels = new Set<string>(QA_SMOKE_CI_CHANNELS);
   const unsupportedChannels = new Set(
     scenarios.flatMap((scenario) => {
-      const declaredChannels = listQaSmokeCiDeclaredChannels(scenario);
+      const declaredChannels = scenario.execution.channels ?? [];
       return declaredChannels.length > 0 && !selectQaSmokeCiEligibilityChannel(scenario)
         ? declaredChannels.filter((channel) => !supportedChannels.has(channel))
         : [];

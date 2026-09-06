@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 344429,
-  "reason": "Channel conversation avatars (PR #125668): lead-slot render branch + row plumbing on top of the 344395 B main baseline; avatar element itself is code-split out of startup",
-  "updatedAt": "2026-08-18"
+  "startupJsGzipBytes": 350377,
+  "reason": "Current main b6a4d0dad430 measures 350377 B startup gzip in Linux CI after integrated UI changes (+812 B, 0.23%); pristine-main and candidate builds measured 350363 B and 350380 B, within the existing 64 B variance allowance. Fixed 358400 B cap and existing growth allowance retained.",
+  "updatedAt": "2026-09-04"
 }

@@ -15,6 +15,7 @@ import {
   isLinkLocalIpAddress,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   isRfc1918Ipv4Address,
   normalizeIpAddress,
   parseCanonicalIpAddress,
@@ -30,13 +31,28 @@ describe("shared ip helpers", () => {
     expect(isLegacyIpv4Literal("example.com")).toBe(false);
   });
 
-  it("matches both IPv4 and IPv6 CIDRs", () => {
-    expect(isIpInCidr("10.42.0.59", "10.42.0.0/24")).toBe(true);
-    expect(isIpInCidr("10.43.0.59", "10.42.0.0/24")).toBe(false);
-    expect(isIpInCidr("2001:db8::1234", "2001:db8::/32")).toBe(true);
-    expect(isIpInCidr("2001:db9::1234", "2001:db8::/32")).toBe(false);
-    expect(isIpInCidr("::ffff:127.0.0.1", "127.0.0.1")).toBe(true);
-    expect(isIpInCidr("127.0.0.1", "::ffff:127.0.0.2")).toBe(false);
+  it.each([
+    ["10.42.0.59", "10.42.0.0/24", true],
+    ["10.43.0.59", "10.42.0.0/24", false],
+    ["2001:db8::1234", "2001:db8::/32", true],
+    ["2001:db9::1234", "2001:db8::/32", false],
+    ["::ffff:127.0.0.1", "127.0.0.1", true],
+    ["127.0.0.1", "::ffff:127.0.0.2", false],
+    ["127.0.0.1", "127.1/8", true],
+    ["127.0.0.1", "127.1", false],
+    ["10.42.0.59", " 10.42.0.0/24 ", true],
+    ["10.42.0.59", "10.42.0.0/33", false],
+    ["2001:db8::1", "2001:db8::/129", false],
+    ["10.42.0.59", "junk", false],
+    ["10.42.0.59", "", false],
+    ["junk", "10.42.0.0/24", false],
+    ["10.42.0.59", "2001:db8::/32", false],
+    ["fe80::1%eth0", "fe80::1%eth1", false],
+    ["fe80::1%eth0", "fe80::1%eth0", true],
+    ["fe80::1%eth0", "fe80::1%eth1/128", true],
+    ["::ffff:127.0.0.1", "::ffff:127.0.0.1/128", true],
+  ])("matches %s against %s: %s", (ip, range, expected) => {
+    expect(isIpInCidr(ip, range)).toBe(expected);
   });
 
   it("extracts embedded IPv4 for transition prefixes", () => {
@@ -44,7 +60,6 @@ describe("shared ip helpers", () => {
       ["::ffff:127.0.0.1", "127.0.0.1"],
       ["::127.0.0.1", "127.0.0.1"],
       ["64:ff9b::8.8.8.8", "8.8.8.8"],
-      ["64:ff9b:1::10.0.0.1", "10.0.0.1"],
       ["2002:0808:0808::", "8.8.8.8"],
       ["2001::f7f7:f7f7", "8.8.8.8"],
       ["2001:4860:1::5efe:7f00:1", "127.0.0.1"],
@@ -59,12 +74,41 @@ describe("shared ip helpers", () => {
     }
   });
 
+  it("does not guess embedded IPv4 for local-use NAT64 literals", () => {
+    const cases = [
+      "64:ff9b:1:a00:0:100::",
+      "64:ff9b:1:a9fe:a9:fe00:808:808",
+      "64:ff9b:1:7f00:0:100:808:808",
+      "64:ff9b:1:808:808:808:a9fe:a9fe",
+      "64:ff9b:1::8.8.8.8",
+    ] as const;
+    for (const ipv6Literal of cases) {
+      const parsed = parseCanonicalIpAddress(ipv6Literal);
+      expect(parsed?.kind(), ipv6Literal).toBe("ipv6");
+      if (!parsed || !isIpv6Address(parsed)) {
+        continue;
+      }
+      expect(extractEmbeddedIpv4FromIpv6(parsed), ipv6Literal).toBeUndefined();
+    }
+  });
+
+  it("detects RFC8215 local-use NAT64 literals", () => {
+    expect(isRfc8215LocalUseNat64Ipv6Address("64:ff9b:1::8.8.8.8")).toBe(true);
+    expect(isRfc8215LocalUseNat64Ipv6Address("[64:ff9b:1:808:808:808:a9fe:a9fe]")).toBe(true);
+    expect(isRfc8215LocalUseNat64Ipv6Address("64:ff9b::8.8.8.8")).toBe(false);
+    expect(isRfc8215LocalUseNat64Ipv6Address("model.lan")).toBe(false);
+  });
+
   it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:db8::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:2::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("100::1")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:20::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:7f00:0:100:808:808")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:a9fe:a9:fe00:808:808")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:808:808:808:808:808")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe")).toBe(true);
     for (const literal of blockedIpv6MulticastLiterals) {
       expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
     }
@@ -85,7 +129,6 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("0xa9fea9fe")).toBe(true);
     expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
     expect(isLinkLocalIpAddress("64:ff9b::169.254.169.254")).toBe(true);
-    expect(isLinkLocalIpAddress("64:ff9b:1::a9fe:a9fe")).toBe(true);
     expect(isLinkLocalIpAddress("2002:a9fe:a9fe::")).toBe(true);
     expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
     expect(isLinkLocalIpAddress("[fe80::1]")).toBe(true);
@@ -98,7 +141,6 @@ describe("shared ip helpers", () => {
     expect(isCloudMetadataIpAddress("100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("64:ff9b::100.100.100.200")).toBe(true);
-    expect(isCloudMetadataIpAddress("64:ff9b:1::6464:64c8")).toBe(true);
     expect(isCloudMetadataIpAddress("2002:6464:64c8::")).toBe(true);
     expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
     expect(isCloudMetadataIpAddress("fd00:ec2::254")).toBe(true);
@@ -167,6 +209,7 @@ describe("shared ip helpers", () => {
     const loopback = parseCanonicalIpAddress("::1");
     const multicast = parseCanonicalIpAddress("ff02::1");
     const siteLocal = parseCanonicalIpAddress("fec0::1"); // deprecated fec0::/10
+    const localUseNat64 = parseCanonicalIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe");
 
     if (
       !loopback ||
@@ -174,7 +217,9 @@ describe("shared ip helpers", () => {
       !multicast ||
       !isIpv6Address(multicast) ||
       !siteLocal ||
-      !isIpv6Address(siteLocal)
+      !isIpv6Address(siteLocal) ||
+      !localUseNat64 ||
+      !isIpv6Address(localUseNat64)
     ) {
       throw new Error("expected ipv6 fixtures");
     }
@@ -183,6 +228,7 @@ describe("shared ip helpers", () => {
       expect(isBlockedSpecialUseIpv6Address(loopback, options)).toBe(true);
       expect(isBlockedSpecialUseIpv6Address(multicast, options)).toBe(true);
       expect(isBlockedSpecialUseIpv6Address(siteLocal, options)).toBe(true);
+      expect(isBlockedSpecialUseIpv6Address(localUseNat64, options)).toBe(true);
     }
   });
 });

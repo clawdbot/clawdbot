@@ -86,7 +86,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "before  after",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "toolCall",
@@ -128,7 +130,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "I'll check",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "toolCall",
@@ -178,7 +182,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: " visible",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
@@ -218,7 +224,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "before ",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "toolCall",
@@ -229,26 +237,24 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: " after",
-        textSignature: '{"v":1,"id":"commentary-1","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-1-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
-  it("recovers DeepSeek DSML parameter tool calls emitted as text", async () => {
+  it.each(["|", "｜", "｜｜"])("recovers streamed %s DSML parameter tool calls", async (bar) => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
+    const content = `<${bar}DSML${bar}tool_calls><${bar}DSML${bar}invoke name="session_status"><${bar}DSML${bar}parameter name="sessionKey" string="true">current</${bar}DSML${bar}parameter></${bar}DSML${bar}invoke></${bar}DSML${bar}tool_calls>`;
     await processCompletionsStream(
       streamChunks([
-        makeCompletionsChunk(
-          {
-            content:
-              '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
-          },
-          "stop",
-        ),
+        ...Array.from(content, (char) => makeCompletionsChunk({ content: char })),
+        makeCompletionsChunk({}, "stop"),
       ]),
       output,
       model,

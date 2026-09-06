@@ -27,9 +27,10 @@ export function resolvePluginPackageUninstallPlan(
   ];
 }
 
-export function prepareConfigForPendingPluginDirectoryRemovalSet(
+export function prepareConfigForDisabledPluginSet(
   config: OpenClawConfig,
   pluginIds: readonly string[],
+  plannedUninstall?: OpenClawConfig,
 ): OpenClawConfig {
   const entries = { ...config.plugins?.entries };
   for (const entryId of new Set(pluginIds)) {
@@ -38,11 +39,18 @@ export function prepareConfigForPendingPluginDirectoryRemovalSet(
       enabled: false,
     };
   }
+  const plugins = { ...config.plugins, entries };
+  if (plannedUninstall) {
+    // Remove proven load-path aliases in the guarded disable write. Once the
+    // package is deleted, a dangling alias can no longer recover its realpath.
+    if (plannedUninstall.plugins?.load) {
+      plugins.load = plannedUninstall.plugins.load;
+    } else {
+      delete plugins.load;
+    }
+  }
   return {
     ...config,
-    plugins: {
-      ...config.plugins,
-      entries,
-    },
+    plugins,
   };
 }

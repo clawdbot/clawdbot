@@ -1,4 +1,3 @@
-import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import { html, nothing, render } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type {
@@ -8,8 +7,8 @@ import type {
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
-import type { BrowserTarget } from "../pages/new-session/discovery.ts";
-import { folderDisplayName, isAbsolutePath } from "../pages/new-session/path.ts";
+import { folderDisplayName } from "../pages/new-session/path.ts";
+import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
@@ -44,15 +43,10 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     let submitting = false;
     let failure: string | null = null;
     let browserVisible = false;
-    let browserLoading = false;
-    let browserError: string | null = null;
-    let browserListing: FsListDirResult | null = null;
-    let browserPathDraft = "";
-    let browserRequestToken = 0;
-    const browserTarget: BrowserTarget = { nodeId: "", label: t("newSession.gateway") };
+    const browser = new PlaceBrowserState(options.listDirectory, paint);
 
     const finish = () => {
-      browserRequestToken += 1;
+      browser.reset();
       repositoryRequestToken += 1;
       render(nothing, host);
       host.remove();
@@ -94,12 +88,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     };
 
     const showPickerRoot = () => {
-      browserRequestToken += 1;
+      browser.reset();
       browserVisible = false;
-      browserLoading = false;
-      browserError = null;
-      browserListing = null;
-      browserPathDraft = "";
       paint();
     };
 
@@ -182,41 +172,9 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         ?.focus({ preventScroll: true });
     };
 
-    const loadDirectory = async (path?: string) => {
-      const requestToken = ++browserRequestToken;
-      const requestedPath = path?.trim() || undefined;
-      browserLoading = true;
-      browserError = null;
-      browserListing = null;
-      browserPathDraft = requestedPath ?? "";
-      paint();
-      try {
-        const listing = await options.listDirectory(requestedPath);
-        if (requestToken !== browserRequestToken) {
-          return;
-        }
-        browserListing = listing;
-        if (listing.path && browserPathDraft === (requestedPath ?? "")) {
-          browserPathDraft = listing.path;
-        }
-      } catch (error) {
-        if (requestToken !== browserRequestToken) {
-          return;
-        }
-        browserError = readMissingScopeError(error)?.missingScope
-          ? t("newSession.browseRequiresAdmin")
-          : formatUiError(error, t("newSession.browserLoadFailed"));
-      } finally {
-        if (requestToken === browserRequestToken) {
-          browserLoading = false;
-          paint();
-        }
-      }
-    };
-
     const showBrowser = () => {
       browserVisible = true;
-      void loadDirectory(cwd || undefined);
+      void browser.navigate(cwd || undefined);
     };
 
     function paint() {
@@ -224,16 +182,13 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       const folderLabel = trimmedCwd
         ? folderDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
-      const usableBrowserPath = isAbsolutePath(browserPathDraft.trim())
-        ? browserPathDraft.trim()
-        : null;
       const environmentState =
         repositoryStatus === "checking" ? "checking" : repositoryStatus === "git" ? "git" : "local";
       const environmentOptions = [
         {
           value: "local",
           label: t("sessionsView.groupDefaultsLocal"),
-          description: t("newSession.runsDirectlyNote"),
+          description: t("newSession.checkoutCurrentNote"),
           icon: icons.monitor,
         },
         {
@@ -296,54 +251,48 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     without-arrow
                     @wa-hide=${showPickerRoot}
                   >
-                    ${browserVisible
-                      ? renderPlaceBrowser({
-                          listing: browserListing,
-                          target: browserTarget,
-                          loading: browserLoading,
-                          error: browserError,
-                          pathDraft: browserPathDraft,
-                          usablePath: usableBrowserPath,
-                          registerProjectPath: null,
-                          registeringProject: false,
-                          onPathDraftChange: (value) => {
-                            browserPathDraft = value;
-                            paint();
-                          },
-                          onNavigate: (path) => void loadDirectory(path),
-                          onBack: showPickerRoot,
-                          onRegisterProject: () => undefined,
-                          onClose: showPickerRoot,
-                          onApplyFolder: applyFolder,
-                        })
-                      : html`
-                          <div class="new-session-page__picker-root">
-                            ${renderSessionMenuItem(
-                              {
-                                value: "agent-workspace",
-                                label: t("sessionsView.groupDefaultsCwdPlaceholder"),
-                                icon: icons.folder,
-                                checked: !trimmedCwd,
-                                onSelect: () => applyFolder(""),
-                              },
-                              submitting,
-                            )}
-                            <button
-                              type="button"
-                              class="session-menu__item"
-                              data-value="browse"
-                              aria-pressed="false"
-                              ?disabled=${submitting}
-                              @click=${showBrowser}
-                            >
-                              <span class="session-menu__check" aria-hidden="true"></span>
-                              <span class="session-menu__text">${t("newSession.browse")}</span>
-                              <span class="new-session-page__menu-chevron" aria-hidden="true"
-                                >${icons.chevronRight}</span
+                    ${
+                      browserVisible
+                        ? renderPlaceBrowser({
+                            browser,
+                            id: "session-group-defaults-browser",
+                            label: t("newSession.gateway"),
+                            registerProjectPath: null,
+                            registeringProject: false,
+                            onBack: showPickerRoot,
+                            onRegisterProject: () => undefined,
+                            onClose: showPickerRoot,
+                            onApplyFolder: applyFolder,
+                          })
+                        : html`
+                            <div class="new-session-page__picker-root">
+                              ${renderSessionMenuItem(
+                                {
+                                  value: "agent-workspace",
+                                  label: t("sessionsView.groupDefaultsCwdPlaceholder"),
+                                  icon: icons.folder,
+                                  checked: !trimmedCwd,
+                                  onSelect: () => applyFolder(""),
+                                },
+                                submitting,
+                              )}
+                              <button
+                                type="button"
+                                class="session-menu__item"
+                                data-value="browse"
+                                aria-pressed="false"
+                                ?disabled=${submitting}
+                                @click=${showBrowser}
                               >
-                            </button>
-                          </div>
-                        `}
+                                <span class="session-menu__check" aria-hidden="true"></span>
+                                <span class="session-menu__text">${t("newSession.browse")}</span>
+                                <span class="new-session-page__menu-chevron" aria-hidden="true"
+                                  >${icons.chevronRight}</span
+                                >
+                              </button>
+                            </div>
+                          `
+                    }
                   </wa-popover>
                 </div>
                 <div class="field">
@@ -353,120 +302,134 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     data-session-group-environment=${environmentState}
                     aria-live="polite"
                   >
-                    ${repositoryStatus === "git"
-                      ? html`
-                          <wa-dropdown
-                            class="session-group-defaults__mode-dropdown"
-                            placement="bottom-start"
-                            aria-label=${t("sessionsView.groupDefaultsMode")}
-                            @wa-select=${handleModeSelect}
-                            @wa-after-show=${focusSelectedMode}
-                            @keydown=${handleModeKeydown}
-                          >
-                            <button
-                              id="session-group-defaults-mode-trigger"
-                              slot="trigger"
-                              type="button"
-                              class="session-group-defaults__resolved-mode session-group-defaults__mode-trigger"
-                              data-value=${selectedEnvironment.value}
-                              aria-label=${`${t("sessionsView.groupDefaultsMode")}: ${selectedEnvironment.label}`}
-                              ?disabled=${submitting}
+                    ${
+                      repositoryStatus === "git"
+                        ? html`
+                            <wa-dropdown
+                              class="session-group-defaults__mode-dropdown"
+                              placement="bottom-start"
+                              aria-label=${t("sessionsView.groupDefaultsMode")}
+                              @wa-select=${handleModeSelect}
+                              @wa-after-show=${focusSelectedMode}
+                              @keydown=${handleModeKeydown}
+                            >
+                              <button
+                                id="session-group-defaults-mode-trigger"
+                                slot="trigger"
+                                type="button"
+                                class="session-group-defaults__resolved-mode session-group-defaults__mode-trigger"
+                                data-value=${selectedEnvironment.value}
+                                aria-label=${`${t("sessionsView.groupDefaultsMode")}: ${selectedEnvironment.label}`}
+                                ?disabled=${submitting}
+                              >
+                                <span class="new-session-page__target-icon" aria-hidden="true"
+                                  >${selectedEnvironment.icon}</span
+                                >
+                                <span class="session-group-defaults__resolved-copy">
+                                  <strong>${selectedEnvironment.label}</strong>
+                                  <small>${selectedEnvironment.description}</small>
+                                </span>
+                                <span class="new-session-page__trigger-chevron" aria-hidden="true"
+                                  >${icons.chevronDown}</span
+                                >
+                              </button>
+                              ${environmentOptions.map((option) => {
+                                const selected = option === selectedEnvironment;
+                                return html`
+                                  <wa-dropdown-item
+                                    class="session-group-defaults__mode-option"
+                                    data-environment-mode=${option.value}
+                                    ?data-selected=${selected}
+                                    aria-label=${`${option.label}, ${option.description}`}
+                                    value=${option.value}
+                                    type="checkbox"
+                                    .checked=${selected}
+                                    ?disabled=${submitting}
+                                    ${ref((element) => syncDropdownItemRadio(element, selected))}
+                                  >
+                                    <span
+                                      slot="icon"
+                                      class="new-session-page__target-icon session-group-defaults__mode-option-icon"
+                                      aria-hidden="true"
+                                      >${option.icon}</span
+                                    >
+                                    <span class="session-group-defaults__resolved-copy">
+                                      <strong>${option.label}</strong>
+                                      <small>${option.description}</small>
+                                    </span>
+                                  </wa-dropdown-item>
+                                `;
+                              })}
+                            </wa-dropdown>
+                          `
+                        : html`
+                            <div
+                              class="session-group-defaults__resolved-mode"
+                              role=${repositoryStatus === "checking" ? "status" : nothing}
                             >
                               <span class="new-session-page__target-icon" aria-hidden="true"
-                                >${selectedEnvironment.icon}</span
+                                >${
+                                  repositoryStatus === "checking" ? icons.gitBranch : icons.monitor
+                                }</span
                               >
                               <span class="session-group-defaults__resolved-copy">
-                                <strong>${selectedEnvironment.label}</strong>
-                                <small>${selectedEnvironment.description}</small>
-                              </span>
-                              <span class="new-session-page__trigger-chevron" aria-hidden="true"
-                                >${icons.chevronDown}</span
-                              >
-                            </button>
-                            ${environmentOptions.map((option) => {
-                              const selected = option === selectedEnvironment;
-                              return html`
-                                <wa-dropdown-item
-                                  class="session-group-defaults__mode-option"
-                                  data-environment-mode=${option.value}
-                                  ?data-selected=${selected}
-                                  aria-label=${`${option.label}, ${option.description}`}
-                                  value=${option.value}
-                                  type="checkbox"
-                                  .checked=${selected}
-                                  ?disabled=${submitting}
-                                  ${ref((element) => syncDropdownItemRadio(element, selected))}
+                                <strong
+                                  >${
+                                    repositoryStatus === "checking"
+                                      ? t("newSession.checkingGit")
+                                      : t("sessionsView.groupDefaultsLocal")
+                                  }</strong
                                 >
-                                  <span
-                                    slot="icon"
-                                    class="new-session-page__target-icon session-group-defaults__mode-option-icon"
-                                    aria-hidden="true"
-                                    >${option.icon}</span
-                                  >
-                                  <span class="session-group-defaults__resolved-copy">
-                                    <strong>${option.label}</strong>
-                                    <small>${option.description}</small>
-                                  </span>
-                                </wa-dropdown-item>
-                              `;
-                            })}
-                          </wa-dropdown>
-                        `
-                      : html`
-                          <div
-                            class="session-group-defaults__resolved-mode"
-                            role=${repositoryStatus === "checking" ? "status" : nothing}
-                          >
-                            <span class="new-session-page__target-icon" aria-hidden="true"
-                              >${repositoryStatus === "checking"
-                                ? icons.gitBranch
-                                : icons.monitor}</span
-                            >
-                            <span class="session-group-defaults__resolved-copy">
-                              <strong
-                                >${repositoryStatus === "checking"
-                                  ? t("newSession.checkingGit")
-                                  : t("sessionsView.groupDefaultsLocal")}</strong
-                              >
-                              ${repositoryStatus === "checking"
-                                ? nothing
-                                : html`<small
-                                    >${repositoryStatus === "unavailable"
-                                      ? t("newSession.gitCheckUnavailable")
-                                      : t("newSession.runsDirectlyNote")}</small
-                                  >`}
-                            </span>
-                          </div>
-                        `}
+                                ${
+                                  repositoryStatus === "checking"
+                                    ? nothing
+                                    : html`<small
+                                        >${
+                                          repositoryStatus === "unavailable"
+                                            ? t("newSession.gitCheckUnavailable")
+                                            : t("newSession.checkoutCurrentNote")
+                                        }</small
+                                      >`
+                                }
+                              </span>
+                            </div>
+                          `
+                    }
                   </div>
                 </div>
               </div>
-              ${failure
-                ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
-                : nothing}
+              ${
+                failure
+                  ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
                 <button
                   type="submit"
                   class="btn primary"
-                  ?disabled=${submitting ||
-                  repositoryStatus === "checking" ||
-                  repositoryStatus === "unavailable"}
+                  ?disabled=${
+                    submitting ||
+                    repositoryStatus === "checking" ||
+                    repositoryStatus === "unavailable"
+                  }
                 >
                   ${t("common.save")}
                 </button>
-                ${repositoryStatus === "unavailable"
-                  ? html`
-                      <button
-                        type="button"
-                        class="btn"
-                        ?disabled=${submitting}
-                        @click=${() =>
-                          void inspectRepository(cwd.trim() === options.defaults.cwd.trim())}
-                      >
-                        ${t("common.retry")}
-                      </button>
-                    `
-                  : nothing}
+                ${
+                  repositoryStatus === "unavailable"
+                    ? html`
+                        <button
+                          type="button"
+                          class="btn"
+                          ?disabled=${submitting}
+                          @click=${() =>
+                            void inspectRepository(cwd.trim() === options.defaults.cwd.trim())}
+                        >
+                          ${t("common.retry")}
+                        </button>
+                      `
+                    : nothing
+                }
                 <button type="button" class="btn" ?disabled=${submitting} @click=${finish}>
                   ${t("common.cancel")}
                 </button>

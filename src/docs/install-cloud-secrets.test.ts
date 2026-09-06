@@ -25,7 +25,7 @@ async function readInstallDocs(): Promise<Array<{ docName: string; markdown: str
 }
 
 describe("cloud install docs", () => {
-  it("does not publish a copy-paste gateway token placeholder", async () => {
+  it("keeps cloud install secret guidance safe and centralized", async () => {
     for (const { docName, markdown } of await readInstallDocs()) {
       for (const token of KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS) {
         expect(markdown, docName).not.toContain(`OPENCLAW_GATEWAY_TOKEN=${token}`);

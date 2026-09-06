@@ -223,6 +223,49 @@ describe("ports helpers", () => {
 });
 
 describeUnix("inspectPortUsage", () => {
+  it("distinguishes a socat forward from a Gateway profile named socat", async () => {
+    const gatewayServer = net.createServer();
+    const gatewayAddress = await listenServer(gatewayServer, 0, "127.0.0.1");
+    if (!gatewayAddress) {
+      return;
+    }
+    const socatServer = net.createServer();
+    const socatAddress = await listenServer(socatServer, gatewayAddress.port, "127.0.0.2");
+    if (!socatAddress) {
+      await closeServer(gatewayServer);
+      return;
+    }
+    const port = gatewayAddress.port;
+
+    mockUnixCommands({
+      lsof: commandOutput(
+        `p111\ncopenclaw-gatewa\nnTCP 127.0.0.1:${port} (LISTEN)\n` +
+          `p222\ncsocat\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
+      ),
+      commandLine: (pid) =>
+        pid === "111"
+          ? "openclaw-gateway --profile socat"
+          : `socat -lpopenclaw TCP-LISTEN:${port},bind=127.0.0.2,fork TCP:127.0.0.1:${port}`,
+    });
+
+    try {
+      const result = await inspectPortUsage(port, {
+        probeHosts: ["127.0.0.2", "127.0.0.1"],
+      });
+
+      expect(result.status).toBe("busy");
+      expect(result.listeners).toHaveLength(2);
+      expect(result.hints).toEqual([
+        expect.stringContaining("Gateway already running locally"),
+        "Another process is listening on this port.",
+        expect.stringContaining("Multiple listeners detected"),
+      ]);
+    } finally {
+      await closeServer(socatServer);
+      await closeServer(gatewayServer);
+    }
+  });
+
   it("keeps only listener rows that can block a scoped bind", async () => {
     const server = net.createServer();
     const address = await listenServer(server, 0, "127.0.0.1");
@@ -331,7 +374,7 @@ describeUnix("inspectPortUsage", () => {
     }
   });
 
-  it("falls back to ss when lsof is unavailable", async () => {
+  it.each(["single", "batch"])("falls back to ss when lsof is unavailable (%s)", async (mode) => {
     const server = net.createServer();
     const address = await listenServer(server, 0, "127.0.0.1");
     if (!address) {
@@ -350,12 +393,73 @@ describeUnix("inspectPortUsage", () => {
     });
 
     try {
-      const result = await inspectPortUsage(port);
-      expect(result.status).toBe("busy");
-      expect(result.listeners.length).toBeGreaterThan(0);
-      expect(result.listeners[0]?.pid).toBe(process.pid);
-      expect(result.listeners[0]?.commandLine).toContain("openclaw");
-      expect(result.errors).toBeUndefined();
+      const result =
+        mode === "single"
+          ? await inspectPortUsage(port)
+          : (await inspectPortUsages([port])).get(port);
+      expect(result).toBeDefined();
+      expect(result?.status).toBe("busy");
+      expect(result?.listeners.length).toBeGreaterThan(0);
+      expect(result?.listeners[0]?.pid).toBe(process.pid);
+      expect(result?.listeners[0]?.commandLine).toContain("openclaw");
+      expect(result?.errors).toBeUndefined();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it.each(
+    [
+      { name: "successful empty scan", lsof: commandOutput(""), ssCalls: 0 },
+      { name: "quiet exit one", lsof: commandOutput("ignored output", 1, " \n"), ssCalls: 0 },
+      {
+        name: "nonzero empty scan",
+        lsof: commandOutput("", 2),
+        ssCalls: 1,
+      },
+      {
+        name: "unavailable lsof with an empty fallback",
+        lsof: new Error("lsof unavailable"),
+        ssCalls: 1,
+        errors: ["Error: lsof unavailable"],
+      },
+      {
+        name: "both commands failing",
+        lsof: commandOutput("lsof output\n", 1, "lsof error\n"),
+        ss: commandOutput("ss output\n", 2, "ss error\n"),
+        ssCalls: 1,
+        errors: ["lsof error\nlsof output", "ss error\nss output"],
+      },
+    ].flatMap((scenario) =>
+      ["single", "batch"].map((mode) => ({ name: scenario.name, scenario, mode })),
+    ),
+  )("preserves $name diagnostics ($mode)", async ({ scenario, mode }) => {
+    const { lsof, ss, ssCalls, errors } = scenario;
+    const server = net.createServer();
+    const address = await listenServer(server, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    mockUnixCommands({ lsof, ss });
+
+    try {
+      const result =
+        mode === "single"
+          ? await inspectPortUsage(address.port)
+          : (await inspectPortUsages([address.port])).get(address.port);
+      expect(result).toMatchObject({
+        port: address.port,
+        status: "busy",
+        listeners: [],
+        detail: undefined,
+        errors,
+      });
+      expect(result?.hints).toContain(
+        "Port is in use but process details are unavailable (install lsof or run as an admin user).",
+      );
+      expect(
+        runCommandWithTimeoutMock.mock.calls.filter(([argv]) => argv[0] === "ss"),
+      ).toHaveLength(ssCalls);
     } finally {
       await closeServer(server);
     }

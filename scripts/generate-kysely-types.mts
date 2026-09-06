@@ -98,7 +98,7 @@ function generateTypes(db: DatabaseSync): string {
       .toSorted((left, right) => String(left.name).localeCompare(String(right.name)));
     const primaryKeyColumnCount = columns.filter((column) => Number(column.pk) > 0).length;
     for (const column of columns) {
-      lines.push(`  ${column.name}: ${columnType(column, primaryKeyColumnCount)};`);
+      lines.push(`  ${String(column.name)}: ${columnType(column, primaryKeyColumnCount)};`);
     }
     lines.push("}", "");
   }

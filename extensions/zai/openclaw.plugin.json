@@ -28,6 +28,9 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "zai": "zai"
+    },
     "providers": {
       "zai": {
         "baseUrl": "https://api.z.ai/api/paas/v4",
@@ -45,6 +48,21 @@
               "input": 0,
               "output": 0,
               "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "glm-5.3-flash",
+            "name": "GLM-5.3-Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.15,
+              "output": 0.5,
+              "cacheRead": 0.03,
               "cacheWrite": 0
             },
             "compat": { "codeMode": "preferred" }

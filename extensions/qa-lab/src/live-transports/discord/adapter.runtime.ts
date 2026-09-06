@@ -160,6 +160,9 @@ export async function createDiscordQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
+    },
+    async cleanupAfterGatewayStop() {
+      // Keep renewing the lease until the child gateway stops.
       // Lease release must still run when heartbeat shutdown reports an error.
       try {
         await heartbeat.stop();

@@ -1,8 +1,15 @@
 /** Verifies provider-like plugin registry entries across capability families. */
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi } from "vitest";
+import { registryContainsRuntimePluginIds } from "./active-runtime-registry.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type {
+  OpenClawPluginApi,
+  ProviderPluginCatalog,
+  UnifiedModelCatalogProviderContext,
+} from "./types.js";
 
 function createTestRegistry() {
   return createPluginRegistry({
@@ -15,18 +22,6 @@ function createTestRegistry() {
     runtime: {} as PluginRuntime,
     activateGlobalSideEffects: false,
   });
-}
-
-function createCatalogModel(id: string, name: string) {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 2048,
-  };
 }
 
 describe("plugin registry provider-like registrations", () => {
@@ -115,228 +110,6 @@ describe("plugin registry provider-like registrations", () => {
     ]);
   });
 
-  it("publishes text catalog rows for registered provider catalog hooks", async () => {
-    const pluginRegistry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "text-owner",
-      name: "Text Owner",
-      source: "/tmp/text-owner/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-
-    pluginRegistry.registerProvider(record, {
-      id: "text-provider",
-      label: "Text Provider",
-      auth: [],
-      catalog: {
-        run: async () => ({
-          provider: {
-            baseUrl: "https://text.example/v1",
-            models: [createCatalogModel("text-live", "Text Live")],
-          },
-        }),
-      },
-      staticCatalog: {
-        run: async () => ({
-          provider: {
-            baseUrl: "https://text.example/v1",
-            models: [createCatalogModel("text-static", "Text Static")],
-          },
-        }),
-      },
-    });
-
-    expect(pluginRegistry.registry.providers).toHaveLength(1);
-    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
-    const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
-    expect(catalogProvider?.provider).toBe("text-provider");
-    expect(catalogProvider?.kinds).toEqual(["text"]);
-    await expect(catalogProvider?.staticCatalog?.({} as never)).resolves.toEqual([
-      {
-        kind: "text",
-        provider: "text-provider",
-        model: "text-static",
-        label: "Text Static",
-        source: "static",
-      },
-    ]);
-    await expect(catalogProvider?.liveCatalog?.({} as never)).resolves.toEqual([
-      {
-        kind: "text",
-        provider: "text-provider",
-        model: "text-live",
-        label: "Text Live",
-        source: "live",
-      },
-    ]);
-  });
-
-  it("publishes synthesized media-generation catalog rows during provider registration", async () => {
-    const pluginRegistry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "media-owner",
-      name: "Media Owner",
-      source: "/tmp/media-owner/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-
-    pluginRegistry.registerVideoGenerationProvider(record, {
-      id: "video-provider",
-      label: "Video Provider",
-      defaultModel: "video-default",
-      models: ["video-default", "video-pro"],
-      capabilities: {
-        generate: {
-          supportedDurationSeconds: [4, 8],
-        },
-      },
-      generateVideo: async () => ({
-        videos: [{ buffer: Buffer.alloc(0), mimeType: "video/mp4" }],
-      }),
-    });
-
-    expect(pluginRegistry.registry.videoGenerationProviders).toHaveLength(1);
-    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
-    const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
-    expect(catalogProvider?.provider).toBe("video-provider");
-    expect(catalogProvider?.kinds).toEqual(["video_generation"]);
-    const staticRows = await catalogProvider?.staticCatalog?.({} as never);
-    expect(staticRows).toHaveLength(2);
-    expect(staticRows?.[0]?.kind).toBe("video_generation");
-    expect(staticRows?.[0]?.provider).toBe("video-provider");
-    expect(staticRows?.[0]?.model).toBe("video-default");
-    expect(staticRows?.[0]?.source).toBe("static");
-    expect(staticRows?.[0]?.default).toBe(true);
-    expect(staticRows?.[0]?.capabilities).toEqual({
-      generate: {
-        supportedDurationSeconds: [4, 8],
-      },
-    });
-    expect(staticRows?.[1]?.kind).toBe("video_generation");
-    expect(staticRows?.[1]?.provider).toBe("video-provider");
-    expect(staticRows?.[1]?.model).toBe("video-pro");
-    expect(staticRows?.[1]?.source).toBe("static");
-  });
-
-  it("publishes synthesized voice catalog rows during speech provider registration", async () => {
-    const pluginRegistry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "speech-owner",
-      name: "Speech Owner",
-      source: "/tmp/speech-owner/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-
-    pluginRegistry.registerSpeechProvider(record, {
-      id: "speech-provider",
-      label: "Speech Provider",
-      defaultModel: "tts-default",
-      models: ["tts-default", "tts-pro"],
-      isConfigured: () => true,
-      synthesize: async () => ({
-        audioBuffer: Buffer.alloc(0),
-        fileExtension: "mp3",
-        outputFormat: "audio/mpeg",
-        voiceCompatible: true,
-      }),
-    });
-
-    expect(pluginRegistry.registry.speechProviders).toHaveLength(1);
-    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
-    const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
-    expect(catalogProvider?.provider).toBe("speech-provider");
-    expect(catalogProvider?.kinds).toEqual(["voice"]);
-    const staticRows = await catalogProvider?.staticCatalog?.({} as never);
-    expect(staticRows).toEqual([
-      {
-        kind: "voice",
-        provider: "speech-provider",
-        model: "tts-default",
-        label: "Speech Provider",
-        source: "static",
-        default: true,
-        modes: ["tts"],
-        capabilities: { tts: true },
-      },
-      {
-        kind: "voice",
-        provider: "speech-provider",
-        model: "tts-pro",
-        label: "Speech Provider",
-        source: "static",
-        modes: ["tts"],
-        capabilities: { tts: true },
-      },
-    ]);
-  });
-
-  it("combines voice catalog rows from speech and realtime providers", async () => {
-    const pluginRegistry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "voice-owner",
-      name: "Voice Owner",
-      source: "/tmp/voice-owner/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-
-    pluginRegistry.registerSpeechProvider(record, {
-      id: "voice-provider",
-      label: "Voice Provider",
-      defaultModel: "tts-default",
-      isConfigured: () => true,
-      synthesize: async () => ({
-        audioBuffer: Buffer.alloc(0),
-        fileExtension: "mp3",
-        outputFormat: "audio/mpeg",
-        voiceCompatible: true,
-      }),
-    });
-    pluginRegistry.registerRealtimeTranscriptionProvider(record, {
-      id: "voice-provider",
-      label: "Voice Provider",
-      defaultModel: "stt-default",
-      isConfigured: () => true,
-      createSession: () => ({
-        connect: async () => {},
-        sendAudio() {},
-        close() {},
-        isConnected: () => true,
-      }),
-    });
-    pluginRegistry.registerRealtimeVoiceProvider(record, {
-      id: "voice-provider",
-      label: "Voice Provider",
-      defaultModel: "realtime-default",
-      isConfigured: () => true,
-      createBridge: () => ({
-        connect: async () => {},
-        sendAudio() {},
-        setMediaTimestamp() {},
-        submitToolResult() {},
-        acknowledgeMark() {},
-        close() {},
-        isConnected: () => true,
-      }),
-    });
-
-    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
-    const staticRows =
-      await pluginRegistry.registry.modelCatalogProviders[0]?.provider.staticCatalog?.({} as never);
-    expect(staticRows?.map((row) => [row.model, row.modes, row.capabilities])).toEqual([
-      ["tts-default", ["tts"], { tts: true }],
-      ["stt-default", ["realtime_transcription"], { realtime_transcription: true }],
-      ["realtime-default", ["realtime_voice"], { realtime_voice: true }],
-    ]);
-  });
-
   it("does not duplicate manifest-declared capability provider ids during runtime registration", () => {
     const pluginRegistry = createTestRegistry();
     const record = createPluginRecord({
@@ -365,5 +138,350 @@ describe("plugin registry provider-like registrations", () => {
 
     expect(record.speechProviderIds).toEqual(["kitchen-sink-speech-provider"]);
     expect(pluginRegistry.registry.speechProviders).toHaveLength(1);
+  });
+});
+
+const reservationCases = [
+  {
+    family: "text",
+    kind: "text",
+    registryKey: "providers",
+    ownedKey: "providerIds",
+    label: "provider",
+  },
+  {
+    family: "speech",
+    kind: "voice",
+    registryKey: "speechProviders",
+    ownedKey: "speechProviderIds",
+    label: "speech provider",
+  },
+  {
+    family: "transcription",
+    kind: "voice",
+    registryKey: "realtimeTranscriptionProviders",
+    ownedKey: "realtimeTranscriptionProviderIds",
+    label: "realtime transcription provider",
+  },
+  {
+    family: "realtime",
+    kind: "voice",
+    registryKey: "realtimeVoiceProviders",
+    ownedKey: "realtimeVoiceProviderIds",
+    label: "realtime voice provider",
+  },
+  {
+    family: "image",
+    kind: "image_generation",
+    registryKey: "imageGenerationProviders",
+    ownedKey: "imageGenerationProviderIds",
+    label: "image-generation provider",
+  },
+  {
+    family: "video",
+    kind: "video_generation",
+    registryKey: "videoGenerationProviders",
+    ownedKey: "videoGenerationProviderIds",
+    label: "video-generation provider",
+  },
+  {
+    family: "music",
+    kind: "music_generation",
+    registryKey: "musicGenerationProviders",
+    ownedKey: "musicGenerationProviderIds",
+    label: "music-generation provider",
+  },
+] as const;
+
+function registerReservedProvider(
+  api: OpenClawPluginApi,
+  family: (typeof reservationCases)[number]["family"],
+  id: string,
+  run: ProviderPluginCatalog["run"],
+) {
+  const provider = { id, label: "Catalog provider", defaultModel: "default", models: ["default"] };
+  const unused = () => {
+    throw new Error("registration must not invoke provider operations");
+  };
+  switch (family) {
+    case "text":
+      return api.registerProvider({
+        ...provider,
+        auth: [],
+        catalog: { run },
+        staticCatalog: { run },
+      });
+    case "speech":
+      return api.registerSpeechProvider({ ...provider, isConfigured: unused, synthesize: unused });
+    case "transcription":
+      return api.registerRealtimeTranscriptionProvider({
+        ...provider,
+        isConfigured: unused,
+        createSession: unused,
+      });
+    case "realtime":
+      return api.registerRealtimeVoiceProvider({
+        ...provider,
+        isConfigured: unused,
+        createBridge: unused,
+      });
+    case "image":
+      return api.registerImageGenerationProvider({
+        ...provider,
+        capabilities: { generate: { maxCount: 1 }, edit: { enabled: false } },
+        generateImage: unused,
+      });
+    case "video":
+      return api.registerVideoGenerationProvider({
+        ...provider,
+        capabilities: { generate: { maxDurationSeconds: 4 } },
+        generateVideo: unused,
+      });
+    case "music":
+      return api.registerMusicGenerationProvider({
+        ...provider,
+        capabilities: { generate: { maxTracks: 1 } },
+        generateMusic: unused,
+      });
+  }
+}
+
+function createCatalogOwner(builder: ReturnType<typeof createTestRegistry>, id: string) {
+  const record = createPluginRecord({
+    id,
+    name: id,
+    source: `/plugins/${id}/index.ts`,
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+  });
+  return { record, api: builder.createApi(record, { config: {} }) };
+}
+
+function catalogOwners(builder: ReturnType<typeof createTestRegistry>) {
+  return builder.registry.modelCatalogProviders.map(({ pluginId, provider }) => ({
+    pluginId,
+    provider: provider.provider,
+    kinds: provider.kinds,
+  }));
+}
+
+const catalogContext: UnifiedModelCatalogProviderContext = {
+  config: {},
+  env: {},
+  resolveProviderApiKey: () => ({ apiKey: undefined }),
+  resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+};
+
+describe.each(reservationCases)(
+  "$family catalog ownership",
+  ({ family, kind, registryKey, ownedKey, label }) => {
+    it.each(["catalog-provider", "  Catalog-Provider  ", "", "   "])(
+      "reserves only accepted provider IDs without executing hooks (%j)",
+      (id) => {
+        const builder = createTestRegistry();
+        const { api, record } = createCatalogOwner(builder, "owner");
+        const run = vi.fn(async () => null);
+
+        expect(registerReservedProvider(api, family, id, run)).toBeUndefined();
+        expect(run).not.toHaveBeenCalled();
+        if (!id.trim()) {
+          expect(builder.registry[registryKey]).toEqual([]);
+          expect(record[ownedKey]).toEqual([]);
+          expect(catalogOwners(builder)).toEqual([]);
+          expect(builder.registry.diagnostics).toEqual([
+            {
+              level: "error",
+              pluginId: "owner",
+              source: record.source,
+              message: `${label} registration missing id`,
+            },
+          ]);
+          return;
+        }
+        expect(builder.registry[registryKey].map(({ provider }) => provider.id)).toEqual([
+          family === "text" ? id.trim() : id,
+        ]);
+        expect(record[ownedKey]).toEqual([id.trim()]);
+        expect(catalogOwners(builder)).toEqual([
+          { pluginId: "owner", provider: id.trim(), kinds: [kind] },
+        ]);
+        expect(builder.registry.diagnostics).toEqual([]);
+      },
+    );
+
+    it.each(["automatic-first", "explicit-first"] as const)(
+      "preserves cross-plugin ownership and provider registration (%s)",
+      (order) => {
+        const builder = createTestRegistry();
+        const alpha = createCatalogOwner(builder, "alpha");
+        const beta = createCatalogOwner(builder, "beta");
+        const run = vi.fn(async () => null);
+        const explicit = (api: OpenClawPluginApi) =>
+          api.registerModelCatalogProvider({ provider: "catalog-provider", kinds: ["text"] });
+        if (order === "automatic-first") {
+          registerReservedProvider(alpha.api, family, "catalog-provider", run);
+          explicit(beta.api);
+        } else {
+          explicit(alpha.api);
+          registerReservedProvider(beta.api, family, "catalog-provider", run);
+        }
+        expect(catalogOwners(builder)).toEqual([
+          {
+            pluginId: "alpha",
+            provider: "catalog-provider",
+            kinds: [order === "automatic-first" ? kind : "text"],
+          },
+        ]);
+        expect(builder.registry[registryKey].map(({ pluginId }) => pluginId)).toEqual([
+          order === "automatic-first" ? "alpha" : "beta",
+        ]);
+        expect(builder.registry.diagnostics).toEqual([
+          {
+            level: "error",
+            pluginId: "beta",
+            source: beta.record.source,
+            message: "model catalog provider already registered: catalog-provider (alpha)",
+          },
+        ]);
+        expect(run).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["automatic-first", "explicit-first"] as const)(
+      "retains explicit static/live contributions alongside a same-plugin reservation (%s)",
+      async (order) => {
+        const builder = createTestRegistry();
+        const { api } = createCatalogOwner(builder, "owner");
+        const run = vi.fn(async () => null);
+        const row = { kind, provider: "catalog-provider", model: "explicit-model" };
+        const staticCatalog = vi.fn(() => [{ ...row, source: "static" as const }]);
+        const liveCatalog = vi.fn(() => [{ ...row, source: "live" as const }]);
+        const automatic = () => registerReservedProvider(api, family, "catalog-provider", run);
+        const explicit = () =>
+          api.registerModelCatalogProvider({
+            provider: "catalog-provider",
+            kinds: [kind],
+            staticCatalog,
+            liveCatalog,
+          });
+        if (order === "automatic-first") {
+          automatic();
+          explicit();
+        } else {
+          explicit();
+          automatic();
+        }
+        expect(catalogOwners(builder)).toEqual([
+          { pluginId: "owner", provider: "catalog-provider", kinds: [kind] },
+        ]);
+        expect(run).not.toHaveBeenCalled();
+        expect(staticCatalog).not.toHaveBeenCalled();
+        expect(liveCatalog).not.toHaveBeenCalled();
+        const provider = expectDefined(
+          builder.registry.modelCatalogProviders[0],
+          "catalog reservation",
+        ).provider;
+        const staticRows = await provider.staticCatalog?.(catalogContext);
+        const liveRows = await provider.liveCatalog?.(catalogContext);
+        // Automatic rows are intentionally not an oracle; the explicit API contribution is.
+        expect(staticRows?.filter((entry) => entry.model === row.model)).toEqual([
+          { ...row, source: "static" },
+        ]);
+        expect(liveRows?.filter((entry) => entry.model === row.model)).toEqual([
+          { ...row, source: "live" },
+        ]);
+        expect(staticCatalog).toHaveBeenCalledExactlyOnceWith(catalogContext);
+        expect(liveCatalog).toHaveBeenCalledExactlyOnceWith(catalogContext);
+        expect(builder.registry.diagnostics).toEqual([]);
+      },
+    );
+  },
+);
+
+describe("catalog reservation lifecycle", () => {
+  it.each(["none", "static", "live", "both"] as const)(
+    "reserves text only when eligible (%s)",
+    (mode) => {
+      const builder = createTestRegistry();
+      const { api } = createCatalogOwner(builder, "owner");
+      const run = vi.fn(async () => null);
+      api.registerProvider({
+        id: "text-provider",
+        label: "Text provider",
+        auth: [],
+        ...(mode === "live" || mode === "both" ? { catalog: { run } } : {}),
+        ...(mode === "static" || mode === "both" ? { staticCatalog: { run } } : {}),
+      });
+      expect(builder.registry.providers).toHaveLength(1);
+      expect(catalogOwners(builder)).toEqual(
+        mode === "none" ? [] : [{ pluginId: "owner", provider: "text-provider", kinds: ["text"] }],
+      );
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the first overlapping row, distinct kinds, rollback, and record-authoritative containment", () => {
+    const builder = createTestRegistry();
+    const alpha = createCatalogOwner(builder, "alpha");
+    const beta = createCatalogOwner(builder, "beta");
+    const run = vi.fn(async () => null);
+    for (const { family } of reservationCases) {
+      registerReservedProvider(alpha.api, family, "catalog-provider", run);
+    }
+    beta.api.registerModelCatalogProvider({ provider: "other-provider", kinds: ["voice"] });
+    const explicit = vi.fn(() => []);
+    alpha.api.registerModelCatalogProvider({
+      provider: "catalog-provider",
+      kinds: ["voice", "video_generation", "voice"],
+      staticCatalog: explicit,
+    });
+    expect(catalogOwners(builder)).toEqual([
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["text"] },
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["voice", "video_generation"] },
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["image_generation"] },
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["video_generation"] },
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["music_generation"] },
+      { pluginId: "beta", provider: "other-provider", kinds: ["voice"] },
+    ]);
+    expect(registryContainsRuntimePluginIds(builder.registry, ["alpha", "beta"])).toBe(true);
+    expect(registryContainsRuntimePluginIds(builder.registry, [])).toBe(false);
+    builder.registry.plugins.push({ ...alpha.record, status: "disabled" });
+    expect(registryContainsRuntimePluginIds(builder.registry, ["alpha"])).toBe(false);
+    builder.registry.plugins.pop();
+    builder.rollbackPluginGlobalSideEffects(alpha.record.id, alpha.record);
+    expect(catalogOwners(builder)).toEqual([
+      { pluginId: "beta", provider: "other-provider", kinds: ["voice"] },
+    ]);
+    for (const { registryKey } of reservationCases) {
+      expect(builder.registry[registryKey]).toEqual([]);
+    }
+    expect(registryContainsRuntimePluginIds(builder.registry, ["alpha"])).toBe(false);
+    expect(registryContainsRuntimePluginIds(builder.registry, ["beta"])).toBe(true);
+    expect(builder.registry.diagnostics).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+    expect(explicit).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing explicit provider and kinds without claiming ownership", () => {
+    const builder = createTestRegistry();
+    const { api, record } = createCatalogOwner(builder, "owner");
+    api.registerModelCatalogProvider({ provider: " ", kinds: ["text"] });
+    api.registerModelCatalogProvider({ provider: "catalog-provider", kinds: [] });
+    expect(catalogOwners(builder)).toEqual([]);
+    expect(builder.registry.diagnostics).toEqual([
+      {
+        level: "error",
+        pluginId: "owner",
+        source: record.source,
+        message: "model catalog provider registration missing provider",
+      },
+      {
+        level: "error",
+        pluginId: "owner",
+        source: record.source,
+        message: 'model catalog provider "catalog-provider" registration missing kinds',
+      },
+    ]);
   });
 });

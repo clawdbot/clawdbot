@@ -5,6 +5,11 @@ import {
   type NativeHookRelayRetention,
 } from "../agents/harness/native-hook-relay.js";
 
+export {
+  buildNativeHookRelayCommandPlan,
+  type NativeHookRelayCommandPlan,
+} from "../agents/harness/native-hook-relay-plan.js";
+
 export type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
   retention: NativeHookRelayRetention;
 };

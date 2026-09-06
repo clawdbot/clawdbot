@@ -2,6 +2,7 @@ type PluginSurfaceManifest = {
   id?: string;
   channels?: string[];
   providers?: string[];
+  cliCommands?: Array<{ name?: string }>;
   commandAliases?: Array<{ name?: string; kind?: string }>;
   contracts?: Record<string, unknown>;
   dashboard?: Partial<Record<"actionVerbs" | "dataBindings", Array<{ id?: string }>>>;
@@ -75,15 +76,27 @@ function resolveDashboardCapabilityIds(
     .filter((value) => value !== null);
 }
 
-export function resolvePluginSurface(manifest: PluginSurfaceManifest) {
-  const parts = [];
+// Returns one surface item per line so the reference template can render a list.
+// STE bans the semicolon, so these items must never be joined into one sentence.
+export function resolvePluginSurface(manifest: PluginSurfaceManifest): string[] {
+  const parts: string[] = [];
   if (Array.isArray(manifest.channels) && manifest.channels.length > 0) {
-    parts.push(`channels: ${formatIdentifiers(manifest.channels)}`);
+    parts.push(`Channels: ${formatIdentifiers(manifest.channels)}`);
   }
   if (Array.isArray(manifest.providers) && manifest.providers.length > 0) {
-    parts.push(`providers: ${formatIdentifiers(manifest.providers)}`);
+    parts.push(`Providers: ${formatIdentifiers(manifest.providers)}`);
   }
-  const commands = [
+  const cliCommands = [
+    ...new Set(
+      (manifest.cliCommands ?? [])
+        .map((command) => command.name?.trim())
+        .filter((name): name is string => Boolean(name)),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+  if (cliCommands.length > 0) {
+    parts.push(`CLI commands: ${formatIdentifiers(cliCommands.map((name) => `openclaw ${name}`))}`);
+  }
+  const slashCommands = [
     ...new Set(
       (manifest.commandAliases ?? [])
         .filter((alias) => alias.kind === "runtime-slash")
@@ -91,28 +104,25 @@ export function resolvePluginSurface(manifest: PluginSurfaceManifest) {
         .filter((name): name is string => Boolean(name)),
     ),
   ].toSorted((left, right) => left.localeCompare(right));
-  if (commands.length > 0) {
-    parts.push(`commands: ${formatIdentifiers(commands.map((name) => `/${name}`))}`);
+  if (slashCommands.length > 0) {
+    parts.push(`Slash commands: ${formatIdentifiers(slashCommands.map((name) => `/${name}`))}`);
   }
   const contracts = Object.keys(manifest.contracts ?? {}).toSorted((left, right) =>
     left.localeCompare(right),
   );
   if (contracts.length > 0) {
-    parts.push(`contracts: ${formatIdentifiers(contracts)}`);
+    parts.push(`Contracts: ${formatIdentifiers(contracts)}`);
   }
   const dashboardDataBindings = resolveDashboardCapabilityIds(manifest, "dataBindings");
   if (dashboardDataBindings.length > 0) {
-    parts.push(`dashboard data bindings: ${formatIdentifiers(dashboardDataBindings)}`);
+    parts.push(`Dashboard data bindings: ${formatIdentifiers(dashboardDataBindings)}`);
   }
   const dashboardActionVerbs = resolveDashboardCapabilityIds(manifest, "actionVerbs");
   if (dashboardActionVerbs.length > 0) {
-    parts.push(`dashboard action verbs: ${formatIdentifiers(dashboardActionVerbs)}`);
+    parts.push(`Dashboard action verbs: ${formatIdentifiers(dashboardActionVerbs)}`);
   }
   if (Array.isArray(manifest.skills) && manifest.skills.length > 0) {
-    parts.push("skills");
+    parts.push("Skills");
   }
-  if (parts.length === 0) {
-    return "plugin";
-  }
-  return parts.join("; ");
+  return parts;
 }

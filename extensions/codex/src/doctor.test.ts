@@ -78,6 +78,7 @@ function createCheck(deps: ReturnType<typeof managedDeps>) {
   registerCodexManagedAppServerDoctorChecks(
     {
       pluginRoot: "/candidate/plugin",
+      getHealthCheck: () => check,
       registerHealthCheck(value) {
         check = value;
       },
@@ -91,6 +92,25 @@ function createCheck(deps: ReturnType<typeof managedDeps>) {
 }
 
 describe("managed Codex doctor check", () => {
+  it("registers once in each host registry", () => {
+    for (let index = 0; index < 2; index++) {
+      let check: HealthCheck | undefined;
+      const host = {
+        pluginRoot: "/candidate/plugin",
+        getHealthCheck: () => check,
+        registerHealthCheck: vi.fn((value: HealthCheck) => {
+          check = value;
+        }),
+      };
+
+      registerCodexManagedAppServerDoctorChecks(host);
+      registerCodexManagedAppServerDoctorChecks(host);
+
+      expect(host.registerHealthCheck).toHaveBeenCalledOnce();
+      expect(check?.id).toBe(CODEX_MANAGED_APP_SERVER_CHECK_ID);
+    }
+  });
+
   it("accepts the exact pinned native binary without changing explicit long-context config", async () => {
     const cfg = config();
     const before = structuredClone(cfg);

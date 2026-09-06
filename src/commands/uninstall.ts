@@ -33,27 +33,6 @@ type UninstallOptions = {
 const multiselectStyled = <T>(params: Parameters<typeof multiselect<T>>[0]) =>
   multiselect(styleSelectParams(params));
 
-function buildScopeSelection(opts: UninstallOptions): {
-  scopes: Set<UninstallScope>;
-  hadExplicit: boolean;
-} {
-  const hadExplicit = Boolean(opts.all || opts.service || opts.state || opts.workspace || opts.app);
-  const scopes = new Set<UninstallScope>();
-  if (opts.all || opts.service) {
-    scopes.add("service");
-  }
-  if (opts.all || opts.state) {
-    scopes.add("state");
-  }
-  if (opts.all || opts.workspace) {
-    scopes.add("workspace");
-  }
-  if (opts.all || opts.app) {
-    scopes.add("app");
-  }
-  return { scopes, hadExplicit };
-}
-
 async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
     // Nix owns service lifecycle in Nix mode; uninstalling via launchd/systemd would fight the profile.
@@ -109,13 +88,12 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean): Promise<bool
   return result.ok;
 }
 
-function logBackupRecommendation(runtime: RuntimeEnv) {
-  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
-}
-
 /** Runs the uninstall flow for selected service/state/workspace/app scopes. */
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
-  const { scopes, hadExplicit } = buildScopeSelection(opts);
+  const scopes = new Set(
+    (["service", "state", "workspace", "app"] as const).filter((scope) => opts.all || opts[scope]),
+  );
+  const hadExplicit = scopes.size > 0;
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
     runtime.error(
@@ -149,7 +127,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
           hint: "/Applications/OpenClaw.app",
         },
       ],
-      initialValues: ["service", "state", "workspace"],
+      initialValues: ["service"],
     });
     if (isCancel(selection)) {
       cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
@@ -182,10 +160,22 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   let workspaceBlocked = false;
   let failed = false;
   let serviceSafe = true;
+  const attemptCleanup = async <T>(
+    failureMessage: string,
+    action: () => Promise<T>,
+  ): Promise<T | undefined> => {
+    try {
+      return await action();
+    } catch (error) {
+      runtime.error(`${failureMessage}: ${formatErrorMessage(error)}`);
+      failed = true;
+      return undefined;
+    }
+  };
   const removesLocalData = scopes.has("state") || scopes.has("workspace");
 
   if (removesLocalData) {
-    logBackupRecommendation(runtime);
+    runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
   }
 
   if (scopes.has("service")) {
@@ -201,13 +191,10 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   let cleanupPlan;
   if (removesLocalData && serviceSafe) {
-    try {
-      cleanupPlan = dryRun
-        ? await resolveCleanupPlanForDryRun()
-        : await resolveCleanupPlanForRemoval(runtime);
-    } catch (error) {
-      runtime.error(`Failed to prepare local data cleanup: ${formatErrorMessage(error)}`);
-    }
+    const plan = await attemptCleanup("Failed to prepare local data cleanup", () =>
+      dryRun ? resolveCleanupPlanForDryRun() : resolveCleanupPlanForRemoval(runtime),
+    );
+    cleanupPlan = plan;
     if (!cleanupPlan) {
       failed = true;
     }
@@ -219,62 +206,45 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
       cleanupPlan;
     if (!scopes.has("workspace")) {
-      try {
-        const legacyFailures = await removeWorkspaceDirs(workspaceDirs, runtime, {
-          dryRun,
-          preserveWorkspace: true,
-        });
-        if (legacyFailures.length > 0) {
-          runtime.error(`Retired workspace state cleanup incomplete: ${legacyFailures.join(", ")}`);
-          failed = true;
-        }
-      } catch (error) {
-        runtime.error(`Retired workspace state cleanup failed: ${formatErrorMessage(error)}`);
+      const retiredWorkspace = await attemptCleanup("Retired workspace state cleanup failed", () =>
+        removeWorkspaceDirs(workspaceDirs, runtime, { dryRun, preserveWorkspace: true }),
+      );
+      if (retiredWorkspace && retiredWorkspace.length > 0) {
+        runtime.error(`Retired workspace state cleanup incomplete: ${retiredWorkspace.join(", ")}`);
         failed = true;
       }
     }
     // Preserve workspaces when state-only uninstall is requested; workspace scope removes them explicitly.
-    try {
-      stateRemoved = await removeStateAndLinkedPaths(
+    const state = await attemptCleanup("State cleanup failed", () =>
+      removeStateAndLinkedPaths(
         { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
         runtime,
         { dryRun, preservePaths: scopes.has("workspace") ? [] : workspaceDirs },
-      );
-    } catch (error) {
-      runtime.error(`State cleanup failed: ${formatErrorMessage(error)}`);
-      workspaceBlocked = true;
-    }
+      ),
+    );
+    stateRemoved = state ?? false;
+    workspaceBlocked = state === undefined;
     failed ||= !stateRemoved;
   }
 
   if (scopes.has("workspace") && cleanupPlan && workspaceBlocked) {
     runtime.error("Workspace cleanup blocked because state cleanup could not safely complete.");
   } else if (scopes.has("workspace") && cleanupPlan) {
-    try {
-      const workspaceFailures = await removeWorkspaceDirs(cleanupPlan.workspaceDirs, runtime, {
+    const workspace = await attemptCleanup("Workspace cleanup failed", () =>
+      removeWorkspaceDirs(cleanupPlan.workspaceDirs, runtime, {
         dryRun,
         removeStateRows: !scopes.has("state") || !stateRemoved,
-      });
-      if (workspaceFailures.length > 0) {
-        runtime.error(`Workspace cleanup incomplete: ${workspaceFailures.join(", ")}`);
-        failed = true;
-      }
-    } catch (error) {
-      runtime.error(`Workspace cleanup failed: ${formatErrorMessage(error)}`);
+      }),
+    );
+    if (workspace && workspace.length > 0) {
+      runtime.error(`Workspace cleanup incomplete: ${workspace.join(", ")}`);
       failed = true;
     }
   }
 
   if (scopes.has("app")) {
-    try {
-      const appRemoved = await removeMacApp(runtime, dryRun);
-      if (!appRemoved) {
-        failed = true;
-      }
-    } catch (error) {
-      runtime.error(`App cleanup failed: ${formatErrorMessage(error)}`);
-      failed = true;
-    }
+    const app = await attemptCleanup("App cleanup failed", () => removeMacApp(runtime, dryRun));
+    failed ||= app !== true;
   }
 
   if (!failed) {

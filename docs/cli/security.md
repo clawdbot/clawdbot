@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw security` (audit and fix common security f
 read_when:
   - You want to run a quick security audit on config/state
   - You want to apply safe "fix" suggestions (permissions, tighten defaults)
-title: "Security"
+title: "Security CLI"
 ---
 
 # `openclaw security`
@@ -33,6 +33,7 @@ If Gateway password auth is supplied only at startup, pass the same value with `
 - Warns when multiple DM senders share the main session and recommends secure DM mode: `session.dmScope="per-channel-peer"` (or `per-account-channel-peer` for multi-account channels) for shared inboxes. This is cooperative/shared-inbox hardening, not isolation for mutually untrusted operators; split trust boundaries with separate gateways (or separate OS users/hosts) for that.
 - Emits `security.trust_model.group_scope_main` when global `session.groupScope="main"` or a binding override merges group/channel rooms into the main session. Every member of each matched room shares that context, so reserve this for trusted rooms (see [Groups](/channels/groups#session-keys)).
 - Emits `security.trust_model.multi_user_heuristic` when config suggests likely shared-user ingress (for example open DM/group policy, configured group targets, or wildcard sender rules) — OpenClaw's default trust model is personal-assistant (one operator), not hostile multi-tenant isolation. For intentional shared-user setups: sandbox all sessions, keep filesystem access workspace-scoped, and keep personal/private identities or credentials off that runtime.
+- Emits `security.trust_model.cross_agent_session_access_default` when two or more agents have `tools.sessions.visibility` resolving to `all` and agent-to-agent access enabled with an omitted or empty `tools.agentToAgent.allow` list, provided at least one agent retains a session tool in an unclamped context (unsandboxed sessions or `agents.defaults.sandbox.sessionToolsVisibility: "all"`). The detail lists each agent's reach and allowed session tools; no finding is emitted if every agent is clamped or has no session tools. This is `info` for plain multi-agent setups, escalating to `warn` when an agent is sandboxed, has agent-level tool restrictions, or shared-user ingress signals suggest different trust levels. Narrow [session visibility or agent-to-agent access](/gateway/config-tools#tools-agenttoagent) for persona separation.
 - Warns when small models (`<=300B` parameters) are used without sandboxing and with web/browser tools enabled.
 
 **Webhook/hooks**
@@ -124,7 +125,7 @@ Applies safe, deterministic remediations:
 
 - flips common `groupPolicy="open"` to `groupPolicy="allowlist"` (including account variants in supported channels)
 - when WhatsApp group policy flips to `allowlist`, seeds `groupAllowFrom` from the stored `allowFrom` file when that list exists and config does not already define `allowFrom`
-- tightens permissions for state/config and common sensitive files (`credentials/*.json`, `auth-profiles.json`, `openclaw-agent.sqlite`, and legacy session artifacts)
+- tightens permissions for state/config and common sensitive files (`credentials/*.json`, legacy `auth-profiles.json`, `openclaw-agent.sqlite`, and legacy session artifacts)
 - also tightens config include files referenced from `openclaw.json`
 - uses `chmod` on POSIX hosts and `icacls` resets on Windows
 

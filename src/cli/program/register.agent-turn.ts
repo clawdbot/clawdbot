@@ -4,38 +4,12 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
-import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
-
-type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
-type AgentExecModule = typeof import("../../commands/agent-exec.js");
-type CliUtilsModule = typeof import("../cli-utils.js");
-type GlobalStateModule = typeof import("../../global-state.js");
-type RuntimeModule = typeof import("../../runtime.js");
-
-async function loadAgentCliCommand(): Promise<AgentViaGatewayModule["agentCliCommand"]> {
-  return (await import("../../commands/agent-via-gateway.js")).agentCliCommand;
-}
-
-async function loadAgentExecCommand(): Promise<AgentExecModule["agentExecCommand"]> {
-  return (await import("../../commands/agent-exec.js")).agentExecCommand;
-}
 
 function collectFallback(value: string, previous: string[]): string[] {
   return [...previous, value];
-}
-
-async function loadDefaultRuntime(): Promise<RuntimeModule["defaultRuntime"]> {
-  return (await import("../../runtime.js")).defaultRuntime;
-}
-
-async function loadRunCommandWithRuntime(): Promise<CliUtilsModule["runCommandWithRuntime"]> {
-  return (await import("../cli-utils.js")).runCommandWithRuntime;
-}
-
-async function loadSetVerbose(): Promise<GlobalStateModule["setVerbose"]> {
-  return (await import("../../global-state.js")).setVerbose;
 }
 
 /** Register `openclaw agent` for one Gateway-backed agent turn. */
@@ -67,7 +41,7 @@ export function registerAgentTurnCommand(
     .option("--reply-account <id>", "Delivery account id override")
     .option(
       "--local",
-      "Run the embedded agent locally (requires model provider API keys in your shell)",
+      "Run the embedded agent locally using configured provider credentials or local CLI logins",
       false,
     )
     .option("--deliver", "Send the agent's reply back to the selected channel", false)
@@ -109,22 +83,25 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .action(async (opts): Promise<void> => {
       const verboseLevel =
         typeof opts.verbose === "string" ? normalizeLowercaseStringOrEmpty(opts.verbose) : "";
-      const [defaultRuntime, runCommandWithRuntime, setVerbose, agentCliCommand] =
-        await measureCliCommandStartup("agent-action-imports", () =>
-          Promise.all([
-            loadDefaultRuntime(),
-            loadRunCommandWithRuntime(),
-            loadSetVerbose(),
-            loadAgentCliCommand(),
-          ]),
-        );
+      const [
+        { defaultRuntime },
+        { runCommandWithRuntime },
+        { setVerbose },
+        { agentCliCommand },
+        { requestExitAfterOneShotOutput },
+      ] = await measureCliCommandStartup("agent-action-imports", () =>
+        Promise.all([
+          import("../../runtime.js"),
+          import("../cli-utils.js"),
+          import("../../global-state.js"),
+          import("../../commands/agent-via-gateway.js"),
+          import("../one-shot-exit.js"),
+        ]),
+      );
       await runCommandWithRuntime(defaultRuntime, async () => {
         setVerbose(verboseLevel === "on");
         await agentCliCommand(opts, defaultRuntime);
-        requestExitAfterOneShotOutput(
-          defaultRuntime,
-          typeof process.exitCode === "number" ? process.exitCode : 0,
-        );
+        requestExitAfterOneShotOutput(defaultRuntime);
       });
     });
 
@@ -190,13 +167,21 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         messageFile: opts.messageFile ?? parentOpts?.messageFile,
         model: opts.model ?? parentOpts?.model,
         thinking: opts.thinking ?? parentOpts?.thinking,
-        timeout: parentOpts?.timeout ?? opts.timeout,
+        // Exec --timeout defaults to "600"; inherit a parent flag only when the
+        // leaf source is default. An explicit nested --timeout must win.
+        timeout: inheritOptionFromParent<string>(command, "timeout") ?? opts.timeout,
         json: opts.json === true || parentOpts?.json === true,
       };
-      const [defaultRuntime, runCommandWithRuntime, agentExecCommand] = await Promise.all([
-        loadDefaultRuntime(),
-        loadRunCommandWithRuntime(),
-        loadAgentExecCommand(),
+      const [
+        { defaultRuntime },
+        { runCommandWithRuntime },
+        { agentExecCommand },
+        { requestExitAfterOneShotOutput },
+      ] = await Promise.all([
+        import("../../runtime.js"),
+        import("../cli-utils.js"),
+        import("../../commands/agent-exec.js"),
+        import("../one-shot-exit.js"),
       ]);
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await agentExecCommand(message, execOpts, defaultRuntime);

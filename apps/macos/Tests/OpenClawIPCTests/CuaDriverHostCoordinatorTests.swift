@@ -21,12 +21,13 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `disabled host never spawns and enabled host publishes only a ready endpoint`() async throws {
-        let root = self.shortTemporaryDirectory("host")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let executable = root.appendingPathComponent("cua-driver")
         let launcher = CuaProcessLauncherProbe()
         var workerStops = 0
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -34,6 +35,7 @@ struct CuaDriverHostCoordinatorTests {
                 launcher.launch(launch, onTermination: onTermination)
             },
             readinessProbe: { _ in true },
+            permissionSnapshot: { [:] },
             beforeDaemonStop: {
                 let allRunning = launcher.processes.allSatisfy(\.isRunning)
                 #expect(allRunning)
@@ -59,10 +61,11 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `elevation host refuses CUA enablement before spawning a child`() async throws {
-        let root = self.shortTemporaryDirectory("elevation-host")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -70,6 +73,7 @@ struct CuaDriverHostCoordinatorTests {
                 launcher.launch(launch, onTermination: onTermination)
             },
             readinessProbe: { _ in true },
+            permissionSnapshot: { [:] },
             enablementAllowed: {
                 AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"]).allowsCuaComputerControl
             })
@@ -80,6 +84,7 @@ struct CuaDriverHostCoordinatorTests {
         #expect(coordinator.workerEndpoint == nil)
 
         let normalCoordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -87,6 +92,7 @@ struct CuaDriverHostCoordinatorTests {
                 launcher.launch(launch, onTermination: onTermination)
             },
             readinessProbe: { _ in true },
+            permissionSnapshot: { [:] },
             enablementAllowed: {
                 AppLaunchRuntimePlan(arguments: ["OpenClaw"]).allowsCuaComputerControl
             })
@@ -96,7 +102,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `socket directory is random owner-only and cleanup removes only its owned leaf`() throws {
-        let root = self.shortTemporaryDirectory("socket")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
 
         let first = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
@@ -150,17 +156,19 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `unexpected exit closes liveness and removes its socket directory`() async throws {
-        let root = self.shortTemporaryDirectory("exit-cleanup")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
         let endpoint = try #require(coordinator.workerEndpoint)
@@ -177,18 +185,20 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `startup removes a preexisting owned directory without a live daemon`() async throws {
-        let root = self.shortTemporaryDirectory("startup-reap")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
         #expect(!FileManager.default.fileExists(atPath: stale.url.path))
@@ -196,13 +206,11 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `startup terminates a live owned daemon after its host is gone`() async throws {
-        let root = self.shortTemporaryDirectory("startup-orphan")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
         let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let orphan = try self.startFakeDaemon(executable: executable, hostPID: Int32.max)
-        defer {
-            self.stopIfRunning(orphan)
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { self.stopIfRunning(orphan) }
         let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         try String(orphan.processIdentifier).write(
             to: stale.url.appendingPathComponent("cua.pid"),
@@ -210,13 +218,15 @@ struct CuaDriverHostCoordinatorTests {
             encoding: .utf8)
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -228,18 +238,20 @@ struct CuaDriverHostCoordinatorTests {
     @Test func `launch records the spawned daemon pid for later reaping`() async throws {
         // Without this record the reaper can only delete the directory and leaves the
         // privileged daemon running: `serve` ignores --pid-file and writes a global path.
-        let root = self.shortTemporaryDirectory("launch-pidfile")
-        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -255,11 +267,12 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `launch without an authoritative pid record never becomes ready`() async throws {
-        let root = self.shortTemporaryDirectory("launch-pidfile-failure")
-        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -274,7 +287,8 @@ struct CuaDriverHostCoordinatorTests {
                 try Data("incomplete".utf8).write(to: pidFile)
                 return launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -287,13 +301,11 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `startup refuses to signal a pid owned by another executable`() async throws {
-        let root = self.shortTemporaryDirectory("startup-pid-reuse")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
         let expectedExecutable = try self.expectedExecutable(in: root, target: "/bin/cat")
         let unrelated = try self.startSleep(executable: URL(fileURLWithPath: "/bin/sleep"))
-        defer {
-            self.stopIfRunning(unrelated)
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { self.stopIfRunning(unrelated) }
         let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         try String(unrelated.processIdentifier).write(
             to: stale.url.appendingPathComponent("cua.pid"),
@@ -301,13 +313,15 @@ struct CuaDriverHostCoordinatorTests {
             encoding: .utf8)
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { expectedExecutable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -322,13 +336,11 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `teardown leaves no owned directories or live owned daemons`() async throws {
-        let root = self.shortTemporaryDirectory("teardown-reap")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
         let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
         let orphan = try self.startFakeDaemon(executable: executable, hostPID: Int32.max)
-        defer {
-            self.stopIfRunning(orphan)
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { self.stopIfRunning(orphan) }
         let live = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         try String(orphan.processIdentifier).write(
             to: live.url.appendingPathComponent("cua.pid"),
@@ -336,9 +348,11 @@ struct CuaDriverHostCoordinatorTests {
             encoding: .utf8)
         _ = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
-            bundleIdentifier: { "ai.openclaw.test" })
+            bundleIdentifier: { "ai.openclaw.test" },
+            permissionSnapshot: { [:] })
 
         await coordinator.shutdown()
 
@@ -348,7 +362,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `socket directory rejects a symlinked CUA root`() throws {
-        let root = self.shortTemporaryDirectory("unsafe")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let openClaw = root.appendingPathComponent("OpenClaw", isDirectory: true)
         let redirected = root.appendingPathComponent("redirected", isDirectory: true)
@@ -365,7 +379,7 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `socket directory rejects a symlinked OpenClaw support root`() throws {
-        let root = self.shortTemporaryDirectory("unsafe-parent")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let redirected = root.appendingPathComponent("redirected", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -411,36 +425,13 @@ struct CuaDriverHostCoordinatorTests {
         #expect(launch.environment["PATH"] == "/usr/bin:/bin")
     }
 
-    @Test func `stderr relay replaces the raw danger banner with one managed mode notice`() async throws {
-        let probe = CuaDriverStderrProbe()
-        let relay = CuaDriverStderrRelay { probe.append($0) }
-        relay.startReading()
-        relay.reportManagedMode()
-        relay.reportManagedMode()
-
-        let driverOutput = """
-        DANGER: Cua Driver is running in unrestricted mode. Runtime approval prompts are disabled.
-        driver diagnostic
-
-        """
-        try relay.pipe.fileHandleForWriting.write(contentsOf: Data(driverOutput.utf8))
-        try relay.pipe.fileHandleForWriting.close()
-        for _ in 0..<1000 where probe.events.count < 2 {
-            await Task.yield()
-        }
-        relay.stop()
-
-        #expect(probe.events == [
-            .notice(CuaDriverStderrRelay.managedModeNotice),
-            .error("driver diagnostic"),
-        ])
-    }
-
     @Test func `unexpected exits retry with a bounded budget while advertising unavailable`() async throws {
-        let root = self.shortTemporaryDirectory("restart")
+        let delays = CuaRestartDelayProbe()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -448,7 +439,8 @@ struct CuaDriverHostCoordinatorTests {
                 launcher.launch(launch, onTermination: onTermination)
             },
             readinessProbe: { _ in true },
-            restartSleep: { _ in })
+            restartSleep: { delays.append($0) },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
         for expectedLaunchCount in 2...6 {
@@ -462,13 +454,122 @@ struct CuaDriverHostCoordinatorTests {
         for _ in 0..<100 {
             await Task.yield()
         }
+        #expect(delays.values == [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(10)])
         #expect(launcher.launches.count == 6)
         #expect(coordinator.workerEndpoint == nil)
         await coordinator.setEnabled(false)
     }
 
+    @Test(arguments: CuaStartupSuspension.allCases, [false, true])
+    func `retired startup never publishes availability or overwrites permissions`(
+        suspension: CuaStartupSuspension,
+        disable: Bool) async throws
+    {
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notifications = NotificationCenter()
+        let launcher = CuaProcessLauncherProbe()
+        let probe = CuaStartupProbe(suspension: suspension)
+        let restartGate = AsyncTestGate()
+        let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: notifications,
+            observeNotifications: true,
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in await probe.readiness() },
+            restartSleep: { _ in await restartGate.wait() },
+            permissionSnapshot: { await probe.permissions() })
+        var availability: [CuaDriverWorkerEndpoint?] = []
+        let observer = notifications.addObserver(
+            forName: .openclawCuaDriverAvailabilityChanged,
+            object: nil,
+            queue: nil)
+        { _ in
+            // Publication is synchronous on MainActor; an asynchronous observer would miss ready -> nil.
+            MainActor.assumeIsolated { availability.append(coordinator.workerEndpoint) }
+        }
+        defer { notifications.removeObserver(observer) }
+        let startup = Task { await coordinator.setEnabled(true) }
+        var disabling: Task<Void, Never>?
+        var replacement: Task<Void, Never>?
+        var failure: (any Error)?
+        do {
+            try #require(await self.waitUntil { probe.startupEntered })
+            let child = try #require(launcher.processes.first)
+            let launch = try #require(launcher.launches.first)
+            let socketIndex = try #require(launch.arguments.firstIndex(of: "--socket")) + 1
+            let retiredDirectory = URL(fileURLWithPath: launch.arguments[socketIndex]).deletingLastPathComponent()
+            #expect(FileManager.default.fileExists(atPath: retiredDirectory.path))
+
+            // Record a newer permission baseline while the old startup result is suspended.
+            probe.snapshot = [.accessibility: .granted, .screenRecording: .granted]
+            let expectedReads = probe.permissionReads + 1
+            notifications.post(name: .openclawPermissionsChanged, object: nil)
+            try #require(await self.waitUntil { probe.permissionReads == expectedReads })
+            if disable {
+                var disableEntered = false
+                disabling = Task { @MainActor in
+                    disableEntered = true
+                    // Same-actor call runs through desiredEnabled's update before its first suspension.
+                    await coordinator.setEnabled(false)
+                }
+                try #require(await self.waitUntil { disableEntered })
+            } else {
+                child.crash(status: 7)
+                try #require(await self.waitUntil {
+                    child.closeLivenessCount == 1 &&
+                        !FileManager.default.fileExists(atPath: retiredDirectory.path)
+                })
+            }
+            #expect(availability.isEmpty)
+            probe.releaseStartup.open()
+            await startup.value
+            await disabling?.value
+            #expect(coordinator.workerEndpoint == nil)
+            #expect(availability.isEmpty)
+            await coordinator.setEnabled(false)
+
+            // A stale snapshot would make this unchanged notification restart the next healthy child.
+            replacement = Task { await coordinator.setEnabled(true) }
+            try #require(await self.waitUntil { probe.replacementEntered })
+            let replacementReads = probe.permissionReads + 1
+            notifications.post(name: .openclawPermissionsChanged, object: nil)
+            try #require(await self.waitUntil { probe.permissionReads == replacementReads })
+            probe.releaseReplacement.open()
+            await replacement?.value
+            await coordinator.setEnabled(true)
+            #expect(launcher.launches.count == 2)
+            #expect(launcher.processes[1].closeLivenessCount == 0)
+            let endpoint = try #require(coordinator.workerEndpoint)
+            #expect(availability == [endpoint])
+        } catch {
+            failure = error
+        }
+        // Release and join every task even when a prerequisite assertion fails.
+        probe.releaseStartup.open()
+        probe.releaseReplacement.open()
+        await coordinator.shutdown()
+        restartGate.open()
+        await startup.value
+        await disabling?.value
+        await replacement?.value
+        if let failure { throw failure }
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return condition()
+    }
+
     @Test func `permission changes replace the daemon generation and endpoint`() async throws {
-        let root = self.shortTemporaryDirectory("permissions")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let notifications = NotificationCenter()
         let permissions = CuaPermissionSnapshotProbe()
@@ -496,10 +597,6 @@ struct CuaDriverHostCoordinatorTests {
         #expect(try replacementEndpoint.environmentValue() != originalEnvironmentValue)
         #expect(!launcher.processes[0].isRunning)
         await coordinator.setEnabled(false)
-    }
-
-    private func shortTemporaryDirectory(_ label: String) -> URL {
-        URL(fileURLWithPath: "/tmp/oc-cua-\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
     }
 
     private func expectedExecutable(in root: URL, target: String) throws -> URL {
@@ -566,25 +663,74 @@ struct CuaDriverHostCoordinatorTests {
     }
 }
 
-private final class CuaDriverStderrProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var captured: [CuaDriverStderrEvent] = []
-
-    var events: [CuaDriverStderrEvent] {
-        self.lock.withLock { self.captured }
-    }
-
-    func append(_ event: CuaDriverStderrEvent) {
-        self.lock.withLock { self.captured.append(event) }
-    }
-}
-
 @MainActor
 private final class CuaPermissionSnapshotProbe {
     var value: [Capability: CapabilityAuthorizationStatus] = [
         .accessibility: .notGranted,
         .screenRecording: .notGranted,
     ]
+}
+
+enum CuaStartupSuspension: CaseIterable, Sendable {
+    case permissions
+    case readinessSuccess
+    case readinessFailure
+}
+
+@MainActor
+private final class CuaStartupProbe {
+    let releaseStartup = AsyncTestGate()
+    let releaseReplacement = AsyncTestGate()
+    private let suspension: CuaStartupSuspension
+    private var readinessReads = 0
+    private(set) var permissionReads = 0
+    private(set) var startupEntered = false
+    private(set) var replacementEntered = false
+    var snapshot: [Capability: CapabilityAuthorizationStatus] = [
+        .accessibility: .notGranted,
+        .screenRecording: .notGranted,
+    ]
+
+    init(suspension: CuaStartupSuspension) {
+        self.suspension = suspension
+    }
+
+    func readiness() async -> Bool {
+        self.readinessReads += 1
+        if self.readinessReads == 1 {
+            if self.suspension != .permissions {
+                self.startupEntered = true
+                await self.releaseStartup.wait()
+            }
+            return self.suspension != .readinessFailure
+        }
+        self.replacementEntered = true
+        await self.releaseReplacement.wait()
+        return true
+    }
+
+    func permissions() async -> [Capability: CapabilityAuthorizationStatus] {
+        self.permissionReads += 1
+        let snapshot = self.snapshot
+        if self.permissionReads == 1, self.suspension == .permissions {
+            self.startupEntered = true
+            await self.releaseStartup.wait()
+        }
+        return snapshot
+    }
+}
+
+private final class CuaRestartDelayProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delays: [Duration] = []
+
+    var values: [Duration] {
+        self.lock.withLock { self.delays }
+    }
+
+    func append(_ delay: Duration) {
+        self.lock.withLock { self.delays.append(delay) }
+    }
 }
 
 @MainActor

@@ -74,13 +74,26 @@ async function runLocalShellCommand(
 }
 
 describe("sandbox fs bridge local backend e2e", () => {
-  it.runIf(process.platform !== "win32")(
-    "writes through backend shell commands using the pinned mutation helper",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    { workspaceAccess: "rw", mutation: "write" },
+    { workspaceAccess: "none", mutation: "write" },
+    { workspaceAccess: "ro", mutation: "write" },
+    { workspaceAccess: "rw", mutation: "remove" },
+    { workspaceAccess: "none", mutation: "remove" },
+    { workspaceAccess: "rw", mutation: "rename" },
+    { workspaceAccess: "none", mutation: "rename" },
+  ] as const)(
+    "enforces $workspaceAccess workspace writes and protects skills from $mutation",
+    async ({ workspaceAccess, mutation }) => {
       const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fsbridge-e2e-"));
       const workspacePath = path.join(stateDir, "workspace");
       await fs.mkdir(workspacePath, { recursive: true });
       const workspaceDir = await fs.realpath(workspacePath);
+      const skillRelativePath =
+        mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+      const skillPath = path.join(workspaceDir, skillRelativePath);
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(skillPath, "managed instructions");
       const scripts: string[] = [];
       const backend: SandboxBackendHandle = {
         id: "local-test",
@@ -107,7 +120,9 @@ describe("sandbox fs bridge local backend e2e", () => {
         const sandbox = createSandboxTestContext({
           overrides: {
             workspaceDir,
-            agentWorkspaceDir: workspaceDir,
+            agentWorkspaceDir:
+              workspaceAccess === "none" ? path.join(stateDir, "agent") : workspaceDir,
+            workspaceAccess,
             containerName: "local-backend-fsbridge",
             containerWorkdir: workspaceDir,
             backend,
@@ -115,11 +130,48 @@ describe("sandbox fs bridge local backend e2e", () => {
         });
 
         const bridge = createSandboxFsBridge({ sandbox });
+        if (!bridge.readDirectory) {
+          throw new Error("The mounted bridge must support directory discovery.");
+        }
+        await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
+          { name: mutation === "write" ? "skills" : ".agents", isDirectory: true },
+        ]);
+        await expect(bridge.readDirectory({ filePath: "../" })).rejects.toThrow();
+        await fs.symlink(path.dirname(skillPath), path.join(workspaceDir, "alias"));
+        await expect(bridge.readDirectory({ filePath: "alias" })).resolves.toEqual([
+          { name: "SKILL.md", isDirectory: false },
+        ]);
+        await fs.symlink(stateDir, path.join(workspaceDir, "outside"));
+        await expect(bridge.readDirectory({ filePath: "outside" })).rejects.toThrow();
+        const scriptsBeforeMutation = scripts.length;
+        if (workspaceAccess === "ro") {
+          await expect(
+            bridge.writeFile({ filePath: "nested/hello.txt", data: "blocked" }),
+          ).rejects.toThrow("read-only");
+          expect(scripts).toHaveLength(scriptsBeforeMutation);
+          return;
+        }
         await bridge.writeFile({ filePath: "nested/hello.txt", data: "from-backend" });
 
         await expect(
           fs.readFile(path.join(workspaceDir, "nested", "hello.txt"), "utf8"),
         ).resolves.toBe("from-backend");
+        await bridge.rename({ from: "nested", to: "renamed" });
+        await expect(
+          fs.readFile(path.join(workspaceDir, "renamed", "hello.txt"), "utf8"),
+        ).resolves.toBe("from-backend");
+        await bridge.remove({ filePath: "renamed", recursive: true });
+        await expect(fs.stat(path.join(workspaceDir, "renamed"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        const mutate =
+          mutation === "write"
+            ? bridge.writeFile({ filePath: skillRelativePath, data: "changed" })
+            : mutation === "remove"
+              ? bridge.remove({ filePath: ".agents", recursive: true })
+              : bridge.rename({ from: ".agents", to: "moved-instructions" });
+        await expect(mutate).rejects.toThrow("read-only");
+        await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
         expect(scripts.some((script) => script.includes("operation = sys.argv[1]"))).toBe(true);
       } finally {
         await fs.rm(stateDir, { recursive: true, force: true });

@@ -1,13 +1,13 @@
 /** Type contract for the generated installed plugin index persisted on disk. */
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
-import type { PluginInstallSourceInfo } from "./install-source-info.js";
+import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
+import type { PluginInstallSourceInfo } from "./install-source-info.types.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { OpenClawPackageBuild, PluginPackageChannel } from "./manifest.js";
+import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -90,6 +90,10 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
+  | "acceptedSurface"
+  | "acceptedSurfaceHash"
+  | "acceptedSurfaceAt"
+  | "acceptedSurfaceIntegrity"
 >;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
@@ -167,6 +171,7 @@ export type LoadInstalledPluginIndexParams = {
   diagnostics?: PluginDiagnostic[];
   discovery?: PluginDiscoveryResult;
   now?: () => Date;
+  artifactPreservingReadOnly?: boolean;
 };
 
 export type RefreshInstalledPluginIndexParams = LoadInstalledPluginIndexParams & {

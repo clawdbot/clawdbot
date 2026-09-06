@@ -8,15 +8,17 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingMaxAgeMsForChannel,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-  type RuntimeEnv,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   CoreConfig,
@@ -82,7 +84,8 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): bool
     return true;
   }
   if (resolveMatrixStreamingMode(streaming) === "progress") {
-    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+    // Progress drafts are quiet unless the operator opts into the tool log.
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? false;
   }
   return streaming.preview?.toolProgress ?? true;
 }
@@ -263,7 +266,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const dmSessionScope = dmConfig?.sessionScope ?? "per-user";
-  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", effectiveAccountId);
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
   )?.groupChat?.historyLimit;
@@ -421,7 +423,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       blockStreamingEnabled,
       dmEnabled,
       dmPolicy,
-      textLimit,
       mediaMaxBytes,
       historyLimit,
       startupMs,
@@ -469,6 +470,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           })
           .catch(() => []),
       directTracker,
+      groupPolicy,
+      roomsConfig,
+      needsRoomAliasesForConfig,
+      getRoomInfo,
       invalidateMemberDisplayName,
       logVerboseMessage,
       warnedEncryptedRooms,

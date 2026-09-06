@@ -1,10 +1,24 @@
 // Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import {
+  normalizeSessionColorValue,
+  normalizeSessionIconValue,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
+
+function normalizeSessionEntryArchiveReason(
+  value: unknown,
+): SessionEntry["archiveReason"] | undefined {
+  return value === "manual" ||
+    value === "active-session-cap" ||
+    value === "stale-dashboard" ||
+    value === "restart-recovery"
+    ? value
+    : undefined;
+}
 
 // Persisted stores may contain old or malformed ids; reject path-like ids before use.
 function isSafeSessionId(value: unknown): value is string {
@@ -69,6 +83,15 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     canonicalValue.icon = icon;
   } else {
     delete canonicalValue.icon;
+  }
+  const color =
+    typeof canonicalValue.color === "string"
+      ? normalizeSessionColorValue(canonicalValue.color)
+      : null;
+  if (color) {
+    canonicalValue.color = color;
+  } else {
+    delete canonicalValue.color;
   }
   const legacyPendingText = normalizeOptionalString(pendingFinalDeliveryText);
   const legacySelectedModel = normalizeOptionalString(fallbackNoticeSelectedModel);
@@ -148,7 +171,28 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
   } else {
     delete canonicalValue.memoryFlush;
   }
+  const archiveReason = normalizeSessionEntryArchiveReason(canonicalValue.archiveReason);
+  if (canonicalValue.archivedAt !== undefined) {
+    if (archiveReason) {
+      canonicalValue.archiveReason = archiveReason;
+    } else {
+      delete canonicalValue.archiveReason;
+    }
+  } else {
+    delete canonicalValue.archivedBy;
+    delete canonicalValue.archiveReason;
+  }
   return canonicalValue as unknown as SessionEntry;
+}
+
+/** Removes the runtime-only skill catalog without mutating the live session snapshot. */
+export function stripRuntimeOnlySessionSkillsFields(entry: SessionEntry): SessionEntry {
+  const snapshot = entry.skillsSnapshot;
+  if (snapshot?.resolvedSkills === undefined) {
+    return entry;
+  }
+  const { resolvedSkills: _drop, ...skillsSnapshot } = snapshot;
+  return { ...entry, skillsSnapshot };
 }
 
 function normalizePendingFinalDelivery(
@@ -208,7 +252,7 @@ function normalizePendingDeliveryNotice(
   const intentId = normalizeOptionalString(value.intentId);
   return createdAt !== undefined &&
     intentId &&
-    (value.state === "owed" || value.state === "unresolved")
+    (value.state === "owed" || value.state === "unresolved" || value.state === "acknowledged")
     ? { createdAt, context: value.context, intentId, state: value.state }
     : undefined;
 }

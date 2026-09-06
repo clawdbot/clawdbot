@@ -1,7 +1,7 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 type WorkerPlacementDestination =

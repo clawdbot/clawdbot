@@ -8,11 +8,13 @@ These fixtures capture the default OpenAI/Codex happy path for prompt review:
 - Codex harness default coverage for tool-only visible source replies.
 - Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.
 
-The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, heartbeat collaboration-mode guidance when applicable, and references to the complete dynamic tool catalog.
+The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.
 
-The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions, keeps `MEMORY.md` in turn input, and points heartbeat turns at `HEARTBEAT.md` without inlining it. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.
+The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.
 
 The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.
+
+The Telegram Markdown file is the complete canonical prompt snapshot. Discord and heartbeat are readable, SHA-bound zero-context `.md.diff` files with complete lossless differences from that base. Materialize one with `node --import tsx scripts/generate-prompt-snapshots.ts --materialize-prompt discord-group`; replace the scenario with `heartbeat-turn` or `telegram-direct` as needed.
 
 The Telegram JSON is the complete shared tool catalog. Discord and heartbeat JSON fixtures contain readable, complete replacements for their changed top-level tools or namespaces; their `base` field points to the Telegram catalog.
 
@@ -47,8 +49,8 @@ pnpm prompt:snapshots:check
 Snapshots:
 
 - telegram-direct-codex-message-tool.md
-- discord-group-codex-message-tool.md
-- telegram-heartbeat-codex-tool.md
+- discord-group-codex-message-tool.md.diff
+- telegram-heartbeat-codex-tool.md.diff
 - codex-dynamic-tools.telegram-direct.json
 - codex-dynamic-tools.discord-group.json
 - codex-dynamic-tools.heartbeat-turn.json

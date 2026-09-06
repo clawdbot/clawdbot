@@ -115,28 +115,6 @@ describe("wrapCloudflareAiGatewayProviderStream", () => {
     warnMock.mockClear();
   });
 
-  it("patches Anthropic Messages models", () => {
-    const payload = {
-      thinking: { type: "enabled" },
-      messages: [
-        { role: "user", content: "Return JSON." },
-        { role: "assistant", content: "{" },
-      ],
-    };
-    const wrapped = wrapCloudflareAiGatewayProviderStream({
-      model: { api: "anthropic-messages" },
-      streamFn: createPayloadBaseStream(payload),
-    } as never);
-
-    void wrapped?.(
-      { provider: "cloudflare-ai-gateway", api: "anthropic-messages" } as never,
-      {} as never,
-      {},
-    );
-
-    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
-  });
-
   it("leaves non-Anthropic model APIs on the original stream path", () => {
     let onPayloadWasInstalled = false;
     const baseStreamFn: StreamFn = (_model, _context, options) => {

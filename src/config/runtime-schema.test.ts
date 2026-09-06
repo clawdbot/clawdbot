@@ -1,5 +1,7 @@
 // Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -9,6 +11,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import type { PluginEntryConfig } from "./types.plugins.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 const mockReadConfigFileSnapshot = vi.hoisted(() =>
@@ -42,17 +45,20 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     mockLoadPluginManifestRegistry(...args),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: (...args: unknown[]) => ({
-    manifestRegistry: mockLoadPluginManifestRegistry(...args),
-  }),
-  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
-    mockGetCurrentPluginMetadataSnapshot(...args) ?? {
-      manifestRegistry: mockLoadPluginManifestRegistry(...args),
-    },
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (...args: unknown[]) =>
+    createPluginMetadataSnapshotFixture(mockLoadPluginManifestRegistry(...args)),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) => {
+    const current = mockGetCurrentPluginMetadataSnapshot(...args);
+    return createPluginMetadataSnapshotFixture(
+      current?.manifestRegistry ?? mockLoadPluginManifestRegistry(...args),
+    );
+  },
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
     mockGetCurrentPluginMetadataSnapshot(...args),
 }));
@@ -303,6 +309,134 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("matrix");
   });
 
+  it("does not execute plugin setup probes while selecting channel schemas", async () => {
+    const setupRegistry = await import("../plugins/setup-registry.js");
+    const probes = vi
+      .spyOn(setupRegistry, "resolvePluginSetupAutoEnableReasons")
+      .mockReturnValue([]);
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true, config: { mode: "synthetic" } } } },
+    });
+    try {
+      loadGatewayRuntimeConfigSchema();
+      expect(probes).not.toHaveBeenCalled();
+    } finally {
+      probes.mockRestore();
+    }
+  });
+
+  const ownerCases: Array<{
+    name: string;
+    entries: Record<string, PluginEntryConfig>;
+    allow?: string[];
+    deny: string[];
+    expected: "plus" | "core" | "first";
+    coreOrigin?: PluginOrigin;
+    plusOrigin?: PluginOrigin;
+  }> = [
+    { name: "preferred owner", entries: { plus: { enabled: true } }, deny: [], expected: "plus" },
+    {
+      name: "disabled replacement",
+      entries: { plus: { enabled: false }, core: { enabled: true } },
+      deny: [],
+      expected: "core",
+    },
+    {
+      name: "denied replacement",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      deny: ["plus"],
+      expected: "core",
+    },
+    {
+      name: "explicit dual selection",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      deny: [],
+      expected: "first",
+    },
+    {
+      name: "explicit dual selection after allowlist materialization",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      allow: ["core"],
+      deny: [],
+      expected: "first",
+    },
+    {
+      name: "untrusted material config",
+      entries: { plus: { config: {} }, core: { enabled: true } },
+      allow: ["core"],
+      deny: [],
+      expected: "core",
+    },
+    {
+      name: "closer-origin owner",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      deny: [],
+      coreOrigin: "workspace",
+      expected: "plus",
+    },
+    {
+      name: "ineligible workspace replacement",
+      entries: { core: { enabled: true } },
+      deny: [],
+      plusOrigin: "workspace",
+      expected: "core",
+    },
+  ];
+  it.each(
+    ownerCases.flatMap((scenario) =>
+      (["plus", "core"] as const).map((first) => ({ scenario, first })),
+    ),
+  )(
+    "publishes the $scenario.name schema and sensitive hints with $first first",
+    ({
+      scenario: { entries, allow, deny, expected, coreOrigin = "config", plusOrigin = "config" },
+      first,
+    }) => {
+      mockLoadConfig.mockReturnValue({
+        ...explicitMainRoster(),
+        plugins: { entries, allow, deny },
+        channels: { proofchat: { address: "local" } },
+      });
+      const order = first === "plus" ? ["plus", "core"] : ["core", "plus"];
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: order.map((id) => ({
+          id,
+          origin: id === "core" ? coreOrigin : plusOrigin,
+          channels: ["proofchat"],
+          providers: [],
+          cliBackends: [],
+          channelConfigs: {
+            proofchat: {
+              label: id,
+              ...(id === "plus" ? { preferOver: ["core"] } : {}),
+              schema: {
+                type: "object",
+                properties: { [id]: { type: "string" } },
+                additionalProperties: false,
+              },
+              uiHints: { [id]: { sensitive: true } },
+            },
+          },
+        })),
+      });
+      const owner = expected === "first" ? first : expected;
+      const result = loadGatewayRuntimeConfigSchema();
+      expect(result.uiHints["channels.proofchat"]).toMatchObject({ label: owner });
+      expect(result.uiHints[`channels.proofchat.${owner}`]?.sensitive).toBe(true);
+      expect(result.schema).toMatchObject({
+        properties: {
+          channels: {
+            properties: {
+              proofchat: { properties: { [owner]: { type: "string" } } },
+            },
+          },
+        },
+      });
+    },
+  );
+
   it("projects strict heartbeat visibility for external channels and their accounts", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
@@ -489,7 +623,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     loadGatewayRuntimeConfigSchema();
     loadGatewayRuntimeConfigSchema();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
       expect(call[0]).toHaveProperty("config");
       expect(call[0]).not.toHaveProperty("bundledChannelConfigCollector");

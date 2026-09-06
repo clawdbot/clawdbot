@@ -16,26 +16,28 @@ export function resolveLineGroupLookupIds(groupId?: string | null): string[] {
   return [normalized, `group:${normalized}`, `room:${normalized}`];
 }
 
-export function resolveLineGroupConfigEntry<T>(
+export function resolveLineGroupConfigEntry<T extends object>(
   groups: Record<string, T | undefined> | undefined,
   params: { groupId?: string | null; roomId?: string | null },
 ): T | undefined {
   if (!groups) {
     return undefined;
   }
-  for (const candidate of resolveLineGroupLookupIds(params.groupId)) {
+  // `*` is the defaults node, not a rival entry: a room's own entry overrides it
+  // field by field. Returning the matched entry alone would drop every setting the
+  // operator only wrote on `*`, and would disagree with the scope-tree resolution
+  // this channel already reports through `resolveLineGroupRequireMention`.
+  const defaults = groups["*"];
+  for (const candidate of [
+    ...resolveLineGroupLookupIds(params.groupId),
+    ...resolveLineGroupLookupIds(params.roomId),
+  ]) {
     const hit = groups[candidate];
     if (hit) {
-      return hit;
+      return defaults && defaults !== hit ? { ...defaults, ...hit } : hit;
     }
   }
-  for (const candidate of resolveLineGroupLookupIds(params.roomId)) {
-    const hit = groups[candidate];
-    if (hit) {
-      return hit;
-    }
-  }
-  return groups["*"];
+  return defaults;
 }
 
 export function resolveLineGroupsConfig(

@@ -100,6 +100,7 @@ describe("buildStatusScanResult", () => {
       buildStatusScanResult({
         cfg: { gateway: {} },
         sourceConfig: { gateway: {} },
+        configDiagnostics: null,
         secretDiagnostics: ["diag"],
         osSummary,
         tailscaleMode: "serve",
@@ -118,6 +119,7 @@ describe("buildStatusScanResult", () => {
     ).toEqual({
       cfg: { gateway: {} },
       sourceConfig: { gateway: {} },
+      configDiagnostics: null,
       secretDiagnostics: ["diag"],
       osSummary,
       tailscaleMode: "serve",

@@ -23,7 +23,7 @@ function installMatrixActionTestRuntime(): void {
         convertMarkdownTables: (text: string) => text,
       },
     },
-  } as unknown as import("../../runtime-api.js").PluginRuntime);
+  } as unknown as import("openclaw/plugin-sdk/plugin-runtime").PluginRuntime);
 }
 
 function createPollResponseEvent(): Record<string, unknown> {
@@ -110,14 +110,24 @@ function createMessagesClient(params: {
     }
     return null;
   });
-  const getRelations = vi.fn(async (_roomId: string, _eventId: string, relType: string) => ({
-    events:
-      relType === "m.thread"
-        ? (params.threadRelations ?? params.pollRelations ?? [])
-        : (params.pollRelations ?? []),
-    nextBatch: null,
-    prevBatch: null,
-  }));
+  const getRelations = vi.fn(
+    async (
+      _roomId: string,
+      _eventId: string,
+      relType: string,
+    ): Promise<{
+      events: Array<Record<string, unknown>>;
+      nextBatch: string | null;
+      prevBatch: string | null;
+    }> => ({
+      events:
+        relType === "m.thread"
+          ? (params.threadRelations ?? params.pollRelations ?? [])
+          : (params.pollRelations ?? []),
+      nextBatch: null,
+      prevBatch: null,
+    }),
+  );
 
   return {
     client: {
@@ -138,6 +148,7 @@ function createEditClient(originalContent: Record<string, unknown>) {
   const sendMessage = vi.fn().mockResolvedValue("evt-edit");
   const client = {
     getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
+    getRelations: vi.fn().mockResolvedValue({ events: [], nextBatch: null }),
     getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     sendMessage,
@@ -354,6 +365,33 @@ describe("matrix message actions", () => {
       eventId: "$msg",
       body: "hello",
     });
+  });
+
+  it.each([
+    { name: "room history", threadId: undefined },
+    { name: "poll-rooted thread history", threadId: "$poll" },
+  ])("fails visibly on cyclic poll pagination in $name", async ({ threadId }) => {
+    const pollRoot = createPollStartEvent();
+    const { client, getRelations } = createMessagesClient({
+      chunk: threadId ? [] : [pollRoot],
+      pollRoot,
+    });
+    let pollPageCalls = 0;
+    getRelations.mockImplementation(async (_roomId, _eventId, relationType) => {
+      if (relationType !== "m.reference") {
+        return { events: [], nextBatch: null, prevBatch: null };
+      }
+      pollPageCalls += 1;
+      if (pollPageCalls > 2) {
+        throw new Error("test stopped unbounded Matrix poll pagination");
+      }
+      return { events: [], nextBatch: "stuck", prevBatch: null };
+    });
+
+    await expect(
+      readMatrixMessages("room:!room:example.org", { client, threadId }),
+    ).rejects.toThrow("Matrix poll pagination returned a repeated cursor");
+    expect(pollPageCalls).toBe(2);
   });
 
   it("dedupes multiple poll events for the same poll within one read page", async () => {

@@ -27,7 +27,7 @@ resolve_head_push_url() {
 # symlink/special-file dereference risks from untrusted fork content.
 verify_prep_head_extends_hosted_head() {
   local expected_oid="$1"
-  if ! git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
     echo "Prep sync cannot resolve hosted head $expected_oid locally; re-run prepare-init." >&2
     return 1
   fi
@@ -35,6 +35,21 @@ verify_prep_head_extends_hosted_head() {
     echo "Prep sync refused rewritten history: hosted head $expected_oid is not an ancestor of local HEAD." >&2
     echo "Recreate the prep branch from the hosted PR head and replay only reviewed fixup commits." >&2
     return 1
+  fi
+}
+
+classify_replaced_hosted_ancestry() {
+  local hosted_head="$1"
+  local prepared_head="$2"
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${hosted_head}^{commit}" 2>/dev/null ||
+    ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${prepared_head}^{commit}" 2>/dev/null; then
+    echo "Cannot inspect hosted and prepared commits; re-run prepare-init." >&2
+    return 1
+  fi
+  if git merge-base --is-ancestor "$hosted_head" "$prepared_head"; then
+    printf 'false\n'
+  else
+    printf 'true\n'
   fi
 }
 
@@ -311,7 +326,9 @@ push_prep_head_to_pr_branch() {
           git rebase "pr-$pr-latest"
           prep_head_sha=$(git rev-parse HEAD)
           local_prep_head_sha="$prep_head_sha"
+          refresh_main_snapshot || return 1
           run_prepare_push_retry_gates "$docs_only"
+          refresh_main_snapshot || return 1
         fi
 
         if ! push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then
@@ -354,6 +371,8 @@ push_prep_head_to_pr_branch() {
     echo "Pushed PR head tree differs from the prepared local tree."
     exit 1
   fi
+  local replaced_hosted_ancestry
+  replaced_hosted_ancestry=$(classify_replaced_hosted_ancestry "$pushed_from_sha" "$local_prep_head_sha") || exit 1
 
   # merge-verify owns relevance-aware mainline drift checks. Requiring every
   # prepared head to contain main here forces needless rebases, while GraphQL
@@ -363,6 +382,7 @@ push_prep_head_to_pr_branch() {
     PUSH_PREP_HEAD_SHA "$prep_head_sha" \
     PUSH_LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PUSHED_FROM_SHA "$pushed_from_sha" \
+    PUSH_REPLACED_HOSTED_ANCESTRY "$replaced_hosted_ancestry" \
     PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after" \
     > "$result_env_path"
 }

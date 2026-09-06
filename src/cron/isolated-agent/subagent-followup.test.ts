@@ -168,6 +168,68 @@ describe("readDescendantSubagentFallbackReply", () => {
     expect(result).toBe("live transcript text");
   });
 
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "authoritative child output" } as const,
+      resultText: "older captured output",
+      expected: "authoritative child output",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+      expected: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: undefined,
+    },
+  ])(
+    "uses producer-owned $name terminal evidence instead of a stale child transcript",
+    async ({ terminalReply, resultText, expected }) => {
+      const descendant = createDescendantRun({ resultText });
+      descendant.execution.outcome = { status: "ok" };
+      descendant.completion = {
+        required: true,
+        resultText,
+        fallbackResultText: "older captured fallback",
+        terminalReply,
+      };
+      vi.mocked(listDescendantRunsForRequester).mockReturnValue([descendant]);
+      vi.mocked(readLatestAssistantReply).mockResolvedValue("stale child transcript");
+
+      await expect(
+        readDescendantSubagentFallbackReply({ sessionKey: "test-session", runStartedAt }),
+      ).resolves.toBe(expected);
+    },
+  );
+
+  it.each([
+    { name: "missing transcript", hasInternalTranscript: false, transcript: undefined },
+    { name: "silent transcript", hasInternalTranscript: false, transcript: "NO_REPLY" },
+    { name: "internal resume", hasInternalTranscript: true, transcript: undefined },
+  ])(
+    "retains a successful NO_REPLY fallback with a $name",
+    async ({ hasInternalTranscript, transcript }) => {
+      const descendant = createDescendantRun({ resultText: "NO_REPLY", hasInternalTranscript });
+      descendant.execution.outcome = { status: "ok" };
+      descendant.completion = {
+        required: true,
+        resultText: "NO_REPLY",
+        fallbackResultText: "captured child findings",
+      };
+      vi.mocked(listDescendantRunsForRequester).mockReturnValue([descendant]);
+      vi.mocked(readLatestAssistantReply).mockResolvedValue(transcript);
+
+      await expect(
+        readDescendantSubagentFallbackReply({ sessionKey: "test-session", runStartedAt }),
+      ).resolves.toBe("captured child findings");
+    },
+  );
+
   it("prefers captured completion for internally resumed descendants", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       createDescendantRun({
@@ -336,24 +398,27 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(waitCall?.params?.runId).toBe("run-abc");
   });
 
-  it("returns undefined when descendants finish but only interim text remains after grace period", async () => {
-    vi.useFakeTimers();
-    // No active runs at call time, but observedActiveDescendants=true (saw them before)
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
-    // readLatestAssistantReply keeps returning interim text
-    vi.mocked(readLatestAssistantReply).mockResolvedValue("on it");
+  it.each(["on it", "on it\n\nMEDIA:/workspace/report.png"])(
+    "does not mistake unchanged parent history for synthesis: %s",
+    async (parentReply) => {
+      vi.useFakeTimers();
+      // No active runs at call time, but observedActiveDescendants=true (saw them before)
+      vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+      // readLatestAssistantReply keeps returning interim text
+      vi.mocked(readLatestAssistantReply).mockResolvedValue(parentReply);
 
-    const resultPromise = waitForDescendantSubagentSummary({
-      sessionKey: "cron-session",
-      initialReply: "on it",
-      timeoutMs: 100,
-      observedActiveDescendants: true,
-    });
+      const resultPromise = waitForDescendantSubagentSummary({
+        sessionKey: "cron-session",
+        initialReply: "on it",
+        timeoutMs: 100,
+        observedActiveDescendants: true,
+      });
 
-    const result = await resolveAfterAdvancingTimers(resultPromise);
+      const result = await resolveAfterAdvancingTimers(resultPromise);
 
-    expect(result).toBeUndefined();
-  });
+      expect(result).toBeUndefined();
+    },
+  );
 
   it("returns synthesis even if initial reply was undefined", async () => {
     vi.mocked(listDescendantRunsForRequester)

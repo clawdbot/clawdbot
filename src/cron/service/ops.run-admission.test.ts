@@ -1,8 +1,8 @@
 // Shared cron run-admission regressions cover cross-trigger limits and queued-run cleanup.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -21,24 +21,22 @@ import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
-import { stop } from "./ops-lifecycle.js";
-import { update } from "./ops-mutations.js";
+import { remove, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
-import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const opsRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-run-admission-",
 });
 
-type CronStateParams = Parameters<typeof createCronServiceState>[0] & {
+type CronStateParams = Parameters<typeof createCronRegressionState>[0] & {
   testAdmissionLimit?: number;
 };
 
 function createAdmissionTestState(params: CronStateParams) {
   const { testAdmissionLimit, ...stateParams } = params;
-  const state = createCronServiceState(stateParams);
+  const state = createCronRegressionState(stateParams);
   if (testAdmissionLimit !== undefined) {
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - testAdmissionLimit;
   }
@@ -79,12 +77,8 @@ describe("cron service run admission", () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const onEvent = vi.fn();
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent,
     });
@@ -124,13 +118,9 @@ describe("cron service run admission", () => {
     let peakActive = 0;
     const completed = new Set<string>();
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 4,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ job }: { job: { id: string } }) => {
         active += 1;
         peakActive = Math.max(peakActive, active);
@@ -186,13 +176,9 @@ describe("cron service run admission", () => {
       return await releaseCompleting.promise;
     });
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 2,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: failingJob.id });
@@ -260,13 +246,9 @@ describe("cron service run admission", () => {
       return { status: "ok" as const, summary: "should not run" };
     });
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -305,6 +287,87 @@ describe("cron service run admission", () => {
     expect(receipt?.status).toBe("skipped");
   });
 
+  it.each(["edited-and-restored", "removed"] as const)(
+    "fences and settles a queued manual run after its job is %s",
+    async (mutation) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:06.050Z");
+      const activeJob = createDueIsolatedJob({
+        id: `active-before-${mutation}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt + 3_600_000,
+      });
+      const waitingJob = createDueIsolatedJob({
+        id: `queued-before-${mutation}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt + 3_600_000,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
+
+      const activeStarted = createDeferred();
+      const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+      const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
+        if (job.id === activeJob.id) {
+          activeStarted.resolve();
+          return await releaseActive.promise;
+        }
+        return { status: "ok" as const, summary: "replacement" };
+      });
+      const state = createAdmissionTestState({
+        storePath: store.storePath,
+        testAdmissionLimit: 1,
+        nowMs: () => dueAt,
+        runIsolatedAgentJob,
+      });
+
+      const activeRun = run(state, activeJob.id, "force");
+      await activeStarted.promise;
+      const waitingRun = run(state, waitingJob.id, "force");
+      await vi.waitFor(() => {
+        expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(true);
+      });
+      const staleReceipt = inspectActiveCronRunReceipt({
+        storePath: store.storePath,
+        jobId: waitingJob.id,
+      });
+      if (!staleReceipt) {
+        throw new Error("Expected the queued run to own a durable receipt");
+      }
+
+      if (mutation === "removed") {
+        await remove(state, waitingJob.id);
+      } else {
+        await update(state, waitingJob.id, {
+          payload: { kind: "agentTurn", message: "replacement generation" },
+        });
+        await update(state, waitingJob.id, { payload: waitingJob.payload });
+      }
+
+      releaseActive.resolve({ status: "ok", summary: "active" });
+      await activeRun;
+      await expect(waitingRun).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(false);
+      const receipt = openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(staleReceipt.receiptId) as { status: string } | undefined;
+      expect(receipt?.status).toBe("skipped");
+
+      if (mutation === "edited-and-restored") {
+        const persisted = (await loadCronStore(store.storePath)).jobs.find(
+          (job) => job.id === waitingJob.id,
+        );
+        expect(persisted?.state.queuedAtMs).toBeUndefined();
+        expect(persisted?.state.runningAtMs).toBeUndefined();
+        await expect(run(state, waitingJob.id, "force")).resolves.toEqual({
+          ok: true,
+          ran: true,
+        });
+        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
   it("cancels a queued stream batch after an A-to-B-to-A source replacement", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:06.100Z");
@@ -332,14 +395,10 @@ describe("cron service run admission", () => {
       return { status: "ok" as const, summary: "stale stream batch" };
     });
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
       cronConfig: { triggers: { enabled: true } },
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -389,14 +448,10 @@ describe("cron service run admission", () => {
 
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
       cronConfig: { triggers: { enabled: true } },
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -443,14 +498,10 @@ describe("cron service run admission", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [streamJob] });
 
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
       cronConfig: { triggers: { enabled: true } },
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -484,14 +535,10 @@ describe("cron service run admission", () => {
 
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
       cronConfig: { triggers: { enabled: true } },
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -540,13 +587,9 @@ describe("cron service run admission", () => {
       return { status: "ok" as const, summary: "should not run" };
     });
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -576,7 +619,7 @@ describe("cron service run admission", () => {
     expect(completedJob?.state.lastRunStatus).toBe("skipped");
   });
 
-  it("drops stale invalid-run notifications when the row changes before commit", async () => {
+  it("commits invalid-run state before notifying a subscriber that edits the job", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:06.200Z");
     const job = createDueIsolatedJob({
@@ -588,14 +631,12 @@ describe("cron service run admission", () => {
     job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const sendCronFailureAlert = vi.fn(async () => {});
+    const editedName = "edited after invalid-run commit";
     let edited = false;
+    let persistedStatusAtEvent: string | undefined;
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       sendCronFailureAlert,
       runIsolatedAgentJob: vi.fn(),
       onEvent: (event) => {
@@ -603,11 +644,14 @@ describe("cron service run admission", () => {
           return;
         }
         edited = true;
+        persistedStatusAtEvent = cronStoreModule
+          .loadCronJobsStoreSync(store.storePath)
+          .jobs.find((entry) => entry.id === job.id)?.state.lastRunStatus;
         openOpenClawStateDatabase()
           .db.prepare(
-            "UPDATE cron_jobs SET name = ?, updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
+            "UPDATE cron_jobs SET name = ?, job_json = json_set(job_json, '$.name', ?), updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
           )
-          .run("edited before invalid-run commit", cronStoreKey(store.storePath), job.id);
+          .run(editedName, editedName, cronStoreKey(store.storePath), job.id);
       },
     });
 
@@ -617,10 +661,11 @@ describe("cron service run admission", () => {
       reason: "invalid-spec",
     });
 
+    expect(persistedStatusAtEvent).toBe("skipped");
     const persisted = (await loadCronStore(store.storePath)).jobs[0];
-    expect(persisted?.name).toBe("edited before invalid-run commit");
-    expect(persisted?.state.lastRunStatus).toBeUndefined();
-    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+    expect(persisted?.name).toBe(editedName);
+    expect(persisted?.state.lastRunStatus).toBe("skipped");
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
   });
 
   it("keeps a same-millisecond replacement reservation when stale cleanup runs", async () => {
@@ -650,13 +695,9 @@ describe("cron service run admission", () => {
       return { status: "ok" as const, summary: "replacement" };
     });
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -699,12 +740,8 @@ describe("cron service run admission", () => {
 
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -738,12 +775,8 @@ describe("cron service run admission", () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const onEvent = vi.fn();
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent,
     });
@@ -770,12 +803,8 @@ describe("cron service run admission", () => {
 
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -813,13 +842,9 @@ describe("cron service run admission", () => {
       return await releaseWaiting.promise;
     });
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 
@@ -870,13 +895,9 @@ describe("cron service run admission", () => {
     const waitingStarted = createDeferred();
     const releaseWaiting = createDeferred<{ status: "ok"; summary: string }>();
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
         if (runningJob.id === activeJob.id) {
           activeStarted.resolve();
@@ -935,12 +956,8 @@ describe("cron service run admission", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
@@ -973,118 +990,5 @@ describe("cron service run admission", () => {
     );
     expect(persisted?.state.runningAtMs).toBeUndefined();
     expect(persisted?.state.queuedAtMs).toBeUndefined();
-  });
-
-  it("releases a direct manual reservation when stop wins its admission wait", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:07.000Z");
-    const activeJob = createDueIsolatedJob({
-      id: "active-before-manual-stop",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt + 3_600_000,
-    });
-    const waitingJob = createDueIsolatedJob({
-      id: "stopped-manual-admission",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt + 3_600_000,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
-
-    const activeStarted = createDeferred();
-    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
-    const state = createAdmissionTestState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      testAdmissionLimit: 1,
-      log: noopLogger,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
-        if (runningJob.id === activeJob.id) {
-          activeStarted.resolve();
-          return await releaseActive.promise;
-        }
-        return { status: "ok" as const, summary: "should not run" };
-      }),
-    });
-
-    const activeRun = run(state, activeJob.id, "force");
-    await activeStarted.promise;
-    const waitingRun = run(state, waitingJob.id, "force");
-    await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(
-        dueAt,
-      );
-    });
-    stop(state);
-    await expect(waitingRun).resolves.toEqual({ ok: true, ran: false, reason: "stopped" });
-    expect(
-      state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs,
-    ).toBeUndefined();
-    expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(false);
-    releaseActive.resolve({ status: "ok", summary: "active" });
-    await activeRun;
-  });
-
-  it("skips a scheduled reservation rescheduled while it waits for admission", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:08.000Z");
-    const activeJob = createDueIsolatedJob({
-      id: "active-before-scheduled-admission",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt + 3_600_000,
-    });
-    const scheduledJob = createDueIsolatedJob({
-      id: "rescheduled-scheduled-admission",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, scheduledJob] });
-
-    const activeStarted = createDeferred();
-    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
-    const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
-      if (runningJob.id === activeJob.id) {
-        activeStarted.resolve();
-        return await releaseActive.promise;
-      }
-      return { status: "ok" as const, summary: "should not run" };
-    });
-    const state = createAdmissionTestState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      testAdmissionLimit: 1,
-      log: noopLogger,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
-
-    const activeRun = run(state, activeJob.id, "force");
-    await activeStarted.promise;
-    const timerRun = onTimer(state);
-    await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.queuedAtMs).toBe(
-        dueAt,
-      );
-    });
-    await update(state, scheduledJob.id, {
-      schedule: { kind: "at", at: new Date(dueAt + 3_600_000).toISOString() },
-    });
-
-    releaseActive.resolve({ status: "ok", summary: "active" });
-    await Promise.all([activeRun, timerRun]);
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    expect(
-      state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.runningAtMs,
-    ).toBeUndefined();
-    const receipt = openOpenClawStateDatabase()
-      .db.prepare(
-        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
-      )
-      .get(cronStoreKey(store.storePath), scheduledJob.id) as { status: string } | undefined;
-    expect(receipt?.status).toBe("skipped");
   });
 });

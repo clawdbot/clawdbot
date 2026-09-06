@@ -23,6 +23,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import {
   legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshotSync,
@@ -144,13 +145,10 @@ function parseLegacyManagedImageRecord(params: {
   if (!isRecord(raw) || !isRecord(raw.original)) {
     throw new Error("legacy managed image record must be an object");
   }
-  const unexpectedRecordKey = Object.keys(raw).find((key) => !RECORD_KEYS.has(key));
-  const unexpectedOriginalKey = Object.keys(raw.original).find((key) => !ORIGINAL_KEYS.has(key));
-  if (unexpectedRecordKey || unexpectedOriginalKey) {
-    throw new Error(
-      `legacy managed image record has unexpected field ${unexpectedRecordKey ?? `original.${unexpectedOriginalKey}`}`,
-    );
-  }
+  assertAllowedJsonFields(raw, RECORD_KEYS, "legacy managed image record");
+  assertAllowedJsonFields(raw.original, ORIGINAL_KEYS, "legacy managed image record", {
+    fieldPrefix: "original.",
+  });
 
   const attachmentId = optionalNonEmptyString(raw.attachmentId);
   const sessionKey = optionalNonEmptyString(raw.sessionKey);

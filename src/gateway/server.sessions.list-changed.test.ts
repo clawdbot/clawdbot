@@ -14,6 +14,7 @@ import {
   projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -146,7 +147,7 @@ async function invokeSessionsList({
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      readPreparedGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
       ...context,
     } as never,
   });
@@ -260,7 +261,7 @@ async function expectListedSessionActiveRun(
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(expected);
-  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
+  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : []);
   expect(session.status).toBe(expectedStatus);
 }
 
@@ -417,14 +418,16 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   const { respond } = await invokeSessionsList({
     requestId: "req-sessions-list-thinking-default",
     context: {
-      readPreparedGatewayModelCatalog: async () => [
-        {
-          provider: "test-provider",
-          id: "reasoner",
-          name: "Reasoner",
-          reasoning: true,
-        },
-      ],
+      readPreparedGatewayModelCatalog: async () => ({
+        entries: [
+          {
+            provider: "test-provider",
+            id: "reasoner",
+            name: "Reasoner",
+            reasoning: true,
+          },
+        ],
+      }),
     },
   });
 
@@ -696,7 +699,7 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
   await writeMainSessionStore({ label: "Original title" });
   const received = vi.fn();
   const unsubscribe = subscribePluginSessionsChanged(received);
-  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
 
   try {
     await invokeSessionMutation({
@@ -724,12 +727,12 @@ test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true, "running");
 });
 
-test("sessions.list marks admitted pre-execution work as queued", async () => {
+test("sessions.list marks ordinary pre-execution work as running", async () => {
   await expectListedSessionActiveRun(
-    "req-sessions-list-queued-run",
+    "req-sessions-list-startup-run",
     { executionStarted: false },
     true,
-    "queued",
+    "running",
   );
 });
 
@@ -741,6 +744,25 @@ test("sessions.list replaces a previous terminal status when execution starts", 
     "running",
     { status: "failed" },
   );
+});
+
+test("sessions.list distinguishes proven idle from unavailable run identities", async () => {
+  await writeMainSessionStore();
+
+  const idle = await invokeSessionsList({ requestId: "req-sessions-list-idle-exact-runs" });
+  const idleSession = findSession(expectRespondPayload(idle.respond), "agent:main:main");
+  expect(idleSession).toMatchObject({ hasActiveRun: false, activeRunIds: [] });
+
+  embeddedRunMock.activeIds.add("sess-main");
+  const unavailable = await invokeSessionsList({
+    requestId: "req-sessions-list-unavailable-runs",
+  });
+  const unavailableSession = findSession(
+    expectRespondPayload(unavailable.respond),
+    "agent:main:main",
+  );
+  expect(unavailableSession).toMatchObject({ hasActiveRun: true });
+  expect(unavailableSession).not.toHaveProperty("activeRunIds");
 });
 
 test("sessions.changed publishes visible active run ids", async () => {
@@ -762,11 +784,11 @@ test("sessions.changed publishes visible active run ids", async () => {
   });
 });
 
-test("sessions.changed publishes queued status before execution starts", async () => {
+test("sessions.changed publishes running status during ordinary startup", async () => {
   await writeMainSessionStore({ status: "failed" });
   const result = await invokeSessionMutation({
     method: "sessions.patch",
-    params: { key: "main", label: "Queued main" },
+    params: { key: "main", label: "Starting main" },
     context: {
       chatAbortControllers: new Map([
         ["run-1", { sessionKey: "agent:main:main", executionStarted: false }],
@@ -777,7 +799,7 @@ test("sessions.changed publishes queued status before execution starts", async (
   expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
-    status: "queued",
+    status: "running",
     hasActiveRun: true,
     activeRunIds: ["run-1"],
   });
@@ -1097,23 +1119,67 @@ test("sessions.changed mutation events include session management metadata", asy
     key: "discord:group:dev",
     unread: true,
   });
-  expectChangedBroadcast(unread.broadcastToConnIds, {
+  const unreadPayload = expectChangedBroadcast(unread.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
     unread: true,
     lastReadAt: 20,
+    markedUnreadAt: expect.any(Number),
     lastActivityAt: 5,
   });
+
+  const marker = expectDefined(
+    unreadPayload.markedUnreadAt as number | undefined,
+    "manual unread marker",
+  );
+  expect(marker).toEqual(expect.any(Number));
+
+  const staleRead = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+    expectedMarkedUnreadAt: null,
+  });
+  expectFields(staleRead.responsePayload, { ok: true, key: "agent:main:discord:group:dev" });
+  expect(staleRead.broadcastToConnIds).not.toHaveBeenCalled();
+  expect(requireRecord(staleRead.responsePayload.entry, "stale read entry").markedUnreadAt).toBe(
+    marker,
+  );
 
   const read = await invokeSessionsPatch({
     key: "discord:group:dev",
     unread: false,
+    expectedMarkedUnreadAt: marker,
   });
   expectChangedBroadcast(read.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
     unread: false,
     lastReadAt: expect.any(Number),
+    markedUnreadAt: null,
+    lastActivityAt: 5,
+  });
+
+  const remarked = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: true,
+  });
+  expectChangedBroadcast(remarked.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: true,
+    markedUnreadAt: expect.any(Number),
+  });
+
+  const legacyRead = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+  });
+  expectChangedBroadcast(legacyRead.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: false,
+    lastReadAt: expect.any(Number),
+    markedUnreadAt: null,
     lastActivityAt: 5,
   });
 });
@@ -1384,7 +1450,11 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentRole: "orchestrator",
     subagentControlScope: "children",
     createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
+    createdActor: {
+      type: "agent",
+      id: "agent:main:main",
+      identity: { type: "agent", id: "agent:main:main" },
+    },
     createdAt: 1_000,
     forkSource: {
       sessionKey: "agent:main:main",

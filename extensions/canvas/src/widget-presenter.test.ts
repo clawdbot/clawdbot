@@ -10,11 +10,12 @@ function createNodesRuntime(
   return {
     list: vi.fn(async () => ({ nodes })),
     invoke: vi.fn(async () => ({ ok: true })),
+    openDuplex: vi.fn(),
   };
 }
 
 describe("Canvas widget presenter", () => {
-  it("prefers the existing local Mac default and presents the hosted URL atomically", async () => {
+  it.each(["macos", "macOS 26.6.2"])("presents the hosted URL on a %s node", async (platform) => {
     const runtime = createNodesRuntime([
       {
         nodeId: "android-recent",
@@ -28,7 +29,7 @@ describe("Canvas widget presenter", () => {
       {
         nodeId: "mac-local",
         displayName: "Studio",
-        platform: "macos",
+        platform,
         connected: true,
         connectedAtMs: 10,
         caps: ["canvas"],
@@ -39,13 +40,17 @@ describe("Canvas widget presenter", () => {
 
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_1/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_1/index.html",
+        },
         title: "Status",
-        sessionContext: { sessionKey: "agent:main:status" },
+        context: { sessionKey: "agent:main:status" },
       }),
     ).resolves.toEqual({
       ok: true,
-      value: { nodeId: "mac-local", nodeName: "Studio" },
+      value: { kind: "node", nodeId: "mac-local", nodeName: "Studio" },
     });
     expect(runtime.invoke).toHaveBeenNthCalledWith(
       1,
@@ -90,9 +95,13 @@ describe("Canvas widget presenter", () => {
     const presenter = createCanvasWidgetPresenter(runtime);
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_2/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_2/index.html",
+        },
         title: "Status",
-        sessionContext: {},
+        context: {},
       }),
     ).resolves.toEqual({
       ok: false,
@@ -127,9 +136,9 @@ describe("Canvas widget presenter", () => {
     });
 
     const result = await createCanvasWidgetPresenter(runtime).present({
-      documentUrlPath,
+      document: { kind: "html", html: "<p>Status</p>", hostedUrl: documentUrlPath },
       title: "Status",
-      sessionContext: {},
+      context: {},
     });
 
     expect(result).toEqual({
@@ -160,9 +169,13 @@ describe("Canvas widget presenter", () => {
     });
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_linux/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_linux/index.html",
+        },
         title: "Status",
-        sessionContext: {},
+        context: {},
       }),
     ).resolves.toMatchObject({
       ok: false,

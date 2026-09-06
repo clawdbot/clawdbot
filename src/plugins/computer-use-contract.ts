@@ -545,6 +545,7 @@ export type ComputerUseProvider = {
   label: string;
   capabilities(): ComputerUseCapabilityDescriptor;
   isAvailable(): boolean;
+  prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;
   watchAvailability?: (
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
@@ -637,6 +638,7 @@ export function registerComputerUseProvider(
     command: "screen.snapshot",
     cap: "screen",
     dangerous: false,
+    prepare: (context) => provider.prepare?.(context),
     isAvailable: () => provider.isAvailable(),
     watchAvailability: (context, onChange) => {
       const stopWatching = provider.watchAvailability?.(context, onChange);

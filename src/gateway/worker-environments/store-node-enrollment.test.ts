@@ -46,12 +46,38 @@ describe("worker environment node enrollment store", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  function seedEnrollmentState(state: string, deviceId: string | null): string {
+    store.transition({
+      environmentId: "worker-enrollment",
+      from: "requested",
+      to: "provisioning",
+    });
+    const setupId = expectDefined(
+      store.ensureNodeEnrollment("worker-enrollment").nodeSetupId,
+      "worker node enrollment setup id",
+    );
+    database.db
+      .prepare(
+        "UPDATE worker_environments SET state = ?, node_device_id = ? WHERE node_setup_id = ?",
+      )
+      .run(state, deviceId, setupId);
+    return setupId;
+  }
+
   it("binds setup completion to the exact environment identity across restart", async () => {
+    expect(store.hasPendingNodeEnrollmentSetup("", "cloud-device-1")).toBe(false);
+    expect(store.hasPendingNodeEnrollmentSetup("missing-setup", "cloud-device-1")).toBe(false);
+    store.transition({
+      environmentId: "worker-enrollment",
+      from: "requested",
+      to: "provisioning",
+    });
     const pending = store.ensureNodeEnrollment("worker-enrollment");
     const setupId = expectDefined(pending.nodeSetupId, "worker node enrollment setup id");
     expect(setupId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(pending.nodeDeviceId).toBeNull();
     expect(store.ensureNodeEnrollment("worker-enrollment").nodeSetupId).toBe(setupId);
+    expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-1")).toBe(true);
 
     const issued = await ensureDevicePairSetupBootstrapToken({
       baseDir: root,
@@ -80,7 +106,84 @@ describe("worker environment node enrollment store", () => {
       nodeSetupId: setupId,
       nodeDeviceId: "cloud-device-1",
     });
+    expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-1")).toBe(true);
+    expect(store.hasPendingNodeEnrollmentSetup(setupId, "different-cloud-device")).toBe(false);
   });
+
+  it("rejects a destroy-requested provisioning setup", async () => {
+    store.transition({
+      environmentId: "worker-enrollment",
+      from: "requested",
+      to: "provisioning",
+    });
+    const setupId = expectDefined(
+      store.ensureNodeEnrollment("worker-enrollment").nodeSetupId,
+      "worker node enrollment setup id",
+    );
+    expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-canceled")).toBe(true);
+    const issued = await ensureDevicePairSetupBootstrapToken({
+      baseDir: root,
+      setupId,
+      profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    if (issued.status !== "pending") {
+      throw new Error("expected pending cloud worker setup");
+    }
+    await verifyDeviceBootstrapToken({
+      baseDir: root,
+      token: issued.token,
+      deviceId: "cloud-device-canceled",
+      publicKey: "cloud-public-key-canceled",
+      role: "node",
+      scopes: [],
+    });
+
+    store.requestDestroy({ environmentId: "worker-enrollment", state: "provisioning" });
+
+    expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-canceled")).toBe(false);
+    await expect(
+      consumeDeviceBootstrapTokenWithSetupCompletion({
+        baseDir: root,
+        token: issued.token,
+        deviceId: "cloud-device-canceled",
+        completedAtMs: 10,
+      }),
+    ).rejects.toThrow("Cloud worker setup completion owner is no longer pending");
+    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
+  });
+
+  it.each(["provisioning", "bootstrapping", "ready", "idle", "attached"])(
+    "admits only the exact already-bound setup device in %s",
+    (state) => {
+      const setupId = seedEnrollmentState(state, "cloud-device-bound");
+
+      expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-bound")).toBe(true);
+      expect(store.hasPendingNodeEnrollmentSetup(setupId, "different-cloud-device")).toBe(false);
+      expect(store.hasPendingNodeEnrollmentSetup("missing-setup", "cloud-device-bound")).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(["provisioning", "bootstrapping", "ready", "idle", "attached"])(
+    "allows first setup-device binding in %s only when provisioning",
+    (state) => {
+      const setupId = seedEnrollmentState(state, null);
+
+      expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-first")).toBe(
+        state === "provisioning",
+      );
+    },
+  );
+
+  it.each(["requested", "draining", "destroying", "destroyed", "failed", "orphaned"])(
+    "rejects an already-bound setup device in %s",
+    (state) => {
+      const setupId = seedEnrollmentState(state, "cloud-device-bound");
+
+      expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-bound")).toBe(false);
+    },
+  );
 
   it("persists a credential-bound node receipt without SSH metadata", () => {
     store.transition({

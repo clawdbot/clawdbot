@@ -1,15 +1,16 @@
 // Feishu tests cover reasoning preview plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "./bot-runtime-api.js";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 
 const { getSessionEntryMock } = vi.hoisted(() => ({
   getSessionEntryMock: vi.fn(),
 }));
 
-vi.mock("./bot-runtime-api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./bot-runtime-api.js")>("./bot-runtime-api.js");
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
   return {
     ...actual,
     getSessionEntry: getSessionEntryMock,
@@ -17,7 +18,7 @@ vi.mock("./bot-runtime-api.js", async () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("./bot-runtime-api.js");
+  vi.doUnmock("openclaw/plugin-sdk/session-store-runtime");
   vi.resetModules();
 });
 

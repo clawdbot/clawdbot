@@ -9,7 +9,6 @@ export type SkillWorkshopRevisionAdmissionInput = {
   proposalOriginAgentId?: string;
   proposalOriginSessionKey?: string;
   proposalSlug: string;
-  useCurrentChatForRevisions: boolean;
 };
 
 export type SkillWorkshopRevisionAdmissionBinding = {
@@ -27,14 +26,19 @@ export type SkillWorkshopRevisionAdmissionEntry = SkillWorkshopRevisionAdmission
 
 export type SkillWorkshopRevisionAdmissionOutcome =
   | { id: string; sessionKey: string; status: "admitted" }
+  | { id: string; status: "revision-changed" }
   | { error: string; id: string; status: "retryable-failed" };
+
+type AdmissionExecutorResult =
+  | { sessionKey: string; status: "admitted" }
+  | { status: "revision-changed" };
 
 type AdmissionExecutor = (
   entry: SkillWorkshopRevisionAdmissionEntry,
   materialize: (
     binding: SkillWorkshopRevisionAdmissionBinding,
   ) => SkillWorkshopRevisionAdmissionEntry | null,
-) => Promise<{ sessionKey: string }>;
+) => Promise<AdmissionExecutorResult>;
 
 type SkillWorkshopRevisionAdmissionRun = {
   completion: Promise<SkillWorkshopRevisionAdmissionOutcome>;
@@ -90,12 +94,14 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
     };
     const completion = entry
       .execute(copyEntry(entry), materialize)
-      .then(({ sessionKey }): SkillWorkshopRevisionAdmissionOutcome => {
-        if (entries.get(entry.value.id) === entry) {
+      .then((result): SkillWorkshopRevisionAdmissionOutcome => {
+        if (entries.get(entry.value.id) === entry && entry.generation === generation) {
           entries.delete(entry.value.id);
           publish();
         }
-        return { id: entry.value.id, sessionKey, status: "admitted" };
+        return result.status === "admitted"
+          ? { id: entry.value.id, sessionKey: result.sessionKey, status: "admitted" }
+          : { id: entry.value.id, status: "revision-changed" };
       })
       .catch((error: unknown): SkillWorkshopRevisionAdmissionOutcome => {
         const message = error instanceof Error ? error.message : String(error);

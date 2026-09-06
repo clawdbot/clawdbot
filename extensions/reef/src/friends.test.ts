@@ -132,7 +132,7 @@ describe("ReefFriendManager pairing", () => {
 
     addApproval(store, pairing, pending);
     await expect(manager.reconcile()).resolves.toEqual(["alice"]);
-    expect(relay.respondFriend).toHaveBeenCalledWith(pending, true);
+    expect(relay.respondFriend).toHaveBeenCalledWith(pending, true, undefined);
     expect(store.get("alice")).toMatchObject({
       autonomy: "bounded",
       ed25519PublicKey: pending.ed25519_pub,
@@ -191,6 +191,33 @@ describe("ReefFriendManager pairing", () => {
     const reopened = trust();
     expect(reopened.get("alice")).toMatchObject({ autonomy: "bounded" });
     expect(fs.existsSync(path.join(stateDir, "requested.json"))).toBe(false);
+  });
+
+  it("preserves ambiguous outbound intent when account authority closes during a relay request", async () => {
+    const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
+    const requestStarted = deferred<void>();
+    const relayResult = deferred<{ status: string }>();
+    const relay = transport(pending);
+    relay.requestFriend.mockImplementation(async () => {
+      requestStarted.resolve(undefined);
+      return await relayResult.promise;
+    });
+    const store = trust();
+    const authority = new AbortController();
+    const manager = new ReefFriendManager(
+      relay as unknown as ReefTransportClient,
+      store,
+      approvals(),
+      authority.signal,
+    );
+    const request = manager.request("alice");
+    await requestStarted.promise;
+
+    authority.abort();
+    relayResult.resolve({ status: "pending" });
+
+    await expect(request).rejects.toBeInstanceOf(Error);
+    expect(store.hasOutboundRequest("alice")).toBe(true);
   });
 
   it("removes a relay edge created after another process revoked the request", async () => {
@@ -343,7 +370,7 @@ describe("ReefFriendManager pairing", () => {
     addApproval(store, pairing, reapproval);
     await expect(manager.reconcile()).resolves.toEqual(["alice"]);
 
-    expect(relay.respondFriend).toHaveBeenCalledWith(reapproval, true);
+    expect(relay.respondFriend).toHaveBeenCalledWith(reapproval, true, undefined);
     expect(store.get("alice")).toMatchObject({
       autonomy: "extended",
       safetyNumberChanged: false,
@@ -369,7 +396,7 @@ describe("ReefFriendManager pairing", () => {
 
     await expect(manager.reconcile()).resolves.toEqual(["alice"]);
 
-    expect(relay.respondFriend).toHaveBeenCalledWith(pending, true);
+    expect(relay.respondFriend).toHaveBeenCalledWith(pending, true, undefined);
     expect(store.get("alice")).toMatchObject({ autonomy: "extended" });
     expect(pairing.values).toEqual(new Set());
   });
@@ -389,7 +416,7 @@ describe("ReefFriendManager pairing", () => {
 
     await expect(manager.reconcile()).resolves.toEqual([]);
 
-    expect(relay.respondFriend).toHaveBeenCalledWith(pending, true);
+    expect(relay.respondFriend).toHaveBeenCalledWith(pending, true, undefined);
     expect(relay.removeFriend).toHaveBeenCalledWith("alice");
     expect(store.get("alice")).toBeUndefined();
     expect(pairing.values).toEqual(new Set());

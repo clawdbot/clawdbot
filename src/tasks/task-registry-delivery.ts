@@ -2,10 +2,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
 import { channelSupportsThreadDelivery } from "../channels/thread-addressing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -20,7 +21,6 @@ import {
   shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
 import { getTaskFlowById } from "./task-flow-runtime-internal.js";
-import type { TaskDeliveryOwner } from "./task-registry-common.js";
 import {
   getTaskDeliveryState,
   updateTask,
@@ -43,11 +43,14 @@ import type {
   TaskEventRecord,
   TaskRecord,
 } from "./task-registry.types.js";
+import { resolveTaskSessionAgentId } from "./task-session-identity.js";
 
-function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
-  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
-  return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
-}
+type TaskDeliveryOwner = {
+  sessionKey?: string;
+  agentId?: string;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  flowId?: string;
+};
 
 function resolveTaskStateChangeIdempotencyKey(params: {
   task: TaskRecord;
@@ -60,52 +63,35 @@ function resolveTaskStateChangeIdempotencyKey(params: {
   return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
 }
 
-function resolveTaskTerminalIdempotencyKey(task: TaskRecord): string {
-  const owner = resolveTaskDeliveryOwner(task);
-  if (owner.flowId) {
-    const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
-    return `flow-terminal:${owner.flowId}:${task.taskId}:${task.status}:${outcome}`;
-  }
-  return taskTerminalDeliveryIdempotencyKey(task);
-}
-
-function getLinkedFlowForDelivery(task: TaskRecord) {
-  const flowId = task.parentFlowId?.trim();
-  if (!flowId || task.scopeKind !== "session") {
-    return undefined;
-  }
-  const flow = getTaskFlowById(flowId);
-  if (!flow) {
-    return undefined;
-  }
-  if (normalizeOptionalString(flow.ownerKey) !== normalizeOptionalString(task.ownerKey)) {
-    return undefined;
-  }
-  return flow;
+function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDeliveryOwner): string {
+  const prefix = owner.flowId ? `flow-terminal:${owner.flowId}` : "task-terminal";
+  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
+  return `${prefix}:${task.taskId}:${task.status}:${outcome}`;
 }
 
 function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
-  const flow = getLinkedFlowForDelivery(task);
-  if (flow) {
-    return {
-      sessionKey: flow.ownerKey.trim(),
-      requesterOrigin: normalizeDeliveryContext(
-        flow.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
-      ),
-      flowId: flow.flowId,
-    };
-  }
   if (task.scopeKind !== "session") {
     return {};
   }
+  const flowId = task.parentFlowId?.trim();
+  const candidate = flowId ? getTaskFlowById(flowId) : undefined;
+  const flow =
+    candidate &&
+    normalizeOptionalString(candidate.ownerKey) === normalizeOptionalString(task.ownerKey)
+      ? candidate
+      : undefined;
   return {
     sessionKey: task.ownerKey.trim(),
-    requesterOrigin: normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin),
+    // Bare session keys are shared across agents; the executor is not the requester.
+    agentId: resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId),
+    requesterOrigin: normalizeDeliveryContext(
+      flow?.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
+    ),
+    ...(flow ? { flowId: flow.flowId } : {}),
   };
 }
 
-function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
-  const owner = resolveTaskDeliveryOwner(task);
+function canDeliverTaskToRequesterOrigin(owner: TaskDeliveryOwner): boolean {
   if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
     return false;
   }
@@ -118,11 +104,13 @@ function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
-function canDeliverParentReviewTaskToThreadOrigin(task: TaskRecord): boolean {
+function canDeliverParentReviewTaskToThreadOrigin(
+  task: TaskRecord,
+  owner: TaskDeliveryOwner,
+): boolean {
   if (!shouldUseParentReviewTaskTerminalMessage(task)) {
     return false;
   }
-  const owner = resolveTaskDeliveryOwner(task);
   const origin = owner.requesterOrigin;
   const threadId = String(origin?.threadId ?? "").trim();
   // Parent-review terminal messages may deliver directly only when the requester origin
@@ -143,48 +131,38 @@ function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
 
-function queueTaskSystemEvent(task: TaskRecord, text: string) {
-  const owner = resolveTaskDeliveryOwner(task);
+function queueTaskSystemEvent(
+  task: TaskRecord,
+  text: string,
+  owner: TaskDeliveryOwner,
+  source: "background-task" | "background-task-blocked" = "background-task",
+) {
   const ownerKey = owner.sessionKey?.trim();
   if (!ownerKey) {
     return false;
   }
-  enqueueSystemEvent(text, {
+  const options = {
     sessionKey: ownerKey,
-    contextKey: `task:${task.taskId}`,
+    contextKey: `task:${task.taskId}${source === "background-task-blocked" ? ":blocked-followup" : ""}`,
     deliveryContext: owner.requesterOrigin,
-  });
+  };
+  enqueueSystemEvent(text, owner.agentId ? withSystemEventOwner(options, owner.agentId) : options);
   requestHeartbeat({
-    source: "background-task",
+    source,
     intent: "immediate",
-    reason: "background-task",
+    reason: source,
     sessionKey: ownerKey,
+    agentId: owner.agentId,
   });
   return true;
 }
 
-function queueBlockedTaskFollowup(task: TaskRecord) {
+function queueBlockedTaskFollowup(task: TaskRecord, owner: TaskDeliveryOwner) {
   const followupText = formatTaskBlockedFollowupMessage(task);
   if (!followupText) {
     return false;
   }
-  const owner = resolveTaskDeliveryOwner(task);
-  const ownerKey = owner.sessionKey?.trim();
-  if (!ownerKey) {
-    return false;
-  }
-  enqueueSystemEvent(followupText, {
-    sessionKey: ownerKey,
-    contextKey: `task:${task.taskId}:blocked-followup`,
-    deliveryContext: owner.requesterOrigin,
-  });
-  requestHeartbeat({
-    source: "background-task-blocked",
-    intent: "immediate",
-    reason: "background-task-blocked",
-    sessionKey: ownerKey,
-  });
-  return true;
+  return queueTaskSystemEvent(task, followupText, owner, "background-task-blocked");
 }
 
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
@@ -200,10 +178,10 @@ async function runTaskDeliveryWithIndependentAdmission(
   ensureTaskRegistryReady();
   let admitted = false;
   try {
-    return await runWithGatewayIndependentRootWorkAdmission(async () => {
+    return await runWithGatewayIndependentRootWorkContinuation(async () => {
       admitted = true;
       return await deliver();
-    });
+    }, "tasks:delivery");
   } catch (error) {
     // Late lifecycle callbacks must not leak a rejected detached promise after
     // restart closes admission. An already-admitted delivery still reports its
@@ -270,19 +248,18 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       });
     }
     const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
-    const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToThreadOrigin(latest);
+    const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToThreadOrigin(latest, owner);
     const canDeliverDirect =
-      canDeliverTaskToRequesterOrigin(latest) || shouldDeliverParentReviewDirect;
-    const directEventText = formatTaskTerminalMessage(latest);
+      canDeliverTaskToRequesterOrigin(owner) || shouldDeliverParentReviewDirect;
     const sessionEventText = formatTaskTerminalMessage(
       latest,
       shouldRouteParentReview ? { surface: "parent_session" } : undefined,
     );
     if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
       try {
-        queueTaskSystemEvent(latest, sessionEventText);
+        queueTaskSystemEvent(latest, sessionEventText, owner);
         if (latest.terminalOutcome === "blocked") {
-          queueBlockedTaskFollowup(latest);
+          queueBlockedTaskFollowup(latest, owner);
         }
         return updateTask(taskId, {
           deliveryStatus:
@@ -302,19 +279,30 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       }
     }
     try {
-      const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
+      const { sendMessage, resolveTaskControlUiSessionUrl } =
+        await loadTaskRegistryDeliveryRuntime();
       const beforeSend = tasks.get(taskId);
       if (!beforeSend || !shouldAutoDeliverTaskTerminalUpdate(beforeSend)) {
         return beforeSend ? cloneTaskRecord(beforeSend) : null;
       }
-      const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
-      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
+      const requesterAgentId = owner.agentId;
+      const inspectUrl = latest.childSessionKey
+        ? resolveTaskControlUiSessionUrl?.({
+            sessionKey: latest.childSessionKey,
+            fallbackAgentId:
+              parseAgentSessionKey(latest.childSessionKey)?.agentId ?? requesterAgentId,
+          })
+        : undefined;
+      const directEventText = shouldDeliverParentReviewDirect
+        ? sessionEventText
+        : formatTaskTerminalMessage(latest);
+      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest, owner);
       const sendResult = await sendMessage({
         channel: owner.requesterOrigin?.channel,
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
         threadId: owner.requesterOrigin?.threadId,
-        content: shouldDeliverParentReviewDirect ? sessionEventText : directEventText,
+        content: inspectUrl ? `${directEventText}\nInspect: ${inspectUrl}` : directEventText,
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
@@ -345,7 +333,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         );
       }
       if (afterSend.terminalOutcome === "blocked") {
-        queueBlockedTaskFollowup(afterSend);
+        queueBlockedTaskFollowup(afterSend, resolveTaskDeliveryOwner(afterSend));
       }
       return updateTask(taskId, {
         deliveryStatus: "delivered",
@@ -363,9 +351,10 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         return beforeFallback ? cloneTaskRecord(beforeFallback) : null;
       }
       try {
-        queueTaskSystemEvent(beforeFallback, sessionEventText);
+        const fallbackOwner = resolveTaskDeliveryOwner(beforeFallback);
+        queueTaskSystemEvent(beforeFallback, sessionEventText, fallbackOwner);
         if (beforeFallback.terminalOutcome === "blocked") {
-          queueBlockedTaskFollowup(beforeFallback);
+          queueBlockedTaskFollowup(beforeFallback, fallbackOwner);
         }
       } catch (fallbackError) {
         taskRegistryLog.warn("Failed to queue background task fallback event", {
@@ -419,8 +408,8 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
         lastEventAt: Date.now(),
       });
     }
-    if (!canDeliverTaskToRequesterOrigin(current)) {
-      queueTaskSystemEvent(current, eventText);
+    if (!canDeliverTaskToRequesterOrigin(owner)) {
+      queueTaskSystemEvent(current, eventText, owner);
       upsertTaskDeliveryState({
         taskId,
         requesterOrigin: deliveryState?.requesterOrigin,
@@ -431,7 +420,7 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
       });
     }
     const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-    const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
+    const requesterAgentId = owner.agentId;
     const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
       task: current,
       latestEvent,

@@ -2,6 +2,7 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSmsAccount } from "./accounts.js";
 import { smsPlugin } from "./channel.js";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
@@ -84,6 +85,31 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("smsPlugin account removal", () => {
+  it("removes the default media cap without changing retained named accounts", () => {
+    const cfg = smsPlugin.config.deleteAccount?.({
+      accountId: "default",
+      cfg: {
+        agents: { defaults: { mediaMaxMb: 3 } },
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            mediaMaxMb: 1,
+            accounts: { support: { mediaMaxMb: 2 }, inherited: { enabled: true } },
+          },
+        },
+      },
+    });
+    if (!cfg) {
+      throw new Error("expected SMS account deletion result");
+    }
+    expect(resolveSmsAccount(cfg, "support").mediaMaxBytes).toBe(2 * 1024 * 1024);
+    expect(resolveSmsAccount(cfg, "inherited").mediaMaxBytes).toBe(3 * 1024 * 1024);
+  });
 });
 
 describe("smsPlugin status", () => {
@@ -430,44 +456,51 @@ describe("smsPlugin outbound", () => {
     );
   });
 
-  it("discards staged MMS media when the durable dispatch marker fails", async () => {
-    const ctx = {
-      cfg: {
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+  it.each(["durable marker", "final Twilio fence"] as const)(
+    "discards staged MMS media when the %s blocks dispatch",
+    async (failurePoint) => {
+      if (failurePoint === "final Twilio fence") {
+        sendSmsViaTwilio.mockImplementationOnce(async ({ onPlatformSendDispatch }) => {
+          await onPlatformSendDispatch?.();
+          throw new PlatformMessageNotDispatchedError(
+            "credentials changed before Twilio dispatch",
+            { cause: new Error("credentials changed") },
+          );
+        });
+      }
+      const ctx = {
+        cfg: {
+          channels: {
+            sms: {
+              accountSid: "AC123",
+              authToken: "secret",
+              fromNumber: "+15557654321",
+              publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+            },
           },
         },
-      },
-      to: "+15551234567",
-      text: "caption",
-      kind: "media" as const,
-      mediaUrl: "/tmp/photo.jpg",
-      onPlatformSendDispatch: async () => {
-        throw new Error("delivery marker failed");
-      },
-    };
-    const lifecycle = smsPlugin.message?.send?.lifecycle;
-    const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
-    let observed: unknown;
-    try {
-      await smsPlugin.message?.send?.media?.(ctx);
-    } catch (error) {
-      observed = error;
-    }
+        to: "+15551234567",
+        text: "caption",
+        kind: "media" as const,
+        mediaUrl: "/tmp/photo.jpg",
+        onPlatformSendDispatch: async () => {
+          if (failurePoint === "durable marker") {
+            throw new Error("delivery marker failed");
+          }
+        },
+      };
+      const lifecycle = smsPlugin.message?.send?.lifecycle;
+      const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
+      const observed = await smsPlugin.message?.send?.media?.(ctx).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
 
-    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    await lifecycle?.afterSendFailure?.({
-      ...ctx,
-      error: observed,
-      attemptToken,
-    });
-
-    expect(hostedMediaMocks.cleanup).toHaveBeenCalledOnce();
-  });
+      expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      await lifecycle?.afterSendFailure?.({ ...ctx, error: observed, attemptToken });
+      expect(hostedMediaMocks.cleanup).toHaveBeenCalledOnce();
+    },
+  );
 
   it("discards staged MMS media when core fails before entering the adapter", async () => {
     const ctx = {

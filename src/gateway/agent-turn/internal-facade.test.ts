@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetAgentEventsForTest,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { registerChatAbortController } from "../chat-abort.js";
+import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
+import type { AgentTurnStartOwner } from "./internal-facade.types.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
+const authorize = vi.hoisted(() => vi.fn(async () => ({ error: null })));
+const envelope = vi.hoisted(() => vi.fn(async (run: () => Promise<unknown>) => await run()));
 
 vi.mock("../server-methods.js", () => ({
-  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
+  authorizeGatewayRequestPreDispatch: authorize,
   createRequestGatewayMethodRegistry: () => ({
     isControlPlaneWrite: () => false,
   }),
@@ -14,7 +24,7 @@ vi.mock("../server-methods.js", () => ({
     _method: string,
     _client: unknown,
     run: () => Promise<unknown>,
-  ) => await run(),
+  ) => await envelope(run),
 }));
 
 vi.mock("./agent-request-preflight.js", () => ({
@@ -28,29 +38,86 @@ vi.mock("./agent-turn-service.js", () => ({
   }),
 }));
 
-function createFacade() {
+function createContext() {
+  return Object.assign({} as GatewayRequestContext, {
+    trackExecution: trackAsyncWork,
+    agentRunSeq: new Map(),
+    broadcast: vi.fn(),
+    chatAbortControllers: new Map(),
+    chatRunState: createChatRunState(),
+    dedupe: new Map(),
+    getRuntimeConfig: () => ({}),
+    logGateway: { error: vi.fn(), warn: vi.fn() },
+    nodeSendToSession: vi.fn(),
+    removeChatRun: vi.fn(() => undefined),
+  });
+}
+
+function createFacade(context = createContext()) {
   return createInternalAgentTurnFacade({
     client: createSyntheticPluginRuntimeClient(),
-    getContext: () =>
-      ({
-        dedupe: new Map(),
-        getRuntimeConfig: () => ({}),
-        logGateway: { error: vi.fn(), warn: vi.fn() },
-      }) as unknown as GatewayRequestContext,
+    getContext: () => context,
   });
 }
 
 describe("createInternalAgentTurnFacade", () => {
   beforeEach(() => {
+    resetAgentEventsForTest();
     startTurn.mockReset();
+    authorize.mockReset().mockResolvedValue({ error: null });
+    envelope.mockReset().mockImplementation(async (run) => await run());
   });
 
+  it.each(["authorization", "envelope"] as const)(
+    "rejects a source closed during %s before starting a turn",
+    async (boundary) => {
+      let current = true;
+      const assertAdmissionCurrent = () => {
+        if (!current) {
+          throw new Error("source closed");
+        }
+      };
+      if (boundary === "authorization") {
+        authorize.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          current = false;
+          return { error: null };
+        });
+      } else {
+        envelope.mockImplementationOnce(async (run) => {
+          await Promise.resolve();
+          current = false;
+          return await run();
+        });
+      }
+      startTurn.mockImplementation(async ({ io }) => {
+        io.emitAcceptance([true, { runId: "stale-source", status: "accepted" }, undefined]);
+      });
+
+      await expect(
+        createFacade().dispatchRaw(
+          { message: "test", idempotencyKey: "stale-source" },
+          { assertAdmissionCurrent },
+        ),
+      ).rejects.toThrow("source closed");
+      expect(startTurn).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves accepted/final ordering and acceptance metadata without frames", async () => {
+    let sourceCurrent = true;
+    const assertAdmissionCurrent = vi.fn(() => {
+      if (!sourceCurrent) {
+        throw new Error("source closed");
+      }
+    });
     let emitFinal!: () => void;
     const finalGate = new Promise<void>((resolve) => {
       emitFinal = resolve;
     });
-    startTurn.mockImplementation(async ({ io }) => {
+    startTurn.mockImplementation(async ({ io, assertAdmissionCurrent: admissionGuard }) => {
+      expect(admissionGuard).toBe(assertAdmissionCurrent);
+      admissionGuard();
       io.emitAcceptance([true, { runId: "run-1", status: "accepted" }, undefined], {
         runId: "run-1",
       });
@@ -64,7 +131,7 @@ describe("createInternalAgentTurnFacade", () => {
 
     const result = createFacade().dispatchRaw(
       { message: "test", idempotencyKey: "run-1" },
-      { expectFinal: true, onAccepted },
+      { expectFinal: true, onAccepted, assertAdmissionCurrent },
     );
     await vi.waitFor(() =>
       expect(onAccepted).toHaveBeenCalledWith({
@@ -72,6 +139,8 @@ describe("createInternalAgentTurnFacade", () => {
         status: "accepted",
       }),
     );
+    sourceCurrent = false;
+    const checksAtAcceptance = assertAdmissionCurrent.mock.calls.length;
     emitFinal();
 
     await expect(result).resolves.toEqual({
@@ -80,6 +149,7 @@ describe("createInternalAgentTurnFacade", () => {
       error: undefined,
       meta: { runId: "run-1", terminal: true },
     });
+    expect(assertAdmissionCurrent).toHaveBeenCalledTimes(checksAtAcceptance);
   });
 
   it("preserves post-acceptance Error identity", async () => {
@@ -119,5 +189,222 @@ describe("createInternalAgentTurnFacade", () => {
       error: undefined,
       meta: { cached: true, runId: "run-2" },
     });
+  });
+
+  it("passes the exact internal execution-start observer to the turn", async () => {
+    const onExecutionStarted = vi.fn();
+    startTurn.mockImplementation(async ({ io }) => {
+      expect(io.emitExecutionStarted).toBe(onExecutionStarted);
+      io.emitAcceptance([true, { runId: "run-started", status: "accepted" }, undefined]);
+      io.emitExecutionStarted?.();
+    });
+
+    await expect(
+      createFacade().dispatchRaw(
+        { message: "test", idempotencyKey: "run-started" },
+        { onExecutionStarted },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(onExecutionStarted).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "aborted",
+    "replaced",
+    "rotated",
+    "agent changed",
+    "session changed",
+    "gateway closed",
+    "request mutated",
+  ] as const)("keeps startup ownership bound to its registration through %s", async (change) => {
+    const context = createContext();
+    let gatewayCurrent = true;
+    let owner: AgentTurnStartOwner | undefined;
+    const onStartOwner = vi.fn((value: AgentTurnStartOwner) => {
+      owner = value;
+    });
+    const request = {
+      agentId: "main",
+      message: "resume",
+      idempotencyKey: "owned-start",
+      sessionKey: "agent:main:owned-start",
+      expectedExistingSessionId: "owned-session",
+    };
+    const register = () =>
+      registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        agentId: request.agentId,
+        runId: request.idempotencyKey,
+        sessionId: request.expectedExistingSessionId,
+        sessionKey: request.sessionKey,
+        kind: "agent",
+        timeoutMs: 60_000,
+      });
+    const registration = register();
+    if (!registration.registered) {
+      throw new Error("expected startup registration");
+    }
+    startTurn.mockImplementation(async ({ io }) => {
+      io.emitStartOwner?.(request.idempotencyKey, registration.entry);
+      io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }, undefined], {
+        runId: request.idempotencyKey,
+      });
+    });
+    const facade = createInternalAgentTurnFacade({
+      client: createSyntheticPluginRuntimeClient(),
+      getContext: () => context,
+      assertContextCurrent: () => {
+        if (!gatewayCurrent) {
+          throw new Error("gateway closed");
+        }
+      },
+    });
+    await facade.dispatch(request, { onStartOwner });
+    if (!owner) {
+      throw new Error("expected captured startup owner");
+    }
+    expect(owner.observe()).toEqual({
+      executionStarted: false,
+      expiresAtMs: registration.entry.expiresAtMs,
+    });
+    let replacement: ReturnType<typeof register> | undefined;
+    switch (change) {
+      case "aborted":
+        registration.controller.abort();
+        break;
+      case "replaced":
+        registration.cleanup();
+        replacement = register();
+        break;
+      case "rotated":
+        rotateAgentEventLifecycleGeneration();
+        break;
+      case "agent changed":
+        registration.entry.agentId = "other-agent";
+        break;
+      case "session changed":
+        registration.entry.sessionId = "replacement-session";
+        break;
+      case "gateway closed":
+        gatewayCurrent = false;
+        break;
+      case "request mutated":
+        request.agentId = "other-agent";
+        request.idempotencyKey = "other-run";
+        request.sessionKey = "agent:other:other";
+        request.expectedExistingSessionId = "other-session";
+        break;
+    }
+    if (change === "request mutated") {
+      expect(owner.observe()).toBeDefined();
+      expect(owner.abort()).toBe(true);
+      expect(registration.controller.signal.aborted).toBe(true);
+    } else {
+      expect(owner.observe()).toBeUndefined();
+      expect(owner.abort()).toBe(false);
+    }
+    expect(replacement?.controller.signal.aborted ?? false).toBe(false);
+    expect(onStartOwner).toHaveBeenCalledOnce();
+    replacement?.cleanup();
+    registration.cleanup();
+  });
+
+  it("cancels only the accepted run when its opted-in dispatch deadline expires", async () => {
+    vi.useFakeTimers();
+    const context = createContext();
+    const unrelated = registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId: "unrelated-run",
+      sessionId: "unrelated-session",
+      sessionKey: "agent:main:unrelated",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    let accepted: ReturnType<typeof registerChatAbortController> | undefined;
+    startTurn.mockImplementation(async ({ io }) => {
+      const registration = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: "deadline-run",
+        sessionId: "deadline-session",
+        sessionKey: "agent:main:deadline",
+        timeoutMs: 60_000,
+        kind: "agent",
+      });
+      accepted = registration;
+      io.emitAcceptance([true, { runId: "deadline-run", status: "accepted" }, undefined], {
+        runId: "deadline-run",
+      });
+      await new Promise<void>((_resolve, reject) => {
+        registration.controller.signal.addEventListener(
+          "abort",
+          () => reject(new Error("deadline run aborted")),
+          { once: true },
+        );
+      });
+    });
+
+    try {
+      const result = createFacade(context).dispatchRaw(
+        {
+          message: "settle requester",
+          sessionKey: "agent:main:deadline",
+          idempotencyKey: "deadline-run",
+        },
+        { cancelOnDeadline: true, expectFinal: true, timeoutMs: 20 },
+      );
+      const outcome = expect(result).rejects.toThrow("gateway request timeout for agent");
+      await vi.advanceTimersByTimeAsync(20);
+
+      await outcome;
+      expect(accepted?.controller.signal.aborted).toBe(true);
+      expect(unrelated.controller.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a run accepted after its opted-in dispatch deadline", async () => {
+    vi.useFakeTimers();
+    const context = createContext();
+    let accept!: () => void;
+    const acceptanceGate = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    let accepted: ReturnType<typeof registerChatAbortController> | undefined;
+    startTurn.mockImplementation(async ({ io }) => {
+      await acceptanceGate;
+      accepted = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: "late-run",
+        sessionId: "late-session",
+        sessionKey: "agent:main:late",
+        timeoutMs: 60_000,
+        kind: "agent",
+      });
+      io.emitAcceptance([true, { runId: "late-run", status: "accepted" }, undefined], {
+        runId: "late-run",
+      });
+    });
+
+    try {
+      const result = createFacade(context).dispatchRaw(
+        {
+          message: "settle requester",
+          sessionKey: "agent:main:late",
+          idempotencyKey: "late-run",
+        },
+        { cancelOnDeadline: true, expectFinal: true, timeoutMs: 20 },
+      );
+      const outcome = expect(result).rejects.toThrow("gateway request timeout for agent");
+      await vi.advanceTimersByTimeAsync(20);
+      await outcome;
+
+      accept();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(accepted?.controller.signal.aborted).toBe(true);
+    } finally {
+      accept();
+      vi.useRealTimers();
+    }
   });
 });

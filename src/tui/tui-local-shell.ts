@@ -1,9 +1,9 @@
 // Launches and manages the local shell process used by TUI local mode.
-import { spawn } from "node:child_process";
-import { StringDecoder } from "node:string_decoder";
+import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
 
@@ -23,7 +23,6 @@ type LocalShellDeps = {
     onSelect?: (item: SelectItem) => void;
     onCancel?: () => void;
   };
-  spawnCommand?: typeof spawn;
   getCwd?: () => string | undefined;
   env?: NodeJS.ProcessEnv;
   maxOutputChars?: number;
@@ -32,22 +31,25 @@ type LocalShellDeps = {
 export function createLocalShellRunner(deps: LocalShellDeps) {
   let localExecAsked = false;
   let localExecAllowed = false;
+  let closing = false;
+  let shutdownPromise: Promise<void> | undefined;
+  let cancelPendingApproval: (() => void) | undefined;
+  const supervisor = getProcessSupervisor();
+  const scopeKey = `tui-local:${randomUUID()}`;
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   const createSelector = deps.createSelector ?? createSearchableSelectList;
-  const spawnCommand = deps.spawnCommand ?? spawn;
   const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
   const maxChars = deps.maxOutputChars ?? 40_000;
 
   const ensureLocalExecAllowed = async (): Promise<boolean> => {
-    if (localExecAllowed) {
-      return true;
-    }
-    if (localExecAsked) {
-      return false;
+    if (closing || localExecAsked) {
+      return localExecAllowed && !closing;
     }
     localExecAsked = true;
 
     return await new Promise<boolean>((resolve) => {
+      let settled = false;
       deps.chatLog.addSystem("Allow local shell commands for this session?");
       deps.chatLog.addSystem(
         "This runs commands on YOUR machine (not the gateway) and may delete files or reveal secrets.",
@@ -60,25 +62,30 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         ],
         2,
       );
-      selector.onSelect = (item: SelectItem) => {
-        deps.closeOverlay(overlayHandle);
-        if (item.value === "yes") {
-          localExecAllowed = true;
-          deps.chatLog.addSystem("local shell: enabled for this session");
-          resolve(true);
-        } else {
-          deps.chatLog.addSystem("local shell: not enabled");
-          resolve(false);
+      const finish = (allowed: boolean, message: string) => {
+        if (settled) {
+          return;
         }
-        deps.tui.requestRender();
-      };
-      selector.onCancel = () => {
+        settled = true;
         deps.closeOverlay(overlayHandle);
-        deps.chatLog.addSystem("local shell: cancelled");
+        cancelPendingApproval = undefined;
+        if (allowed) {
+          localExecAllowed = true;
+        }
+        deps.chatLog.addSystem(message);
         deps.tui.requestRender();
-        resolve(false);
+        resolve(allowed);
       };
-      const overlayHandle: OverlayHandle = deps.openOverlay(selector);
+      selector.onSelect = (item: SelectItem) => {
+        const allowed = item.value === "yes" && !closing;
+        finish(
+          allowed,
+          allowed ? "local shell: enabled for this session" : "local shell: not enabled",
+        );
+      };
+      selector.onCancel = () => finish(false, "local shell: cancelled");
+      const overlayHandle = deps.openOverlay(selector);
+      cancelPendingApproval = selector.onCancel;
       deps.tui.requestRender();
     });
   };
@@ -98,7 +105,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     }
 
     const allowed = await ensureLocalExecAllowed();
-    if (!allowed) {
+    if (!allowed || closing) {
       return;
     }
 
@@ -115,63 +122,61 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
-    const appendWithCap = (text: string, chunk: string) => {
-      const combined = text + chunk;
-      return combined.length > maxChars ? sliceUtf16Safe(combined, -maxChars) : combined;
-    };
-
-    await new Promise<void>((resolve) => {
-      const child = spawnCommand(cmd, {
-        // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
-        // and is gated behind an explicit in-session approval prompt.
-        shell: true,
+    let stdout = "";
+    let stderr = "";
+    let error: unknown;
+    let result: Awaited<ReturnType<ManagedRun["wait"]>> | undefined;
+    let run: ManagedRun | undefined;
+    try {
+      run = await supervisor.spawn({
+        mode: "anchored-shell",
+        command: cmd,
+        scopeKey,
         cwd,
         env: { ...env, OPENCLAW_SHELL: "tui-local" },
+        captureOutput: false,
+        onStdout: (chunk) => {
+          stdout = sliceUtf16Safe(stdout + chunk, -maxChars);
+        },
+        onStderr: (chunk) => {
+          stderr = sliceUtf16Safe(stderr + chunk, -maxChars);
+        },
       });
+      if (closing) {
+        return;
+      }
+      result = await run.wait();
+    } catch (caught) {
+      error = caught;
+    } finally {
+      run?.detachOutput?.();
+    }
+    // Keep the tail so a large stdout cannot evict a trailing stderr failure reason.
+    const combined = sliceUtf16Safe(
+      stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""),
+      -maxChars,
+    ).trimEnd();
 
-      let stdout = "";
-      let stderr = "";
-      let error: Error | undefined;
-      const stdoutDecoder = new StringDecoder("utf8");
-      const stderrDecoder = new StringDecoder("utf8");
-      // Pipe errors are incidental; close owns completion after any recorded spawn error.
-      const ignoreOutputStreamError = () => {};
-      child.stdout.on("error", ignoreOutputStreamError);
-      child.stderr.on("error", ignoreOutputStreamError);
-      child.stdout.on("data", (buf) => {
-        stdout = appendWithCap(stdout, stdoutDecoder.write(buf));
-      });
-      child.stderr.on("data", (buf) => {
-        stderr = appendWithCap(stderr, stderrDecoder.write(buf));
-      });
-
-      child.on("close", (code, signal) => {
-        stdout = appendWithCap(stdout, stdoutDecoder.end());
-        stderr = appendWithCap(stderr, stderrDecoder.end());
-        // Keep the tail (consistent with the streaming appendWithCap above) so a
-        // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
-        // end is what the operator needs most when output overflows the cap.
-        const combined = sliceUtf16Safe(
-          stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""),
-          -maxChars,
-        ).trimEnd();
-
-        if (combined) {
-          for (const lineLocal of combined.split("\n")) {
-            deps.chatLog.addSystem(`[local] ${lineLocal}`);
-          }
-        }
-        const status = error ? `error: ${formatTuiErrorMessage(error)}` : `exit ${code ?? "?"}`;
-        deps.chatLog.addSystem(`[local] ${status}${signal ? ` (signal ${signal})` : ""}`);
-        deps.tui.requestRender();
-        resolve();
-      });
-
-      child.on("error", (err) => {
-        error = err;
-      });
-    });
+    if (combined) {
+      for (const lineLocal of combined.split("\n")) {
+        deps.chatLog.addSystem(`[local] ${lineLocal}`);
+      }
+    }
+    const status = error
+      ? `error: ${formatTuiErrorMessage(error)}`
+      : `exit ${result?.exitCode ?? "?"}`;
+    deps.chatLog.addSystem(
+      `[local] ${status}${result?.exitSignal ? ` (signal ${result.exitSignal})` : ""}`,
+    );
+    deps.tui.requestRender();
   };
 
-  return { runLocalShellLine };
+  const shutdown = () =>
+    (shutdownPromise ??= (async () => {
+      closing = true;
+      cancelPendingApproval?.();
+      await cleanupScope();
+    })());
+
+  return { runLocalShellLine, shutdown };
 }

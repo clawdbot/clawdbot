@@ -136,8 +136,19 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("requires the Tailscale Funnel marker on the managed Funnel listener", async () => {
+  it("attributes unmarked tailnet traffic to the managed Funnel policy", async () => {
+    const req = request({ forwardedFor: "100.64.0.10", login: "alice@example.com" });
+    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
+
+    expect(prepareGatewayIngressAttribution({ req })).toMatchObject({
+      kind: "tailscale-funnel",
+      clientIp: "100.64.0.10",
+    });
+  });
+
+  it("rejects an invalid marker on the managed Funnel listener", async () => {
     const req = request({ forwardedFor: "203.0.113.10" });
+    req.headers["tailscale-funnel-request"] = "?0";
     markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
 
     expect(prepareGatewayIngressAttribution({ req })).toMatchObject({

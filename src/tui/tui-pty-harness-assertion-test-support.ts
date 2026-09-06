@@ -209,7 +209,7 @@ function replayTerminalState(
   if (!terminalOutputIsComplete(raw)) {
     return undefined;
   }
-  for (const segment of ansiSequences.splitAnsiSegments(raw)) {
+  for (const segment of ansiSequences.iterateAnsiSegments(raw)) {
     if (segment.kind === "text") {
       // pi-tui expands visible tabs and does not use literal HT/BS for output layout.
       // Captured HT/BS bytes are invalid evidence, not terminal operations to replay.
@@ -415,20 +415,7 @@ async function assertTerminalAttackPrefixSanitized(
   );
 }
 
-function hasStatusFrame(
-  raw: string,
-  markers: string[],
-  status: RegExp,
-  dimensions: PtyTerminalDimensions,
-) {
-  return latestFrameHasRow(
-    raw,
-    dimensions,
-    (row) => markers.every((marker) => row.includes(marker)) && status.test(row),
-  );
-}
-
-export async function exerciseSelectorOutputSafety(
+async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -555,7 +542,7 @@ export async function exerciseNarrowTerminalRendering(
   }
 }
 
-export async function exerciseGatewayOutputSafety(
+async function exerciseGatewayOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -583,13 +570,14 @@ export async function exerciseGatewayOutputSafety(
     await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
     await fixture.run.waitForOutput("(no output)", startupTimeoutMs);
-    await assertTerminalAttackSanitized(fixture, idlePayload, startupTimeoutMs);
-    const raw = fixture.run.output();
-    for (const attack of systemAttacks) {
-      expect(raw).not.toContain(attack);
-    }
-    expect(hasStatusFrame(fixture.run.output(), idlePayload.markers, /\| idle/u, fixture.run)).toBe(
-      true,
+    // Replay omits zero-width bidi isolates but preserves authenticated cells.
+    // The complete disconnect row must exist before reconnect replaces it.
+    await assertHistoricalTerminalAttackSanitized(
+      fixture,
+      idlePayload,
+      idlePayload.markers,
+      `local runtime stopped: ${idlePayload.expectedLine} | idle`,
+      startupTimeoutMs,
     );
     await waitForSynchronizedFrameRows(
       fixture.run,
@@ -598,6 +586,11 @@ export async function exerciseGatewayOutputSafety(
         rows.some((row) => row.includes("local ready | idle")),
       startupTimeoutMs,
     );
+    const raw = fixture.run.output();
+    for (const attack of [...systemAttacks, ...idlePayload.attacks]) {
+      expect(raw).not.toContain(attack);
+    }
+    expect(raw).not.toContain("\uFFFD");
 
     const helpOffset = fixture.run.visibleOutput().length;
     await fixture.run.write("/help\r", { delay: false });
@@ -611,7 +604,7 @@ export async function exerciseGatewayOutputSafety(
   }
 }
 
-export async function exerciseMarkdownAndAutocompleteOutputSafety(
+async function exerciseMarkdownAndAutocompleteOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -653,11 +646,8 @@ export async function exerciseMarkdownAndAutocompleteOutputSafety(
     await fixture.run.write("\x14", { delay: false });
     await commandAssertion;
 
-    await fixture.run.write("\x1b", { delay: false });
-    await sleep(50);
-    await fixture.run.write("\x15", { delay: false });
-    await sleep(50);
-    await fixture.run.write("/think ", { delay: false });
+    // Ctrl+U replaces the input without a lone Escape absorbing it as an Alt chord over SSH.
+    await fixture.run.write("\x15/think ", { delay: false });
     await fixture.run.waitForOutput("T08_SAFE_THINKING", 5_000);
     const raw = fixture.run.output();
     expect(thinking.markers.some((marker) => raw.includes(marker))).toBe(false);
@@ -667,7 +657,7 @@ export async function exerciseMarkdownAndAutocompleteOutputSafety(
   }
 }
 
-export async function exerciseInteractiveOutputSafety(
+async function exerciseInteractiveOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -703,6 +693,18 @@ export async function exerciseInteractiveOutputSafety(
   } finally {
     await fixture.cleanup();
   }
+}
+
+export async function exerciseTerminalOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  await Promise.all([
+    exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
+    exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs),
+    exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs),
+    exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
+  ]);
 }
 
 /** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */

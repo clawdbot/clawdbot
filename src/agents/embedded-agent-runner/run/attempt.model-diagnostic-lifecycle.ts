@@ -1,3 +1,4 @@
+import { withProviderAcceptanceObserver, type ProviderAcceptance } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
@@ -52,6 +53,7 @@ export type ModelCallDiagnosticContext = {
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
   suppressPluginHooks?: boolean;
+  requestTimeoutMs?: number;
 };
 
 export type ModelCallEventBase = Omit<
@@ -85,6 +87,7 @@ export type ModelCallUsage = NonNullable<
 >;
 export type ModelCallObservationState = {
   requestPayloadBytes?: number;
+  providerAcceptanceKind?: ProviderAcceptance["kind"];
   responseStatus?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
@@ -92,9 +95,9 @@ export type ModelCallObservationState = {
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
   contentCapture?: DiagnosticModelContentCapturePolicy;
-  lastStreamProgressAt?: number;
   semanticProgressEmitted?: boolean;
   terminalEventEmitted?: boolean;
+  terminalError?: Error;
   suppressPluginHooks?: boolean;
 };
 export type ModelCallObserver = {
@@ -154,6 +157,7 @@ function emitProviderRequestTimelineEvent(
   durationMs: number,
   ok: boolean,
   responseStatus: number | undefined,
+  providerAcceptanceKind: ModelCallObservationState["providerAcceptanceKind"],
 ): void {
   const provider = boundedTimelineAttribute(eventBase.provider);
   const model = boundedTimelineAttribute(eventBase.model);
@@ -174,6 +178,8 @@ function emitProviderRequestTimelineEvent(
       ...(model ? { model } : {}),
       ...(api ? { api } : {}),
       ...(transport ? { transport } : {}),
+      providerAccepted: providerAcceptanceKind !== undefined,
+      ...(providerAcceptanceKind ? { providerAcceptanceKind } : {}),
     },
   });
 }
@@ -273,10 +279,11 @@ function dispatchModelCallEndedHook(
   );
 }
 
-function emitModelCallCompleted(
+function emitModelCallEnded(
   eventBase: ModelCallEventBase,
   startedAt: number,
   observer: ModelCallObserver,
+  failure: { error: unknown } | undefined,
   ownerGeneration: CoreModelRequestOwnerGeneration | undefined,
 ): void {
   if (observer.state.terminalEventEmitted) {
@@ -285,16 +292,24 @@ function emitModelCallCompleted(
   observer.state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = observer.sizeTimingFields();
+  const fields = failure ? modelCallErrorFields(failure.error) : undefined;
+  const terminal = fields
+    ? { type: "model.call.error" as const, ...fields }
+    : { type: "model.call.completed" as const };
+  const errorStatus = failure ? diagnosticHttpStatusCode(failure.error) : undefined;
+  const responseStatus =
+    observer.state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
   emitProviderRequestTimelineEvent(
     eventBase,
     startedAt,
     durationMs,
-    true,
-    observer.state.responseStatus,
+    failure === undefined,
+    responseStatus,
+    observer.state.providerAcceptanceKind,
   );
   emitCoreModelRequestEndedDiagnosticEvent(
     {
-      type: "model.call.completed",
+      ...terminal,
       ...eventBase,
       durationMs,
       ...sizeTimingFields,
@@ -306,46 +321,7 @@ function emitModelCallCompleted(
   if (!observer.state.suppressPluginHooks) {
     dispatchModelCallEndedHook(eventBase, {
       durationMs,
-      outcome: "completed",
-      ...sizeTimingFields,
-    });
-  }
-}
-
-function emitModelCallError(
-  eventBase: ModelCallEventBase,
-  startedAt: number,
-  observer: ModelCallObserver,
-  err: unknown,
-  ownerGeneration: CoreModelRequestOwnerGeneration | undefined,
-): void {
-  if (observer.state.terminalEventEmitted) {
-    return;
-  }
-  observer.state.terminalEventEmitted = true;
-  const durationMs = Date.now() - startedAt;
-  const sizeTimingFields = observer.sizeTimingFields();
-  const fields = modelCallErrorFields(err);
-  const errorStatus = diagnosticHttpStatusCode(err);
-  const responseStatus =
-    observer.state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
-  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false, responseStatus);
-  emitCoreModelRequestEndedDiagnosticEvent(
-    {
-      type: "model.call.error",
-      ...eventBase,
-      durationMs,
-      ...sizeTimingFields,
-      ...fields,
-      ...observer.usageField(),
-    },
-    ownerGeneration,
-    modelContentPrivateData(observer.completedContent()),
-  );
-  if (!observer.state.suppressPluginHooks) {
-    dispatchModelCallEndedHook(eventBase, {
-      durationMs,
-      outcome: "error",
+      outcome: failure ? "error" : "completed",
       ...sizeTimingFields,
       ...fields,
     });
@@ -393,13 +369,19 @@ function withDiagnosticRequestContext(
   if (traceparent) {
     headers[TRACEPARENT_HEADER_NAME] = traceparent;
   }
-  return {
+  const requestOptions = {
     ...options,
     requestId: callId,
     ...((options?.headers || traceparent) && { headers }),
     onPayload,
     onResponse,
   };
+  return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
+    observer.state.providerAcceptanceKind = acceptance.kind;
+    if (acceptance.kind === "http_response") {
+      observer.state.responseStatus = acceptance.status;
+    }
+  });
 }
 
 export function createModelLifecycle(params: {
@@ -430,10 +412,22 @@ export function createModelLifecycle(params: {
     propagatedOptions,
     startedAt,
     emitCompleted() {
-      emitModelCallCompleted(eventBase, startedAt, observer, params.ctx.ownerGeneration);
+      emitModelCallEnded(
+        eventBase,
+        startedAt,
+        observer,
+        observer.state.terminalError ? { error: observer.state.terminalError } : undefined,
+        params.ctx.ownerGeneration,
+      );
     },
     emitError(err: unknown) {
-      emitModelCallError(eventBase, startedAt, observer, err, params.ctx.ownerGeneration);
+      emitModelCallEnded(
+        eventBase,
+        startedAt,
+        observer,
+        { error: err },
+        params.ctx.ownerGeneration,
+      );
     },
   };
 }

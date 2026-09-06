@@ -1,6 +1,3 @@
-import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationContext } from "../app/context.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import {
   hovercardBootstrapIntentActive,
   LazyHovercardBootstrap,
@@ -8,45 +5,18 @@ import {
 } from "./lazy-hovercard-registration.ts";
 import {
   SESSION_PROGRESS_HOVER_LINK_SELECTOR,
-  sessionProgressHoverAnchorFromEvent,
+  sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
+import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 
 let bootstrapObserver: MutationObserver | null = null;
 
-type HovercardProviderElement = HTMLElement & {
-  client?: GatewayBrowserClient | null;
-  context?: ApplicationContext | null;
-  gateway?: ApplicationGateway | null;
-};
-
-const bootstrap = new LazyHovercardBootstrap<
-  HovercardProviderElement,
-  {
-    client: GatewayBrowserClient | null;
-    context: ApplicationContext | null;
-    gateway: ApplicationGateway | null;
-  }
->({
+const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   tag: HOVERCARD_TAG,
   load: async () =>
     (await import("./session-progress-hovercard.runtime.ts")).SessionProgressHovercardProvider,
-  snapshot: (provider) => ({
-    client: provider.client ?? null,
-    context: provider.context ?? null,
-    gateway: provider.gateway ?? null,
-  }),
-  restore: (provider, properties) => {
-    // Lit assigns .gateway before upgrade. Remove the expando so the runtime
-    // accessors can own the restored dependencies after definition.
-    delete provider.client;
-    delete provider.context;
-    delete provider.gateway;
-    provider.client = properties.client;
-    provider.context = properties.context;
-    provider.gateway = properties.gateway;
-  },
   onDefined: () => {
     bootstrapObserver?.disconnect();
     bootstrapObserver = null;
@@ -78,20 +48,20 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   ) {
     return;
   }
-  const anchor = sessionProgressHoverAnchorFromEvent(event);
-  if (!anchor || !bootstrap.providerFor(anchor)) {
+  const target = sessionProgressHoverTargetFromEvent(event);
+  if (!target || !bootstrap.providerFor(target)) {
     return;
   }
   await bootstrap.define();
-  const target = event.target;
+  const eventTarget = event.target;
   if (
-    !(target instanceof EventTarget) ||
-    !anchor.isConnected ||
-    !hovercardBootstrapIntentActive(anchor, trigger)
+    !(eventTarget instanceof EventTarget) ||
+    !target.isConnected ||
+    !hovercardBootstrapIntentActive(target, trigger, true)
   ) {
     return;
   }
-  target.dispatchEvent(
+  eventTarget.dispatchEvent(
     new Event(trigger === "pointer" ? "pointerover" : "focusin", {
       bubbles: true,
       composed: true,

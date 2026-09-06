@@ -357,7 +357,7 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
   return true;
 }
 
-/** Clear an unfinished invocation capture. Attempt keys are unique per CLI execution. */
+/** Clear observers for this capture key. Grant admission is fenced separately. */
 export function clearMcpLoopbackToolCallCapture(captureKey: string): void {
   deleteMcpLoopbackToolCallCapture(captureKey.trim());
 }

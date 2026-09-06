@@ -31,7 +31,7 @@ function isCurrentJournalOwner(
   db: DatabaseSync,
   placement: WorkerSessionPlacementRecord | undefined,
   owner: WorkerWorkspaceJournalOwner,
-): boolean {
+): placement is Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }> {
   if (
     (placement?.state !== "active" && placement?.state !== "draining") ||
     placement.environmentId !== owner.environmentId ||
@@ -106,6 +106,12 @@ export function clearWorkerWorkspaceReconciliation(
 export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntime) {
   const { now, read, write } = runtime;
   return {
+    getWorkspaceReconciliationPlacement(owner: WorkerWorkspaceJournalOwner) {
+      const db = read();
+      const placement = find(db, owner.sessionId);
+      return isCurrentJournalOwner(db, placement, owner) ? placement : undefined;
+    },
+
     listWorkspaceReconciliationOwners(): WorkerWorkspaceJournalOwner[] {
       const db = read();
       return executeSqliteQuerySync(

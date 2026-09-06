@@ -12,6 +12,11 @@ adapters before removing them. This protects existing bundled and external
 plugins while the SDK, manifest, setup, config, and agent runtime contracts
 evolve.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
+Plugin authors should pin and test supported OpenClaw host versions. This
+stability designation does not cancel existing deprecation windows,
+compatibility adapters, or supported-upgrade migrations described below.
+
 ## Compatibility registry
 
 Plugin compatibility contracts are tracked in the core registry at
@@ -42,6 +47,13 @@ The `pnpm check:doctor-deprecation-registry` guard fails when a record is still
 supported-upgrade proof or move it to `removal-pending` with a documented
 blocker. `removal-pending` records do not fail the date guard, but remain in the
 explicit review queue until their upgrade conditions are met.
+
+A maintainer-approved doctor deadline renewal preserves the original date as
+`previousRemoveAfter`, records the approval date as `renewedAt`, and sets a new
+`removeAfter` no more than three months later. Renewal changes review timing
+only; it does not change runtime compatibility, config handling, migration
+behavior, or lifecycle status. On August 29, 2026, all 44 current doctor
+records were renewed through November 29, 2026.
 
 Release sweeps should check both registries. Do not delete a doctor
 migration just because the matching runtime or config compatibility record
@@ -78,7 +90,7 @@ separately tracked so supported upgrade paths can still repair old config.
 
 The remaining dated compatibility areas are:
 
-- the September SDK subpath window listed in the migration guide
+- the renewed October 1 SDK subpath window listed in the migration guide
 - the beta.5 session-store bridge
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
@@ -92,19 +104,20 @@ The annotation-only compatibility audit added these dated records. Their
 `removeAfter` date is an earliest review date, not permission to remove a
 surface while its stated reader or migration condition remains unmet.
 
-| Compatibility code                        | Removal condition                                                                                       | `removeAfter` |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------- |
-| `plugin-sdk-channel-setup-input-fields`   | Repeat the published-plugin artifact sweep and remove only fields with no reader.                       | 2026-10-01    |
-| `plugin-sdk-broad-runtime-barrels`        | Move bundled and indexed external consumers to focused SDK subpaths.                                    | 2026-10-01    |
-| `plugin-sdk-provider-owned-helper-shims`  | Move each deprecated provider helper to its provider-local API and prove no published reader remains.   | 2026-10-01    |
-| `message-presentation-legacy-bridges`     | Move reply producers and official channel packages to `MessagePresentation`.                            | 2026-10-01    |
-| `plugin-sdk-focused-compat-aliases`       | Prove every enumerated alias has no bundled or published reader.                                        | 2026-10-01    |
-| `agent-harness-terminal-result-aliases`   | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.      | 2026-10-01    |
-| `official-plugin-export-aliases`          | Move users of Google Meet testing, channel presentation, and Discord timeout exports to canonical APIs. | 2026-10-01    |
-| `memory-host-compatibility-aliases`       | Use canonical memory tables and prepared runtime config everywhere.                                     | 2026-10-01    |
-| `plugin-runtime-api-compat-aliases`       | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                | 2026-10-01    |
-| `plugin-provider-manifest-compat-aliases` | Move kind/setup/catalog ownership to manifests and model-catalog registration.                          | 2026-10-01    |
-| `deprecated-session-store-beta5-api`      | End the v2026.7.x whole-store upgrade window, including package-root aliases.                           | 2026-10-12    |
+| Compatibility code                            | Removal condition                                                                                       | `removeAfter` |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------- |
+| `plugin-sdk-channel-setup-input-fields`       | Repeat the published-plugin artifact sweep and remove only fields with no reader.                       | 2026-10-01    |
+| `plugin-sdk-broad-runtime-barrels`            | Move bundled and indexed external consumers to focused SDK subpaths.                                    | 2026-10-01    |
+| `plugin-sdk-provider-owned-helper-shims`      | Move each deprecated provider helper to its provider-local API and prove no published reader remains.   | 2026-10-01    |
+| `message-presentation-legacy-bridges`         | Move reply producers and official channel packages to `MessagePresentation`.                            | 2026-10-01    |
+| `plugin-sdk-focused-compat-aliases`           | Prove every enumerated alias has no bundled or published reader.                                        | 2026-10-01    |
+| `agent-harness-terminal-result-aliases`       | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.      | 2026-10-01    |
+| `official-plugin-export-aliases`              | Move users of Google Meet testing, channel presentation, and Discord timeout exports to canonical APIs. | 2026-10-01    |
+| `memory-host-compatibility-aliases`           | Use canonical memory tables and prepared runtime config everywhere.                                     | 2026-10-01    |
+| `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                | 2026-10-01    |
+| `plugin-provider-manifest-compat-aliases`     | Move kind/setup/catalog ownership to manifests and model-catalog registration.                          | 2026-10-01    |
+| `deprecated-session-store-beta5-api`          | End the v2026.7.x whole-store upgrade window, including package-root aliases.                           | 2026-10-12    |
+| `plugin-sdk-session-agent-resolution-aliases` | Move published plugins to strict session-agent resolution with an explicit or prepared owner.           | 2026-11-29    |
 
 `pnpm plugins:boundary-report` reports `removal-pending` records separately
 from deprecated records. A due `removal-pending` record remains blocked until
@@ -112,6 +125,19 @@ its reported migration condition is satisfied and its reader references are
 cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
+
+### Session agent resolution aliases
+
+New plugins should use `resolveSessionAgentIdsStrict` or
+`resolveSessionAgentIdStrict` and supply an explicit agent, an agent-scoped
+session key, a prepared fallback agent, or a persisted fixed-store owner.
+
+The older `resolveSessionAgentIds` and `resolveSessionAgentId` Plugin SDK
+exports preserve ambient system-agent fallback only when strict resolution
+fails because no owner was supplied. They do not override explicit,
+agent-scoped, persisted, conflicting, or retired owner outcomes. These aliases
+are deprecated as of August 29, 2026, and remain available through November 29, 2026. Removal also requires a published-plugin reader sweep and explicit
+breaking-release approval.
 
 ### Auth profile cooldown classifications
 

@@ -3,19 +3,19 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
+  controlUiSessionPath,
+  captureUiProof,
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("starts a model-suggested follow-up in a fresh worktree session", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("starts a model-suggested follow-up in a new session before workspace decisions", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const suggestion = {
       id: "task_123",
@@ -29,13 +29,16 @@ suite.define(() => {
     };
     const gateway = await installMockGateway(page, {
       deferredMethods: ["taskSuggestions.list"],
+      featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
       featureMethods: [
         "chat.metadata",
         "chat.startup",
         "taskSuggestions.list",
         "taskSuggestions.accept",
+        "environments.list",
       ],
       methodResponses: {
+        "environments.list": { environments: [], profiles: [{ id: "build" }] },
         "taskSuggestions.list": { suggestions: [suggestion] },
         "taskSuggestions.accept": {
           taskId: "task_123",
@@ -53,27 +56,13 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
 
-      const startButton = page.getByRole("button", { name: "Start with worktree" });
+      const startButton = page.getByRole("button", { name: "Start in a new session" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
-      const moreActions = page.getByRole("button", { name: "More ways to start this task" });
-      expect(await moreActions.count()).toBe(1);
-      const [startBox, moreActionsBox] = await Promise.all([
-        startButton.boundingBox(),
-        moreActions.boundingBox(),
-      ]);
-      expect(startBox).not.toBeNull();
-      expect(moreActionsBox).not.toBeNull();
-      expect(
-        (moreActionsBox?.x ?? 0) - ((startBox?.x ?? 0) + (startBox?.width ?? 0)),
-      ).toBeLessThanOrEqual(1);
-      await moreActions.click();
-      await page
-        .getByText("Copy prompt", { exact: true })
-        .waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.getByText("Start locally", { exact: true }).count()).toBe(0);
-      expect(await page.getByText("Fix in this session", { exact: true }).count()).toBe(0);
-      expect(await page.getByText("Send to cloud", { exact: true }).count()).toBe(0);
-      await page.keyboard.press("Escape");
+      const card = page.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`);
+      expect(await card.locator("wa-dropdown").count()).toBe(0);
+      expect(await card.getByRole("button", { name: "Copy prompt" }).isEnabled()).toBe(true);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      await captureUiProof(suite, page, "task-suggestions", "session-first.png");
       await page.getByText("Show instructions", { exact: true }).click();
       await page
         .getByText("/projects/example", { exact: true })
@@ -86,71 +75,17 @@ suite.define(() => {
       await startButton.click();
 
       const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
-      expect(acceptRequest.params).toEqual({ taskId: "task_123" });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("fixes a model-suggested follow-up in the source session", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const suggestion = {
-      id: "task_session",
-      title: "Repair the active flow",
-      prompt: "Fix the active flow and keep this transcript selected.",
-      tldr: "The follow-up belongs in this session.",
-      cwd: "/projects/example",
-      sessionKey: "main",
-      agentId: "main",
-      createdAt: Date.now(),
-    };
-    const gateway = await installMockGateway(page, {
-      featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "environments.list",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-      ],
-      methodResponses: {
-        "environments.list": { environments: [], profiles: [] },
-        "taskSuggestions.list": { suggestions: [suggestion] },
-        "taskSuggestions.accept": { taskId: suggestion.id, key: suggestion.sessionKey },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const card = page.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`);
-      await card.waitFor({ state: "visible", timeout: 10_000 });
-      await gateway.waitForRequest("environments.list");
-      const routeBeforeAccept = page.url();
-      await card.getByRole("button", { name: "More ways to start this task" }).click();
-      const sessionItem = card.locator('wa-dropdown-item[value="session"]');
-      await sessionItem.waitFor({ state: "visible", timeout: 10_000 });
-      await sessionItem.click();
-
-      const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
-      expect(acceptRequest.params).toEqual({ taskId: suggestion.id, mode: "session" });
-      await expect.poll(() => card.count()).toBe(0);
-      expect(page.url()).toBe(routeBeforeAccept);
+      expect(acceptRequest.params).toEqual({ taskId: "task_123", mode: "local" });
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:dashboard:suggested"));
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("clears model-suggested follow-ups while switching sessions", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: [
@@ -181,8 +116,8 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const startButton = page.getByRole("button", { name: "Start with worktree" });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      const startButton = page.getByRole("button", { name: "Start in a new session" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("taskSuggestions.list");
       await page
@@ -200,11 +135,7 @@ suite.define(() => {
   });
 
   it("keeps copy available when only listing is advertised", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
@@ -246,13 +177,10 @@ suite.define(() => {
         .waitFor({ state: "visible", timeout: 10_000 });
       const card = page.locator('.task-suggestion[data-task-id="task_list_only"]');
       await card.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await card.getByRole("button", { name: "Start with worktree" }).isDisabled()).toBe(
+      expect(await card.getByRole("button", { name: "Start in a new session" }).isDisabled()).toBe(
         true,
       );
-      await card.getByRole("button", { name: "More ways to start this task" }).click();
-      await card
-        .getByText("Copy prompt", { exact: true })
-        .waitFor({ state: "visible", timeout: 10_000 });
+      expect(await card.getByRole("button", { name: "Copy prompt" }).isEnabled()).toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -53,8 +53,7 @@ const {
   resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
 const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
-const { resetProviderAuthAliasMapCacheForTest } =
-  await import("../agents/provider-auth-aliases.test-support.js");
+const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
 
 function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
   return {
@@ -129,7 +128,7 @@ describe("provider auth choice manifest helpers", () => {
     );
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("flattens manifest auth choices", () => {
@@ -139,6 +138,7 @@ describe("provider auth choice manifest helpers", () => {
         method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        personalAccount: true,
         assistantPriority: 10,
         assistantVisibility: "visible",
         onboardingScopes: ["text-inference"],
@@ -156,6 +156,7 @@ describe("provider auth choice manifest helpers", () => {
           methodId: "api-key",
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
+          personalAccount: true,
           assistantPriority: 10,
           assistantVisibility: "visible",
           onboardingScopes: ["text-inference"],

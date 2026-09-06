@@ -15,7 +15,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerSessionPlacementStore,
+} from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 
@@ -24,8 +27,9 @@ const TERMINAL_ENVIRONMENT_STATES = new Set(["destroyed", "failed", "orphaned"])
 
 type NodeWorkspaceRetainCoordinatorOptions = {
   gatewayNamespace: string;
-  placements: Pick<WorkerSessionPlacementStore, "list">;
+  placements: Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">;
   environments: Pick<WorkerEnvironmentService, "list">;
+  additionalManifestRefs?: (placement: WorkerSessionPlacementRecord) => readonly string[];
   warn: (message: string) => void;
 };
 
@@ -71,6 +75,9 @@ function snapshotEntriesForNode(
   const placements = new Map(
     options.placements.list().map((placement) => [placement.sessionId, placement] as const),
   );
+  const pendingResults = new Map(
+    options.placements.listPendingWorkspaceResults().map((result) => [result.sessionId, result]),
+  );
   return nodeEnvironments(options, nodeId)
     .flatMap((environment): NodeWorkerWorkspaceRetainEntry[] => {
       if (
@@ -82,6 +89,13 @@ function snapshotEntriesForNode(
       }
       const sessionId = environment.attachedSessionIds[0]!;
       const placement = placements.get(sessionId);
+      const pending = pendingResults.get(sessionId);
+      // The base is not a complete reachability set until reconciliation settles. Pending
+      // results preserve this protection across restarts, when node-local transfer pins are lost.
+      const unsettled =
+        placement?.turnClaim ||
+        (pending?.environmentId === environment.environmentId &&
+          pending.ownerEpoch === environment.ownerEpoch);
       const hasExactManifestOwner =
         placement?.state === "starting" ||
         placement?.state === "active" ||
@@ -89,10 +103,16 @@ function snapshotEntriesForNode(
         placement?.state === "reconciling";
       const exactManifest =
         hasExactManifestOwner &&
+        !unsettled &&
         placement.environmentId === environment.environmentId &&
         placement.workspaceBaseManifestRef &&
         (placement.activeOwnerEpoch === environment.ownerEpoch || placement.state === "starting")
-          ? [placement.workspaceBaseManifestRef]
+          ? [
+              ...new Set([
+                placement.workspaceBaseManifestRef,
+                ...(options.additionalManifestRefs?.(placement) ?? []),
+              ]),
+            ].toSorted()
           : null;
       return [
         {

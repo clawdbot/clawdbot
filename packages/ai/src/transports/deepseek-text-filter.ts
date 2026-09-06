@@ -1,19 +1,16 @@
+import { DEEPSEEK_DSML_MARKERS } from "./deepseek-dsml-grammar.js";
+
 /**
  * DeepSeek DSML streaming text filter.
  * Removes provider-emitted DSML tool markup while buffering split tag prefixes
  * across streamed chunks.
  */
 const DSML_KINDS = ["tool_use_error", "tool_calls", "tool_call", "function_calls"] as const;
-const DSML_BARS = ["|", "｜"] as const;
 
-const DSML_OPEN_TOKENS = DSML_BARS.flatMap((bar) =>
-  DSML_KINDS.map((kind) => `<${bar}DSML${bar}${kind}>`),
-);
-const DSML_CLOSE_TOKENS = DSML_BARS.flatMap((bar) =>
-  DSML_KINDS.map((kind) => `</${bar}DSML${bar}${kind}>`),
+const DSML_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
+  DSML_KINDS.map((kind) => `<${marker}${kind}>`),
 );
 const MAX_OPEN_TOKEN_LEN = Math.max(...DSML_OPEN_TOKENS.map((token) => token.length));
-const MAX_CLOSE_TOKEN_LEN = Math.max(...DSML_CLOSE_TOKENS.map((token) => token.length));
 
 interface DeepSeekTextFilter {
   /** Push one streamed text chunk and receive any safe visible text segments. */
@@ -25,7 +22,8 @@ interface DeepSeekTextFilter {
 /** Create an incremental text filter that strips DeepSeek DSML tool blocks. */
 export function createDeepSeekTextFilter(): DeepSeekTextFilter {
   let buffer = "";
-  let insideDsml = false;
+  // Only the matching delimiter and kind may end the block being suppressed.
+  let closeToken: string | undefined;
 
   const consume = (final: boolean): string[] => {
     const output: string[] = [];
@@ -36,19 +34,19 @@ export function createDeepSeekTextFilter(): DeepSeekTextFilter {
     };
 
     while (buffer) {
-      if (insideDsml) {
-        const close = findEarliestToken(buffer, DSML_CLOSE_TOKENS);
-        if (close) {
-          buffer = buffer.slice(close.index + close.token.length);
-          insideDsml = false;
+      if (closeToken) {
+        const closeIndex = buffer.indexOf(closeToken);
+        if (closeIndex !== -1) {
+          buffer = buffer.slice(closeIndex + closeToken.length);
+          closeToken = undefined;
           continue;
         }
         // Keep a suffix that could still become a closing tag once the next
         // streamed chunk arrives; on final flush, drop the unterminated block.
-        const keep = final ? 0 : Math.min(buffer.length, MAX_CLOSE_TOKEN_LEN - 1);
+        const keep = final ? 0 : Math.min(buffer.length, closeToken.length - 1);
         buffer = buffer.slice(buffer.length - keep);
         if (final) {
-          insideDsml = false;
+          closeToken = undefined;
         }
         return output;
       }
@@ -57,7 +55,7 @@ export function createDeepSeekTextFilter(): DeepSeekTextFilter {
       if (open) {
         emit(buffer.slice(0, open.index));
         buffer = buffer.slice(open.index + open.token.length);
-        insideDsml = true;
+        closeToken = open.token.replace("<", "</");
         continue;
       }
 

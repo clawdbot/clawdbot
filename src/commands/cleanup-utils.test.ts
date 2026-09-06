@@ -756,7 +756,6 @@ describe("cleanup path removals", () => {
     const result = await removePath(process.cwd(), runtime, { dryRun: true });
 
     expect(result.ok).toBe(false);
-    expect(result.skipped).toBeUndefined();
     expect(runtime.error.mock.calls.length).toBe(1);
     expect(
       expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],
@@ -777,7 +776,6 @@ describe("cleanup path removals", () => {
       const result = await removePath(tmpRoot, runtime, { dryRun: true });
 
       expect(result.ok).toBe(false);
-      expect(result.skipped).toBeUndefined();
       expect(runtime.error.mock.calls.length).toBe(1);
       expect(
         expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],

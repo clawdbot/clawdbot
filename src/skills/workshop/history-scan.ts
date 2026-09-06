@@ -15,7 +15,6 @@ import {
   reconcileSkillHistoryScanProgress,
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
-import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./history-scan-review-outcome.js";
 import { HISTORY_SCAN_SESSION_SEGMENT, runSkillHistoryScanReview } from "./history-scan-review.js";
 import {
   emptyHistoryScanResult,
@@ -42,6 +41,7 @@ import {
   resolveSkillWorkshopModelContextTokens,
   resolveSkillWorkshopProjectionBudgets,
 } from "./model-context-budget.js";
+import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./review-outcome.js";
 import { getSkillProposalRunProgress } from "./service.js";
 
 type ActiveSkillHistoryScan = {
@@ -165,7 +165,8 @@ async function runSkillHistoryScanCore(
     }
     const durableProgress = await getSkillProposalRunProgress({
       runId: stored.pending.runId,
-      workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
+      config: params.config,
       ...(params.env ? { env: params.env } : {}),
     });
     resumedPending = {

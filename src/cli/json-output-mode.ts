@@ -61,10 +61,13 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
 }
 
 /** Let resolved command metadata override conservative early literal-flag routing. */
-export function applyResolvedCommandOutputMode(machineOutput: boolean): void {
-  resolvedJsonOutputMode = machineOutput;
+export function applyResolvedCommandOutputMode(
+  jsonOutputMode: boolean,
+  machineOutputMode = jsonOutputMode,
+): void {
+  resolvedJsonOutputMode = jsonOutputMode;
   const restore = loggingState.earlyConsoleRoutingRestore;
-  if (!machineOutput && restore !== null) {
+  if (!machineOutputMode && restore !== null) {
     loggingState.forceConsoleToStderr = restore;
   }
 }

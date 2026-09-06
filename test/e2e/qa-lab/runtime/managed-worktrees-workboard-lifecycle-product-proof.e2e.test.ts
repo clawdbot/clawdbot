@@ -6,8 +6,9 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import type { ManagedWorktreeRecord } from "../../../../src/agents/worktrees/types.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -35,11 +36,15 @@ type WorkboardDispatchResult = {
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
 type GatewayRunResult = { status?: unknown };
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -67,7 +72,8 @@ async function initializeRepository(root: string): Promise<string> {
 }
 
 async function startHarness() {
-  harness = await startQaLiveLaneGateway({
+  gatewayOwner = createQaLiveLaneGateway();
+  harness = await gatewayOwner.start({
     repoRoot: process.cwd(),
     providerMode: "mock-openai",
     primaryModel: "mock-openai/gpt-5.6-luna",

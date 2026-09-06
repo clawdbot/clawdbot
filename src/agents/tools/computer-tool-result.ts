@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { readImageMetadataFromHeader } from "../../media/image-ops.js";
 import type { ComputerActResult } from "../../plugins/computer-use-contract.js";
 import { DEFAULT_IMAGE_MAX_DIMENSION_PX } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
-import { sanitizeToolResultImages } from "../tool-images.js";
+import { sanitizeContentBlocksImages } from "../tool-images.js";
 import type {
   ComputerContextEpoch,
+  ComputerObservationState,
   ComputerTarget,
   ComputerToolAction,
   ScreenshotCapture,
@@ -16,10 +18,7 @@ type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> 
   truncatedElements?: number;
 };
 
-export function computerActResultText(
-  action: ComputerToolAction,
-  result: ComputerActResult,
-): string {
+function projectComputerActResultMetadata(result: ComputerActResult) {
   let observation: ModelObservationProjection | undefined = result.observation
     ? { ...result.observation, ...(result.observation.base64 ? { base64: "[image]" } : {}) }
     : undefined;
@@ -40,26 +39,25 @@ export function computerActResultText(
     details.elements = details.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
     details.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
   }
-  return JSON.stringify({
-    action,
+  return {
     ...result,
     ...(observation ? { observation } : {}),
     ...(details ? { details } : {}),
-  });
+  };
+}
+
+export function computerActResultText(
+  action: ComputerToolAction,
+  result: ComputerActResult,
+): string {
+  return JSON.stringify({ action, ...projectComputerActResultMetadata(result) });
 }
 
 function computerFrameImageIdentity(
   content: AgentToolResult<unknown>["content"],
 ): string | undefined {
-  const images = content.filter(
-    (block): block is Extract<(typeof content)[number], { type: "image" }> =>
-      block.type === "image",
-  );
-  if (images.length !== 1) {
-    return undefined;
-  }
-  const image = images.at(0);
-  if (!image) {
+  const [image, duplicate] = content.filter((block) => block.type === "image");
+  if (!image || duplicate) {
     return undefined;
   }
   return crypto
@@ -127,6 +125,26 @@ export function resolveReferenceWidth(limits: { maxDimensionPx?: number }): numb
   return Math.max(1, Math.min(COMPUTER_REF_WIDTH, sanitizationLimit));
 }
 
+async function projectComputerImage(params: {
+  image?: { base64: string; mimeType: string };
+  action: ComputerToolAction;
+  referenceWidth: number;
+  modelHasVision?: boolean;
+}) {
+  // Keep the delivered pixels within the replay cap so later turns cannot
+  // resize the image underneath the coordinates bound to it.
+  const content = await sanitizeContentBlocksImages(
+    params.image && params.modelHasVision !== false
+      ? [{ type: "image", data: params.image.base64, mimeType: params.image.mimeType }]
+      : [],
+    `computer:${params.action}`,
+    { maxDimensionPx: params.referenceWidth },
+  );
+  const image = content.find((block) => block.type === "image");
+  const dimensions = image ? readImageMetadataFromHeader(Buffer.from(image.data, "base64")) : null;
+  return { content, image, dimensions };
+}
+
 export async function projectScreenshotResult(params: {
   capture: ScreenshotCapture;
   noteLines: string[];
@@ -141,60 +159,32 @@ export async function projectScreenshotResult(params: {
 }> {
   const { capture, target } = params;
   const frameId = crypto.randomUUID();
-  // Report the delivered dimensions, not the pre-sanitization capture size:
-  // sanitizeToolResultImages caps the longest edge to referenceWidth, so a
-  // portrait capture is scaled down. Advertising the original size would let
-  // the model pick coordinates against a wider frame than it was shown.
-  const longestEdge = Math.max(capture.width ?? 0, capture.height ?? 0);
-  const frameScale = longestEdge > params.referenceWidth ? params.referenceWidth / longestEdge : 1;
-  const deliveredWidth = capture.width != null ? Math.round(capture.width * frameScale) : undefined;
-  const deliveredHeight =
-    capture.height != null ? Math.round(capture.height * frameScale) : undefined;
-  const dims =
-    deliveredWidth && deliveredHeight ? `${deliveredWidth}x${deliveredHeight}` : "unknown size";
+  const { content, dimensions } = await projectComputerImage({ ...params, image: capture });
+  const dims = dimensions ? `${dimensions.width}x${dimensions.height}` : "unknown size";
   const text = [
     ...params.noteLines,
     `screenshot ${dims} (screen ${target.screenIndex}, frameId ${frameId})`,
   ].join("\n");
-  const content: AgentToolResult<unknown>["content"] = [{ type: "text", text }];
-  if (params.modelHasVision !== false) {
-    content.push({ type: "image", data: capture.base64, mimeType: capture.mimeType });
-  } else {
+  if (params.modelHasVision === false) {
     content.push({
       type: "text",
       text: "[model has no vision; screenshot omitted — use a vision-capable model for computer use]",
     });
   }
-  // Cap the delivered screenshot's longest edge to the reference width so
-  // the coordinate frame is stable across turns. Replay-sanitization in
-  // later turns caps the longest edge to the configured limit, which is
-  // >= referenceWidth, so it is a no-op and the node maps coordinates
-  // against this same width for both portrait and landscape captures. A
-  // portrait frame (height > referenceWidth) is uniformly scaled down here,
-  // matching OpenClawComputerInputGeometry.capturedWidth on the node.
-  // media.outbound=false keeps desktop pixels model-only (#44759).
-  const result = await sanitizeToolResultImages(
-    {
-      content,
-      details: {
-        node: target.nodeId,
-        action: params.action,
-        width: deliveredWidth,
-        height: deliveredHeight,
-        screenIndex: target.screenIndex,
-        frameId,
-        refWidth: params.referenceWidth,
-        media: { outbound: false },
-      },
+  const result = {
+    content: [{ type: "text" as const, text }, ...content],
+    details: {
+      node: target.nodeId,
+      action: params.action,
+      width: dimensions?.width,
+      height: dimensions?.height,
+      screenIndex: target.screenIndex,
+      frameId,
+      refWidth: params.referenceWidth,
+      media: { outbound: false },
     },
-    `computer:${params.action}`,
-    { maxDimensionPx: params.referenceWidth },
-  );
-  return {
-    result,
-    frameId,
-    imageIdentity: computerFrameImageIdentity(result.content),
   };
+  return { result, frameId, imageIdentity: computerFrameImageIdentity(result.content) };
 }
 
 export async function projectComputerActResult(params: {
@@ -203,30 +193,54 @@ export async function projectComputerActResult(params: {
   action: ComputerToolAction;
   referenceWidth: number;
   modelHasVision?: boolean;
-}): Promise<AgentToolResult<unknown>> {
+}): Promise<{
+  result: AgentToolResult<unknown>;
+  imageCoordinates?: ComputerObservationState["imageCoordinates"];
+}> {
   const observation = params.result.observation;
-  const content: AgentToolResult<unknown>["content"] = [
-    { type: "text", text: computerActResultText(params.action, params.result) },
-  ];
-  if (observation?.base64 && params.modelHasVision !== false) {
-    content.push({
-      type: "image",
-      data: observation.base64,
-      mimeType: imageMimeFromFormat(observation.format ?? "png") ?? "image/png",
+  // Observation images have no context-presence tracking, so they must never be deduplicated.
+  const { content, image, dimensions } = await projectComputerImage({
+    ...params,
+    image: observation?.base64
+      ? {
+          base64: observation.base64,
+          mimeType: imageMimeFromFormat(observation.format ?? "png") ?? "image/png",
+        }
+      : undefined,
+  });
+  // Pixels belong only in image content. Metadata describes the delivered bitmap;
+  // accessibility bounds retain the provider's coordinate space.
+  const result = projectComputerActResultMetadata(params.result);
+  if (result.observation && dimensions) {
+    Object.assign(result.observation, dimensions, {
+      format: image?.mimeType === "image/jpeg" ? "jpeg" : "png",
     });
   }
-  return await sanitizeToolResultImages(
-    {
-      content,
+  let imageCoordinates: ComputerObservationState["imageCoordinates"];
+  if (params.result.details?.coordinateSpace === "image-pixels") {
+    imageCoordinates =
+      dimensions && observation?.width && observation.height
+        ? {
+            kind: "available",
+            scaleX: observation.width / dimensions.width,
+            scaleY: observation.height / dimensions.height,
+          }
+        : { kind: "unavailable" };
+  }
+  return {
+    result: {
+      content: [
+        { type: "text", text: JSON.stringify({ action: params.action, ...result }) },
+        ...content,
+      ],
       details: {
         node: params.target.nodeId,
         action: params.action,
         screenIndex: params.target.screenIndex,
-        result: params.result,
+        result,
         media: { outbound: false },
       },
     },
-    `computer:${params.action}`,
-    { maxDimensionPx: params.referenceWidth },
-  );
+    imageCoordinates,
+  };
 }

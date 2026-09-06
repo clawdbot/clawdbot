@@ -1,5 +1,6 @@
 // Cron store row normalization for doctor repair and quarantine decisions.
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -12,6 +13,7 @@ import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/store/types.js";
 import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
@@ -35,6 +37,7 @@ import {
   stripLegacyTopLevelFields,
 } from "./payload-migration.js";
 import { createScheduledToolPolicyMigrationCollector } from "./scheduled-tool-policy-migration.js";
+import { migrateLegacyCronTriggerScript } from "./trigger-script-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -42,6 +45,7 @@ type CronStoreIssueKey =
   | "nonStringId"
   | "legacyScheduleString"
   | "legacyScheduleCron"
+  | "legacyScheduleKind"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
   | "legacyImageInspectionToolName"
@@ -108,8 +112,11 @@ type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
   unresolvedAgentTurnCommandPromptJobs: string[];
   unresolvedAgentTurnShellToolPromptJobs: string[];
+  legacyTriggerScriptJobs: string[];
+  unsupportedLegacyTriggerScriptJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
+  legacyGatewayExecJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
@@ -163,6 +170,9 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const legacyTriggerScriptJobs: string[] = [];
+  const unsupportedLegacyTriggerScriptJobs: string[] = [];
+  const legacyGatewayExecJobs: string[] = [];
   const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
@@ -219,6 +229,25 @@ export function normalizeStoredCronJobs(
       mutated = true;
     } else {
       raw.name = nameRaw.trim();
+    }
+
+    const trigger = raw.trigger;
+    if (isRecord(trigger)) {
+      if (typeof trigger.script === "string") {
+        const migration = migrateLegacyCronTriggerScript(trigger.script);
+        const id = normalizeOptionalString(raw.id);
+        const name = normalizeOptionalString(raw.name);
+        const jobIdentity = name && id && name !== id ? `${name} (${id})` : (name ?? id);
+        if (migration.kind === "supported") {
+          trigger.script = migration.script;
+          mutated = true;
+          if (jobIdentity) {
+            legacyTriggerScriptJobs.push(jobIdentity);
+          }
+        } else if (migration.kind === "unsupported" && jobIdentity) {
+          unsupportedLegacyTriggerScriptJobs.push(jobIdentity);
+        }
+      }
     }
 
     const desc = normalizeOptionalString(raw.description);
@@ -329,6 +358,18 @@ export function normalizeStoredCronJobs(
     }
 
     if (payloadRecord) {
+      const hasLegacyGatewayExec =
+        Array.isArray(payloadRecord.toolsAllow) &&
+        payloadRecord.toolsAllow.some(
+          (tool) =>
+            typeof tool === "string" && normalizeOptionalLowercaseString(tool) === "gateway_exec",
+        );
+      if (hasLegacyGatewayExec) {
+        const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+        if (name) {
+          legacyGatewayExecJobs.push(name);
+        }
+      }
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       const hadLegacyPayloadCodexModel = hasLegacyOpenAICodexCronModelRef(payloadRecord);
       const hadLegacyTaskSuggestionToolName = hasLegacyToolNameList(
@@ -398,6 +439,27 @@ export function normalizeStoredCronJobs(
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
       const sched = schedule as Record<string, unknown>;
       const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
+      const canonicalKind =
+        kind === "at" ||
+        kind === "every" ||
+        kind === "cron" ||
+        kind === "on-exit" ||
+        kind === "stream"
+          ? kind
+          : undefined;
+      if (canonicalKind && sched.kind !== canonicalKind) {
+        sched.kind = canonicalKind;
+        mutated = true;
+        trackIssue("legacyScheduleKind");
+      }
+      if (canonicalKind === "stream") {
+        const streamMode = normalizeOptionalLowercaseString(sched.mode);
+        if ((streamMode === "line" || streamMode === "match") && sched.mode !== streamMode) {
+          sched.mode = streamMode;
+          mutated = true;
+          trackIssue("legacyScheduleKind");
+        }
+      }
       if (!kind && ("at" in sched || "atMs" in sched)) {
         sched.kind = "at";
         mutated = true;
@@ -576,20 +638,18 @@ export function normalizeStoredCronJobs(
     mutated ||= scheduledPolicyMutated;
 
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
-    if (
-      invalidPersistedReason === "missing-schedule" ||
-      invalidPersistedReason === "invalid-schedule"
-    ) {
-      trackIssue("invalidSchedule");
-      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
-      mutated = true;
-      continue;
-    }
-    if (
-      invalidPersistedReason === "missing-payload" ||
-      invalidPersistedReason === "invalid-payload"
-    ) {
-      trackIssue("invalidPayload");
+    if (invalidPersistedReason) {
+      if (
+        invalidPersistedReason === "missing-schedule" ||
+        invalidPersistedReason === "invalid-schedule"
+      ) {
+        trackIssue("invalidSchedule");
+      } else if (
+        invalidPersistedReason === "missing-payload" ||
+        invalidPersistedReason === "invalid-payload"
+      ) {
+        trackIssue("invalidPayload");
+      }
       removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;
@@ -606,10 +666,66 @@ export function normalizeStoredCronJobs(
     issues,
     unresolvedAgentTurnCommandPromptJobs,
     unresolvedAgentTurnShellToolPromptJobs,
+    legacyTriggerScriptJobs,
+    unsupportedLegacyTriggerScriptJobs,
     legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
     invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
+    legacyGatewayExecJobs,
     jobs,
     mutated,
     removedJobs,
   };
+}
+
+export type QuarantinedCronJobRecovery = {
+  recoveredJobs: Array<Record<string, unknown>>;
+  recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob>;
+  retainedEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob>;
+};
+
+function restoredCronJobId(job: Record<string, unknown>): string | undefined {
+  return normalizeOptionalStringifiedId(job.id) ?? normalizeOptionalStringifiedId(job.jobId);
+}
+
+/** Revalidate quarantined schedule rows for an explicit Doctor repair. */
+export function recoverValidQuarantinedCronScheduleJobs(
+  entries: ReadonlyArray<QuarantinedCronConfigJob | CronQuarantinedJob>,
+  activeJobIds: ReadonlySet<string>,
+): QuarantinedCronJobRecovery {
+  const recoveredJobs: Array<Record<string, unknown>> = [];
+  const recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
+  const retainedEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
+  const recoveredJobIds = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.reason !== "invalid-schedule" || !isRecord(entry.job)) {
+      retainedEntries.push(entry);
+      continue;
+    }
+    const candidate = structuredClone(entry.job);
+    const jobId = restoredCronJobId(candidate);
+    if (jobId && (activeJobIds.has(jobId) || recoveredJobIds.has(jobId))) {
+      retainedEntries.push(entry);
+      continue;
+    }
+    if (isRecord(entry.state)) {
+      candidate.state = structuredClone(entry.state);
+    }
+    if (typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)) {
+      candidate.updatedAtMs = entry.updatedAtMs;
+    }
+
+    const normalized = normalizeStoredCronJobs([candidate]);
+    if (normalized.jobs.length !== 1 || normalized.removedJobs.length !== 0) {
+      retainedEntries.push(entry);
+      continue;
+    }
+    recoveredJobs.push(candidate);
+    recoveredEntries.push(entry);
+    if (jobId) {
+      recoveredJobIds.add(jobId);
+    }
+  }
+
+  return { recoveredJobs, recoveredEntries, retainedEntries };
 }

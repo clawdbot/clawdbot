@@ -75,9 +75,7 @@ export function detectRespawnSupervisor(
     if (hasAnyHint(env, SUPERVISOR_HINTS.schtasks)) {
       return "schtasks";
     }
-    const marker = env.OPENCLAW_SERVICE_MARKER?.trim();
-    const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
-    return marker && serviceKind === "gateway" ? "schtasks" : null;
+    return hasOpenClawGatewayServiceMarker(env) ? "schtasks" : null;
   }
   return null;
 }

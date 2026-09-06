@@ -16,6 +16,7 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "../../infra/system-agent-approvals.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
@@ -292,6 +293,7 @@ type ChannelLoginWithQrStartResult = {
   qrDataUrl?: string;
   message: string;
   connected?: boolean;
+  sessionKey?: string;
 };
 
 type ChannelLoginWithQrWaitResult = {
@@ -321,6 +323,7 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   }) => Promise<ChannelLoginWithQrStartResult>;
   loginWithQrWait?: (params: {
     accountId?: string;
+    sessionKey?: string;
     timeoutMs?: number;
     currentQrDataUrl?: string;
   }) => Promise<ChannelLoginWithQrWaitResult>;
@@ -553,7 +556,7 @@ type ChannelApprovalDeliveryAdapter = {
     cfg: OpenClawConfig;
     approvalKind: ChannelApprovalKind;
     target: ChannelApprovalForwardTarget;
-    request: ExecApprovalRequest | PluginApprovalRequest;
+    request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
   }) => boolean;
 };
 type ChannelApproveCommandBehavior =
@@ -739,6 +742,8 @@ export type ChannelConfiguredBindingProvider = {
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
   isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
+  /** Declares that live bindings come from a channel-registered adapter, never generic storage. */
+  bindingStore?: "adapter";
   /**
    * Preferred placement when a command is started from a top-level conversation
    * without an existing native thread id.

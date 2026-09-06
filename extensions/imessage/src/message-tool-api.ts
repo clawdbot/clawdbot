@@ -30,7 +30,13 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
   "poll-vote",
 ]);
 
-function isGroupTarget(raw?: string | null): boolean {
+function isGroupTarget(
+  raw?: string | null,
+  chatType?: "direct" | "group" | "channel" | null,
+): boolean {
+  if (chatType) {
+    return chatType !== "direct";
+  }
   if (!raw) {
     return false;
   }
@@ -40,6 +46,7 @@ function isGroupTarget(raw?: string | null): boolean {
 export function describeIMessageMessageTool({
   cfg,
   accountId,
+  chatType,
   currentChannelId,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) {
   const account = resolveIMessageAccount({ cfg, accountId });
@@ -102,7 +109,7 @@ export function describeIMessageMessageTool({
     }
     actions.add(action);
   }
-  if (!isGroupTarget(currentChannelId)) {
+  if (!isGroupTarget(currentChannelId, chatType)) {
     for (const action of IMESSAGE_ACTION_NAMES) {
       if ("groupOnly" in IMESSAGE_ACTIONS[action] && IMESSAGE_ACTIONS[action].groupOnly) {
         actions.delete(action);

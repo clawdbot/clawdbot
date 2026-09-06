@@ -1,10 +1,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
-import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import type { ModelCatalogEntry } from "../../model-catalog.types.js";
+import {
+  findNormalizedProviderValue,
+  resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
+} from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
@@ -26,7 +32,6 @@ import {
   readRequesterThinkingLevel,
 } from "./subagent-spawn-requester-prefs.js";
 import {
-  loadPreparedModelCatalog,
   normalizeDeliveryContext,
   resolveAgentConfig,
   resolveSandboxRuntimeStatus,
@@ -47,24 +52,23 @@ function buildResolvedSubagentModelMetadata(resolvedModel?: string): {
   };
 }
 
-async function resolveCollectorOutputModelError(params: {
+async function resolveSpawnModelError(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   targetAgentDir: string;
   workspaceDir?: string;
+  request: SpawnSubagentParams;
   resolvedModel?: string;
 }): Promise<string | undefined> {
-  const selected = splitModelRef(params.resolvedModel);
-  const fallback = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.targetAgentId,
-  });
-  const provider = selected.provider ?? fallback.provider;
-  const model = selected.model ?? fallback.model;
-  if (!provider || !model) {
+  const { cfg, targetAgentId } = params;
+  const requestedModel = normalizeOptionalString(params.request.model);
+  if (!requestedModel && !params.request.outputSchema) {
     return undefined;
   }
-  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
+  const defaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
+  const selected = splitModelRef(params.resolvedModel);
+  const provider = selected.provider ?? defaults.provider;
+  let catalog: ModelCatalogEntry[];
   try {
     catalog = await getSubagentSpawnDeps().loadPreparedModelCatalog({
       config: params.cfg,
@@ -75,13 +79,53 @@ async function resolveCollectorOutputModelError(params: {
       scopedLiveProviderDiscovery: true,
     });
   } catch (error) {
-    return `sessions_spawn could not verify outputSchema model capabilities: ${summarizeSpawnError(error)}`;
+    return `sessions_spawn could not verify ${requestedModel ? "the requested model" : "outputSchema model capabilities"}: ${summarizeSpawnError(error)}`;
   }
-  const entry = findModelCatalogEntry(catalog, { provider, modelId: model });
-  if (!entry || supportsModelTools(entry)) {
-    return undefined;
+
+  if (!requestedModel) {
+    const model = selected.model ?? defaults.model;
+    const entry = model && findModelCatalogEntry(catalog, { provider, modelId: model });
+    return entry && !supportsModelTools(entry)
+      ? `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`
+      : undefined;
   }
-  return `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`;
+  const selection = {
+    cfg,
+    catalog,
+    defaultProvider: defaults.provider,
+    defaultModel: defaults.model,
+    agentId: targetAgentId,
+  };
+  const resolved = resolveAllowedModelRef({
+    ...selection,
+    raw: requestedModel,
+  });
+  if ("error" in resolved) {
+    return `sessions_spawn model "${requestedModel}" is not usable: ${resolved.error}`;
+  }
+
+  const entry = findModelCatalogEntry(catalog, {
+    provider: resolved.ref.provider,
+    modelId: resolved.ref.model,
+  });
+  if (!entry) {
+    const resolvedProvider = resolved.ref.provider;
+    const knownProvider =
+      findNormalizedProviderValue(cfg.models?.providers, resolvedProvider) ||
+      catalog.some((catalogEntry) => catalogEntry.provider === resolvedProvider) ||
+      getSubagentSpawnDeps().resolveProviderRefOwnership({
+        provider: resolvedProvider,
+        config: cfg,
+        workspaceDir: params.workspaceDir,
+      }).status === "owned";
+    if (!knownProvider) {
+      return `sessions_spawn model "${requestedModel}" is not usable: unknown model provider "${resolvedProvider}"`;
+    }
+  }
+  if (params.request.outputSchema && entry && !supportsModelTools(entry)) {
+    return `sessions_spawn outputSchema requires a tool-capable target model; "${resolved.ref.provider}/${resolved.ref.model}" declares compat.supportsTools=false.`;
+  }
+  return undefined;
 }
 
 type ResolvedSubagentChildPlan = {
@@ -93,6 +137,7 @@ type ResolvedSubagentChildPlan = {
   incognito: boolean;
   childSessionKey: string;
   childRuntimeSandboxed: boolean;
+  creationPolicy: ReturnType<typeof inheritSessionCreationPolicy>;
   targetAgentDir: string;
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
   launchAuthorization?: SubagentLaunchAuthorization;
@@ -158,15 +203,23 @@ export async function resolveSubagentChildPlan(params: {
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
+    agentId: params.requesterAgentId,
   });
-  const childRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: childSessionKey,
-  });
+  const creationPolicy = inheritSessionCreationPolicy(
+    {
+      sandbox: requesterRuntime.sandboxRequired ? "required" : undefined,
+      createdActor: requesterRuntime.createdActor,
+    },
+    { type: "agent", id: params.requesterAgentId },
+  );
+  // A fresh child has no stored row yet; admission must include its inherited isolation.
+  const childRuntimeSandboxed =
+    creationPolicy.sandbox === "required" ||
+    resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: childSessionKey }).sandboxed;
   const sandboxError = resolveSpawnSandboxError({
     backend: "subagent",
     requesterSandboxed: requesterRuntime.sandboxed,
-    childSandboxed: childRuntime.sandboxed,
+    childSandboxed: childRuntimeSandboxed,
     sandbox: params.sandboxMode,
   });
   if (sandboxError) {
@@ -175,7 +228,7 @@ export async function resolveSubagentChildPlan(params: {
   const spawnedWorkspaceCwd = spawnedWorkspaceDir
     ? resolveUserPath(spawnedWorkspaceDir)
     : undefined;
-  if (childRuntime.sandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
+  if (childRuntimeSandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
     return {
       ok: false,
       result: {
@@ -188,11 +241,15 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
-  const callerThinkingRaw = readRequesterThinkingLevel({
-    cfg: params.cfg,
-    requesterInternalKey: params.requesterInternalKey,
-    requesterAgentId: params.requesterAgentId,
-  });
+  // The active turn owns inherited effort; saved preferences may already describe
+  // a later turn and cannot represent one-shot overrides.
+  const callerThinkingRaw =
+    params.ctx.requesterThinkingLevel ??
+    readRequesterThinkingLevel({
+      cfg: params.cfg,
+      requesterInternalKey: params.requesterInternalKey,
+      requesterAgentId: params.requesterAgentId,
+    });
   const inheritedFastMode =
     params.swarmEnabled && params.request.fastMode === undefined
       ? readRequesterFastMode({
@@ -221,6 +278,24 @@ export async function resolveSubagentChildPlan(params: {
     };
   }
   const { resolvedModel } = modelPlan;
+  const modelError = await resolveSpawnModelError({
+    cfg: params.cfg,
+    targetAgentId: params.targetAgentId,
+    targetAgentDir,
+    workspaceDir: spawnedWorkspaceDir,
+    request: params.request,
+    resolvedModel,
+  });
+  if (modelError) {
+    return {
+      ok: false,
+      result: {
+        status: "error",
+        error: modelError,
+        ...(params.request.outputSchema ? { childSessionKey } : {}),
+      },
+    };
+  }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =
     params.request.model?.trim() && resolvedLaunchModel.model
@@ -231,21 +306,6 @@ export async function resolveSubagentChildPlan(params: {
           },
         }
       : undefined;
-  if (params.request.outputSchema) {
-    const outputModelError = await resolveCollectorOutputModelError({
-      cfg: params.cfg,
-      targetAgentId: params.targetAgentId,
-      targetAgentDir,
-      workspaceDir: spawnedWorkspaceDir,
-      resolvedModel,
-    });
-    if (outputModelError) {
-      return {
-        ok: false,
-        result: { status: "error", error: outputModelError, childSessionKey },
-      };
-    }
-  }
   return {
     ok: true,
     resolved: {
@@ -256,7 +316,8 @@ export async function resolveSubagentChildPlan(params: {
       childSessionOrigin,
       incognito,
       childSessionKey,
-      childRuntimeSandboxed: childRuntime.sandboxed,
+      childRuntimeSandboxed,
+      creationPolicy,
       targetAgentDir,
       modelPlan,
       launchAuthorization,

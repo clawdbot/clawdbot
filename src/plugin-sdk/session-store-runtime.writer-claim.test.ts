@@ -11,6 +11,7 @@ import {
 } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
+  updateSessionStore,
   upsertSessionEntry,
   type SessionEntry,
 } from "./session-store-runtime.js";
@@ -27,6 +28,11 @@ function privateGenerationEntry(): InternalSessionEntry {
       captureId: "capture-1",
       status: "pending",
     },
+    transcriptByteCompactionLatch: {
+      activeBytes: 60_000,
+      sessionId: "session-1",
+      maxBytes: 50_000,
+    },
     sessionId: "session-1",
     updatedAt: 10,
   };
@@ -36,6 +42,7 @@ function expectGenerationPrivateFieldsCleared(entry: InternalSessionEntry | unde
   expect(entry?.activeWriterRunId).toBeUndefined();
   expect(entry?.lifecycleRunId).toBeUndefined();
   expect(entry?.sessionDiffBaselineCapture).toBeUndefined();
+  expect(entry?.transcriptByteCompactionLatch).toBeUndefined();
 }
 
 const sessionEntryKeepsWriterClaimPrivate: "activeWriterRunId" extends keyof SessionEntry
@@ -46,10 +53,76 @@ const sessionEntryKeepsBaselineClaimPrivate: "sessionDiffBaselineCapture" extend
   ? false
   : true = true;
 void sessionEntryKeepsBaselineClaimPrivate;
+const sessionEntryKeepsByteCompactionLatchPrivate: "transcriptByteCompactionLatch" extends keyof SessionEntry
+  ? false
+  : true = true;
+void sessionEntryKeepsByteCompactionLatchPrivate;
+const sessionEntryKeepsThinkingSelectionPrivate: "thinkingLevelSelection" extends keyof SessionEntry
+  ? false
+  : true = true;
+void sessionEntryKeepsThinkingSelectionPrivate;
+const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection" extends keyof NonNullable<
+  SessionEntry["modelFallback"]
+>
+  ? false
+  : true = true;
+void sessionFallbackKeepsThinkingSelectionPrivate;
 
 describe("plugin session writer claim projection", () => {
-  it("excludes the durable writer claim from entries and patches", () => {
-    const entry: InternalSessionEntry = {
+  it.each(["patch", "upsert", "whole-store"] as const)(
+    "preserves server publication through %s lifecycle changes while rejecting forged grants",
+    async (method) => {
+      const sessionKey = "agent:main:plugin-publication";
+      const storePath = path.join(tempDirs.make("openclaw-sdk-publication-"), "sessions.json");
+      const publicShare = { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 };
+      const updatedAt = Date.now();
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...privateGenerationEntry(),
+          publicShare,
+          updatedAt,
+        },
+      );
+      const mutate = async (entry: InternalSessionEntry) => {
+        if (method === "patch") {
+          await patchSessionEntry({
+            sessionKey,
+            storePath,
+            replaceEntry: true,
+            update: () => entry,
+          });
+        } else if (method === "upsert") {
+          await upsertSessionEntry({ sessionKey, storePath, entry });
+        } else {
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = entry;
+          });
+        }
+      };
+      await mutate({
+        sessionId: "session-1",
+        lifecycleRevision: "generation-2",
+        updatedAt,
+        publicShare: { ...publicShare, id: "b".repeat(48) },
+      });
+      const sameSession = loadSessionEntry({ sessionKey, storePath });
+      expect(sameSession?.sessionId).toBe("session-1");
+      expect(sameSession?.publicShare).toEqual(publicShare);
+      expectGenerationPrivateFieldsCleared(sameSession);
+
+      await mutate({
+        sessionId: "session-2",
+        lifecycleRevision: "generation-3",
+        updatedAt,
+        publicShare: { ...publicShare, sessionId: "session-2", id: "c".repeat(48) },
+      });
+      expect(loadSessionEntry({ sessionKey, storePath })?.publicShare).toBeUndefined();
+    },
+  );
+
+  it("excludes private claims and retired thinking provenance from entries and patches", () => {
+    const entry = {
       activeWriterRunId: "run-writer",
       lifecycleRunId: "run-lifecycle",
       sessionDiffBaselineCapture: {
@@ -57,13 +130,32 @@ describe("plugin session writer claim projection", () => {
         captureId: "capture-writer",
         status: "pending",
       },
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "session-writer",
+        maxBytes: 50_000,
+      },
       model: "gpt-5.6",
+      modelFallback: {
+        prevModel: "gpt-5.5",
+        prevProvider: "openai",
+        prevThinkingLevelSelection: { retired: true },
+        source: "agent-patch",
+        ts: 1,
+      },
       sessionId: "session-writer",
+      thinkingLevelSelection: { retired: true },
       updatedAt: 10,
-    };
+    } as unknown as InternalSessionEntry;
 
     expect(projectPluginSessionEntry(entry)).toEqual({
       model: "gpt-5.6",
+      modelFallback: {
+        prevModel: "gpt-5.5",
+        prevProvider: "openai",
+        source: "agent-patch",
+        ts: 1,
+      },
       sessionId: "session-writer",
       updatedAt: 10,
     });
@@ -76,9 +168,30 @@ describe("plugin session writer claim projection", () => {
           captureId: "capture-next",
           status: "pending",
         },
+        transcriptByteCompactionLatch: {
+          activeBytes: 70_000,
+          sessionId: "session-next",
+          maxBytes: 60_000,
+        },
         model: "gpt-5.5",
-      }),
-    ).toEqual({ model: "gpt-5.5" });
+        modelFallback: {
+          prevModel: "gpt-5.4",
+          prevProvider: "openai",
+          prevThinkingLevelSelection: { retired: true },
+          source: "agent-patch",
+          ts: 2,
+        },
+        thinkingLevelSelection: { retired: true },
+      } as unknown as Partial<InternalSessionEntry>),
+    ).toEqual({
+      model: "gpt-5.5",
+      modelFallback: {
+        prevModel: "gpt-5.4",
+        prevProvider: "openai",
+        source: "agent-patch",
+        ts: 2,
+      },
+    });
   });
 
   it("preserves private generation fields when patches and upserts omit lifecycle revision", async () => {
@@ -98,6 +211,11 @@ describe("plugin session writer claim projection", () => {
       lifecycleRunId: "lifecycle-run",
       model: "gpt-5.6",
       sessionDiffBaselineCapture: { captureId: "capture-1", status: "pending" },
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "session-1",
+        maxBytes: 50_000,
+      },
     });
 
     await upsertSessionEntry({
@@ -110,6 +228,11 @@ describe("plugin session writer claim projection", () => {
       lifecycleRevision: "generation-1",
       lifecycleRunId: "lifecycle-run",
       sessionDiffBaselineCapture: { captureId: "capture-1", status: "pending" },
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "session-1",
+        maxBytes: 50_000,
+      },
     });
   });
 

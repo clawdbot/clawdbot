@@ -3,6 +3,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { buildMacosCatalog } from "../../scripts/apple-app-i18n.ts";
 import {
   assignNativeI18nIds,
   collectNativeI18nEntries,
@@ -10,6 +11,7 @@ import {
   isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
   parseNativeI18nCommand,
+  serializeNativeI18nInventory,
   syncNativeLocale,
   type NativeI18nEntry,
   validateNativeLocaleArtifact,
@@ -41,6 +43,37 @@ function hasSite(
 }
 
 describe("native app i18n inventory", () => {
+  it("serializes each complete entry on one line", () => {
+    const entries = [
+      {
+        id: "native.android.fixture",
+        source: 'A quoted "label"\nwith two lines',
+        surface: "android",
+        sites: [
+          { kind: "xml-string", path: "apps/android/res/values/strings.xml" },
+          { kind: "ui-call", path: "apps/android/src/Fixture.kt" },
+        ],
+      },
+      {
+        id: "native.apple.fixture",
+        source: "Settings",
+        surface: "apple",
+        sites: [{ kind: "ui-call", path: "apps/ios/Sources/Fixture.swift" }],
+      },
+    ] satisfies NativeI18nEntry[];
+
+    const serialized = serializeNativeI18nInventory(entries);
+    const lines = serialized.trimEnd().split("\n");
+
+    expect(JSON.parse(serialized)).toEqual({ version: 2, entries });
+    expect(lines).toHaveLength(entries.length + 5);
+    expect(lines.slice(3, -2)).toEqual([
+      `    ${JSON.stringify(entries[0])},`,
+      `    ${JSON.stringify(entries[1])}`,
+    ]);
+    expect(serialized.endsWith("\n")).toBe(true);
+  });
+
   it("merges sites and hashes only surface plus source", () => {
     const source = "Gateway status";
     const entries = assignNativeI18nIds([
@@ -93,6 +126,77 @@ describe("native app i18n inventory", () => {
     expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
   });
 
+  it.each([
+    { surface: "apple", value: String.raw`agent:\(owner):global` },
+    { surface: "android", value: "agent:$agentId:global" },
+    { surface: "apple", value: String.raw`cache:\(scope.path):\(makeKey(value: token)):entry` },
+    { surface: "apple", value: String.raw`cache:\(makeKey(name: "local")):entry` },
+    { surface: "android", value: "cache:${scope.path}:$entryId" },
+    { surface: "android", value: "cache:${keys.getOrElse(index) { fallback }}:$entryId" },
+  ] as const)(
+    "excludes $surface interpolated identifiers but preserves explicit UI copy: $value",
+    ({ surface, value }) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const branch = (text: string) =>
+        surface === "apple"
+          ? `let key = enabled ? "${text}" : fallback`
+          : `val key = if (enabled) "${text}" else fallback`;
+
+      expect(extractNativeI18nCandidates(surface, repoPath, branch(value))).toEqual([]);
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, `Text("${value}")`).map(
+          (entry) => entry.source,
+        ),
+      ).toEqual([value]);
+      const prose = `Current route: ${value}`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, branch(prose)).map((entry) => entry.source),
+      ).toEqual([prose]);
+    },
+  );
+
+  it.each(["apple", "android"] as const)(
+    "preserves compact %s prose and the candidate length boundary",
+    (surface) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const value = surface === "apple" ? String.raw`\(hours)h` : "${hours}h";
+      const source =
+        surface === "apple"
+          ? `let label = enabled ? "${value}" : fallback`
+          : `val label = if (enabled) "${value}" else fallback`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, source).map((entry) => entry.source),
+      ).toEqual([value]);
+      for (const length of [500, 501]) {
+        const text = "a".repeat(length);
+        expect(
+          extractNativeI18nCandidates(surface, repoPath, `Text("${text}")`).map(
+            (entry) => entry.source,
+          ),
+        ).toEqual(length === 500 ? [text] : []);
+      }
+    },
+  );
+
+  it("preserves the typed expiry key from Swift extraction through macOS catalog projection", () => {
+    const entries = assignNativeI18nIds(
+      extractNativeI18nCandidates(
+        "apple",
+        "apps/macos/Sources/OpenClaw/Expiry.swift",
+        [
+          "let minutes: Int = 3",
+          'Label(String(format: String(localized: "Expires in %lld minutes"), minutes), systemImage: "clock")',
+          'Text(verbatim: "\\(name) — \\(minutes)")',
+        ].join("\n"),
+      ),
+    );
+    const { catalog } = buildMacosCatalog({}, { version: 2, entries }, []);
+    expect(Object.keys(catalog.strings ?? {})).toEqual(["Expires in %lld minutes"]);
+    expect(catalog.strings?.["Expires in %lld minutes"]?.localizations?.en?.stringUnit?.value).toBe(
+      "Expires in %lld minutes",
+    );
+  });
+
   it("joins adjacent literals across supported Swift and Kotlin UI expressions", () => {
     const swift = extractNativeI18nCandidates(
       "apple",
@@ -131,6 +235,7 @@ describe("native app i18n inventory", () => {
         fun Fixture() {
           Text("Kotlin first " + "argument")
           Text(text = "Named " + "argument")
+          Text(if (enabled) "Kotlin enabled " + "now" else "Kotlin disabled " + "now")
           Icon(contentDescription = if (enabled) "Open \${row.title}" else row.title)
         }
 
@@ -162,6 +267,8 @@ describe("native app i18n inventory", () => {
         "Switch ready",
         "Switch waiting",
         "Kotlin first argument",
+        "Kotlin enabled now",
+        "Kotlin disabled now",
         "Open ${row.title}",
         "When ready",
         "When waiting",
@@ -180,6 +287,8 @@ describe("native app i18n inventory", () => {
           "Switch ",
           "Swift first ",
           "Kotlin first ",
+          "Kotlin enabled ",
+          "Kotlin disabled ",
           "When ",
           "Return ",
         ].includes(source),
@@ -300,6 +409,21 @@ describe("native app i18n inventory", () => {
           ) && entry.source === "Current session",
       ),
     ).toBe(true);
+    // Wear-only entries do not reach phone resources; the phone owner must declare its modes.
+    expect(
+      entries
+        .filter(
+          (entry) =>
+            entry.surface === "android" &&
+            hasSite(
+              entry,
+              (site) =>
+                site.path ===
+                "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+            ),
+        )
+        .map((entry) => entry.source),
+    ).toEqual(expect.arrayContaining(["System", "Dark", "Light"]));
     expect(
       entries.some(
         (entry) =>
@@ -352,7 +476,6 @@ describe("native app i18n inventory", () => {
       ]),
     );
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
@@ -364,7 +487,14 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Scan QR code")).toBe(true);
     expect(entries.some((entry) => entry.source === "Test connection")).toBe(true);
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "apple" &&
+          entry.source === "Connection…" &&
+          hasSite(entry, (site) => site.path === "apps/macos/Sources/OpenClaw/MenuBar.swift"),
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
     expect(
       entries.some((entry) => entry.surface === "android" && entry.source === "Search OpenClaw"),
@@ -438,6 +568,27 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);
+    expect
+      .soft(
+        entries
+          .filter(
+            (entry) => entry.source === "Update the gateway to load progress cards for this agent.",
+          )
+          .map((entry) => entry.surface)
+          .toSorted(),
+      )
+      .toEqual(["android", "apple"]);
+    expect
+      .soft(
+        entries
+          .filter(
+            (entry) =>
+              entry.source ===
+              "Update the gateway before sending queued messages. This version requires safe delivery routing.",
+          )
+          .map((entry) => entry.surface),
+      )
+      .toEqual(["apple"]);
     expect(
       entries.some(
         (entry) =>
@@ -450,8 +601,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+            "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -468,7 +623,7 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+          "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
       ),
     ).toBe(true);
     expect(
@@ -495,7 +650,7 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some((entry) =>
         [
-          "Your AI-powered setup helper. It can check status, fix config, ",
+          "The current gateway.remote.token value is not plain text. ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
           "Paste the token configured on the gateway host. ",
@@ -508,12 +663,6 @@ describe("native app i18n inventory", () => {
           entry.source === '\\(day.entryCount) \\(day.entryCount == 1 ? "entry" : "entries")',
       ),
     ).toBe(false);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source === 'Missing binaries: \\(self.missingBins.joined(separator: ", "))',
-      ),
-    ).toBe(true);
     expect(
       entries.some(
         (entry) =>
@@ -575,33 +724,35 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "ws")).toBe(false);
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);
     expect(entries.some((entry) => entry.source === "builtIn")).toBe(false);
-    expect(entries.some((entry) => entry.source === "State:  \\(stateDir)")).toBe(true);
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+            "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
           entry.source ===
-          "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.",
+          "The Gateway can capture your screen and interact with apps on this Mac, including clicking and typing, subject to macOS permissions.",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) =>
+              site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
+              site.kind === "ui-localized-call-multiline",
+          ) &&
           entry.source ===
-          "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source ===
-          "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
+            "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
       ),
     ).toBe(true);
     expect(
@@ -732,6 +883,58 @@ describe("native app i18n inventory", () => {
       cleanupTempDirs(tempDirs);
     }
   });
+  it("rejects invalid native placeholders inside the translation batch", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.progress", "apple", "Processed %lld of %@");
+    let translatorReturned = false;
+
+    try {
+      await expect(
+        syncNativeLocale("sv", [entry], {
+          glossary: [],
+          translationsDir,
+          translate: async (_pending, locale, _glossary, validateTranslation) => {
+            const translated = "Bearbetade %@";
+            validateTranslation?.(entry.source, translated, entry.id, locale);
+            translatorReturned = true;
+            return new Map([[entry.id, translated]]);
+          },
+        }),
+      ).rejects.toThrow(
+        `native translation changed placeholders or line breaks for sv:${entry.id}`,
+      );
+      expect(translatorReturned).toBe(false);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("retranslates existing native strings only when a full refresh is requested", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.open", "apple", "Open");
+    try {
+      await syncNativeLocale("sv", [entry], {
+        glossary: [],
+        translationsDir,
+        translate: async () => new Map([[entry.id, "Tidigare"]]),
+      });
+      const refreshed = await syncNativeLocale("sv", [entry], {
+        force: true,
+        glossary: [],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((item) => [item.id, "Öppna"])),
+      });
+      expect(refreshed.translated).toBe(1);
+      expect(
+        JSON.parse(await readFile(path.join(translationsDir, "sv.json"), "utf8")).translations,
+      ).toEqual({ [entry.id]: "Öppna" });
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("rejects native printf placeholder drift", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
@@ -835,14 +1038,14 @@ describe("native app i18n inventory", () => {
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej\nNästa" },
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej ${name} Nästa" },
@@ -922,6 +1125,12 @@ describe("native app i18n inventory", () => {
     });
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale"])).toThrow(
       "requires a locale value",
+    );
+    expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv", "--force"]).force).toBe(
+      true,
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--force"])).toThrow(
+      "requires `sync --write --locale",
     );
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "--write"])).toThrow(
       "requires a locale value",

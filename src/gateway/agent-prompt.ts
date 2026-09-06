@@ -10,6 +10,12 @@ export type ConversationEntry = {
   internalStreamError?: boolean;
 };
 
+export type ConversationToolCall = { id?: string; name: string; arguments: string };
+
+export function renderConversationToolCall(call: ConversationToolCall): string {
+  return `tool_call id=${call.id ?? ""} name=${call.name} arguments=${call.arguments}`;
+}
+
 // Placeholder user text for an image-only turn. The agent command requires a
 // non-empty message even when the real payload is the attached image, so both
 // the /v1/chat/completions and /v1/responses prompt builders substitute this
@@ -74,7 +80,8 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
   if (!currentPromptEntry) {
     return "";
   }
-  if (historyEntries.length === 0) {
+  // A completed tool call still needs its identity when its output is empty.
+  if (historyEntries.length === 0 && currentConversationEntry.role !== "tool") {
     return currentPromptEntry.body;
   }
 

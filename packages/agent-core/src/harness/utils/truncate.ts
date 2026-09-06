@@ -38,7 +38,6 @@ export interface TruncationOptions {
 }
 
 interface ResolvedTruncationInput {
-  lines: string[];
   totalLines: number;
   totalBytes: number;
   maxLines: number;
@@ -50,17 +49,6 @@ interface RuntimeBuffer {
 }
 
 const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
-
-function splitLinesForCounting(content: string): string[] {
-  if (content.length === 0) {
-    return [];
-  }
-  const lines = content.split("\n");
-  if (content.endsWith("\n")) {
-    lines.pop();
-  }
-  return lines;
-}
 
 function findFirstNonAscii(content: string): number {
   for (let index = 0; index < content.length; index++) {
@@ -103,29 +91,6 @@ function utf8ByteLength(content: string): number {
   return bytes;
 }
 
-function replaceUnpairedSurrogates(content: string): string {
-  let output = "";
-  for (let i = 0; i < content.length; i++) {
-    const code = content.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      if (i + 1 < content.length) {
-        const next = content.charCodeAt(i + 1);
-        if (next >= 0xdc00 && next <= 0xdfff) {
-          output += content.charAt(i) + content.charAt(i + 1);
-          i++;
-          continue;
-        }
-      }
-      output += "�";
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      output += "�";
-    } else {
-      output += content.charAt(i);
-    }
-  }
-  return output;
-}
-
 /**
  * Format byte counts for compact tool-output diagnostics.
  */
@@ -142,16 +107,15 @@ function resolveTruncationInput(
   content: string,
   options: TruncationOptions,
 ): ResolvedTruncationInput {
-  const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-  const totalBytes = utf8ByteLength(content);
-  const lines = splitLinesForCounting(content);
+  let totalLines = content.length > 0 && !content.endsWith("\n") ? 1 : 0;
+  for (let index = content.indexOf("\n"); index !== -1; index = content.indexOf("\n", index + 1)) {
+    totalLines++;
+  }
   return {
-    lines,
-    totalLines: lines.length,
-    totalBytes,
-    maxLines,
-    maxBytes,
+    totalLines,
+    totalBytes: utf8ByteLength(content),
+    maxLines: options.maxLines ?? DEFAULT_MAX_LINES,
+    maxBytes: options.maxBytes ?? DEFAULT_MAX_BYTES,
   };
 }
 
@@ -162,7 +126,7 @@ function buildTruncationResult(
     truncated: boolean;
     truncatedBy: TruncationResult["truncatedBy"];
     outputLines: number;
-    outputBytes?: number;
+    outputBytes: number;
     lastLinePartial?: boolean;
     firstLineExceedsLimit?: boolean;
   },
@@ -174,7 +138,7 @@ function buildTruncationResult(
     totalLines: input.totalLines,
     totalBytes: input.totalBytes,
     outputLines: params.outputLines,
-    outputBytes: params.outputBytes ?? utf8ByteLength(params.content),
+    outputBytes: params.outputBytes,
     lastLinePartial: params.lastLinePartial ?? false,
     firstLineExceedsLimit: params.firstLineExceedsLimit ?? false,
     maxLines: input.maxLines,
@@ -201,8 +165,9 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     });
   }
 
-  const firstLine = input.lines[0];
-  if (firstLine !== undefined && utf8ByteLength(firstLine) > input.maxBytes) {
+  const firstLineEnd = content.indexOf("\n");
+  const firstLine = content.slice(0, firstLineEnd === -1 ? content.length : firstLineEnd);
+  if (input.totalLines > 0 && utf8ByteLength(firstLine) > input.maxBytes) {
     return buildTruncationResult(input, {
       content: "",
       truncated: true,
@@ -213,37 +178,45 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     });
   }
 
-  const outputLinesArr: string[] = [];
+  const outputLines: string[] = [];
   let outputBytesCount = 0;
   let truncatedBy: "lines" | "bytes" = input.totalLines > input.maxLines ? "lines" : "bytes";
-
-  for (const [i, line] of input.lines.slice(0, input.maxLines).entries()) {
-    const lineBytes = utf8ByteLength(line) + (i > 0 ? 1 : 0); // +1 for newline
+  // Preserve slice(0, maxLines) semantics for negative and fractional ceilings.
+  const lineLimit = Math.trunc(input.maxLines) || 0;
+  const selectedLines = Math.min(
+    input.totalLines,
+    lineLimit < 0 ? input.totalLines + lineLimit : lineLimit,
+  );
+  for (let start = 0; outputLines.length < selectedLines;) {
+    const newline = content.indexOf("\n", start);
+    const end = newline === -1 ? content.length : newline;
+    const line = content.slice(start, end);
+    const lineBytes = utf8ByteLength(line) + (outputLines.length > 0 ? 1 : 0);
 
     if (outputBytesCount + lineBytes > input.maxBytes) {
       truncatedBy = "bytes";
       break;
     }
 
-    outputLinesArr.push(line);
+    outputLines.push(line);
+    start = end + 1;
     outputBytesCount += lineBytes;
   }
 
   if (
     input.totalLines > input.maxLines &&
-    outputLinesArr.length >= input.maxLines &&
+    outputLines.length >= input.maxLines &&
     outputBytesCount <= input.maxBytes
   ) {
     truncatedBy = "lines";
   }
 
-  const outputContent = outputLinesArr.join("\n");
-
   return buildTruncationResult(input, {
-    content: outputContent,
+    content: outputLines.join("\n"),
     truncated: true,
     truncatedBy,
-    outputLines: outputLinesArr.length,
+    outputLines: outputLines.length,
+    outputBytes: outputBytesCount,
   });
 }
 
@@ -266,50 +239,49 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
     });
   }
 
-  const outputLinesArr: string[] = [];
+  const outputLines: string[] = [];
   let outputBytesCount = 0;
   let truncatedBy: "lines" | "bytes" = input.totalLines > input.maxLines ? "lines" : "bytes";
   let lastLinePartial = false;
+  // A final newline terminates the last display line; truncated output omits it.
+  let end = content.length - (content.endsWith("\n") ? 1 : 0);
 
-  for (let i = input.lines.length - 1; i >= 0 && outputLinesArr.length < input.maxLines; i--) {
-    const line = input.lines.at(i);
-    if (line === undefined) {
-      continue;
-    }
-    const lineBytes = utf8ByteLength(line) + (outputLinesArr.length > 0 ? 1 : 0); // +1 for newline
+  while (outputLines.length < input.totalLines && outputLines.length < input.maxLines) {
+    const start = end > 0 ? content.lastIndexOf("\n", end - 1) + 1 : 0;
+    const line = content.slice(start, end);
+    const lineBytes = utf8ByteLength(line) + (outputLines.length > 0 ? 1 : 0); // +1 for newline
 
     if (outputBytesCount + lineBytes > input.maxBytes) {
       truncatedBy = "bytes";
-      // Edge case: if we haven't added ANY lines yet and this line exceeds maxBytes,
-      // take the end of the line (partial)
-      if (outputLinesArr.length === 0) {
-        const truncatedLine = truncateStringToBytesFromEnd(line, input.maxBytes);
-        outputLinesArr.unshift(truncatedLine);
-        outputBytesCount = utf8ByteLength(truncatedLine);
+      if (outputLines.length === 0) {
+        const partialLine = truncateStringToBytesFromEnd(line, input.maxBytes);
+        outputLines.push(partialLine);
+        outputBytesCount = utf8ByteLength(partialLine);
         lastLinePartial = true;
       }
       break;
     }
 
-    outputLinesArr.unshift(line);
+    outputLines.push(line);
+    end = start - 1;
     outputBytesCount += lineBytes;
   }
 
   if (
     input.totalLines > input.maxLines &&
-    outputLinesArr.length >= input.maxLines &&
+    outputLines.length >= input.maxLines &&
     outputBytesCount <= input.maxBytes
   ) {
     truncatedBy = "lines";
   }
 
-  const outputContent = outputLinesArr.join("\n");
-
   return buildTruncationResult(input, {
-    content: outputContent,
+    // Join only selected lines so a multiline result does not retain the full source.
+    content: outputLines.toReversed().join("\n"),
     truncated: true,
     truncatedBy,
-    outputLines: outputLinesArr.length,
+    outputLines: outputLines.length,
+    outputBytes: outputBytesCount,
     lastLinePartial,
   });
 }
@@ -325,7 +297,8 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
   let outputBytes = 0;
   let start = str.length;
-  let needsReplacement = false;
+  let unchangedEnd = str.length;
+  let repairedTail = "";
   for (let i = str.length; i > 0;) {
     let characterStart = i - 1;
     const code = str.charCodeAt(characterStart);
@@ -351,12 +324,15 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
     }
     outputBytes += characterBytes;
     start = characterStart;
-    needsReplacement ||= unpairedSurrogate;
+    if (unpairedSurrogate) {
+      // Selection already identified the lone surrogate; retain the valid span to its right.
+      repairedTail = "\uFFFD" + str.slice(i, unchangedEnd) + repairedTail;
+      unchangedEnd = characterStart;
+    }
     i = characterStart;
   }
 
-  const output = str.slice(start);
-  return needsReplacement ? replaceUnpairedSurrogates(output) : output;
+  return str.slice(start, unchangedEnd) + repairedTail;
 }
 
 /**

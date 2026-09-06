@@ -1,14 +1,36 @@
+import { html, nothing } from "lit";
 import type { SessionsCatalogStartTerminalResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+} from "../../lib/session-method-access.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+
+export function readNewSessionTerminalStartAccess(
+  gateway: Parameters<typeof readSessionMethodAccess>[0],
+  worktree: boolean,
+): SessionMethodAccess {
+  const terminalAccess = readSessionMethodAccess(gateway, {
+    method: "sessions.catalog.startTerminal",
+    requiredScope: "operator.admin",
+  });
+  return !terminalAccess.allowed || !worktree
+    ? terminalAccess
+    : readSessionMethodAccess(gateway, {
+        method: "worktrees.create",
+        requiredScope: "operator.admin",
+      });
+}
 
 export async function startNewSessionInTerminal(
   client: GatewayBrowserClient,
   params: {
     catalogId: string;
     agentId: string;
+    hostId: string;
     cwd: string;
-    execNode: string;
     initialMessage: string;
     worktree: boolean;
     worktreeName: string;
@@ -30,9 +52,50 @@ export async function startNewSessionInTerminal(
   }
   return client.request<SessionsCatalogStartTerminalResult>("sessions.catalog.startTerminal", {
     catalogId: params.catalogId,
-    ...(params.execNode ? { hostId: `node:${params.execNode}` } : {}),
     agentId: params.agentId,
+    hostId: params.hostId,
     cwd,
     ...(params.initialMessage ? { initialMessage: params.initialMessage } : {}),
   });
+}
+
+export function renderNewSessionTerminalHost(params: {
+  hosts: Array<{ hostId: string; label: string }>;
+  hostId: string;
+  submitting: boolean;
+  refreshing: boolean;
+  onSelect: (hostId: string) => void;
+  onRefresh: () => void;
+}) {
+  return html`<div class="new-session-page__select new-session-page__menu-field">
+    <span>${t("newSession.where")}</span>
+    <select
+      class="new-session-page__trigger"
+      aria-label=${t("newSession.where")}
+      .value=${params.hostId}
+      ?disabled=${params.submitting}
+      @change=${(event: Event) => {
+        if (event.currentTarget instanceof HTMLSelectElement) {
+          params.onSelect(event.currentTarget.value);
+        }
+      }}
+    >
+      ${
+        !params.hosts.some((host) => host.hostId === params.hostId)
+          ? html`<option value=${params.hostId} disabled>
+              ${t("newSession.chooseNativeHost")}
+            </option>`
+          : nothing
+      }
+      ${params.hosts.map((host) => html`<option value=${host.hostId}>${host.label}</option>`)}
+    </select>
+    <button
+      type="button"
+      class="btn btn--sm"
+      ?disabled=${params.refreshing || params.submitting}
+      @click=${params.onRefresh}
+    >
+      ${t("common.refresh")}
+    </button>
+  </div>`;
 }

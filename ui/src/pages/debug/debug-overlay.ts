@@ -3,15 +3,20 @@ import { html, nothing } from "lit";
 import { state as litState } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/debug.css";
 import {
   DEBUG_OVERLAY_SECTIONS,
   type DebugOverlaySectionDescriptor,
+  type DebugOverlayStatusSample,
+  type DebugOverlayStatusSnapshot,
 } from "./debug-overlay-sections.ts";
 
 const DEBUG_OVERLAY_POLL_INTERVAL_MS = 2000;
+const DEBUG_OVERLAY_HISTORY_LIMIT = 90;
 
 type SectionState =
   | { status: "loading" }
@@ -28,24 +33,26 @@ export class DebugOverlay extends OpenClawLightDomElement {
   private requestController: AbortController | null = null;
   private requestActive = false;
   private requestGeneration = 0;
-  private eventLogSource: ApplicationContext["gateway"] | null = null;
-  private unsubscribeEventLog: (() => void) | null = null;
+  private statusHistory: DebugOverlayStatusSample[] = [];
   private readonly polling = new PollController(
     this,
     DEBUG_OVERLAY_POLL_INTERVAL_MS,
     () => void this.refreshSections(),
     false,
   );
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => this.resetSections(),
+    ensureInitialData: () => void this.refreshSections(),
+  });
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => (this.open ? this.context?.gateway : null),
+    (gateway, notify) => gateway.subscribeEventLog(notify),
+  );
 
   override disconnectedCallback(): void {
     this.close();
     super.disconnectedCallback();
-  }
-
-  protected override updated(): void {
-    if (this.open) {
-      this.syncEventLogSubscription();
-    }
   }
 
   toggle(): void {
@@ -55,7 +62,6 @@ export class DebugOverlay extends OpenClawLightDomElement {
     }
     this.open = true;
     document.addEventListener("keydown", this.handleKeydown, true);
-    this.syncEventLogSubscription();
     this.sections = new Map(
       DEBUG_OVERLAY_SECTIONS.map((section) => [section.id, { status: "loading" }]),
     );
@@ -72,34 +78,33 @@ export class DebugOverlay extends OpenClawLightDomElement {
   };
 
   private readonly close = (): void => {
-    if (!this.open && !this.requestController && !this.unsubscribeEventLog) {
+    if (!this.open && !this.requestController) {
       return;
     }
     this.open = false;
     this.polling.stop();
     document.removeEventListener("keydown", this.handleKeydown, true);
+    this.resetSections();
+    this.subscriptions.clear();
+  };
+
+  private resetSections(): void {
     this.requestGeneration += 1;
     this.requestController?.abort();
     this.requestController = null;
     this.requestActive = false;
-    this.unsubscribeEventLog?.();
-    this.unsubscribeEventLog = null;
-    this.eventLogSource = null;
-  };
-
-  private syncEventLogSubscription(): void {
-    const gateway = this.context?.gateway ?? null;
-    if (!this.open || gateway === this.eventLogSource) {
-      return;
-    }
-    this.unsubscribeEventLog?.();
-    this.eventLogSource = gateway;
-    this.unsubscribeEventLog = gateway?.subscribeEventLog(() => this.requestUpdate()) ?? null;
+    this.statusHistory = [];
+    this.sections = new Map(
+      DEBUG_OVERLAY_SECTIONS.map((section) => [
+        section.id,
+        { status: this.gateway.connected ? "loading" : "unavailable" },
+      ]),
+    );
   }
 
   private async refreshSections(): Promise<void> {
-    const gateway = this.context?.gateway;
-    const client = gateway?.snapshot.phase === "connected" ? gateway.snapshot.client : null;
+    const gateway = this.gateway.gateway;
+    const client = this.gateway.connected ? this.gateway.client : null;
     if (!this.open || this.requestActive) {
       return;
     }
@@ -134,6 +139,14 @@ export class DebugOverlay extends OpenClawLightDomElement {
     if (!this.open || generation !== this.requestGeneration) {
       return;
     }
+    if (id === "status" && state.status === "ready") {
+      // SAFETY: The status descriptor owns this section id and always returns a status snapshot.
+      const snapshot = state.value as DebugOverlayStatusSnapshot;
+      this.statusHistory = [
+        ...this.statusHistory.slice(-(DEBUG_OVERLAY_HISTORY_LIMIT - 1)),
+        { at: Date.now(), status: snapshot },
+      ];
+    }
     const next = new Map(this.sections);
     next.set(id, state);
     this.sections = next;
@@ -144,11 +157,13 @@ export class DebugOverlay extends OpenClawLightDomElement {
     return html`
       <section class="debug-overlay__section">
         <h3>${t(section.titleKey)}</h3>
-        ${state.status === "loading"
-          ? html`<div class="debug-overlay__empty">${t("common.loading")}</div>`
-          : state.status === "unavailable"
-            ? html`<div class="debug-overlay__empty">${t("debug.overlay.unavailable")}</div>`
-            : section.render(state.value)}
+        ${
+          state.status === "loading"
+            ? html`<div class="debug-overlay__empty">${t("common.loading")}</div>`
+            : state.status === "unavailable"
+              ? html`<div class="debug-overlay__empty">${t("debug.overlay.unavailable")}</div>`
+              : section.render(state.value, this.statusHistory)
+        }
       </section>
     `;
   }

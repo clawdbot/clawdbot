@@ -41,9 +41,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON: LegacyConfigMigrationSpec[] 
         return;
       }
       delete cron.runLog;
-      if (Object.keys(cron).length > 0) {
-        raw.cron = cron;
-      } else {
+      if (Object.keys(cron).length === 0) {
         delete raw.cron;
       }
       changes.push("Removed retired cron.runLog config; cron history now keeps 2000 runs per job.");

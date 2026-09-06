@@ -6,9 +6,9 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../reply-payload.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
+import { ReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import {
   captureReplyDispatchDeliveryOutcome,
-  isReplyDispatchProvenInvisible,
   type ReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
@@ -21,6 +21,7 @@ const SETTLE_QUEUED_TIMEOUT_MS = 30_000;
 type LedgerQueuedSend = {
   queued: boolean;
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
+  hasPendingDelivery?: () => boolean;
 };
 
 type LedgerSettleResult = "settled" | "aborted" | "timed-out";
@@ -29,13 +30,21 @@ type ReplyTurnLedger = {
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
   sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
   /** Record a routed transport result; routed sends settle at their call site. */
-  recordRoutedDelivery: (payload: ReplyPayload, delivered: boolean) => void;
+  recordRoutedDelivery: (
+    payload: ReplyPayload,
+    result: {
+      delivered: boolean;
+      queueCustody?: "held" | "released";
+      ambiguous?: boolean;
+    },
+  ) => void;
   /** Resolve every admitted payload's outcome so the fallback gate decides after
    * beforeDeliver hooks and transport delivery, not at admission. Only a
    * "settled" result proves the visibility verdict is complete. */
   settleQueued: (abortSignal?: AbortSignal) => Promise<LedgerSettleResult>;
   /** True once any settled, contentful, non-suppressed delivery exists. */
   hasVisibleDelivery: () => boolean;
+  hasPendingDelivery: () => boolean;
 };
 
 export async function requireQueuedReplyDelivery(params: {
@@ -58,13 +67,14 @@ export async function requireQueuedReplyDelivery(params: {
     return;
   }
   const settledOutcome = await runWithDispatchAbortSignal(params.abortSignal, () => outcome);
-  if (isReplyDispatchProvenInvisible(settledOutcome)) {
-    throw new Error("queued reply delivery failed");
+  if (settledOutcome !== "delivered") {
+    throw new ReplyDispatchDeliveryError(settledOutcome);
   }
 }
 
 export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
   let visibleDeliveries = 0;
+  let pendingDelivery = false;
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
     if (kind === "tool") {
       return dispatcher.sendToolResult(payload);
@@ -93,14 +103,22 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       if (!capture.isTracked()) {
         return { queued: true };
       }
-      return { queued: true, outcome: capture.promise };
+      return {
+        queued: true,
+        outcome: capture.promise,
+        hasPendingDelivery: capture.hasPendingDelivery,
+      };
     },
-    recordRoutedDelivery(payload, delivered) {
-      if (delivered && hasOutboundReplyContent(payload, { trimText: true })) {
+    recordRoutedDelivery(payload, result) {
+      pendingDelivery ||= result.queueCustody === "held" || result.ambiguous === true;
+      if (result.delivered && hasOutboundReplyContent(payload, { trimText: true })) {
         visibleDeliveries += 1;
       }
     },
     async settleQueued(abortSignal) {
+      if (abortSignal?.aborted) {
+        return "aborted";
+      }
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<void>((resolve) => {
@@ -133,6 +151,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         if (dispatcher.supportsSettledReceipt === true && receipt?.anyVisibleDelivered === true) {
           visibleDeliveries += 1;
         }
+        pendingDelivery ||= receipt?.hasPendingDelivery === true;
         return "settled";
       } finally {
         if (timer) {
@@ -142,5 +161,6 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       }
     },
     hasVisibleDelivery: () => visibleDeliveries > 0,
+    hasPendingDelivery: () => pendingDelivery,
   };
 }

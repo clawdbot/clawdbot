@@ -1,233 +1,155 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatDurationCompact } from "../../../lib/format.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
-
-const SWARM_DOT_STATUS_RANK = { running: 0, queued: 1, failed: 2, done: 3 } as const;
-const MAX_RENDERED_DOTS_PER_PHASE = 256;
 
 type SwarmDot = {
   key: string;
   label: string;
   status: SwarmDotStatus;
+  duration: string;
 };
 
-type SwarmPhase = {
-  title?: string;
-  dots: SwarmDot[];
-  hidden: number;
-};
-
-type SwarmGroup = {
-  groupId: string;
-  label: string;
-  running: number;
-  done: number;
-  failed: number;
-  narrator?: string;
-  phases: SwarmPhase[];
-};
-
-type SwarmPhaseCarrier = {
-  swarmLog?: unknown;
-  swarmPhase?: unknown;
-  swarmPhaseRank?: unknown;
-};
-
-function swarmStatusLabel(status: SwarmDotStatus): string {
+function swarmDuration(row: GatewaySessionRow, status: SwarmDotStatus): string {
   if (status === "queued") {
-    return t("tasksPage.status.queued");
+    return "—";
   }
-  if (status === "running") {
-    return t("tasksPage.status.running");
+  let durationMs = row.runtimeMs;
+  if (durationMs != null && status === "running" && row.runtimeSampledAt != null) {
+    durationMs += Math.max(0, Date.now() - row.runtimeSampledAt);
+  } else if (durationMs == null && row.startedAt != null) {
+    const endAt = row.endedAt ?? (status === "running" ? Date.now() : undefined);
+    if (endAt != null) {
+      durationMs = Math.max(0, endAt - row.startedAt);
+    }
   }
-  if (status === "done") {
-    return t("activity.status.done");
-  }
-  return t("tasksPage.status.failed");
+  return formatDurationCompact(durationMs) ?? "—";
 }
 
-function swarmDotStatus(row: GatewaySessionRow): SwarmDotStatus | null {
-  if (row.status === "queued") {
-    return "queued";
-  }
-  if (row.status === "running" || row.hasActiveRun === true) {
-    return "running";
-  }
-  if (row.status === "done") {
-    return "done";
-  }
-  if (row.status === "failed" || row.status === "killed" || row.status === "timeout") {
-    return "failed";
-  }
-  return row.subagentRunState === "active" ? "queued" : null;
-}
-
-function groupTail(groupId: string): string {
-  return groupId.split(":").findLast(Boolean) ?? groupId;
-}
-
-function swarmPhaseRank(row: GatewaySessionRow): number {
-  const rank = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmPhaseRank;
-  return typeof rank === "number" && Number.isFinite(rank) ? rank : Number.MAX_SAFE_INTEGER;
-}
-
-function swarmPhase(row: GatewaySessionRow): string | undefined {
-  const phase = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmPhase;
-  return typeof phase === "string" && phase.trim() ? phase.trim() : undefined;
-}
-
-function swarmLog(row: GatewaySessionRow): string | undefined {
-  const log = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmLog;
-  return typeof log === "string" && log.trim() ? log.trim() : undefined;
-}
-
-function isSwarmChildForSession(row: GatewaySessionRow, sessionKey: string): boolean {
-  if (
-    (row.parentSessionKey && areUiSessionKeysEquivalent(row.parentSessionKey, sessionKey)) ||
-    (row.spawnedBy && areUiSessionKeysEquivalent(row.spawnedBy, sessionKey))
-  ) {
-    return true;
-  }
-  const owner = row.swarmGroupId?.split(":").slice(1, -1).join(":");
-  return Boolean(owner && areUiSessionKeysEquivalent(owner, sessionKey));
-}
-
-function collectActiveSwarmGroups(
+function collectSwarmTasks(
   sessions: readonly GatewaySessionRow[],
-  sessionKey: string,
-): SwarmGroup[] {
-  const byGroup = new Map<
-    string,
-    Array<{ phase?: string; phaseRank: number; log?: string; dot: SwarmDot }>
-  >();
+  groups: NonNullable<GatewaySessionRow["swarm"]>["groups"],
+): Map<string, SwarmDot[]> {
+  const byGroup = new Map<string, Array<{ phaseRank: number; dot: SwarmDot }>>();
+  const members = new Map(
+    groups.map((group) => [
+      group.groupId,
+      new Map((group.children ?? []).map((child) => [child.sessionKey, child.status])),
+    ]),
+  );
   for (const row of sessions) {
     const groupId = row.swarmGroupId?.trim();
-    if (!groupId || !isSwarmChildForSession(row, sessionKey)) {
-      continue;
-    }
-    const status = swarmDotStatus(row);
-    if (!status) {
+    const status = groupId ? members.get(groupId)?.get(row.key) : undefined;
+    if (!status || !groupId) {
       continue;
     }
     const entries = byGroup.get(groupId) ?? [];
     entries.push({
-      phase: swarmPhase(row),
-      phaseRank: swarmPhaseRank(row),
-      log: swarmLog(row),
+      phaseRank: row.swarmPhaseRank ?? Number.MAX_SAFE_INTEGER,
       dot: {
         key: row.key,
-        label: row.label?.trim() || row.displayName?.trim() || row.derivedTitle?.trim() || row.key,
+        label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
         status,
+        duration: swarmDuration(row, status),
       },
     });
     byGroup.set(groupId, entries);
   }
-
-  return [...byGroup.entries()]
-    .map(([groupId, entries]) => {
-      const dots = entries.map((entry) => entry.dot);
-      const phases = new Map<string | undefined, { rank: number; dots: SwarmDot[] }>();
-      for (const entry of entries) {
-        const bucket = phases.get(entry.phase) ?? { rank: entry.phaseRank, dots: [] };
-        bucket.rank = Math.min(bucket.rank, entry.phaseRank);
-        bucket.dots.push(entry.dot);
-        phases.set(entry.phase, bucket);
-      }
-      return {
-        groupId,
-        label: groupTail(groupId),
-        running: dots.filter((dot) => dot.status === "running").length,
-        done: dots.filter((dot) => dot.status === "done").length,
-        failed: dots.filter((dot) => dot.status === "failed").length,
-        narrator: entries.map((entry) => entry.log).find(Boolean),
-        phases: [...phases.entries()]
-          .toSorted((left, right) => left[1].rank - right[1].rank)
-          .map(([title, bucket]) => {
-            const visibleFirst =
-              bucket.dots.length > MAX_RENDERED_DOTS_PER_PHASE
-                ? bucket.dots.toSorted(
-                    (left, right) =>
-                      SWARM_DOT_STATUS_RANK[left.status] - SWARM_DOT_STATUS_RANK[right.status],
-                  )
-                : bucket.dots;
-            return {
-              title,
-              dots: visibleFirst.slice(0, MAX_RENDERED_DOTS_PER_PHASE),
-              hidden: Math.max(0, visibleFirst.length - MAX_RENDERED_DOTS_PER_PHASE),
-            };
-          }),
-      } satisfies SwarmGroup;
-    })
-    .filter((group) =>
-      group.phases.some((phase) =>
-        phase.dots.some((dot) => dot.status === "queued" || dot.status === "running"),
-      ),
-    )
-    .toSorted((left, right) => left.groupId.localeCompare(right.groupId));
+  return new Map(
+    [...byGroup].map(([groupId, entries]) => [
+      groupId,
+      entries.toSorted((left, right) => left.phaseRank - right.phaseRank).map((entry) => entry.dot),
+    ]),
+  );
 }
 
 export function renderChatSwarmProgress({
   sessions,
   sessionKey,
+  agentId,
 }: {
   sessions: readonly GatewaySessionRow[];
   sessionKey: string;
+  agentId?: string;
 }): TemplateResult | typeof nothing {
-  const groups = collectActiveSwarmGroups(sessions, sessionKey);
-  if (groups.length === 0) {
+  const summary = sessions.find(
+    (row) =>
+      areUiSessionKeysEquivalent(row.key, sessionKey) &&
+      ((sessionKey !== "global" && sessionKey !== "unknown") ||
+        Boolean(agentId && row.agentId === agentId)),
+  )?.swarm;
+  if (!summary?.groups.length) {
     return nothing;
   }
-  return html`
-    <aside
-      class="chat-swarm"
-      data-test-id="chat-swarm"
-      role="status"
-      aria-live="off"
-      aria-label=${t("labsPage.swarm.title")}
-    >
-      ${groups.map(
-        (group) => html`
-          <div class="chat-swarm__group" data-swarm-group=${group.groupId}>
+  const details = collectSwarmTasks(sessions, summary.groups);
+  return html` <aside
+    class="chat-swarm"
+    data-test-id="chat-swarm"
+    role="status"
+    aria-live="off"
+    aria-label=${t("labsPage.swarm.title")}
+  >
+    ${repeat(
+      summary.groups,
+      (group) => group.groupId,
+      (group) => {
+        const tasks = details.get(group.groupId) ?? [];
+        const total = group.queued + group.running + group.done + group.failed;
+        const complete = group.done + group.failed;
+        const terminal = complete === total;
+        const label = total === 1 && tasks[0] ? tasks[0].label : t("labsPage.swarm.groupTitle");
+        const counts = t(terminal ? "labsPage.swarm.finished" : "labsPage.swarm.active", {
+          running: String(group.running),
+          queued: String(group.queued),
+          done: String(group.done),
+          failed: String(group.failed),
+        });
+        // Counts come from the requester registry, not the surviving child-session page.
+        const markers = (["running", "queued", "failed", "done"] as const)
+          .flatMap((status) => Array.from({ length: Math.min(group[status], 64) }, () => status))
+          .slice(0, 64);
+        return html` <details
+          class="chat-swarm__group ${group.failed > 0 ? "chat-swarm__group--failed" : ""}"
+          data-swarm-group=${group.groupId}
+        >
+          <summary class="chat-swarm__summary">
             <div class="chat-swarm__header">
-              <strong title=${group.groupId}>${group.label}</strong>
+              <strong title=${label}>${label}</strong>
               <span
-                >${group.running} ${swarmStatusLabel("running")} · ${group.done}
-                ${swarmStatusLabel("done")} · ${group.failed} ${swarmStatusLabel("failed")}</span
+                >${t("labsPage.swarm.progress", { complete: String(complete), total: String(total) })}</span
               >
             </div>
-            ${group.narrator
-              ? html`<div class="chat-swarm__narrator">${group.narrator}</div>`
-              : nothing}
-            ${group.phases.map(
-              (phase) => html`
-                <div class="chat-swarm__phase-row">
-                  <div class="chat-swarm__phase">
-                    ${phase.title ?? t("labsPage.swarm.defaultPhase")}
-                  </div>
-                  <div class="chat-swarm__dots" role="list">
-                    ${phase.dots.map(
-                      (dot) => html`
-                        <span
-                          class=${`chat-swarm__dot chat-swarm__dot--${dot.status}`}
-                          role="listitem"
-                          title=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
-                          aria-label=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
-                        ></span>
-                      `,
-                    )}
-                    ${phase.hidden > 0
-                      ? html`<span class="chat-swarm__more" role="listitem">+${phase.hidden}</span>`
-                      : nothing}
-                  </div>
-                </div>
-              `,
+            <div class="chat-swarm__markers" role="img" aria-label=${counts}>
+              ${markers.map((status) => html`<span class=${`chat-swarm__marker chat-swarm__marker--${status}`} aria-hidden="true"></span>`)}
+              ${total > markers.length ? html`<span>+${total - markers.length}</span>` : nothing}
+            </div>
+            <div class="chat-swarm__counts">${counts}</div>
+            ${terminal ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.childOutcome")}</div>` : nothing}
+            <span class="chat-swarm__disclosure"
+              >${t("labsPage.swarm.details")} ${icons.chevronDown}</span
+            >
+          </summary>
+          <div class="chat-swarm__tasks" role="list">
+            ${tasks.length === 0 ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.detailsUnavailable")}</div>` : nothing}
+            ${tasks.map(
+              (task) => html` <div class="chat-swarm__task" role="listitem">
+                <span class=${`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}>
+                  ${task.status === "done" ? icons.check : task.status === "failed" ? icons.alertTriangle : task.status === "running" ? icons.loader : icons.clock}
+                </span>
+                <span class="chat-swarm__task-name">${task.label}</span>
+                <span class="chat-swarm__task-duration">${task.duration}</span>
+              </div>`,
             )}
           </div>
-        `,
-      )}
-    </aside>
-  `;
+        </details>`;
+      },
+    )}
+    ${summary.otherActiveGroups > 0 ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.otherGroups", { count: String(summary.otherActiveGroups) })}</div>` : nothing}
+  </aside>`;
 }

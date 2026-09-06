@@ -36,14 +36,15 @@ describe("buildCopilotPromptGuidance", () => {
     expect(guidance).toContain("## Delegation");
     expect(guidance).toContain("delegate via `sessions_spawn`");
     expect(guidance).toContain("spawn `sessions_spawn` with `visible=true`");
-    expect(guidance).toContain("Need results before reply: `sessions_yield`; never poll.");
+    expect(guidance).toContain("Need announced results before reply: `sessions_yield`");
+    expect(guidance).toContain("Collectors require explicit result collection instead.");
     expect(guidance).toContain("`subagents(action=list)` only for requested status/debug.");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
     expect(guidance?.indexOf("## Skill Workshop")).toBeLessThan(
       guidance?.indexOf("## Delegation") ?? 0,
     );
     expect(guidance?.indexOf("## Delegation")).toBeLessThan(
-      guidance?.indexOf("For the current source conversation") ?? 0,
+      guidance?.indexOf("You can participate in the conversation throughout your work.") ?? 0,
     );
   });
 
@@ -64,7 +65,7 @@ describe("buildCopilotPromptGuidance", () => {
     const guidance = buildGuidance(attempt);
 
     expect(guidance).not.toContain("## Delegation");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
   });
 
   it.each([
@@ -81,19 +82,61 @@ describe("buildCopilotPromptGuidance", () => {
         "sessions_spawn",
       ]),
     ).toContain("Visible source replies are not automatically delivered");
-    expect(
-      buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, ["sessions_spawn"]),
-    ).toContain("reply normally in your final assistant message");
+    const unavailable = buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, [
+      "sessions_spawn",
+    ]);
+    expect(unavailable).toContain("remains private");
+    expect(unavailable).not.toContain("Use `message`");
+    expect(unavailable).not.toContain("OpenClaw delivers your final response automatically");
   });
+
+  it.each([false, true])(
+    "teaches the prepared target requirement (%s) only with message",
+    (required) => {
+      const attempt = {
+        agentId: "main",
+        config: {},
+        sessionKey: "agent:main:main",
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+      } as AttemptParamsLike;
+      const guidance = buildCopilotPromptGuidance({
+        attempt,
+        callableToolNames: ["message"],
+        requireExplicitMessageTarget: required,
+      });
+      expect(guidance).toContain(
+        required ? "target required this turn" : "current source is default target",
+      );
+      const unavailable = buildCopilotPromptGuidance({
+        attempt,
+        callableToolNames: [],
+        requireExplicitMessageTarget: required,
+      });
+      expect(unavailable).toContain("remains private");
+      expect(unavailable).not.toContain("`target`");
+    },
+  );
 
   it("renders only the delegation operations present in the callable inventory", () => {
     const guidance = buildGuidance({}, [" sessions_spawn ", "sessions_spawn"]);
 
     expect(guidance).toContain("## Delegation");
-    expect(guidance).toContain("Completion is push-based; never poll.");
+    expect(guidance).toContain(
+      "Announced completion is push-based; collectors require explicit result collection.",
+    );
     expect(guidance).not.toContain("sessions_yield");
     expect(guidance).not.toContain("subagents(action=list)");
     expect(buildGuidance({}, ["sessions_yield", "subagents"])).not.toContain("## Delegation");
+  });
+
+  it.each([
+    { name: "callable", tools: ["secrets"], disabled: false, discoverable: true },
+    { name: "absent", tools: [], disabled: false, discoverable: false },
+    { name: "disabled", tools: ["secrets"], disabled: true, discoverable: false },
+  ])("gates credential guidance on the $name tool surface", ({ tools, disabled, discoverable }) => {
+    const guidance = buildGuidance({ disableTools: disabled }, tools);
+    expect(guidance?.includes("`secrets`: list metadata first")).toBe(discoverable);
+    expect(guidance).toContain("host-owned masked credential entry");
   });
 
   it("wraps conversation and subagent context without adding workspace prompt sections", () => {

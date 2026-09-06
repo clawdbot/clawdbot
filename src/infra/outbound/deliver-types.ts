@@ -1,10 +1,18 @@
 // Delivery result types define the normalized channel send contract plus
 // partial-failure metadata for multi-payload outbound sends.
-import type { MessageReceipt } from "../../channels/message/types.js";
+import type { MessageReceipt, MessageReceiptSourceResult } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
-/** Successful channel send result normalized for core delivery accounting. */
+export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+
+export type PlatformSendRoute = {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
+
+/** Channel send result or explicit non-outcome normalized for delivery accounting. */
 export type OutboundDeliveryResult = {
+  outcome?: MessageReceiptSourceResult["outcome"];
   channel: ChannelId;
   messageId: string;
   target?: {
@@ -22,6 +30,9 @@ export type OutboundDeliveryResult = {
 /** Count platform sends without double-counting equivalent receipt representations. */
 export function countPhysicalOutboundSends(results: readonly OutboundDeliveryResult[]): number {
   return results.reduce((count, result) => {
+    if (result.outcome === "not_sent") {
+      return count;
+    }
     const receipt = result.receipt;
     if (!receipt) {
       return count + 1;
@@ -41,6 +52,7 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "empty_after_message_sending_hook"
   | "empty_after_reply_payload_sending_hook"
   | "no_visible_payload"
+  | "adapter_returned_no_send"
   | "adapter_returned_no_identity";
 
 /** Delivery phase where a failure occurred. */
@@ -109,12 +121,26 @@ export type OutboundPayloadDeliveryOutcome =
       deliveryKind?: OutboundPayloadDeliveryKind;
     };
 
+/** Every reported payload intentionally omitted delivery; missing evidence stays unknown. */
+export function areOutboundPayloadsIntentionallySuppressed(
+  outcomes: readonly OutboundPayloadDeliveryOutcome[],
+): boolean {
+  return (
+    outcomes.length > 0 &&
+    outcomes.every(
+      (outcome) =>
+        outcome.status === "suppressed" && outcome.reason !== "adapter_returned_no_identity",
+    )
+  );
+}
+
 /** Error carrying partial delivery results when an outbound send fails mid-batch. */
 export class OutboundDeliveryError extends Error {
   readonly results: OutboundDeliveryResult[];
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
+  queueCustody?: "held" | "released";
 
   constructor(
     message: string,
@@ -129,10 +155,24 @@ export class OutboundDeliveryError extends Error {
     this.name = "OutboundDeliveryError";
     this.results = [...(options.results ?? [])];
     this.payloadOutcomes = [...(options.payloadOutcomes ?? [])];
-    this.sentBeforeError = this.results.length > 0;
+    this.sentBeforeError =
+      this.results.length > 0 ||
+      this.payloadOutcomes.some((outcome) =>
+        outcome.status === "failed"
+          ? outcome.sentBeforeError
+          : outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
+      );
     this.stage = options.stage ?? "unknown";
   }
 }
+
+/** Internal control flow for lifecycle closure before recipient-visible dispatch. */
+export class OutboundDeliveryAdmissionClosedError extends Error {}
+
+export const isOutboundDeliveryAdmissionClosedError = (error: unknown): boolean =>
+  error instanceof OutboundDeliveryAdmissionClosedError ||
+  (error instanceof OutboundDeliveryError &&
+    error.cause instanceof OutboundDeliveryAdmissionClosedError);
 
 /** Narrows unknown failures to outbound delivery errors with partial-send metadata. */
 export function isOutboundDeliveryError(error: unknown): error is OutboundDeliveryError {

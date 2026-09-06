@@ -4,8 +4,9 @@ import {
   AgentDeletionCommitUncertainError,
 } from "../agents/agent-lifecycle-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -72,9 +73,11 @@ function snapshotFromExecApprovalsDatabase(
   });
 }
 
-function readExecApprovalsSnapshotFromDatabase(): ExecApprovalsSnapshot {
+function readExecApprovalsSnapshotFromDatabase(
+  options: OpenClawStateDatabaseOptions = {},
+): ExecApprovalsSnapshot {
   assertNoPendingLegacyExecApprovals();
-  return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase().db);
+  return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
 }
 
 function readExecApprovalsSnapshotFromDatabaseReadOnly(): ExecApprovalsSnapshot {
@@ -88,15 +91,22 @@ function readExecApprovalsSnapshotFromDatabaseReadOnly(): ExecApprovalsSnapshot 
   );
 }
 
-export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
+function readExecApprovalsSnapshotWithOptions(
+  options: OpenClawStateDatabaseOptions = {},
+): ExecApprovalsSnapshot {
   try {
-    return readExecApprovalsSnapshotFromDatabase();
+    return readExecApprovalsSnapshotFromDatabase(options);
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
     }
+    // A caller-selected state owner must fail closed instead of reading another database.
     throw new ExecApprovalsStoreUnavailableError(error);
   }
+}
+
+export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
+  return readExecApprovalsSnapshotWithOptions();
 }
 
 export function loadExecApprovals(): ExecApprovalsFile {
@@ -161,6 +171,7 @@ type InternalExecApprovalsUpdate = ExecApprovalsUpdate & {
 
 function updateExecApprovalsInTransaction(
   params: InternalExecApprovalsUpdate,
+  options: OpenClawStateDatabaseOptions = {},
 ): ExecApprovalsSnapshot | null {
   assertNoPendingLegacyExecApprovals();
   return runOpenClawStateWriteTransaction(
@@ -194,7 +205,7 @@ function updateExecApprovalsInTransaction(
         row: { raw_json: raw },
       });
     },
-    {},
+    options,
     { operationLabel: "exec-approvals.update" },
   );
 }
@@ -217,28 +228,33 @@ export async function updateExecApprovals(
 export async function withAgentExecApprovalsRemoved<T>(
   agentId: string,
   commit: () => Promise<T>,
+  options: OpenClawStateDatabaseOptions = {},
 ): Promise<T> {
   const key = normalizeAgentId(agentId);
-  const snapshot = readExecApprovalsSnapshot();
-  const operationId = readAgentDeletionJournal(key)?.operationId;
+  const snapshot = readExecApprovalsSnapshotWithOptions(options);
+  const operationId = readAgentDeletionJournal(key, options)?.operationId;
   if (!operationId) {
     throw new ExecApprovalsMutationFencedError();
   }
-  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(
-    ([policyKey]) => normalizeAgentId(policyKey) === key,
-  );
+  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(([policyKey]) => {
+    const normalizedPolicyKey = normalizeAgentIdStrict(policyKey);
+    return normalizedPolicyKey.ok && normalizedPolicyKey.value === key;
+  });
   if (removedPolicyEntries.length > 0) {
-    const updated = updateExecApprovalsInTransaction({
-      baseHash: snapshot.hash,
-      authority: { action: "remove", agentId: key, operationId },
-      update: (file) => {
-        const agents = { ...file.agents };
-        for (const [policyKey] of removedPolicyEntries) {
-          delete agents[policyKey];
-        }
-        return { ...file, agents };
+    const updated = updateExecApprovalsInTransaction(
+      {
+        baseHash: snapshot.hash,
+        authority: { action: "remove", agentId: key, operationId },
+        update: (file) => {
+          const agents = { ...file.agents };
+          for (const [policyKey] of removedPolicyEntries) {
+            delete agents[policyKey];
+          }
+          return { ...file, agents };
+        },
       },
-    });
+      options,
+    );
     if (!updated) {
       throw new Error("Exec approvals changed while deleting agent; retry deletion.");
     }
@@ -249,7 +265,7 @@ export async function withAgentExecApprovalsRemoved<T>(
         agentId: key,
         operationId,
       });
-    });
+    }, options);
   }
   try {
     return await commit();
@@ -259,13 +275,16 @@ export async function withAgentExecApprovalsRemoved<T>(
     }
     if (removedPolicyEntries.length > 0) {
       try {
-        updateExecApprovalsInTransaction({
-          authority: { action: "restore", agentId: key, operationId },
-          update: (file) => ({
-            ...file,
-            agents: { ...file.agents, ...Object.fromEntries(removedPolicyEntries) },
-          }),
-        });
+        updateExecApprovalsInTransaction(
+          {
+            authority: { action: "restore", agentId: key, operationId },
+            update: (file) => ({
+              ...file,
+              agents: { ...file.agents, ...Object.fromEntries(removedPolicyEntries) },
+            }),
+          },
+          options,
+        );
       } catch (rollbackError) {
         throw new AgentDeletionAuthorityRollbackError(
           [error, rollbackError],

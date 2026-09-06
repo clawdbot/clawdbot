@@ -6,6 +6,12 @@ import { readPackageManagerSpec } from "./package-json.js";
 
 type DetectedPackageManager = "pnpm" | "bun" | "npm";
 
+export type BunGlobalInstallOwner = {
+  globalRoot: string;
+  globalProjectRoot: string;
+  bunInstall?: string;
+};
+
 async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
@@ -15,13 +21,56 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-function resolveBunGlobalNodeModules(): string {
-  return path.join(
-    process.env.BUN_INSTALL || path.join(os.homedir(), ".bun"),
-    "install",
-    "global",
-    "node_modules",
-  );
+/** Resolves Bun's global project from its installed owner rather than unrelated caller settings. */
+export function resolveBunGlobalInstallOwner(
+  pkgRoot?: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): BunGlobalInstallOwner | null {
+  const configuredInstall = env.BUN_INSTALL?.trim();
+  const configuredGlobalProject = env.BUN_INSTALL_GLOBAL_DIR?.trim();
+  if (pkgRoot == null) {
+    const bunInstall = configuredInstall || path.join(os.homedir(), ".bun");
+    const globalProjectRoot = path.resolve(
+      configuredGlobalProject || path.join(bunInstall, "install", "global"),
+    );
+    return {
+      globalRoot: path.join(globalProjectRoot, "node_modules"),
+      globalProjectRoot,
+      ...(!configuredGlobalProject || configuredInstall
+        ? { bunInstall: path.resolve(bunInstall) }
+        : {}),
+    };
+  }
+
+  const trimmed = pkgRoot.trim();
+  if (!trimmed) {
+    return null;
+  }
+  let globalRoot = path.dirname(path.resolve(trimmed));
+  if (path.basename(globalRoot).startsWith("@")) {
+    globalRoot = path.dirname(globalRoot);
+  }
+  if (path.basename(globalRoot) !== "node_modules") {
+    return null;
+  }
+
+  const globalProjectRoot = path.dirname(globalRoot);
+  const installRoot = path.dirname(globalProjectRoot);
+  const conventionalLayout =
+    path.basename(globalProjectRoot) === "global" && path.basename(installRoot) === "install";
+  const configuredProjectMatches =
+    configuredGlobalProject !== undefined &&
+    path.resolve(configuredGlobalProject) === globalProjectRoot;
+  if (!conventionalLayout && !configuredProjectMatches) {
+    return null;
+  }
+
+  const bunInstall = conventionalLayout ? path.dirname(installRoot) : configuredInstall;
+  return {
+    globalRoot,
+    globalProjectRoot,
+    ...(bunInstall ? { bunInstall: path.resolve(bunInstall) } : {}),
+  };
 }
 
 export function resolvePnpmNodeModulesRoot(root: string): string | null {
@@ -40,7 +89,7 @@ export function resolvePnpmNodeModulesRoot(root: string): string | null {
 }
 
 export async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
-  return path.resolve(path.dirname(root)) === path.resolve(resolveBunGlobalNodeModules());
+  return resolveBunGlobalInstallOwner(root) !== null;
 }
 
 export async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {

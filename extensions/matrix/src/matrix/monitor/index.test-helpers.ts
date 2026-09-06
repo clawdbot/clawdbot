@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import { z } from "zod";
 import type { MatrixRoomInfo } from "./room-info.js";
 
 export type DirectRoomTrackerOptions = {
@@ -88,9 +87,6 @@ const hoisted = vi.hoisted(() => {
     aliasesResolved: true,
   }));
   const getMemberDisplayName = vi.fn(async () => "Bot");
-  const resolveTextChunkLimit = vi.fn<
-    (cfg: unknown, channel: unknown, accountId?: unknown) => number
-  >(() => 4000);
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -209,7 +205,6 @@ const hoisted = vi.hoisted(() => {
     releaseSharedClientInstance,
     resolveSharedMatrixClient: lease.start,
     resolveSharedMatrixClientImpl,
-    resolveTextChunkLimit,
     runMatrixStartupMaintenance,
     runRegisteredMonitorRetirement,
     setMatrixRuntime,
@@ -223,73 +218,20 @@ vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => ({
   registerChannelRuntimeContext: hoisted.registerChannelRuntimeContext,
 }));
 
-vi.mock("../../runtime-api.js", () => {
-  const normalizeAccountId = (value: string | null | undefined) => value?.trim() || "default";
-  return {
-    DEFAULT_ACCOUNT_ID: "default",
-    GROUP_POLICY_BLOCKED_LABEL: {
-      room: "room",
-    },
-    MarkdownConfigSchema: z.any().optional(),
-    PAIRING_APPROVED_MESSAGE: "paired",
-    ToolPolicySchema: z.any().optional(),
-    addAllowlistUserEntriesFromConfigEntry: vi.fn(),
-    buildChannelConfigSchema: (schema: unknown) => schema,
-    buildChannelKeyCandidates: (...keys: Array<string | undefined | null>) => {
-      const seen = new Set<string>();
-      return keys
-        .map((key) => (typeof key === "string" ? key.trim() : ""))
-        .filter((key) => {
-          if (!key || seen.has(key)) {
-            return false;
-          }
-          seen.add(key);
-          return true;
-        });
-    },
-    buildProbeChannelStatusSummary: (
-      snapshot: Record<string, unknown>,
-      extra?: Record<string, unknown>,
-    ) => ({
-      ...snapshot,
-      ...extra,
-    }),
-    buildSecretInputSchema: () => z.string(),
-    chunkTextForOutbound: vi.fn((text: string) => [text]),
-    collectStatusIssuesFromLastError: () => [],
-    createActionGate: () => () => true,
-    createReplyPrefixOptions: () => ({}),
-    createTypingCallbacks: () => ({}),
-    formatDocsLink: (input: string) => input,
-    formatZonedTimestamp: () => "2026-03-27T00:00:00.000Z",
-    getAgentScopedMediaLocalRoots: () => [],
-    getSessionBindingService: () => ({}),
-    hasConfiguredSecretInput: (value: unknown) => Boolean(value),
-    mergeAllowlist: ({ existing, additions }: { existing: string[]; additions: string[] }) => [
-      ...existing,
-      ...additions,
-    ],
-    normalizeAccountId,
-    normalizeOptionalAccountId: normalizeAccountId,
-    resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
-    resolveThreadBindingMaxAgeMsForChannel: () => 0,
-    resolveAllowlistProviderRuntimeGroupPolicy: () => ({
-      groupPolicy: "allowlist",
-      providerMissingFallbackApplied: false,
-    }),
-    resolveDefaultGroupPolicy: () => "allowlist",
-    resolveOutboundSendDep: () => null,
-    resolveThreadBindingFarewellText: () => null,
-    resolveAckReaction: () => null,
-    readJsonFileWithFallback: vi.fn(),
-    readNumberParam: vi.fn(),
-    readReactionParams: vi.fn(),
-    readStringArrayParam: vi.fn(),
-    readStringParam: vi.fn(),
-    summarizeMapping: vi.fn(),
-    warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
+  GROUP_POLICY_BLOCKED_LABEL: { room: "room" },
+  resolveAllowlistProviderRuntimeGroupPolicy: () => ({
+    groupPolicy: "allowlist",
+    providerMissingFallbackApplied: false,
+  }),
+  resolveDefaultGroupPolicy: () => "allowlist",
+  warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/thread-bindings-runtime", () => ({
+  resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
+  resolveThreadBindingMaxAgeMsForChannel: () => 0,
+}));
 
 vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
@@ -313,10 +255,6 @@ vi.mock("../../runtime.js", () => ({
     channel: {
       mentions: {
         buildMentionRegexes: () => [],
-      },
-      text: {
-        resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>
-          hoisted.resolveTextChunkLimit(cfg, channel, accountId),
       },
     },
     system: {

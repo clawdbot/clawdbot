@@ -1,10 +1,10 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import { patchSettings, type ChatWorkspaceDock } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
@@ -141,7 +141,7 @@ function artifactSidebarContent(params: {
     const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n\`\`\`${language}\n${decoded}\n\`\`\``,
+      content: `# ${title}\n\n${formatFencedCodeBlock(decoded, language)}`,
       rawText: decoded,
     };
   }
@@ -153,8 +153,8 @@ function artifactSidebarContent(params: {
   return { kind: "markdown", content, rawText: content };
 }
 
-export function refreshSessionWorkspace(state: SessionWorkspaceHost) {
-  if (refreshSessionWorkspaceState(state)) {
+export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
+  if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.handleOpenSidebar(resolveSessionDiffSidebarContent(state));
   }
 }
@@ -177,6 +177,13 @@ function isCurrentWorkspaceOpenRequest(
   );
 }
 
+export function isSessionWorkspaceItemLoading(state: SessionWorkspaceHost): boolean {
+  const workspace = state.sessionWorkspaceState;
+  return Boolean(
+    workspace && isCurrentSessionWorkspace(state, workspace) && workspace.openRequest !== undefined,
+  );
+}
+
 function openWorkspaceItem<T>(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -185,11 +192,11 @@ function openWorkspaceItem<T>(
   render: (result: T) => SidebarContent | null,
   missingMessage: string,
 ) {
+  if (!state.client || !state.connected) {
+    return;
+  }
   const request = beginWorkspaceOpenRequest(workspace, itemId);
   void (async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
     state.handleOpenSidebar(null);
     workspace.error = null;
     try {
@@ -209,6 +216,9 @@ function openWorkspaceItem<T>(
         workspace.error = formatUiError(error);
       }
     } finally {
+      if (workspace.openRequest === request) {
+        delete workspace.openRequest;
+      }
       requestWorkspaceUpdate(state);
     }
   })();
@@ -433,21 +443,30 @@ function openArtifact(
 
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
-  options?: { narrowLayout?: boolean; draftScope?: string; expanded?: boolean },
+  options?: {
+    narrowLayout?: boolean;
+    draftScope?: string;
+    expanded?: boolean;
+    presented?: boolean;
+  },
 ): SessionWorkspaceProps {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getSessionWorkspace(state);
   if (
-    // The collapsed header still renders the diff action, so load its checkout
-    // capability eagerly instead of waiting for the file rail to open.
-    (options?.expanded === true ||
-      !workspace.collapsed ||
-      isGatewayMethodAdvertised(state, "sessions.diff") === true) &&
+    (options?.expanded === false || options?.presented === false) &&
+    workspace.browserSearchTimer
+  ) {
+    clearWorkspaceTimer(workspace);
+    workspace.pendingReload = true;
+  }
+  if (
+    options?.presented !== false &&
+    options?.expanded === true &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
-    !workspace.error &&
-    workspace.list?.sessionKey !== state.sessionKey
+    (!workspace.error || workspace.pendingReload) &&
+    (workspace.pendingReload || workspace.list?.sessionKey !== state.sessionKey)
   ) {
     loadSessionWorkspace(state, workspace);
   }
@@ -469,9 +488,6 @@ export function createSessionWorkspaceProps(
       workspace.browserPath = path;
       workspace.browserSearch = "";
       loadSessionWorkspace(state, workspace, true);
-    },
-    onCopyPath: (path) => {
-      void copyToClipboard(path);
     },
     onOpenFile: (path, origin) => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
@@ -500,10 +516,7 @@ export function resolveSessionDiffSidebarContent(
 ): SidebarContent | null {
   const workspace = getSessionWorkspace(state);
   const canOpenDiff =
-    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
-    Boolean(state.client) &&
-    workspace.list?.sessionKey === state.sessionKey &&
-    workspace.list.gitCheckout !== false;
+    isGatewayMethodAdvertised(state, "sessions.diff") === true && Boolean(state.client);
   if (!canOpenDiff) {
     return null;
   }
@@ -560,6 +573,5 @@ function buildSessionDiffSidebarContent(
         }
       : undefined,
     openFile: (path) => openFile(state, getSessionWorkspace(state), path),
-    revealFile: (path) => revealSessionWorkspaceFile(state, path),
   };
 }

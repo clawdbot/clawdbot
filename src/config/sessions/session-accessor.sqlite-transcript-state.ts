@@ -4,9 +4,9 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
@@ -14,7 +14,6 @@ import {
   assertCanonicalSessionKeyWriteMatchesDatabase,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
-import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -213,7 +212,7 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
       .where("session_id", "=", sessionId),
   );
   const maxSeq =
-    row?.max_seq === null || row?.max_seq === undefined ? -1 : coerceSqliteNumber(row.max_seq);
+    row?.max_seq === null || row?.max_seq === undefined ? -1 : sqliteNumber(row.max_seq);
   return maxSeq + 1;
 }
 
@@ -290,7 +289,5 @@ export function deleteTranscriptEventsInTransaction(
     database.db,
     db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
   );
-  // FTS rows have no FK onto transcript_events; clear them in this transaction.
-  deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
   return (result.numAffectedRows ?? 0n) > 0n;
 }

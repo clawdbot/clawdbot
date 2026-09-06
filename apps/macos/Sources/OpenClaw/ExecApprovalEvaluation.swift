@@ -16,8 +16,14 @@ struct ExecApprovalEvaluation {
     let allowlistAuthorizationSatisfied: Bool
     let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
-    let skillAllow: Bool
+    let skillTrust: SkillBinsCache.Snapshot?
     let policySnapshot: ExecApprovalPolicySnapshot
+
+    var skillAllow: Bool {
+        self.boundCommand != nil && ExecApprovalEvaluator.isSkillAutoAllowed(
+            self.allowlistResolutions,
+            trustedBinsByName: self.skillTrust?.trustByName ?? [:])
+    }
 
     var canPersistAllowAlways: Bool {
         self.security == .allowlist && self.boundCommand != nil && !self.allowAlwaysPatterns.isEmpty
@@ -27,8 +33,8 @@ struct ExecApprovalEvaluation {
         if self.allowlistAuthorizationSatisfied {
             return .allowlistEntries
         }
-        if self.skillAllow {
-            return .autoAllowedSkill
+        if self.skillAllow, let skillTrust = self.skillTrust {
+            return .autoAllowedSkill(skillTrust)
         }
         return nil
     }
@@ -134,9 +140,9 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
 }
 
 enum ExecApprovalAuthorization: Sendable {
-    enum Basis: Sendable, Equatable {
+    enum Basis: Sendable {
         case allowlistEntries
-        case autoAllowedSkill
+        case autoAllowedSkill(SkillBinsCache.Snapshot)
     }
 
     case currentPolicy(evaluatedSecurity: ExecSecurity, evaluatedAsk: ExecAsk, basis: Basis?)
@@ -167,12 +173,13 @@ struct ExecApprovalExecutionCommit: Sendable {
         persistAllowlist: Bool,
         delayedPolicySnapshot: ExecApprovalPolicySnapshot? = nil) -> ExecApprovalExecutionCommit
     {
-        let uses = effectiveSecurity == .allowlist &&
-            context.authorizationBasis == .allowlistEntries
-            ? self.allowlistUses(context: context)
-            : []
-        let grants = persistAllowlist ? self.allowAlwaysGrants(context: context) : []
         let basis = effectiveSecurity == .allowlist ? context.authorizationBasis : nil
+        let uses: [ExecAllowlistUse] = if case .allowlistEntries? = basis {
+            self.allowlistUses(context: context)
+        } else {
+            []
+        }
+        let grants = persistAllowlist ? self.allowAlwaysGrants(context: context) : []
         // Forwarded decisions were evaluated before the Mac rebuilt its context.
         // Local prompt decisions have no override and bind to this evaluation.
         let policySnapshot = delayedPolicySnapshot ?? context.policySnapshot
@@ -246,8 +253,10 @@ enum ExecApprovalEvaluator {
         displayCommand: String? = nil,
         cwd: String?,
         envOverrides: [String: String]?,
-        agentId: String?) async -> ExecApprovalEvaluation
+        agentId: String?,
+        skillBinsCache: SkillBinsCache = .shared) async -> ExecApprovalEvaluation
     {
+        let effectiveCwd = ExecCommandResolution.canonicalApprovalCwd(cwd)
         let trimmedAgent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedAgentId = (trimmedAgent?.isEmpty == false) ? trimmedAgent : nil
         let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId)
@@ -263,11 +272,11 @@ enum ExecApprovalEvaluator {
         let allowlistResolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: allowlistRawCommand,
-            cwd: cwd,
+            cwd: effectiveCwd,
             env: env)
         let allowAlwaysPatterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
             command: command,
-            cwd: cwd,
+            cwd: effectiveCwd,
             env: env,
             rawCommand: allowlistRawCommand)
         let boundCommand = ExecCommandResolution.bindForAllowlistExecution(
@@ -285,13 +294,10 @@ enum ExecApprovalEvaluator {
             allowlistMatches.count == allowlistResolutions.count
         let allowlistSatisfied = security == .allowlist && allowlistAuthorizationSatisfied
 
-        let skillAllow: Bool
-        if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {
-            let bins = await SkillBinsCache.shared.currentTrust()
-            skillAllow = boundCommand != nil &&
-                self.isSkillAutoAllowed(allowlistResolutions, trustedBinsByName: bins)
+        let skillTrust: SkillBinsCache.Snapshot? = if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {
+            await skillBinsCache.current()
         } else {
-            skillAllow = false
+            nil
         }
 
         return ExecApprovalEvaluation(
@@ -309,7 +315,7 @@ enum ExecApprovalEvaluator {
             allowlistAuthorizationSatisfied: allowlistAuthorizationSatisfied,
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
-            skillAllow: skillAllow,
+            skillTrust: skillTrust,
             policySnapshot: ExecApprovalPolicySnapshot(resolved: approvals))
     }
 

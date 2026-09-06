@@ -13,7 +13,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import {
   createLiveHookRegistryFacade,
-  getHookRunnerGlobalState,
+  hookRunnerGlobalState as state,
 } from "./hook-runner-global-state.js";
 import type {
   PluginHookGatewayContext,
@@ -31,7 +31,6 @@ const getLog = () => createSubsystemLogger("plugins");
  * instance stays stable so references captured mid-run keep seeing current hooks.
  */
 export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
-  const state = getHookRunnerGlobalState();
   const log = getLog();
   state.registry = registry;
   if (!state.hookRunner) {
@@ -61,7 +60,7 @@ export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): 
  * Returns null if plugins haven't been loaded yet.
  */
 export function getGlobalHookRunner(): HookRunner | null {
-  return getHookRunnerGlobalState().hookRunner;
+  return state.hookRunner;
 }
 
 /**
@@ -69,7 +68,7 @@ export function getGlobalHookRunner(): HookRunner | null {
  * Returns null if plugins haven't been loaded yet.
  */
 export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
-  return getHookRunnerGlobalState().registry;
+  return state.registry;
 }
 
 /**
@@ -77,9 +76,9 @@ export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
  */
 export function hasGlobalHooks<K extends PluginHookName>(
   hookName: K,
-  ctx?: Parameters<PluginHookHandlerMap[K]>[1],
+  ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
 ): boolean {
-  return getHookRunnerGlobalState().hookRunner?.hasHooks(hookName, ctx) ?? false;
+  return state.hookRunner?.hasHooks(hookName, ctx) ?? false;
 }
 
 export async function runGlobalGatewayStopSafely(params: {
@@ -107,7 +106,6 @@ export async function runGlobalGatewayStopSafely(params: {
  * Reset the global hook runner (for testing).
  */
 export function resetGlobalHookRunner(): void {
-  const state = getHookRunnerGlobalState();
   state.hookRunner = null;
   state.registry = null;
 }

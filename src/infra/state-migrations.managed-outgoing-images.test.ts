@@ -105,7 +105,7 @@ describe("legacy managed outgoing image migration", () => {
       "Migrated 1 managed outgoing image record(s) → shared SQLite state",
     );
     await expect(fsp.access(legacy.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fsp.access(legacy.originalPath)).resolves.toBeUndefined();
+    await fsp.access(legacy.originalPath);
     expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toEqual({
       ...legacy.record,
       original: {
@@ -188,8 +188,8 @@ describe("legacy managed outgoing image migration", () => {
     }
 
     expect(result.warnings.join("\n")).toContain("synthetic attachment remove failure");
-    await expect(fsp.access(legacy.sourcePath)).resolves.toBeUndefined();
-    await expect(fsp.access(legacy.originalPath)).resolves.toBeUndefined();
+    await fsp.access(legacy.sourcePath);
+    await fsp.access(legacy.originalPath);
     expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
   });
 
@@ -222,8 +222,8 @@ describe("legacy managed outgoing image migration", () => {
 
     expect(result.warnings.join("\n")).toContain("conflicts with shared SQLite state");
     expect(readManagedImageRecord(first.record.attachmentId, stateDir)).toBeNull();
-    await expect(fsp.access(first.sourcePath)).resolves.toBeUndefined();
-    await expect(fsp.access(second.sourcePath)).resolves.toBeUndefined();
+    await fsp.access(first.sourcePath);
+    await fsp.access(second.sourcePath);
   });
 
   it("retains malformed and symlinked sources", async () => {
@@ -234,7 +234,7 @@ describe("legacy managed outgoing image migration", () => {
 
     const malformed = migrate(stateDir);
     expect(malformed.warnings.join("\n")).toContain("Failed reading legacy managed outgoing");
-    await expect(fsp.access(malformedPath)).resolves.toBeUndefined();
+    await fsp.access(malformedPath);
 
     await fsp.rm(malformedPath);
     const targetPath = path.join(stateDir, "target.json");
@@ -243,6 +243,27 @@ describe("legacy managed outgoing image migration", () => {
     const symlinked = migrate(stateDir);
     expect(symlinked.warnings.join("\n")).toContain("non-symlink file");
     expect(fs.lstatSync(malformedPath).isSymbolicLink()).toBe(true);
+  });
+
+  it.each([
+    ["root before original", true, '""'],
+    ["original only", false, 'original.""'],
+  ])("rejects empty unexpected fields before mutation: %s", async (_label, root, field) => {
+    const legacy = await writeLegacyRecord({ stateDir });
+    const original = { ...legacy.record.original, "": 1, later: 2 };
+    const record = root
+      ? { ...legacy.record, "": 1, later: 2, original }
+      : { ...legacy.record, original };
+    await fsp.writeFile(legacy.sourcePath, JSON.stringify(record));
+    const result = migrate(stateDir);
+    expect(result.warnings).toEqual([
+      `Failed reading legacy managed outgoing image state: Error: legacy managed image record has unexpected field ${field}`,
+    ]);
+    await fsp.access(legacy.originalPath);
+    expect(fs.readdirSync(path.dirname(legacy.sourcePath))).toEqual([
+      path.basename(legacy.sourcePath),
+    ]);
+    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
   });
 
   it("keeps JSON when the source changes before cleanup", async () => {
@@ -255,7 +276,7 @@ describe("legacy managed outgoing image migration", () => {
     });
 
     expect(result.warnings.join("\n")).toContain("Failed claiming legacy managed outgoing");
-    await expect(fsp.access(legacy.sourcePath)).resolves.toBeUndefined();
+    await fsp.access(legacy.sourcePath);
     expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
   });
 
@@ -268,7 +289,7 @@ describe("legacy managed outgoing image migration", () => {
       },
     });
     expect(failed.warnings.join("\n")).toContain("synthetic remove failure");
-    await expect(fsp.access(legacy.sourcePath)).resolves.toBeUndefined();
+    await fsp.access(legacy.sourcePath);
 
     const retried = migrate(stateDir);
     expect(retried.warnings).toEqual([]);

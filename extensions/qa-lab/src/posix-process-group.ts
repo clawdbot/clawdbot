@@ -27,7 +27,8 @@ export function inspectLinuxProcessGroup(
     try {
       stats.push(readFileSync(path.join("/proc", entry.name, "stat"), "utf8"));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      // Exit can race either opening stat (ENOENT) or reading its open fd (ESRCH).
+      if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) {
         return null;
       }
     }
@@ -41,13 +42,15 @@ export function isQaPosixProcessGroupAlive(
 ) {
   try {
     process.kill(-processGroupId, 0);
+    // Reaping can remove the last zombie between kill(0) and /proc. Resolve an
+    // inconclusive snapshot with a fresh existence probe, never the stale one.
+    return (
+      process.platform !== "linux" ||
+      (inspectLinuxProcessGroupFn(processGroupId)?.alive ?? process.kill(-processGroupId, 0))
+    );
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  return inspectLinuxProcessGroupFn(processGroupId)?.alive ?? true;
 }
 
 export function signalQaPosixProcessGroup(

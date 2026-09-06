@@ -5,9 +5,11 @@ import {
   hasCompletedSourceReplyDeliveryEvidence,
   hasCompletedTerminalDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
-  hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  hasDeliberateSilentTerminalReply,
+  hasIntentionalTerminalCompletion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { logVerbose } from "../../globals.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -22,7 +24,11 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
-import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
+import {
+  buildEmptyInteractiveReplyPayload,
+  markPostCompactionModelFailurePayload,
+  renderPostCompactionModelFailurePayload,
+} from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
@@ -67,22 +73,32 @@ type FollowupDeliveryDecision =
 export function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
   execution: AgentTurnExecutionResult;
-  accounting?: AccountedAgentTurn & { compactionNotice?: ReplyPayload };
+  accounting?: AccountedAgentTurn & {
+    compactionNotice?: ReplyPayload;
+    diagnosticsPayload?: ReplyPayload;
+  };
   opts?: InternalGetReplyOptions;
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
   if (turn.sendPolicy === "deny") {
     return { kind: "suppress", reason: "send-policy" };
   }
-  if (turn.queued.currentInboundEventKind === "room_event") {
+  if (
+    turn.queued.currentInboundEventKind === "room_event" &&
+    !isInternalMessageChannel(turn.queued.originatingChannel)
+  ) {
     return { kind: "suppress", reason: "room-event" };
   }
-  if (
-    execution.outcome.kind === "aborted" ||
-    (execution.outcome.kind === "settled" && execution.outcome.abortReason)
-  ) {
+  if (execution.outcome.kind === "aborted") {
     return { kind: "suppress", reason: "aborted" };
   }
+  const postCompactionModelFailure = execution.outcome.postCompactionModelFailure;
+  const renderFailurePayloads = (payloads: ReplyPayload[]) =>
+    payloads.map((payload) =>
+      renderPostCompactionModelFailurePayload(
+        markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+      ),
+    );
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,
     ctx: {
@@ -126,12 +142,14 @@ export function resolveFollowupDeliveryDecision(params: {
     ) {
       return { kind: "suppress", reason: "message-tool-only" };
     }
-    const payloads = resolveFollowupDeliveryPayloads({
-      ...deliveryContext,
-      payloads: [execution.outcome.payload],
-      reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
-      commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
-    });
+    const payloads = renderFailurePayloads(
+      resolveFollowupDeliveryPayloads({
+        ...deliveryContext,
+        payloads: [execution.outcome.payload],
+        reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+        commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
+      }),
+    );
     return payloads.length > 0
       ? {
           kind: "deliver",
@@ -200,10 +218,6 @@ export function resolveFollowupDeliveryDecision(params: {
       resolved: runtimeResolved,
     };
   }
-  const hasCommittedDelivery =
-    hasVisibleOutboundDeliveryEvidence(result) ||
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
-    result.didSendDeterministicApprovalPrompt === true;
   const fallbackPayload = accounting.terminalFailurePayload
     ? isInteractive && !hasCompletedTerminalDeliveryEvidence(result)
       ? sourcePolicy.sourceReplyDeliveryMode === "message_tool_only"
@@ -234,7 +248,8 @@ export function resolveFollowupDeliveryDecision(params: {
         hasPendingContinuation:
           result.meta?.yielded === true || (result.meta?.pendingToolCalls?.length ?? 0) > 0,
         hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
-        hasCommittedDelivery,
+        hasCommittedDelivery: hasCompletedTerminalDeliveryEvidence(result),
+        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(result),
         sessionCtx: {
           ChatType: turn.queued.originatingChatType,
           Provider: turn.queued.run.messageProvider,
@@ -265,6 +280,15 @@ export function resolveFollowupDeliveryDecision(params: {
     });
     payloads = [...compactionNotices, ...payloads];
   }
+  if (accounting.diagnosticsPayload && payloads.length > 0) {
+    payloads = [
+      ...payloads,
+      ...resolveFollowupDeliveryPayloads({
+        ...deliveryContext,
+        payloads: [accounting.diagnosticsPayload],
+      }),
+    ];
+  }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
     agentDir: turn.queued.run.agentDir,
@@ -282,6 +306,7 @@ export function resolveFollowupDeliveryDecision(params: {
   if (responseUsageLine) {
     payloads = appendUsageLine(payloads, responseUsageLine);
   }
+  payloads = renderFailurePayloads(payloads);
   if (sourcePolicy.sourceReplyDeliveryMode === "message_tool_only") {
     const explicitlyDeliverable = payloads.filter(
       (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
@@ -323,7 +348,15 @@ async function sendFollowupPayloads(params: {
   if (payloads.length === 0) {
     return;
   }
-  if (!originRoutable && !defaults.opts?.onBlockReply) {
+  const sourceDisposition = turn.queued.queuedFollowupReplyDisposition;
+  if (sourceDisposition?.kind === "drop") {
+    logVerbose(`followup queue: source delivery dropped (${sourceDisposition.reason})`);
+    return;
+  }
+  const deliverQueuedBatch = sourceDisposition?.deliver;
+  const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
+  const dispatcherAvailable = Boolean(deliverQueuedBatch || fallbackDispatcher);
+  if (!originRoutable && !dispatcherAvailable) {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
@@ -335,6 +368,14 @@ async function sendFollowupPayloads(params: {
     isHeartbeat: defaults.opts?.isHeartbeat === true,
   });
   const crossChannelFailures: ReplyPayload[] = [];
+  const queuedPayloads: ReplyPayload[] = [];
+  const dispatchPayload = async (payload: ReplyPayload) => {
+    if (deliverQueuedBatch) {
+      queuedPayloads.push(payload);
+    } else {
+      await fallbackDispatcher?.(payload);
+    }
+  };
   let deliveredCrossChannelOrigin = false;
   const provider = resolveOriginMessageProvider({
     provider: turn.queued.run.messageProvider,
@@ -348,7 +389,7 @@ async function sendFollowupPayloads(params: {
       originatingChannel,
       originatingTo,
       originRoutable,
-      dispatcherAvailable: Boolean(defaults.opts?.onBlockReply),
+      dispatcherAvailable,
     });
     if (providerRoute?.route === "drop") {
       continue;
@@ -356,20 +397,21 @@ async function sendFollowupPayloads(params: {
     const route =
       providerRoute?.route === "origin" && originRoutable
         ? "origin"
-        : providerRoute?.route === "dispatcher" && defaults.opts?.onBlockReply
+        : providerRoute?.route === "dispatcher" && dispatcherAvailable
           ? "dispatcher"
           : originRoutable
             ? "origin"
             : "dispatcher";
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
-      await defaults.opts?.onBlockReply?.(payload);
+      await dispatchPayload(payload);
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
       const metadata = getReplyPayloadMetadata(payload);
       const result = await routeReply({
         payload,
         channel: originatingChannel,
         to: originatingTo,
+        agentId: turn.queued.run.agentId,
         sessionKey: turn.queued.run.sessionKey,
         accountId: turn.queued.originatingAccountId,
         requesterSenderId: turn.queued.run.senderId,
@@ -386,12 +428,18 @@ async function sendFollowupPayloads(params: {
         replyKind: params.kind,
         runId: params.runId,
       });
+      if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
+        logVerbose(
+          `followup queue: route-reply remains pending: ${result.error ?? "unconfirmed delivery"}`,
+        );
+        continue;
+      }
       if (!result.delivered && !result.suppressed) {
         const routeError = result.error ?? "no visible delivery";
         logVerbose(`followup queue: route-reply failed: ${routeError}`);
-        if (sameChannelOrigin && defaults.opts?.onBlockReply) {
-          await defaults.opts.onBlockReply(payload);
-        } else if (defaults.opts?.onBlockReply) {
+        if (sameChannelOrigin && dispatcherAvailable) {
+          await dispatchPayload(payload);
+        } else if (dispatcherAvailable) {
           crossChannelFailures.push(payload);
         } else {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
@@ -413,13 +461,21 @@ async function sendFollowupPayloads(params: {
   const terminalFailure = crossChannelFailures.some(isReplyPayloadTerminalContent);
   if (
     (terminalFailure || (crossChannelFailures.length > 0 && !deliveredCrossChannelOrigin)) &&
-    defaults.opts?.onBlockReply
+    dispatcherAvailable
   ) {
-    await defaults.opts.onBlockReply({
+    await dispatchPayload({
       text:
         "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
         "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
       isError: true,
+    });
+  }
+  if (queuedPayloads.length > 0) {
+    await deliverQueuedBatch?.({
+      kind: "queued-followup",
+      runId: params.runId,
+      originatingChannel,
+      payloads: queuedPayloads,
     });
   }
 }

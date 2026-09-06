@@ -74,6 +74,9 @@ export async function createCopilotSessionSetup(params: {
     promptPolicyResult = promptToolPolicy?.apply();
     promptBuild = { prompt: input.prompt, developerInstructions: "" };
   } else {
+    if (!ordinaryAttemptInput) {
+      throw new Error("Copilot ordinary attempt authority is unavailable.");
+    }
     if (!promptToolPolicy) {
       throw new Error("Copilot ordinary attempts require a prompt tool policy.");
     }
@@ -85,6 +88,7 @@ export async function createCopilotSessionSetup(params: {
           return buildCopilotPromptGuidance({
             attempt: input,
             callableToolNames: promptPolicyResult.callableToolNames,
+            requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
             workspaceBootstrapInstructions: workspaceBootstrap.instructions,
           });
         },
@@ -92,6 +96,11 @@ export async function createCopilotSessionSetup(params: {
       messages,
       ctx: hookContext,
       bootstrapContextRunKind: input.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: input.toolAuthorityFingerprint,
+        activeToolNames: () => promptPolicyResult?.callableToolNames ?? [],
+        assertActive: ordinaryAttemptInput.hostCapabilities.assertActive,
+      },
     });
   }
   const attemptInput =

@@ -1,6 +1,6 @@
 // Msteams plugin module implements graph teams behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
-import { type GraphResponse, fetchGraphJson, resolveGraphToken } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson, resolveGraphToken } from "./graph.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,32 +60,18 @@ export async function listChannelsMSTeams(
   params: ListChannelsMSTeamsParams,
 ): Promise<ListChannelsMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
-  const firstPath = `/teams/${encodeURIComponent(params.teamId)}/channels?$select=id,displayName,description,membershipType`;
-  const collected: GraphTeamsChannel[] = [];
-  let nextPath: string | undefined = firstPath;
-  const MAX_PAGES = 10;
-  let page = 0;
-  while (nextPath && page < MAX_PAGES) {
-    type PagedChannelResponse = GraphResponse<GraphTeamsChannel> & {
-      "@odata.nextLink"?: string;
-    };
-    const res: PagedChannelResponse = await fetchGraphJson<PagedChannelResponse>({
-      token,
-      path: nextPath,
-    });
-    collected.push(...(res.value ?? []));
-    const nextLink: string | undefined = res["@odata.nextLink"];
-    // Strip the Graph API root so fetchGraphJson receives a relative path
-    nextPath = nextLink ? nextLink.replace("https://graph.microsoft.com/v1.0", "") : undefined;
-    page++;
-  }
-  const channels = collected.map((ch) => ({
+  const result = await fetchAllGraphPages<GraphTeamsChannel>({
+    token,
+    path: `/teams/${encodeURIComponent(params.teamId)}/channels?$select=id,displayName,description,membershipType`,
+    maxPages: 10,
+  });
+  const channels = result.items.map((ch) => ({
     id: ch.id,
     displayName: ch.displayName,
     description: ch.description,
     membershipType: ch.membershipType,
   }));
-  return { channels, truncated: Boolean(nextPath) };
+  return { channels, truncated: result.truncated };
 }
 
 // ---------------------------------------------------------------------------

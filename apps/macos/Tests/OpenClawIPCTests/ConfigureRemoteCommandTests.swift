@@ -277,12 +277,12 @@ struct GatewayConfigTests {
 
     @Test @MainActor func `config path trims surrounding whitespace and expands tilde`() async {
         let relativePath = ".openclaw-cli-config-\(UUID().uuidString)/openclaw.json"
-        let expectedURL = FileManager().homeDirectoryForCurrentUser.appendingPathComponent(relativePath)
 
         await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": "  ~/\(relativePath)\n",
             "OPENCLAW_STATE_DIR": "/tmp/openclaw-unused-state-dir",
         ]) {
+            let expectedURL = FileManager().homeDirectoryForCurrentUser.appendingPathComponent(relativePath)
             #expect(resolveOpenClawConfigURL().path == expectedURL.path)
         }
     }

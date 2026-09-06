@@ -1,13 +1,14 @@
 ---
-summary: "Bun workflow for installs and package scripts; Node is required at runtime"
+summary: "Bun workflow for installs, package scripts, and opt-in runtime use"
 read_when:
   - You want to install dependencies or run package scripts with Bun
+  - You want to run OpenClaw with Bun 1.4+
   - You hit Bun install/patch/lifecycle script issues
 title: "Bun"
 ---
 
 <Warning>
-Bun releases up to 1.3.x cannot run the OpenClaw CLI or Gateway because they do not provide the required `node:sqlite` API. OpenClaw feature-probes the runtime: Bun builds that ship `node:sqlite` (1.4.0 canary and later) can run the CLI and Gateway experimentally, while older Bun versions are rejected at startup. Node remains the supported and recommended runtime for all OpenClaw runtime commands.
+Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ builds that provide WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in. OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; older Bun versions and builds with unsafe SQLite are rejected.
 </Warning>
 
 Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.
@@ -20,7 +21,7 @@ Bun remains usable as an optional package-script runner. The default package man
     pnpm install
     ```
 
-    Current Bun versions (including 1.4 canary) cannot resolve this repo's pnpm workspace layout, so `bun install` fails during workspace resolution. Use `pnpm install`.
+    Bun cannot resolve this repo's pnpm workspace layout, so `bun install` fails during workspace resolution. Use `pnpm install`.
 
   </Step>
   <Step title="Build and test">
@@ -29,7 +30,21 @@ Bun remains usable as an optional package-script runner. The default package man
     bun run vitest run
     ```
 
-    Commands that launch OpenClaw itself should still run through Node; Bun runtimes that provide `node:sqlite` (1.4.0 canary and later) can run them experimentally.
+    Use Node by default for commands that launch OpenClaw.
+
+  </Step>
+  <Step title="Run OpenClaw with Bun">
+    To run onboarding under Bun and install the managed Gateway under Bun:
+
+    ```sh
+    bun openclaw.mjs onboard --install-daemon --daemon-runtime bun
+    ```
+
+    For a managed node host, select Bun separately:
+
+    ```sh
+    bun openclaw.mjs node install --runtime bun
+    ```
 
   </Step>
 </Steps>
@@ -48,6 +63,14 @@ bun pm trust baileys protobufjs
 ```
 
 ## Caveats
+
+On macOS, Bun uses Apple's system SQLite, which omits native extension loading.
+OpenClaw can open ordinary agent databases without extension loading when that
+library meets the WAL safety floor. Operations that require extensions, including `sqlite-vec`, need an
+extension-capable SQLite library. Use Node, or preload a compatible SQLite
+library with Bun's [custom SQLite setup](https://bun.sh/docs/runtime/sqlite#loadextension)
+before opening any database. OpenClaw does not select a different SQLite library
+automatically.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 

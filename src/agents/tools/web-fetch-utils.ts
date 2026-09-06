@@ -597,10 +597,6 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
   };
 }
 
-function stripTags(value: string): string {
-  return htmlFragmentToMarkdown(value).text;
-}
-
 /** Collapses display whitespace while preserving paragraph breaks. */
 export function normalizeWhitespace(value: string): string {
   return value
@@ -671,7 +667,7 @@ export async function extractBasicHtmlContent(params: {
     const text =
       stripInvisibleUnicode(markdownToText(rendered.text)) ||
       stripInvisibleUnicode(rendered.title ?? "") ||
-      stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
+      stripInvisibleUnicode(rendered.text);
     return text ? { text, title: rendered.title } : null;
   }
   const text = stripInvisibleUnicode(rendered.text) || stripInvisibleUnicode(rendered.title ?? "");

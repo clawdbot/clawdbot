@@ -1,5 +1,13 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
+import {
+  assignSessionOwner,
+  patchSessionEntryCore,
+  recordSessionParticipant,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
@@ -11,12 +19,25 @@ import {
   writeStore,
 } from "./sessions.test-helpers.js";
 
-// Disable colors for deterministic snapshots.
-process.env.FORCE_COLOR = "0";
-
 mockSessionsConfig();
 
+import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 import { sessionsCommand } from "./sessions.js";
+
+function singleSessionTableCells(logs: string[]): string[] {
+  const lines = stripAnsi(logs.join("\n"))
+    .split("\n")
+    .filter((line) => /^[│|]/u.test(line))
+    .map((line) =>
+      line
+        .split(/[│|]/u)
+        .slice(1, -1)
+        .map((cell) => cell.trim()),
+    );
+  const [header = [], ...rows] = lines;
+  expect(rows.length).toBeGreaterThan(0);
+  return header.map((_, index) => rows.map((row) => row[index]).join(""));
+}
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -26,6 +47,7 @@ describe("sessionsCommand", () => {
 
   afterEach(() => {
     resetMockSessionsConfig();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -50,10 +72,66 @@ describe("sessionsCommand", () => {
 
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
-    const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
-    expect(row).toBe(
-      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       id:abc123",
+    expect(singleSessionTableCells(logs)).toEqual([
+      "direct",
+      "agent:main:+15555550123",
+      "45m ago",
+      "test:opus",
+      "OpenAI Codex",
+      "2.0k/200k (1%)",
+      "visibility:shared id:abc123",
+    ]);
+  });
+
+  it.each([
+    { name: "listing", run: sessionsCommand, options: {} },
+    { name: "cleanup dry-run", run: sessionsCleanupCommand, options: { dryRun: true } },
+  ])("aligns $name columns for Unicode keys and full model names", async ({ run, options }) => {
+    const entries = [
+      { key: "agent:main:main", model: "gpt-5.6-sol" },
+      { key: "agent:main:東京", model: "gemini-3-flash-preview" },
+      { key: "agent:main:e\u0301", model: "gpt-5.6-sol" },
+      { key: "agent:main:👩‍💻", model: "claude-sonnet-4-6" },
+    ];
+    const store = await writeStore(
+      Object.fromEntries(
+        entries.map(({ key, model }, index) => [
+          key,
+          { sessionId: `row-${index}`, updatedAt: Date.now(), model, systemSent: true },
+        ]),
+      ),
     );
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
+    try {
+      const { runtime, logs } = makeRuntime();
+      await run({ store, ...options }, runtime);
+      const lines = stripAnsi(logs.join("\n")).split("\n");
+      const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
+      expect(header).toContain("Flags");
+      for (const { key, model } of entries) {
+        const row = lines.find((line) => line.includes(key)) ?? "";
+        expect(row).toContain(key);
+        expect(row).toContain(model);
+        expect(row).toContain("system");
+        for (const [title, value] of [
+          ["Key", key],
+          ["Model", model],
+          ["Flags", "system"],
+        ] as const) {
+          expect(visibleWidth(row.slice(0, row.indexOf(value)))).toBe(
+            visibleWidth(header.slice(0, header.indexOf(title))),
+          );
+        }
+      }
+    } finally {
+      cleanupStore(store);
+      if (columns) {
+        Object.defineProperty(process.stdout, "columns", columns);
+      } else {
+        Reflect.deleteProperty(process.stdout, "columns");
+      }
+    }
   });
 
   it("shows recorded totals without a percentage when freshness provenance is missing", async () => {
@@ -108,10 +186,15 @@ describe("sessionsCommand", () => {
 
     expect(logs.join("\n")).toContain("Runtime");
 
-    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
-    );
+    expect(singleSessionTableCells(logs)).toEqual([
+      "direct",
+      "agent:main:main",
+      "1m ago",
+      "claude-opus-4-7",
+      "Claude CLI",
+      "unknown/200k (?%)",
+      "visibility:shared id:main-session",
+    ]);
   });
 
   it("renders configured CLI runtime when the session stores a canonical provider", async () => {
@@ -142,13 +225,18 @@ describe("sessionsCommand", () => {
 
     cleanupStore(store);
 
-    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
-    );
+    expect(singleSessionTableCells(logs)).toEqual([
+      "direct",
+      "agent:main:main",
+      "1m ago",
+      "claude-opus-4-7",
+      "Claude CLI",
+      "unknown/200k (?%)",
+      "visibility:shared id:main-session",
+    ]);
   });
 
-  it("renders current context after a same-model runtime change", async () => {
+  it("renders recorded runtime with current context after a same-model runtime change", async () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
@@ -189,9 +277,8 @@ describe("sessionsCommand", () => {
     cleanupStore(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toContain("OpenAI Codex");
+    expect(row).toContain("OpenClaw Default");
     expect(row).toContain("0.0k/1000k (0%)");
-    expect(row).not.toContain("272k");
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
@@ -280,6 +367,97 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("defaults missing collaboration visibility to shared in JSON output", async () => {
+    const sessionKey = "agent:main:legacy-shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "legacy-shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+        },
+      },
+      "sessions-default-visibility",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; visibility?: SessionEntry["visibility"] }>;
+    }>(sessionsCommand, store);
+    expect(payload.sessions?.find((entry) => entry.key === sessionKey)).toMatchObject({
+      visibility: "shared",
+    });
+  });
+
+  it("preserves collaboration metadata in JSON and human output", async () => {
+    const sessionKey = "agent:main:shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+          visibility: "suggest",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: "profile-creator",
+            label: "Creator",
+          },
+        },
+      },
+      "sessions-collaboration",
+    );
+    const scope = { agentId: "main", sessionKey, storePath: store };
+    assignSessionOwner(scope, {
+      owner: { type: "human", id: "profile-owner", label: "Grace" },
+      assignedBy: { type: "human", id: "profile-admin", label: "Admin" },
+      assignedAt: Date.now() - 30_000,
+    });
+    for (const id of ["profile-ada", "profile-ben", "profile-cam", "profile-dee", "profile-eli"]) {
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id },
+      });
+    }
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    // Flags may wrap between words or within a long participant identifier.
+    expect(singleSessionTableCells(logs).at(-1)?.replace(/\s/gu, "")).toBe(
+      "visibility:suggestowner:profile-ownerparticipants:profile:profile-ada,profile:profile-ben,profile:profile-cam,profile:profile-dee,+1id:shared-session",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<
+        Pick<
+          SessionEntry,
+          "visibility" | "createdActor" | "owner" | "participants" | "participantCount"
+        > & {
+          key: string;
+          sharingRole?: unknown;
+        }
+      >;
+    }>(sessionsCommand, store);
+    const shared = payload.sessions?.find((entry) => entry.key === sessionKey);
+    expect(shared).toMatchObject({
+      visibility: "suggest",
+      createdActor: { type: "human", id: "profile-creator" },
+      owner: {
+        actor: { type: "human", id: "profile-owner" },
+        assignedBy: { type: "human", id: "profile-admin" },
+        assignedAt: Date.now() - 30_000,
+      },
+      participantCount: 5,
+      participants: [
+        { identity: { type: "profile", id: "profile-ada" } },
+        { identity: { type: "profile", id: "profile-ben" } },
+        { identity: { type: "profile", id: "profile-cam" } },
+        { identity: { type: "profile", id: "profile-dee" } },
+        { identity: { type: "profile", id: "profile-eli" } },
+      ],
+    });
+    expect(shared).not.toHaveProperty("sharingRole");
+  });
+
   it("reports the SQLite database and omits the retired sessionFile field", async () => {
     const store = await writeStore({
       "agent:main:main": {
@@ -316,7 +494,7 @@ describe("sessionsCommand", () => {
     ]);
   });
 
-  it("exports subagent lineage metadata in JSON output", async () => {
+  it("exports session color and subagent lineage metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:main:child": {
         sessionId: "child-session",
@@ -332,10 +510,22 @@ describe("sessionsCommand", () => {
         sessionStartedAt: Date.now() - 20 * 60_000,
         lastInteractionAt: Date.now() - 5 * 60_000,
         label: "research helper",
+        color: "blue",
         status: "done",
         model: "test:opus",
       },
+      "agent:main:uncolored": { sessionId: "uncolored-session", updatedAt: Date.now() },
+      "agent:main:cleared": {
+        sessionId: "cleared-session",
+        updatedAt: Date.now(),
+        color: "red",
+      },
     });
+    await patchSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:cleared", storePath: store },
+      () => ({ color: undefined }),
+      { skipMaintenance: true },
+    );
 
     const payload = await runSessionsJson<{
       sessions?: Array<{
@@ -351,6 +541,7 @@ describe("sessionsCommand", () => {
         sessionStartedAt?: number;
         lastInteractionAt?: number;
         label?: string;
+        color?: string;
         status?: string;
       }>;
     }>(sessionsCommand, store);
@@ -368,9 +559,15 @@ describe("sessionsCommand", () => {
       sessionStartedAt: Date.now() - 20 * 60_000,
       lastInteractionAt: Date.now() - 5 * 60_000,
       label: "research helper",
+      color: "blue",
       status: "done",
     });
     expect(child).not.toHaveProperty("sessionFile");
+    for (const key of ["agent:main:uncolored", "agent:main:cleared"]) {
+      const row = payload.sessions?.find((session) => session.key === key);
+      expect(row).toBeDefined();
+      expect(row).not.toHaveProperty("color");
+    }
   });
 
   it("shows preserved stale totals in JSON output", async () => {
@@ -457,6 +654,8 @@ describe("sessionsCommand", () => {
         global: {
           sessionId: "telegram-global",
           updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "opus",
           delivery: normalizeSessionDeliveryState({
             origin: {
               provider: "telegram",
@@ -475,20 +674,29 @@ describe("sessionsCommand", () => {
       agents: {
         ownership: "explicit",
         defaults: {
-          model: { primary: "test:opus" },
-          models: { "test:opus": {} },
+          model: { primary: "anthropic/opus" },
+          models: { "anthropic/opus": {} },
           sessionStore: { agentId: "ops" },
         },
-        entries: { ops: {}, research: {} },
+        entries: {
+          ops: { models: { "custom/opus": {} } },
+          research: {},
+        },
       },
     }));
 
     const payload = await runSessionsJson<{
-      sessions?: Array<{ agentId?: string; key: string; runtimePolicySessionKey?: string }>;
+      sessions?: Array<{
+        agentId?: string;
+        key: string;
+        modelProvider?: string;
+        runtimePolicySessionKey?: string;
+      }>;
     }>(sessionsCommand, store, { active: "10" });
 
     expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
       agentId: "ops",
+      modelProvider: "custom",
       runtimePolicySessionKey: "agent:ops:telegram:default:direct:42",
     });
   });
@@ -619,63 +827,45 @@ describe("sessionsCommand", () => {
     ]);
   });
 
-  it("rejects invalid --active values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-active-invalid",
+  it.each([
+    {
+      name: "invalid active minutes",
+      options: { active: "0" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "partially numeric active minutes",
+      options: { active: "10m" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "an invalid limit",
+      options: { limit: "0" },
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+    },
+    {
+      name: "active minutes before an invalid limit",
+      options: { active: "0", limit: "0" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+  ])("rejects $name before reading session stores", async ({ options, message }) => {
+    const listSessionEntries = vi.spyOn(
+      await import("../config/sessions/session-accessor.js"),
+      "listSessionEntriesReadOnly",
     );
-    const { runtime, errors } = makeRuntime();
+    const { runtime, logs, errors } = makeRuntime();
+    const runtimeExit = vi.spyOn(runtime, "exit");
+    const execution = sessionsCommand(options, runtime);
 
-    await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    cleanupStore(store);
-  });
-
-  it("rejects partial --active values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-active-partial",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, active: "10m" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    cleanupStore(store);
-  });
-
-  it("rejects invalid --limit values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-limit-invalid",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      '--limit must be a positive integer or "all", for example --limit 25.',
-    ]);
-
-    cleanupStore(store);
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({
+      message,
+      humanOutput: message,
+      machineOutput: message,
+    });
+    expect(logs).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(runtimeExit).not.toHaveBeenCalled();
+    expect(listSessionEntries).not.toHaveBeenCalled();
   });
 });

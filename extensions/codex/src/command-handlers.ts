@@ -1,10 +1,8 @@
 // Codex plugin module implements command handlers behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
-import {
-  resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
-} from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { refreshCodexPluginRuntimeState } from "./app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
@@ -15,7 +13,11 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
-import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
+import {
+  canMutateCodexHost,
+  CODEX_HOST_INSPECTION_AUTH_ERROR,
+  CODEX_NATIVE_EXECUTION_AUTH_ERROR,
+} from "./command-authorization.js";
 import { handleCodexDiagnosticsFeedback } from "./command-diagnostics.js";
 import {
   buildHelp,
@@ -70,6 +72,15 @@ import { readCodexConversationBindingData } from "./conversation-binding-data.js
 
 export type { CodexCommandDepsOverride } from "./command-handler-deps.js";
 
+const CODEX_HOST_INSPECTION_SUBCOMMANDS = new Set([
+  "account",
+  "mcp",
+  "sessions",
+  "skills",
+  "status",
+  "threads",
+]);
+
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
   options: { pluginConfig?: unknown; deps: CodexCommandDepsOverride },
@@ -83,6 +94,9 @@ export async function handleCodexSubcommand(
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
+  }
+  if (CODEX_HOST_INSPECTION_SUBCOMMANDS.has(normalized) && !canMutateCodexHost(ctx)) {
+    return { text: CODEX_HOST_INSPECTION_AUTH_ERROR };
   }
   if (
     CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&

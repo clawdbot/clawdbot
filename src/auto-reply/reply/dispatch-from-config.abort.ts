@@ -1,4 +1,4 @@
-import { isAbortError } from "../../infra/abort-signal.js";
+import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -23,41 +23,13 @@ export function runWithDispatchAbortSignal<T>(
   if (signal?.aborted) {
     return Promise.reject(new DispatchReplyOperationAbortedError());
   }
-  const shouldStopForAbort = () => signal?.aborted === true;
-  let settled = false;
-  let abortHandler: (() => void) | undefined;
-  const work = Promise.resolve()
-    .then(run)
-    .then(
-      (value) => {
-        settled = true;
-        return value;
-      },
-      (error: unknown) => {
-        settled = true;
-        if (shouldStopForAbort() && isAbortError(error)) {
-          throw new DispatchReplyOperationAbortedError();
-        }
-        throw error;
-      },
-    );
+  const work = Promise.resolve().then(run);
   onWorkStarted?.(work);
-  if (!signal) {
-    return work;
-  }
-  const aborted = new Promise<never>((_, reject) => {
-    abortHandler = () => {
-      if (!settled && shouldStopForAbort()) {
-        reject(new DispatchReplyOperationAbortedError());
-      }
-    };
-    signal.addEventListener("abort", abortHandler, { once: true });
-  });
-  return Promise.race([work, aborted]).finally(() => {
-    settled = true;
-    if (abortHandler) {
-      signal.removeEventListener("abort", abortHandler);
+  return racePromiseWithAbortSignal(work, signal).catch((error: unknown) => {
+    if (signal?.aborted && isAbortError(error)) {
+      throw new DispatchReplyOperationAbortedError();
     }
+    throw error;
   });
 }
 
@@ -69,8 +41,11 @@ export function createAbortAwareDispatcher(params: {
     (send: (payload: ReplyPayload) => boolean) =>
     (payload: ReplyPayload): boolean =>
       params.isAborted() ? false : send(payload);
-  const getCancelledCounts = params.dispatcher.getCancelledCounts;
+  const { getCancelledCounts, prepareReplyPayload } = params.dispatcher;
   const dispatcher: ReplyDispatcher = {
+    ...(prepareReplyPayload
+      ? { prepareReplyPayload: prepareReplyPayload.bind(params.dispatcher) }
+      : {}),
     sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
     sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),

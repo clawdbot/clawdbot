@@ -56,6 +56,7 @@ type CreateLaneTextDelivererParams = {
       promptContextSequence?: TelegramPromptContextProjectionSequence;
       textMode?: "html";
       onPlatformSendDispatch?: () => Promise<void>;
+      assertPlatformSendAuthorized?: () => void;
       bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
     },
   ) => Promise<boolean>;
@@ -89,6 +90,7 @@ type DeliverLaneTextParams = {
   allowStream?: boolean;
   promptContextSequence?: TelegramPromptContextProjectionSequence;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };
 
@@ -280,6 +282,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     followedByDurablePayload = false,
     allowErrorPayload = false,
     onPlatformSendDispatch?: () => Promise<void>,
+    assertPlatformSendAuthorized?: () => void,
   ): Promise<LaneDeliveryResult | undefined> => {
     const stream = lane.stream;
     if (!stream || text.length === 0 || (payload.isError && !allowErrorPayload)) {
@@ -308,12 +311,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const previewAlreadyVisible = stream.lastDeliveredText?.() === previewText;
     if (!previewAlreadyVisible) {
       if (finalizePreview && onPlatformSendDispatch) {
-        stream.update(previewText, { onPlatformSendDispatch });
+        stream.update(previewText, {
+          onPlatformSendDispatch,
+          assertPlatformSendAuthorized,
+        });
       } else {
         stream.update(previewText);
       }
     } else if (finalizePreview) {
       await onPlatformSendDispatch?.();
+      assertPlatformSendAuthorized?.();
     }
     if (finalizePreview) {
       if (previewAlreadyVisible) {
@@ -324,6 +331,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       }
     } else {
       await params.flushDraftLane(lane);
+      if (buttons) {
+        await stream.waitForInFlight();
+      }
     }
     const messageId = stream.messageId();
     if (typeof messageId !== "number") {
@@ -355,9 +365,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const activeSnapshot =
       finalizePreview || buttons ? stream.currentMessageSnapshot?.() : undefined;
     let buttonsAttached = false;
+    let buttonAttachmentError: unknown;
     if (buttons && activeSnapshot) {
       try {
         await onPlatformSendDispatch?.();
+        assertPlatformSendAuthorized?.();
         await params.editStreamMessage({
           laneName,
           messageId,
@@ -367,14 +379,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         });
         buttonsAttached = true;
       } catch (err) {
+        buttonAttachmentError = err;
         params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
       }
     }
-    if (!finalizePreview) {
+    if (!finalizePreview && buttonAttachmentError === undefined) {
       return result("preview-updated");
     }
     if (!activeSnapshot) {
-      promptContextSequence.invalidate();
+      if (finalizePreview) {
+        promptContextSequence.invalidate();
+      }
       return undefined;
     }
     lane.finalized = true;
@@ -383,11 +398,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     if (!followedByDurablePayload) {
       await promptContextSequence.finish();
     }
-    return result("preview-finalized", {
+    const delivery = {
       content: previewText,
       messageId,
       buttonsAttached,
-    });
+      receipt: createPreviewMessageReceipt({ id: messageId }),
+    };
+    return buttonAttachmentError
+      ? { kind: "preview-finalized-partial", delivery, error: buttonAttachmentError }
+      : result("preview-finalized", delivery);
   };
 
   return async ({
@@ -401,6 +420,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     allowStream = true,
     promptContextSequence: suppliedPromptContextSequence,
     onPlatformSendDispatch,
+    assertPlatformSendAuthorized,
     bindPendingFinalDelivery,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
@@ -445,6 +465,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
             false,
             streamedErrorDraftText !== undefined,
             onPlatformSendDispatch,
+            assertPlatformSendAuthorized,
           )
         : undefined;
     if (streamed) {
@@ -471,8 +492,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         true,
         false,
         onPlatformSendDispatch,
+        assertPlatformSendAuthorized,
       );
       if (finalizedPreview) {
+        if (finalizedPreview.kind === "preview-finalized-partial") {
+          return finalizedPreview;
+        }
         const stripButtons =
           finalizedPreview.kind === "preview-finalized" &&
           finalizedPreview.delivery.buttonsAttached === true;
@@ -489,6 +514,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
               durable,
               promptContextSequence,
               onPlatformSendDispatch,
+              assertPlatformSendAuthorized,
               bindPendingFinalDelivery,
             },
           );
@@ -523,6 +549,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         durable,
         promptContextSequence,
         onPlatformSendDispatch,
+        assertPlatformSendAuthorized,
         bindPendingFinalDelivery,
         ...(retainedFinalContent?.sourceTextMode === "html" ? { textMode: "html" } : {}),
       },

@@ -6,6 +6,7 @@ import {
   verifyWorkerAdmissionHandshake,
   type ExpectedWorkerBuild,
 } from "./admission.js";
+import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -22,6 +23,7 @@ type WorkerEnvironmentAccessOptions = {
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
+  nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   now: () => number;
   identityResolverFor: (
     record: WorkerEnvironmentRecord,
@@ -48,12 +50,40 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   const { store } = options;
   const tunnels = options.tunnelManager;
   const nodeTunnels = options.nodeTunnelManager;
+  const nodeDesktop = options.nodeDesktopCarrier;
   const now = options.now;
   const inState = options.inState;
   const providerFor = options.providerFor;
   const identityResolverFor = options.identityResolverFor;
   const serviceError = options.serviceError;
   const withLock = options.withLock;
+
+  const requireCurrentRecord = (environmentId: string) => {
+    if (options.isStopping()) {
+      throw serviceError("invalid_state", "Worker environment service is stopping");
+    }
+    const record = store.get(environmentId);
+    if (!record) {
+      throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
+    }
+    return record;
+  };
+
+  const requireDesktopRecord = (environmentId: string) => {
+    const record = requireCurrentRecord(environmentId);
+    if (
+      !inState(record, "ready", "idle", "attached") ||
+      record.destroyRequestedAtMs !== null ||
+      !record.leaseId ||
+      !record.desktop
+    ) {
+      throw serviceError(
+        "invalid_state",
+        "environment has no desktop; desktop is a warm-time capability of the profile",
+      );
+    }
+    return { record, desktop: record.desktop, leaseId: record.leaseId };
+  };
 
   const project = (record: WorkerEnvironmentRecord) => {
     const desktopAvailable =
@@ -76,27 +106,25 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
-    let stopping = options.isStopping();
+    const stopping = options.isStopping();
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     if (!tunnels && !nodeTunnels) {
       throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
     }
+    // Prepare process-stable metadata outside the lock, then validate the durable
+    // owner once. Credential revocation may happen while this await is pending.
+    let currentBundle: ExpectedWorkerBuild;
+    try {
+      currentBundle = await options.prepareCurrentBundle();
+    } catch {
+      throw serviceError("invalid_state", "Current worker build identity is unavailable");
+    }
     let startup: Promise<WorkerTunnelHandle> | undefined;
     let stopStartup: (() => Promise<void>) | undefined;
     await withLock(request.environmentId, async () => {
-      stopping = options.isStopping();
-      if (stopping) {
-        throw serviceError("invalid_state", "Worker environment service is stopping");
-      }
-      const record = store.get(request.environmentId);
-      if (!record) {
-        throw serviceError(
-          "environment_not_found",
-          `Unknown worker environment: ${request.environmentId}`,
-        );
-      }
+      const record = requireCurrentRecord(request.environmentId);
       if (
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
@@ -115,17 +143,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       }
       const credential = store.getCredential(request.environmentId);
       if (
+        record.ownerEpoch !== request.ownerEpoch ||
         !credential ||
-        credential.ownerEpoch !== request.ownerEpoch ||
-        credential.expiresAtMs <= now()
+        credential.ownerEpoch !== request.ownerEpoch
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
-      }
-      let currentBundle: ExpectedWorkerBuild;
-      try {
-        currentBundle = await options.prepareCurrentBundle();
-      } catch {
-        throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
       if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
@@ -137,10 +159,17 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         record.bootstrapReceipt.installKind === "bundle";
       if (nodeBundle) {
         const sessionId = record.attachedSessionIds[0];
-        if (!nodeTunnels || !sessionId) {
+        if (
+          !nodeTunnels ||
+          !sessionId ||
+          record.attachedSessionIds.length !== 1 ||
+          credential.sessionId !== sessionId
+        ) {
           throw serviceError("invalid_state", "Node worker tunnel runtime is unavailable");
         }
         startup = nodeTunnels.start({
+          executionMode:
+            record.profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn",
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
           deviceId: nodeDeviceId,
@@ -177,7 +206,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     }
     const timeoutError = serviceError(
       "provider_failure",
-      "Worker tunnel did not connect within 3 minutes; check worker SSH reachability and retry",
+      "Worker tunnel did not connect within 3 minutes; check that the worker is online and reachable, then retry",
     );
     try {
       return await withTimeout(startup, TUNNEL_START_TIMEOUT_MS, {
@@ -199,7 +228,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     environmentId: string;
     control: boolean;
   }): Promise<WorkerDesktopObserveResult> => {
-    let stopping = options.isStopping();
+    const stopping = options.isStopping();
     if (options.getConfig().cloudWorkers?.desktop !== true) {
       throw serviceError(
         "invalid_state",
@@ -209,45 +238,41 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
-    if (!tunnels) {
-      throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
-    }
     let startup: ReturnType<WorkerTunnelManager["desktop"]["acquire"]> | undefined;
+    let nodeStartup: ReturnType<WorkerNodeDesktopCarrier["observe"]> | undefined;
     let ownerEpoch: number | undefined;
     await withLock(request.environmentId, async () => {
-      stopping = options.isStopping();
-      if (stopping) {
-        throw serviceError("invalid_state", "Worker environment service is stopping");
-      }
-      const record = store.get(request.environmentId);
-      if (!record) {
-        throw serviceError(
-          "environment_not_found",
-          `Unknown worker environment: ${request.environmentId}`,
-        );
-      }
-      if (
-        !inState(record, "ready", "idle", "attached") ||
-        record.destroyRequestedAtMs !== null ||
-        !record.leaseId ||
-        !record.sshEndpoint ||
-        !record.desktop
-      ) {
-        throw serviceError(
-          "invalid_state",
-          "environment has no desktop; desktop is a warm-time capability of the profile",
-        );
-      }
-      const provider = providerFor(record.providerId);
+      const { record, desktop, leaseId } = requireDesktopRecord(request.environmentId);
       ownerEpoch = record.ownerEpoch;
-      startup = tunnels.desktop.acquire({
-        environmentId: record.environmentId,
-        ownerEpoch: record.ownerEpoch,
-        ssh: record.sshEndpoint,
-        desktop: record.desktop,
-        resolveIdentity: identityResolverFor(record, provider, record.leaseId),
-      });
+      if (record.sshEndpoint) {
+        if (!tunnels) {
+          throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
+        }
+        const provider = providerFor(record.providerId);
+        startup = tunnels.desktop.acquire({
+          environmentId: record.environmentId,
+          ownerEpoch: record.ownerEpoch,
+          ssh: record.sshEndpoint,
+          desktop,
+          resolveIdentity: identityResolverFor(record, provider, leaseId),
+        });
+        return;
+      }
+      if (record.nodeDeviceId) {
+        if (!nodeDesktop) {
+          throw serviceError("invalid_state", "Worker node desktop runtime is unavailable");
+        }
+        nodeStartup = nodeDesktop.observe({
+          record,
+          control: request.control,
+        });
+        return;
+      }
+      throw serviceError("invalid_state", "Worker environment has no desktop transport");
     });
+    if (nodeStartup) {
+      return await nodeStartup;
+    }
     if (!startup || ownerEpoch === undefined) {
       throw serviceError("invalid_state", "Worker desktop tunnel failed to start");
     }
@@ -274,7 +299,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     environmentId: string;
     app: "browser" | "terminal";
   }): Promise<WorkerDesktopLaunchResult> => {
-    let stopping = options.isStopping();
+    const stopping = options.isStopping();
     if (options.getConfig().cloudWorkers?.desktop !== true) {
       throw serviceError(
         "invalid_state",
@@ -284,56 +309,45 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
-    if (!tunnels) {
-      throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
-    }
     const requireLaunchable = () => {
-      stopping = options.isStopping();
-      if (stopping) {
-        throw serviceError("invalid_state", "Worker environment service is stopping");
-      }
-      const record = store.get(request.environmentId);
-      if (!record) {
-        throw serviceError(
-          "environment_not_found",
-          `Unknown worker environment: ${request.environmentId}`,
-        );
-      }
-      if (
-        !inState(record, "ready", "idle", "attached") ||
-        record.destroyRequestedAtMs !== null ||
-        !record.leaseId ||
-        !record.sshEndpoint ||
-        !record.desktop
-      ) {
-        throw serviceError(
-          "invalid_state",
-          "environment has no desktop; desktop is a warm-time capability of the profile",
-        );
-      }
-      const app = record.desktop.apps?.find((candidate) => candidate.id === request.app);
+      const { record, desktop, leaseId } = requireDesktopRecord(request.environmentId);
+      const app = desktop.apps?.find((candidate) => candidate.id === request.app);
       if (!app) {
         throw serviceError(
           "desktop_app_not_found",
           `environment does not advertise desktop app: ${request.app}`,
         );
       }
-      return { app, record, sshEndpoint: record.sshEndpoint };
+      return { app, record, leaseId };
     };
 
     let startup: Promise<void> | undefined;
     let launchEpoch: number | undefined;
     await withLock(request.environmentId, async () => {
-      const { app, record, sshEndpoint } = requireLaunchable();
-      const provider = providerFor(record.providerId);
+      const { app, record, leaseId } = requireLaunchable();
       launchEpoch = record.ownerEpoch;
-      startup = tunnels.desktop.launchApp({
-        environmentId: record.environmentId,
-        ownerEpoch: record.ownerEpoch,
-        ssh: sshEndpoint,
-        app,
-        resolveIdentity: identityResolverFor(record, provider, record.leaseId),
-      });
+      if (record.sshEndpoint) {
+        if (!tunnels) {
+          throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
+        }
+        const provider = providerFor(record.providerId);
+        startup = tunnels.desktop.launchApp({
+          environmentId: record.environmentId,
+          ownerEpoch: record.ownerEpoch,
+          ssh: record.sshEndpoint,
+          app,
+          resolveIdentity: identityResolverFor(record, provider, leaseId),
+        });
+        return;
+      }
+      if (record.nodeDeviceId) {
+        if (!nodeDesktop) {
+          throw serviceError("invalid_state", "Worker node desktop runtime is unavailable");
+        }
+        startup = nodeDesktop.launchApp({ record, app });
+        return;
+      }
+      throw serviceError("invalid_state", "Worker environment has no desktop transport");
     });
     if (!startup || launchEpoch === undefined) {
       throw serviceError("launcher_failure", "Worker desktop app launcher failed to start");
@@ -374,13 +388,22 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     return { app: request.app, status: "ready" };
   };
 
+  const stopTunnelOwners = async (stops: Array<Promise<void> | undefined>): Promise<void> => {
+    const results = await Promise.allSettled(stops.filter((stop) => stop !== undefined));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) {
+      throw failure.reason;
+    }
+  };
+
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
-    await withLock(environmentId, async () => {
-      await Promise.all([
+    await withLock(environmentId, async () =>
+      stopTunnelOwners([
         tunnels?.stop(environmentId, ownerEpoch),
         nodeTunnels?.stop(environmentId, ownerEpoch),
-      ]);
-    });
+        nodeDesktop?.stop(environmentId, ownerEpoch),
+      ]),
+    );
   };
 
   return {
@@ -393,9 +416,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     observeDesktop,
     project,
     startTunnel,
-    stopAllTunnels: async () => {
-      await Promise.all([tunnels?.stopAll(), nodeTunnels?.stopAll()]);
-    },
+    stopAllTunnels: () =>
+      stopTunnelOwners([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
     stopTunnel,
   };
 }

@@ -42,7 +42,11 @@ function writeQaSuiteSummary(
     `${JSON.stringify({
       counts,
       metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-      run: { completedAt: "2026-01-01T00:00:01.000Z", startedAt: "2026-01-01T00:00:00.000Z" },
+      run: {
+        status: "completed",
+        completedAt: "2026-01-01T00:00:01.000Z",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
       scenarios: [
         {
           id: "channel-chat-baseline",

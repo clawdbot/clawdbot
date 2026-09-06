@@ -12,10 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  resetRemoteModelCatalogOverlayForTest,
-  setRemoteModelCatalogOverlaySourcesForTest,
-} from "../model-catalog/remote-overlay.test-support.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
@@ -36,7 +33,6 @@ import {
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
   resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
-import { testing as sessionCostUsageTestApi } from "./session-cost-usage.test-support.js";
 
 type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
   ? Omit<P, "agentId"> & { agentId?: string }
@@ -82,7 +78,7 @@ function waitForFast<T>(
 }
 
 async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
-  await sessionCostUsageTestApi.usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
+  await refreshCostUsageCacheForAgent({
     agentId: "main",
     sessionFiles: [sessionFile],
   });
@@ -267,6 +263,23 @@ describe("session cost usage", () => {
           sessionTarget,
         }),
       ).toContain("sqlite:main:");
+    });
+  });
+
+  it.each(["main", "opus"])("validates the owner of a legacy %s entry marker", async (agentId) => {
+    const root = await makeSessionCostRoot("entry-marker-owner");
+    const sessionId = "shared";
+    const marker = `sqlite:${agentId}:${sessionId}:${path.join(root, "agents", agentId, "sessions", "sessions.json")}`;
+    await withStateDir(root, async () => {
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId,
+          sessionEntry: { sessionId, updatedAt: 1, sessionFile: marker } as SessionEntry & {
+            sessionFile: string;
+          },
+        }),
+      ).toBe(agentId === "main" ? marker : undefined);
     });
   });
 
@@ -699,7 +712,6 @@ describe("session cost usage", () => {
         checked_at: 200,
       }),
     });
-    resetRemoteModelCatalogOverlayForTest();
     const config = {
       models: {
         providers: {
@@ -732,7 +744,6 @@ describe("session cost usage", () => {
       });
     } finally {
       setRemoteModelCatalogOverlaySourcesForTest();
-      resetRemoteModelCatalogOverlayForTest();
     }
   });
 
@@ -876,6 +887,9 @@ describe("session cost usage", () => {
 
       const sessionSummary = await loadSessionCostSummary({ sessionFile });
       expect(sessionSummary?.missingCostByModel).toEqual(summary.totals.missingCostByModel);
+      expect(sessionSummary?.dailyBreakdown?.[0]?.missingCostByModel).toEqual(
+        summary.totals.missingCostByModel,
+      );
     });
   });
 
@@ -976,7 +990,9 @@ describe("session cost usage", () => {
     });
 
     expect(ranged?.totalTokens).toBe(20);
-    expect(ranged?.dailyBreakdown).toEqual([{ date: "2026-02-05", tokens: 20, cost: 0.02 }]);
+    expect(ranged?.dailyBreakdown).toMatchObject([
+      { date: "2026-02-05", tokens: 20, cost: 0.02, totalTokens: 20, totalCost: 0.02 },
+    ]);
     expect(ranged?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
     const upperBounded = await loadSessionCostSummary({ sessionFile, endMs: rangeEndMs });
@@ -1031,23 +1047,18 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const session = { sessionId: "sess-batch-range", sessionFile };
-      await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
+      await refreshSessionCostUsageForTest(sessionFile);
       const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
-      await waitForFast(
-        async () => {
-          const ranged = await loadSessionCostSummariesFromCache({
-            sessions: [session],
-            agentId: "main",
-            startMs: Date.UTC(2026, 1, 5),
-            endMs: rangeEndMs,
-            requestRefresh: false,
-          });
-          expect(ranged.cacheStatus.status).toBe("fresh");
-          expect(ranged.summaries[0]?.totalTokens).toBe(20);
-          expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
-        },
-        { interval: 10, timeout: 2_000 },
-      );
+      const ranged = await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: rangeEndMs,
+        requestRefresh: false,
+      });
+      expect(ranged.cacheStatus.status).toBe("fresh");
+      expect(ranged.summaries[0]?.totalTokens).toBe(20);
+      expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
       const cachedEntry = readSessionCostUsageRollupRows("main").find(
         (row) => row.key === sessionFile,
@@ -1098,7 +1109,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("rebuilds invalid rollups and preserves untimestamped usage on append", async () => {
+  it("rebuilds obsolete pricing rollups and preserves untimestamped usage on append", async () => {
     const root = await makeSessionCostRoot("cost-cache-v8-untimestamped-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -1146,7 +1157,7 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      currentRollup.version = 0;
+      currentRollup.version = 2;
       currentRollup.rollup.untimestamped.totals.totalTokens = 9_999;
       expect(
         writeSessionCostUsageRollup({
@@ -1194,8 +1205,8 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      expect(appendedRollup.version).toBe(2);
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
+      expect(appendedRollup.version).toBe(3);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],
@@ -2100,7 +2111,9 @@ describe("session cost usage", () => {
       const global = await loadCostUsageSummary({ agentId: "main", ...range });
 
       expect(direct?.totalTokens).toBe(20);
-      expect(direct?.dailyBreakdown).toEqual([{ date: "2026-02-01", tokens: 20, cost: 0.02 }]);
+      expect(direct?.dailyBreakdown).toMatchObject([
+        { date: "2026-02-01", tokens: 20, cost: 0.02, totalTokens: 20, totalCost: 0.02 },
+      ]);
       expect(global.totals.totalTokens).toBe(20);
     });
   });
@@ -2165,6 +2178,17 @@ describe("session cost usage", () => {
     const summary = await loadSessionCostSummary({ sessionFile });
     expect(summary?.totalTokens).toBe(99);
     expect(summary?.dailyBreakdown?.[0]?.tokens).toBe(99);
+    expect(summary?.dailyBreakdown?.[0]).toMatchObject({
+      input: 1,
+      output: 2,
+      totalTokens: 99,
+      totalCost: 0.099,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    });
     expect(summary?.dailyModelUsage?.[0]?.tokens).toBe(99);
     expect(summary?.utcQuarterHourTokenUsage?.[0]?.totalTokens).toBe(99);
   });
@@ -3029,58 +3053,61 @@ describe("session cost usage", () => {
     expect(series?.points.map((point) => point.cumulativeCost)).toEqual([0.01, 0.03]);
   });
 
-  it("preserves totals and cumulative values when downsampling timeseries", async () => {
-    const root = await makeSessionCostRoot("timeseries-downsample");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-downsample.jsonl");
-
-    const entries = Array.from({ length: 10 }, (_, i) => {
-      const idx = i + 1;
-      return {
+  it.each([3, 2.5, 0.5])(
+    "preserves sampled fields, stable ties, and cumulative values with maxPoints=%s",
+    async (maxPoints) => {
+      const root = await makeSessionCostRoot("timeseries-downsample");
+      const sessionFile = path.join(root, "session.jsonl");
+      // The tied points cross a bucket boundary and must retain transcript order.
+      const entries = [8, 3, 1, 5, 2, 4, 10, 6, 9, 7].map((idx) => ({
         type: "message",
-        timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx, 0)).toISOString(),
+        timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx === 5 ? 4 : idx)).toISOString(),
         message: {
           role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
           usage: {
             input: idx,
             output: idx * 2,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: idx * 3,
-            cost: { total: idx * 0.001 },
+            cacheRead: idx * 3,
+            cacheWrite: idx * 4,
+            totalTokens: idx * 11,
+            cost: { total: idx * 0.001, totalOrigin: "provider-billed" },
           },
         },
-      };
-    });
+      }));
+      await fs.writeFile(
+        sessionFile,
+        entries.map((entry) => JSON.stringify(entry)).join("\n"),
+        "utf-8",
+      );
 
-    await fs.writeFile(
-      sessionFile,
-      entries.map((entry) => JSON.stringify(entry)).join("\n"),
-      "utf-8",
-    );
-
-    const timeseries = await loadSessionUsageTimeSeries({
-      sessionFile,
-      maxPoints: 3,
-    });
-
-    const series = requireValue(timeseries, "session usage timeseries missing");
-    expect(series.points).toHaveLength(3);
-
-    const points = series.points;
-    const totalTokens = points.reduce((sum, point) => sum + point.totalTokens, 0);
-    const totalCost = points.reduce((sum, point) => sum + point.cost, 0);
-    const lastPoint = points[points.length - 1];
-
-    // Full-series totals: sum(1..10)*3 = 165 tokens, sum(1..10)*0.001 = 0.055 cost.
-    expect(totalTokens).toBe(165);
-    expect(totalCost).toBeCloseTo(0.055, 8);
-    expect(lastPoint?.cumulativeTokens).toBe(165);
-    expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
-  });
+      const series = requireValue(
+        await loadSessionUsageTimeSeries({ sessionFile, maxPoints }),
+        "session usage timeseries missing",
+      );
+      // Chronological groups are [1,2,3,5], [4,6,7,8], [9,10], or one complete bucket.
+      const expected =
+        maxPoints < 1
+          ? [{ weight: 55, cumulativeWeight: 55, minute: 10 }]
+          : [
+              { weight: 11, cumulativeWeight: 11, minute: 4 },
+              { weight: 25, cumulativeWeight: 36, minute: 8 },
+              { weight: 19, cumulativeWeight: 55, minute: 10 },
+            ];
+      expect(series.points).toEqual(
+        expected.map(({ weight, cumulativeWeight, minute }) => ({
+          timestamp: Date.UTC(2026, 1, 12, 10, minute),
+          input: weight,
+          output: weight * 2,
+          cacheRead: weight * 3,
+          cacheWrite: weight * 4,
+          totalTokens: weight * 11,
+          cost: expect.closeTo(weight * 0.001, 12),
+          cumulativeTokens: cumulativeWeight * 11,
+          cumulativeCost: expect.closeTo(cumulativeWeight * 0.001, 12),
+        })),
+      );
+    },
+  );
 
   it("returns empty points for zero, negative, and non-finite maxPoints", async () => {
     const root = await makeSessionCostRoot("timeseries-invalid-max-points");

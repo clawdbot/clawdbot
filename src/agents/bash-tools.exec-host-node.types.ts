@@ -24,6 +24,7 @@ export type ExecuteNodeHostCommandParams = {
   bashElevated?: ExecElevatedDefaults;
   approvalReviewerDeviceId?: string;
   nonInteractiveApproval?: boolean;
+  approvalFollowupMode?: "agent" | "direct";
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -32,6 +33,7 @@ export type ExecuteNodeHostCommandParams = {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
   signal?: AbortSignal;

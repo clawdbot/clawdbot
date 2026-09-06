@@ -30,9 +30,6 @@ struct DebugSettings: View {
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
     @State private var canvasError: String?
-    @State private var canvasEvalJS: String = "document.title"
-    @State private var canvasEvalResult: String?
-    @State private var canvasSnapshotPath: String?
 
     init(state: AppState = AppStateStore.shared) {
         self.state = state
@@ -65,7 +62,8 @@ struct DebugSettings: View {
         }
         .alert(item: self.$pendingKill) { listener in
             Alert(
-                title: Text("Kill \(listener.command) (\(listener.pid))?"),
+                title: Text(String(
+                    format: String(localized: "Kill %@ (%d)?"), listener.command, listener.pid)),
                 message: Text("This process looks expected for the current mode. Kill anyway?"),
                 primaryButton: .destructive(Text("Kill")) {
                     Task { await self.killConfirmed(listener.pid) }
@@ -86,9 +84,12 @@ struct DebugSettings: View {
                         }
                     }
 
-                Text(
-                    "When enabled, OpenClaw won't install or manage \(gatewayLaunchdLabel). " +
-                        "It will only attach to an existing Gateway.")
+                Text(String(
+                    format: String(localized: """
+                    When enabled, OpenClaw won't install or manage %@. \
+                    It will only attach to an existing Gateway.
+                    """),
+                    gatewayLaunchdLabel))
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -165,16 +166,7 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("PID")
-                    Text("\(ProcessInfo.processInfo.processIdentifier)")
-                }
-                GridRow {
-                    self.gridLabel("Settings")
-                    VStack(alignment: .leading, spacing: 4) {
-                        Toggle("Show native settings panes", isOn: self.$state.nativeSettingsPanesEnabled)
-                        Text("These panes are being retired in favor of the Dashboard.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(verbatim: "\(ProcessInfo.processInfo.processIdentifier)")
                 }
                 GridRow {
                     self.gridLabel("Binary path")
@@ -355,13 +347,15 @@ struct DebugSettings: View {
                 }
 
                 if self.portReports.isEmpty, !self.portCheckInFlight {
-                    Text("Check which process owns \(GatewayEnvironment.gatewayPort()) and suggest fixes.")
+                    Text(String(
+                        format: String(localized: "Check which process owns %lld and suggest fixes."),
+                        GatewayEnvironment.gatewayPort()))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.portReports) { report in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Port \(report.port)")
+                            Text(String(format: String(localized: "Port %lld"), report.port))
                                 .font(.footnote.weight(.semibold))
                             Text(report.summary)
                                 .font(.caption)
@@ -370,7 +364,7 @@ struct DebugSettings: View {
                             ForEach(report.listeners) { listener in
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 8) {
-                                        Text("\(listener.command) (\(listener.pid))")
+                                        Text(verbatim: "\(listener.command) (\(listener.pid))")
                                             .font(.caption.monospaced())
                                             .foregroundStyle(listener.expected ? .secondary : Color.red)
                                             .lineLimit(1)
@@ -584,51 +578,11 @@ struct DebugSettings: View {
                     Spacer(minLength: 0)
                 }
 
-                HStack(spacing: 8) {
-                    TextField("Eval JS", text: self.$canvasEvalJS)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: 520)
-                    Button("Eval") {
-                        Task { await self.canvasEval() }
-                    }
-                    .buttonStyle(.bordered)
-                    Button("Snapshot") {
-                        Task { await self.canvasSnapshot() }
-                    }
-                    .buttonStyle(.bordered)
-                    Spacer(minLength: 0)
-                }
-
                 if let canvasStatus {
                     Text(canvasStatus)
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                }
-                if let canvasEvalResult {
-                    Text("eval → \(canvasEvalResult)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                if let canvasSnapshotPath {
-                    HStack(spacing: 8) {
-                        Text("snapshot → \(canvasSnapshotPath)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                        Button("Reveal") {
-                            NSWorkspace.shared
-                                .activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
-                        }
-                        .buttonStyle(.bordered)
-                        Spacer(minLength: 0)
-                    }
                 }
                 if let canvasError {
                     Text(canvasError)
@@ -885,36 +839,6 @@ extension DebugSettings {
             self.canvasError = error.localizedDescription
         }
     }
-
-    @MainActor
-    private func canvasEval() async {
-        self.canvasError = nil
-        self.canvasEvalResult = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let result = try await CanvasManager.shared.eval(
-                sessionKey: session.isEmpty ? "main" : session,
-                javaScript: self.canvasEvalJS)
-            self.canvasEvalResult = result
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasSnapshot() async {
-        self.canvasError = nil
-        self.canvasSnapshotPath = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let path = try await CanvasManager.shared.snapshot(
-                sessionKey: session.isEmpty ? "main" : session,
-                outPath: nil)
-            self.canvasSnapshotPath = path
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
 }
 
 struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
@@ -1001,7 +925,7 @@ extension GatewayProcessManager.Status {
 struct DebugSettings_Previews: PreviewProvider {
     static var previews: some View {
         DebugSettings(state: .preview)
-            .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+            .frame(width: ConnectionWindow.width, height: ConnectionWindow.height)
     }
 }
 #endif

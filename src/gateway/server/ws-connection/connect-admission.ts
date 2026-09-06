@@ -1,6 +1,7 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
 import {
+  GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
@@ -12,6 +13,7 @@ import {
   MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  type ConnectParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -20,19 +22,90 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { getRuntimeConfig } from "../../../config/io.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import { ControlUiGitHubError } from "../../control-ui-github-api.js";
 import type { OperatorScope } from "../../operator-scopes.js";
-import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
+import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
+import { checkGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
-import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
+import type {
+  AuthenticatedGatewayConnect,
+  GatewayConnectPhaseContext,
+} from "./message-handler-types.js";
+
+function hasCredential(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
+  return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+}
+
+/** Exact first-connect shape emitted by `openclaw connect` for a setup-code node. */
+export function isStartupNodeBootstrapConnect(connectParams: ConnectParams): boolean {
+  const auth = connectParams.auth;
+  const device = connectParams.device;
+  return (
+    isStartupNodeConnect(connectParams) &&
+    connectParams.client.id === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    Array.isArray(connectParams.scopes) &&
+    connectParams.scopes.length === 0 &&
+    Boolean(device?.id.trim() && device.publicKey.trim()) &&
+    hasCredential(auth?.bootstrapToken) &&
+    !hasCredential(auth?.token) &&
+    !hasCredential(auth?.deviceToken) &&
+    !hasCredential(auth?.password) &&
+    !hasCredential(auth?.approvalRuntimeToken) &&
+    !hasCredential(auth?.agentRuntimeIdentityToken)
+  );
+}
+
+export async function rejectGatewayStartupConnect(
+  context: GatewayConnectPhaseContext,
+): Promise<void> {
+  const { close } = context.handler;
+  const { frame, markHandshakeFailure, sendFrame } = context;
+  markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
+  await sendFrame({
+    type: "res",
+    id: frame.id,
+    ok: false,
+    error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
+      retryable: true,
+      retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+      details: gatewayStartupUnavailableDetails(),
+    }),
+  }).catch(() => {});
+  queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
+}
+
+export async function rejectUnavailableProfileConnect(
+  context: GatewayConnectPhaseContext,
+  error: unknown,
+): Promise<void> {
+  // Role admission needs a verified profile; an empty-scope hello hides the
+  // verification outage behind unrelated permission errors on every request.
+  const failure = authenticatedProfileUnavailableError(
+    error instanceof ControlUiGitHubError && error.statusCode === 429
+      ? "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential."
+      : undefined,
+    error instanceof ControlUiGitHubError ? error.retryAfterMs : undefined,
+  );
+  context.markHandshakeFailure("authenticated-profile-unavailable");
+  context.sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, failure.message, failure);
+  await context.releasePendingNodePairingCleanup();
+  context.handler.close(1013, truncateCloseReason(failure.message));
+}
 
 export function applyConnectionScopeCap(params: {
   scopes: string[];
@@ -90,6 +163,45 @@ export function resolveEffectiveConnectionScopes(params: {
   return { scopes, addedIdentityScopes };
 }
 
+export function rejectGatewayConnectOrigin(
+  context: GatewayConnectPhaseContext,
+  reason: string,
+): void {
+  const message =
+    "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+  context.markHandshakeFailure("origin-mismatch", {
+    origin: context.handler.requestOrigin ?? "n/a",
+    host: context.handler.requestHost ?? "n/a",
+    reason,
+  });
+  context.sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message, {
+    details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED, reason },
+  });
+  context.handler.close(1008, truncateCloseReason(message));
+}
+
+/** Recheck live authority after awaited work, before granting credentials or registering a client. */
+export function resolveGatewayConnectPolicyFailure(
+  context: GatewayConnectPhaseContext,
+  state: AuthenticatedGatewayConnect,
+): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  if (
+    state.sessionUsesSharedGatewayAuth &&
+    context.handler.getRequiredSharedGatewaySessionGeneration &&
+    state.sessionSharedGatewaySessionGeneration !==
+      context.handler.getRequiredSharedGatewaySessionGeneration()
+  ) {
+    return { kind: "auth" };
+  }
+  if (context.browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
+    if (!originCheck.ok) {
+      return { kind: "origin", reason: originCheck.reason };
+    }
+  }
+  return undefined;
+}
+
 export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const {
     connId,
@@ -107,29 +219,19 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     connectParams,
     configSnapshot,
     peerLabel,
-    isLocalClient,
-    enforceOriginCheckForAnyClient,
+    browserOrigin,
     clientLabel,
     markHandshakeFailure,
     sendHandshakeErrorResponse,
     isWebchatConnect,
-    frame,
-    sendFrame,
   } = context;
 
-  if (isStartupPending?.()) {
-    markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
-    await sendFrame({
-      type: "res",
-      id: frame.id,
-      ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
-        retryable: true,
-        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-        details: gatewayStartupUnavailableDetails(),
-      }),
-    }).catch(() => {});
-    queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
+  const isNodeClient = isStartupNodeConnect(connectParams);
+  const startupPending = isStartupPending?.() === true;
+  // Node enrollment is an awaited startup dependency: authenticated node admission
+  // must complete while ordinary methods and other clients remain startup-gated.
+  if (startupPending && !isNodeClient) {
+    await rejectGatewayStartupConnect(context);
     return undefined;
   }
 
@@ -144,8 +246,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   // Protocol v4 changed chat deltas, not node RPC frames. Keep N-1 limited to
   // the node role+mode so stale operator/UI clients cannot enter the v4 surface.
   const supportsPreviousNodeProtocol =
-    connectParams.role === "node" &&
-    connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+    isNodeClient &&
     maxProtocol >= MIN_NODE_PROTOCOL_VERSION &&
     minProtocol <= MIN_NODE_PROTOCOL_VERSION;
   const usesLegacyNodeProtocol = !supportsCurrentProtocol && supportsPreviousNodeProtocol;
@@ -226,37 +327,10 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
   const isWebchat = isWebchatConnect(connectParams);
   const isNativeAppUi = isNativeAppUiClient(connectParams.client);
-  // Extension origins cannot match the gateway host. Admission validates their
-  // canonical shape; device approval binds the exact origin before token issue.
-  const hasCopilotExtensionOrigin = Boolean(browserCopilotOrigin);
-  if (
-    !hasCopilotExtensionOrigin &&
-    (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat)
-  ) {
-    const hostHeaderOriginFallbackEnabled =
-      configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
-    const originCheck = checkBrowserOrigin({
-      requestHost,
-      origin: requestOrigin,
-      allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
-      allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
-      isLocalClient,
-    });
+  if (browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(browserOrigin, configSnapshot);
     if (!originCheck.ok) {
-      const errorMessage =
-        "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
-      markHandshakeFailure("origin-mismatch", {
-        origin: requestOrigin ?? "n/a",
-        host: requestHost ?? "n/a",
-        reason: originCheck.reason,
-      });
-      sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
-        details: {
-          code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
-          reason: originCheck.reason,
-        },
-      });
-      close(1008, truncateCloseReason(errorMessage));
+      rejectGatewayConnectOrigin(context, originCheck.reason);
       return undefined;
     }
     if (originCheck.matchedBy === "host-header-fallback") {
@@ -264,11 +338,9 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       logWsControl.warn(
         `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
       );
-      if (hostHeaderOriginFallbackEnabled) {
-        logGateway.warn(
-          "security metric: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback accepted a websocket connect request",
-        );
-      }
+      logGateway.warn(
+        "security metric: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback accepted a websocket connect request",
+      );
     }
   }
   return {
@@ -281,5 +353,6 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     isBrowserOperatorUi,
     isWebchat,
     isNativeAppUi,
+    startupPending,
   };
 }

@@ -70,6 +70,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+.config-host__stat-path {
+  font-family: var(--mono);
+  letter-spacing: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+
 .config-host__stat-unit {
   font-size: var(--control-ui-text-xs);
   font-weight: 500;
