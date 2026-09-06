@@ -81,6 +81,10 @@ suite.define(() => {
               workerSlots: { total: 2, available: 0 },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: ["codex.exec-server.stdio.v1"],
+              requiredNodeCommand: {
+                command: "codex.exec-server.stdio.v1",
+                state: "invocable",
+              },
             },
             {
               id: "node:restricted-mac",
@@ -91,6 +95,10 @@ suite.define(() => {
               workerSlots: { total: 2, available: 1 },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: [],
+              requiredNodeCommand: {
+                command: "codex.exec-server.stdio.v1",
+                state: "unauthorized",
+              },
             },
           ],
           profiles: [],
@@ -122,7 +130,16 @@ suite.define(() => {
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
       await expect.poll(() => restrictedDevice.isDisabled()).toBe(true);
-      await expect.poll(() => tooltipTitleText(restrictedDevice)).toMatch(/enable|approv/i);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("environments.list")).map((request) => request.params),
+        )
+        .toContainEqual({ runtimeId: "codex" });
+      await expect
+        .poll(() => tooltipTitleText(restrictedDevice))
+        .toBe(
+          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+        );
       await captureDeviceRuntimeUiProof(
         suite,
         page,

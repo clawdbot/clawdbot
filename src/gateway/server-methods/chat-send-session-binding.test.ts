@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -10,12 +15,14 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
 
@@ -39,6 +46,24 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
             "sessionId" in entry &&
             entry.sessionId === "unrelated-session",
         ).length;
+      const profile = ensureProfileForEmail("authoring-binding@example.test");
+      const client: GatewayClient = {
+        connId: "authoring-binding",
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          role: "operator",
+          scopes: ["operator.read", "operator.write", "operator.admin"],
+          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+        },
+      };
+      const namespaceRun = prepareSystemAgentRunAdmission({}, runId, "main", "test");
       const entered = createDeferred<DispatchOptions>();
       const release = createDeferred();
       const observeDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
@@ -70,16 +95,25 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
       let options: DispatchOptions | undefined;
       try {
         const respond = vi.fn();
+        const params = {
+          sessionKey,
+          message: "Keep this user turn in its session",
+          idempotencyKey: runId,
+        };
+        const authorization = resolveSessionMutationAuthorization({
+          client,
+          context,
+          method: "chat.send",
+          requestParams: params,
+        });
+        expect(authorization.error).toBeNull();
         await handleChatSend({
-          params: {
-            sessionKey,
-            message: "Keep this user turn in its session",
-            idempotencyKey: runId,
-          },
+          params,
           req: { type: "req", id: runId, method: "chat.send" },
           respond,
           context,
-          client: null,
+          client,
+          sessionMutationAuthorization: authorization.authorization,
           isWebchatConnect: () => false,
         });
         expect(respond).toHaveBeenCalledWith(
@@ -92,11 +126,21 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         owned = observeDispatch.mock.calls.at(-1)?.[0];
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
-        if (!owned || !prepared || !runStarted) {
+        if (!owned || !prepared || !runStarted || !owned.skillLibraryAuthoring) {
           throw new Error("chat.send did not hand off its prepared-session callback");
         }
         // Initial resolution needs detached entries; later admission must not clone unrelated rows.
         expect.soft(unrelatedCloneCount()).toBeLessThanOrEqual(1);
+        const capability = owned.skillLibraryAuthoring;
+        const admittedContext = await namespaceRun.admit("embedded");
+        capability.bind(admittedContext);
+        const caller = createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admittedContext,
+          agentId: "main",
+          sessionKey,
+        });
+        const readLibrary = () =>
+          withGatewayToolCallerIdentity(caller, () => capability.invoke({ action: "list" }));
         const { admission, userTurn } = owned;
         const original = admission.activeRunAbort.entry;
         expect(original?.sessionId).toBe(runId);
@@ -120,6 +164,7 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         clone.mockClear();
         runStarted(runId);
         expect.soft(unrelatedCloneCount()).toBe(0);
+        await expect(readLibrary()).resolves.toMatchObject({ profileId: profile.id });
 
         if (closure === "queued") {
           expect(original?.sessionId).toBe(binding.sessionId);
@@ -165,6 +210,11 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         expect(successor?.entry?.sessionId).toBe(
           closure === "replaced" ? "successor-session" : undefined,
         );
+        if (closure === "queued") {
+          await expect(readLibrary()).resolves.toMatchObject({ profileId: profile.id });
+        } else if (closure === "released" || closure === "aborted" || closure === "rotated") {
+          await expect(readLibrary()).rejects.toThrow();
+        }
         if (closure !== "queued") {
           await upsertSessionEntryCore(scope, { sessionId: "late-session", updatedAt: Date.now() });
           await userTurn.persist();
@@ -177,6 +227,7 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
           ).toEqual([]);
         }
       } finally {
+        namespaceRun.close();
         options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
         reply?.complete();
         successor?.cleanup();

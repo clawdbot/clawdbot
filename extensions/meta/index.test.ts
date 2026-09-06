@@ -14,12 +14,14 @@ import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMetaProvider } from "./api.js";
 import plugin from "./index.js";
+import { applyMetaConfig } from "./onboard.js";
 import { wrapMetaProviderStream } from "./stream.js";
 
-const CATALOG_CAP_MODEL_ID = "muse-spark-1.2";
+const CATALOG_CAP_MODEL_ID = "muse-spark-1.3";
 const initialAiTransportHost = getAiTransportHost();
 
 function resolveCatalogModel(modelId: string): Model<"openai-responses"> {
@@ -100,7 +102,18 @@ describe("meta provider", () => {
       id: "api-key",
       kind: "api_key",
       label: "Meta API key",
-      starterModel: "meta/muse-spark-1.1",
+      starterModel: "meta/muse-spark-1.3",
+    });
+  });
+
+  it("applies Muse Spark 1.3 as the onboarding default and alias", () => {
+    const config = applyMetaConfig({});
+
+    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+      "meta/muse-spark-1.3",
+    );
+    expect(config.agents?.defaults?.models?.["meta/muse-spark-1.3"]).toEqual({
+      alias: "Muse Spark 1.3",
     });
   });
 
@@ -112,7 +125,7 @@ describe("meta provider", () => {
     }
     const model = {
       ...resolveCatalogModel(CATALOG_CAP_MODEL_ID),
-      api: "openclaw-provider-stream:meta:muse-spark-1.2",
+      api: "openclaw-provider-stream:meta:muse-spark-1.3",
     } as Model;
 
     for (const hook of [provider.wrapStreamFn, provider.wrapSimpleCompletionStreamFn]) {
@@ -148,7 +161,7 @@ describe("meta provider", () => {
     }
     const model = {
       ...resolveCatalogModel(CATALOG_CAP_MODEL_ID),
-      api: "openclaw-provider-stream:meta:muse-spark-1.2",
+      api: "openclaw-provider-stream:meta:muse-spark-1.3",
     } as Model;
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn: StreamFn = (streamModel, _context, options) => {
@@ -204,6 +217,26 @@ describe("meta provider", () => {
     const model = providerConfig.models.find((m) => m.id === "muse-spark-1.2");
     if (!model) {
       throw new Error("Expected muse-spark-1.2 model");
+    }
+    expect(model.contextWindow).toBe(1048576);
+    expect(model.maxTokens).toBe(131072);
+    expect(model.reasoning).toBe(true);
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual({
+      input: 1.25,
+      output: 4.25,
+      cacheRead: 0.15,
+      cacheWrite: 0,
+    });
+  });
+
+  it("builds the muse-spark-1.3 catalog entry over openai-responses", () => {
+    const providerConfig = buildMetaProvider();
+    expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
+    expect(providerConfig.api).toBe("openai-responses");
+    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.3");
+    if (!model) {
+      throw new Error("Expected muse-spark-1.3 model");
     }
     expect(model.contextWindow).toBe(1048576);
     expect(model.maxTokens).toBe(131072);
@@ -432,12 +465,32 @@ describe("meta provider", () => {
     });
   });
 
+  it("builds the discounted muse-spark-1.3-contributor catalog entry", () => {
+    const providerConfig = buildMetaProvider();
+    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.3-contributor");
+    if (!model) {
+      throw new Error("Expected muse-spark-1.3-contributor model");
+    }
+    expect(model.contextWindow).toBe(1048576);
+    expect(model.maxTokens).toBe(131072);
+    expect(model.reasoning).toBe(true);
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual({
+      input: 0.1,
+      output: 0.2,
+      cacheRead: 0.002,
+      cacheWrite: 0,
+    });
+  });
+
   it("publishes a non-empty display name for every catalog model", () => {
     const models = buildMetaProvider().models;
     expect(models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "muse-spark-1.1", name: "Muse Spark 1.1" },
+      { id: "muse-spark-1.3", name: "Muse Spark 1.3" },
+      { id: "muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
       { id: "muse-spark-1.2", name: "Muse Spark 1.2" },
       { id: "muse-spark-1.2-contributor", name: "Muse Spark 1.2 Contributor" },
+      { id: "muse-spark-1.1", name: "Muse Spark 1.1" },
     ]);
     expect(models.every((model) => model.name.trim().length > 0)).toBe(true);
   });
@@ -451,9 +504,11 @@ describe("meta provider", () => {
     const resolveThinkingProfile = requireThinkingProfileResolver(provider);
     const reasoningModels = buildMetaProvider().models.filter((model) => model.reasoning);
     expect(reasoningModels.map((model) => model.id)).toEqual([
-      "muse-spark-1.1",
+      "muse-spark-1.3",
+      "muse-spark-1.3-contributor",
       "muse-spark-1.2",
       "muse-spark-1.2-contributor",
+      "muse-spark-1.1",
     ]);
     for (const model of reasoningModels) {
       const profile = resolveThinkingProfile({

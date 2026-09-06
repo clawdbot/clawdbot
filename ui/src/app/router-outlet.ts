@@ -21,7 +21,7 @@ import {
 export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
-  render: (data: TData | undefined) => unknown;
+  render: (data: TData | undefined, loaderPending: boolean) => unknown;
   renderOwnerKey?: (
     match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
     settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
@@ -156,7 +156,9 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
       : null;
   }
   const renderedPage = () =>
-    measureRoutedRender(routeId, () => routeModule.render(renderedMatch.data));
+    measureRoutedRender(routeId, () =>
+      routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
+    );
   return renderedMatch.error
     ? renderError<TRouteId, TLoadContext, TModule, TData>(
         router,

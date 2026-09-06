@@ -445,48 +445,46 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(whatsappPlugin.origin).toBe("global");
   });
 
-  it("recovers configured global source plugins missing from a stale persisted registry", () => {
-    const tempRoot = makeTempDir();
-    const stateDir = path.join(tempRoot, "state");
-    const env = {
-      ...createHermeticEnv(tempRoot),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const config = {
-      plugins: {
-        entries: {
-          "memory-demo": { enabled: true },
-        },
-        allow: ["memory-demo"],
-        slots: {
-          memory: "memory-demo",
-        },
-      },
-    };
-    const staleIndex = loadInstalledPluginIndex({
-      config,
-      env,
-      stateDir,
-      installRecords: {},
-    });
-    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("memory-demo");
-    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
-    writePackagePlugin(path.join(stateDir, "extensions", "memory-demo-source"), {
-      pluginId: "memory-demo",
-    });
+  it.each<[string, NonNullable<OpenClawConfig["plugins"]>]>([
+    ["entry", { entries: { "memory-demo": { enabled: true } } }],
+    ["allowlist", { allow: ["memory-demo"] }],
+    ["memory slot", { slots: { memory: " memory-demo " } }],
+    ["context-engine slot", { slots: { contextEngine: " memory-demo " } }],
+  ])(
+    "recovers a global source plugin selected by %s from a stale registry",
+    (_selection, plugins) => {
+      const tempRoot = makeTempDir();
+      const stateDir = path.join(tempRoot, "state");
+      const env = {
+        ...createHermeticEnv(tempRoot),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      const config = { plugins };
+      const staleIndex = loadInstalledPluginIndex({
+        config,
+        env,
+        stateDir,
+        installRecords: {},
+      });
+      expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("memory-demo");
+      writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+      writePackagePlugin(path.join(stateDir, "extensions", "memory-demo-source"), {
+        pluginId: "memory-demo",
+      });
 
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      config,
-      env,
-      stateDir,
-    });
+      const result = loadPluginRegistrySnapshotWithMetadata({
+        config,
+        env,
+        stateDir,
+      });
 
-    expect(result.source).toBe("derived");
-    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
-    const memoryPlugin = requirePluginRecord(result.snapshot.plugins, "memory-demo");
-    expect(memoryPlugin.origin).toBe("global");
-  });
+      expect(result.source).toBe("derived");
+      expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+      const memoryPlugin = requirePluginRecord(result.snapshot.plugins, "memory-demo");
+      expect(memoryPlugin.origin).toBe("global");
+    },
+  );
 
   it("does not recover retained managed npm generations as install records", async () => {
     const tempRoot = makeTempDir();
@@ -1434,6 +1432,49 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       fs.realpathSync(sourcePluginDir),
     ]);
   });
+
+  it.each(["plugin", "parent", "disabled"] as const)(
+    "respects %s source mounts after restarting with a persisted built registry",
+    (mount) => {
+      const tempRoot = makeTempDir();
+      const packageRoot = path.join(tempRoot, "openclaw");
+      const bundledRoot = path.join(packageRoot, "dist", "extensions");
+      const builtPluginDir = path.join(bundledRoot, "demo");
+      const sourceRoot = path.join(packageRoot, "extensions");
+      const sourcePluginDir = path.join(sourceRoot, "demo");
+      const stateDir = path.join(tempRoot, "state");
+      const workspaceDir = path.join(tempRoot, "workspace");
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_VERSION: "2026.4.26",
+        VITEST: "true",
+        ...(mount === "disabled" ? { OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1" } : {}),
+      };
+      const config = { plugins: { entries: { demo: { enabled: true } } } };
+      writeBundledPlugin(builtPluginDir, "demo", "index.js");
+      writeBundledPlugin(sourcePluginDir, "demo", "index.ts");
+      const index = loadInstalledPluginIndex({ config, env, stateDir, workspaceDir });
+      expect(index.plugins.map((plugin) => plugin.rootDir)).toEqual([
+        fs.realpathSync(builtPluginDir),
+      ]);
+      writePersistedInstalledPluginIndexSync(index, { stateDir });
+      clearPluginMetadataLifecycleCaches();
+      mockLinuxMountInfo([mount === "parent" ? sourceRoot : sourcePluginDir]);
+
+      const result = loadPluginRegistrySnapshotWithMetadata({
+        config,
+        env,
+        stateDir,
+        workspaceDir,
+      });
+
+      expect(result.source).toBe(mount === "disabled" ? "persisted" : "derived");
+      expect(result.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([
+        fs.realpathSync(mount === "disabled" ? builtPluginDir : sourcePluginDir),
+      ]);
+    },
+  );
 
   it("keeps a persisted bind-mounted source overlay when its built peer exists", () => {
     const tempRoot = makeTempDir();

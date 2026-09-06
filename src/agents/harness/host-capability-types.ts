@@ -83,6 +83,9 @@ export type AgentHarnessHostCapabilities = Readonly<{
     severity: "info" | "warning";
     toolName: string;
     toolCallId?: string;
+    mcpTool?: { server: string; tool: string };
+    /** Persistence-only proof; loss of correlation does not cancel a one-shot approval. */
+    isMcpToolApprovalActive?: () => boolean;
     allowedDecisions?: AgentHarnessHostApprovalDecision[];
     timeoutMs: number;
     transportTimeoutMs?: number;

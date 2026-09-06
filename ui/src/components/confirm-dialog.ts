@@ -66,20 +66,24 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
                 </div>
               </div>
             </div>
-            ${options.details
-              ? html`<div class="exec-approval-command mono">${options.details}</div>`
-              : nothing}
-            ${options.skipPreference
-              ? html`<label class="field checkbox exec-approval-skip">
-                  <input
-                    type="checkbox"
-                    @change=${(event: Event) => {
-                      skipRequested = (event.target as HTMLInputElement).checked;
-                    }}
-                  />
-                  <span>${t("common.dontAskAgain")}</span>
-                </label>`
-              : nothing}
+            ${
+              options.details
+                ? html`<div class="exec-approval-command mono">${options.details}</div>`
+                : nothing
+            }
+            ${
+              options.skipPreference
+                ? html`<label class="field checkbox exec-approval-skip">
+                    <input
+                      type="checkbox"
+                      @change=${(event: Event) => {
+                        skipRequested = (event.target as HTMLInputElement).checked;
+                      }}
+                    />
+                    <span>${t("common.dontAskAgain")}</span>
+                  </label>`
+                : nothing
+            }
             <div class="exec-approval-actions">
               <button
                 type="button"

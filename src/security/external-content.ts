@@ -153,8 +153,8 @@ const LLM_SPECIAL_TOKEN_PATTERN = new RegExp(
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
-// Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
-const ANGLE_BRACKET_MAP: Record<number, string> = {
+// Finite character folds used only to locate spoofed external-content markers.
+const MARKER_CHAR_FOLDS: Record<number, string> = {
   0xff1c: "<", // fullwidth <
   0xff1e: ">", // fullwidth >
   0x2329: "<", // left-pointing angle bracket
@@ -183,43 +183,37 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x276f: ">", // heavy right-pointing angle quotation mark ornament
   0x02c2: "<", // modifier letter left arrowhead
   0x02c3: ">", // modifier letter right arrowhead
+  0x200b: "", // zero width space
+  0x200c: "", // zero width non-joiner
+  0x200d: "", // zero width joiner
+  0x2060: "", // word joiner
+  0xfeff: "", // zero width no-break space
+  0x00ad: "", // soft hyphen
 };
 
-function foldMarkerChar(char: string): string {
-  const code = char.charCodeAt(0);
-  if (code >= 0xff21 && code <= 0xff3a) {
-    return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
+for (const start of [0xff21, 0xff41]) {
+  for (let code = start; code < start + 26; code += 1) {
+    MARKER_CHAR_FOLDS[code] = String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
   }
-  if (code >= 0xff41 && code <= 0xff5a) {
-    return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
-  }
-  const bracket = ANGLE_BRACKET_MAP[code];
-  if (bracket) {
-    return bracket;
-  }
-  return char;
 }
 
-function isMarkerIgnorableChar(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return (
-    code === 0x200b ||
-    code === 0x200c ||
-    code === 0x200d ||
-    code === 0x2060 ||
-    code === 0xfeff ||
-    code === 0x00ad
-  );
-}
+// Derive detection from the folds so new substitutions cannot bypass offset mapping.
+// Every key is a non-ASCII BMP code unit, not RegExp character-class syntax.
+const MARKER_FOLD_PATTERN = new RegExp(
+  `[${Object.keys(MARKER_CHAR_FOLDS)
+    .map((code) => String.fromCharCode(Number(code)))
+    .join("")}]`,
+  "u",
+);
 
 type FoldedMarkerMatch = {
   folded: string;
-  // ASCII folding is identity; all other retained code units need only their source start.
+  // Without folds, offsets are identity; changed text needs each retained source start.
   originalStartByFoldedIndex?: number[];
 };
 
 function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
-  if (!/[\u0080-\u{10FFFF}]/u.test(input)) {
+  if (!MARKER_FOLD_PATTERN.test(input)) {
     return { folded: input };
   }
   let folded = "";
@@ -227,10 +221,11 @@ function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
 
   for (let index = 0; index < input.length; index += 1) {
     const char = input.charAt(index);
-    if (isMarkerIgnorableChar(char)) {
+    const code = input.charCodeAt(index);
+    const foldedChar = code < 0x80 ? char : (MARKER_CHAR_FOLDS[code] ?? char);
+    if (foldedChar === "") {
       continue;
     }
-    const foldedChar = foldMarkerChar(char);
     folded += foldedChar;
     originalStartByFoldedIndex.push(index);
   }

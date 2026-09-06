@@ -127,12 +127,20 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "enum SettingsTextValue: ExpressibleByStringLiteral",
     "case localized(LocalizedStringKey)",
     "case verbatim(String)",
-    "static func localized(_ value: String) -> Self",
     "struct SettingsPageHeader: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "struct SettingsCardGroup<Content: View>: View {\n    let title: SettingsTextValue",
     "struct SettingsCardRow<Content: View>: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
-    "struct SettingsCardToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "Text(verbatim: value)",
+  ],
+  "apps/macos/Sources/OpenClaw/DeviceSettingsPanels.swift": [
+    'String(localized: "Quick Chat shortcut")',
+    'String(localized: "Microphone Test")',
+    'Button("Done")',
+  ],
+  "apps/macos/Sources/OpenClaw/DeviceMicrophonePanel.swift": [
+    'String(localized: "Stopped")',
+    'String(localized: "Timeout: no trigger heard")',
+    "Text(verbatim: meterError)",
   ],
   "apps/ios/Sources/Design/OpenClawProComponents.swift": [
     "enum OpenClawTextValue: ExpressibleByStringLiteral",
@@ -557,29 +565,20 @@ function isAppleCatalogKind(kind: string): boolean {
   return kind === "conditional-branch" || kind.startsWith("ui-");
 }
 
-function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
+function isAppleCatalogEntry(
+  entry: NativeSourceEntry,
+  sourcePrefixes: readonly string[],
+  exclusions: ReadonlySet<string>,
+): boolean {
   return (
     entry.surface === "apple" &&
     entry.sites.some(
       (site) =>
-        IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
+        sourcePrefixes.some((prefix) => site.path.startsWith(prefix)) &&
         isAppleCatalogKind(site.kind),
     ) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
-    !IOS_CATALOG_EXCLUSIONS.has(entry.source)
-  );
-}
-
-function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
-  return (
-    entry.surface === "apple" &&
-    entry.sites.some(
-      (site) =>
-        MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        isAppleCatalogKind(site.kind),
-    ) &&
-    !entry.source.includes("\\(") &&
-    !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
+    !exclusions.has(entry.source)
   );
 }
 
@@ -711,7 +710,9 @@ export function buildIosCatalog(
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
-  return buildAppleCatalog(existingCatalog, nativeSource, translations, isIosCatalogEntry);
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, IOS_SOURCE_PREFIXES, IOS_CATALOG_EXCLUSIONS),
+  );
 }
 
 export function buildMacosCatalog(
@@ -719,7 +720,9 @@ export function buildMacosCatalog(
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
-  return buildAppleCatalog(existingCatalog, nativeSource, translations, isMacosCatalogEntry);
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, MACOS_SOURCE_PREFIXES, MACOS_CATALOG_EXCLUSIONS),
+  );
 }
 
 async function listSwiftFiles(directory: string): Promise<string[]> {
@@ -743,10 +746,21 @@ async function listSwiftFiles(directory: string): Promise<string[]> {
 }
 
 async function validateRuntimeInterpolationPaths(): Promise<void> {
-  const roots = IOS_SOURCE_PREFIXES.map((prefix) => path.join(ROOT, prefix));
-  const files = (await Promise.all(roots.map(listSwiftFiles))).flat();
+  const roots = [...new Set([...IOS_SOURCE_PREFIXES, ...MACOS_SOURCE_PREFIXES])];
+  const files = new Set(
+    (
+      await Promise.all(
+        roots.map((prefix) => {
+          const sourcePath = path.join(ROOT, prefix);
+          return prefix.endsWith(".swift")
+            ? Promise.resolve([sourcePath])
+            : listSwiftFiles(sourcePath);
+        }),
+      )
+    ).flat(),
+  );
   const violations: string[] = [];
-  for (const file of files) {
+  for (const file of [...files].toSorted()) {
     const source = await readFile(file, "utf8");
     for (const label of findAmbiguousRuntimeInterpolations(source)) {
       violations.push(`${path.relative(ROOT, file)}: ${label}`);

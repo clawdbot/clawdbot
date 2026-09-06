@@ -48,6 +48,27 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
+  it.each([
+    { kind: "tool-error", flags: { isError: true } },
+    { kind: "reasoning", flags: { isReasoning: true } },
+  ])("keeps all generated media separate from a $kind payload", ({ flags }) => {
+    const payload = { text: "Referenced ![image](/tmp/generated.png)", ...flags };
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [payload],
+        toolMediaUrls: ["/tmp/generated.png", "/tmp/alternate.png"],
+      }),
+    ).toEqual([
+      payload,
+      {
+        mediaUrls: ["/tmp/generated.png", "/tmp/alternate.png"],
+        mediaUrl: "/tmp/generated.png",
+        audioAsVoice: undefined,
+        trustedLocalMedia: undefined,
+      },
+    ]);
+  });
+
   it("marks harness-owned media when source replies require the message tool", () => {
     const [mediaReply] =
       mergeAttemptToolMediaPayloads({

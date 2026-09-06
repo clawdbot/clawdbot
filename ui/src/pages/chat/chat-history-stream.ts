@@ -153,6 +153,7 @@ export function applyHistoryRun(params: {
       terminalRunId &&
       (sessionInfo.status === "done" ||
         sessionInfo.status === "failed" ||
+        sessionInfo.status === "killed" ||
         sessionInfo.status === "timeout") &&
       sessionInfo.hasActiveRun !== true &&
       !isSessionRunActive(sessionInfo) &&
@@ -161,7 +162,7 @@ export function applyHistoryRun(params: {
         (item) =>
           item.sendState === "sending" && item.sendRunId && item.sendRunId !== terminalRunId,
       ) &&
-      (!knownRun ||
+      ((sessionInfo.status !== "killed" && !knownRun) ||
         state.chatRunId === terminalRunId ||
         getChatRunOwner(state) === terminalRunId) &&
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)
@@ -280,7 +281,10 @@ export function applyHistoryRun(params: {
     startupPhase === "provisioning_environment" ||
     startupPhase === "preparing_context" ||
     startupPhase === "starting_model";
-  if (run.text) {
+  if (
+    run.text &&
+    !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+  ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
   } else if (startup && hasStartupStatus) {
     reconcileChatRunStartup(state, {

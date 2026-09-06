@@ -1,10 +1,8 @@
 /** Owns per-turn Codex request_user_input and ordinary MCP elicitation lifecycles. */
 import {
-  callGatewayTool,
   agentHarnessStructuredInput as structuredInput,
   embeddedAgentLog,
   emptyAgentHarnessUserInputAnswers,
-  type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputOption,
   type AgentHarnessUserInputQuestion,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -45,9 +43,8 @@ export function createCodexUserInputBridge(params: {
   threadId: string;
   turnId: string;
   signal?: AbortSignal;
-  gatewayCall?: AgentHarnessQuestionGatewayCall;
+  gatewayCall?: Parameters<typeof structuredInput.run>[0]["gatewayCall"];
 }) {
-  const gatewayCall = params.gatewayCall ?? callGatewayTool;
   const jobs: InteractiveJob[] = [];
   let activeCompletion: Promise<void> | undefined;
   const inputSessionKey = params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId;
@@ -117,7 +114,7 @@ export function createCodexUserInputBridge(params: {
       agentId: params.paramsForRun.agentId,
       runId: params.paramsForRun.runId,
       timeoutMs,
-      gatewayCall,
+      gatewayCall: params.gatewayCall,
       delivery: params.paramsForRun,
       signal,
       promptOptions: {

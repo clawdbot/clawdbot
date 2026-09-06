@@ -145,6 +145,7 @@ internal class WearProxyController(
                 WearProxyCapability.ModelControls,
                 WearProxyCapability.ModelCatalogSearch,
                 -> hasOperatorAdminScope()
+
                 else -> true
               }
             }.forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
@@ -452,8 +453,11 @@ internal fun projectedWearMessageText(message: JsonElement?): String? {
   val content = (message as? JsonObject)?.get("content")
   val text =
     when (content) {
-      is JsonPrimitive -> content.contentOrNull
-      is JsonArray ->
+      is JsonPrimitive -> {
+        content.contentOrNull
+      }
+
+      is JsonArray -> {
         content.joinToString(separator = "") { part ->
           when (part) {
             is JsonPrimitive -> part.contentOrNull.orEmpty()
@@ -461,7 +465,11 @@ internal fun projectedWearMessageText(message: JsonElement?): String? {
             else -> ""
           }
         }
-      else -> null
+      }
+
+      else -> {
+        null
+      }
     }
   return text?.takeIf { it.isNotEmpty() }
 }
@@ -524,8 +532,11 @@ private fun projectMessage(element: JsonElement?): JsonObject? {
 
 private fun projectContent(content: JsonElement?): JsonElement? =
   when (content) {
-    is JsonPrimitive -> content.contentOrNull?.let { JsonPrimitive(it.takeUtf8Bytes(MAX_PROJECTED_CONTENT_BYTES)) }
-    is JsonArray ->
+    is JsonPrimitive -> {
+      content.contentOrNull?.let { JsonPrimitive(it.takeUtf8Bytes(MAX_PROJECTED_CONTENT_BYTES)) }
+    }
+
+    is JsonArray -> {
       buildJsonArray {
         var remainingBytes = MAX_PROJECTED_CONTENT_BYTES
         var partCount = 0
@@ -533,13 +544,19 @@ private fun projectContent(content: JsonElement?): JsonElement? =
           if (remainingBytes == 0 || partCount == MAX_PROJECTED_CONTENT_PARTS) break
           val text =
             when (part) {
-              is JsonPrimitive -> part.contentOrNull
+              is JsonPrimitive -> {
+                part.contentOrNull
+              }
+
               is JsonObject -> {
                 val type = part.stringOrNull("type")
                 if (type != null && type != "text") continue
                 part.stringOrNull("text")
               }
-              else -> null
+
+              else -> {
+                null
+              }
             } ?: continue
           val projectedText = text.takeUtf8Bytes(remainingBytes)
           if (projectedText.isEmpty() && text.isNotEmpty()) break
@@ -560,7 +577,11 @@ private fun projectContent(content: JsonElement?): JsonElement? =
           partCount += 1
         }
       }
-    else -> null
+    }
+
+    else -> {
+      null
+    }
   }
 
 private fun projectAck(source: JsonObject): JsonObject =

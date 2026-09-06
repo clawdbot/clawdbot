@@ -198,9 +198,12 @@ export function createMainRefreshFixture(directory: string) {
     metadata,
     authorPermission: "write",
     failFetch: false,
+    failPrFetch: false,
+    failDetach: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
     failAuth: false,
+    viewerRateLimited: false,
     moveAfterFirstFetch: false,
     moveAtGate: false,
     moveAtChecks: false,
@@ -259,6 +262,11 @@ function runGit(args, input) {
     instrumentedGit,
     prelude +
       `
+if ((control.failPrFetch && args.includes('fetch') && args.includes('pull/42/head:pr-42')) ||
+    (control.failDetach && args[0] === 'checkout' && args[1] === '--detach')) {
+  console.error('fatal: injected prepare handoff failure');
+  process.exit(73);
+}
 const mainFetch = args.includes('fetch') && args.some(arg =>
   arg === 'main' || arg.startsWith('+refs/heads/main:') || arg === 'refs/heads/main'
 );
@@ -339,8 +347,10 @@ if (args[0] === 'pr' && args[1] === 'view') {
   }
   const parent = runGit(['-C', origin, 'rev-parse', 'refs/heads/main']);
   const tree = runGit(['-C', origin, 'merge-tree', '--write-tree', parent, control.metadata.headRefOid]);
+  const bodyIndex = args.indexOf('--body-file');
+  const body = bodyIndex < 0 ? '' : readFileSync(args[bodyIndex + 1], 'utf8');
   const landed = runGit(['-C', origin, '-c', 'user.name=Fixture', '-c',
-    'user.email=fixture@example.invalid', 'commit-tree', tree, '-p', parent], 'Fixture squash\\n');
+    'user.email=fixture@example.invalid', 'commit-tree', tree, '-p', parent], 'Fixture squash\\n\\n' + body);
   runGit(['-C', origin, 'update-ref', 'refs/heads/main', landed, parent]);
   control.metadata.state = 'MERGED';
   control.metadata.mergeCommit = { oid: landed };
@@ -378,7 +388,18 @@ if (args[0] === 'pr' && args[1] === 'view') {
   if (endpoint === 'graphql') {
     if (control.failAuth) process.exit(1);
     if (args.some(arg => arg.includes('viewer { login }'))) {
+      if (control.viewerRateLimited) {
+        if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\nX-RateLimit-Resource: graphql\\r\\nX-RateLimit-Remaining: 0\\r\\n\\r\\n');
+        console.log(JSON.stringify({ errors: [{ type: 'RATE_LIMITED', message: 'Synthetic quota failure' }] }));
+        process.exit(1);
+      }
       value = { data: { viewer: { login: 'fixture' } } };
+    } else if (args.some(arg => arg.includes('viewerMergeBodyText'))) {
+      value = { data: { repository: { pullRequest: {
+        headRefOid: control.metadata.headRefOid,
+        isMergeQueueEnabled: control.metadata.isMergeQueueEnabled,
+        viewerMergeBodyText: 'Reviewed fixture body',
+      } } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {
       value = { data: { repository: {
         id: 'fixture-repo', nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo',
@@ -468,6 +489,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   throw new Error('Unexpected GitHub command ' + args.join(' '));
 }
 const jqIndex = args.indexOf('--jq');
+if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\n\\n');
 if (jqIndex >= 0) {
   const result = spawnSync('jq', ['-r', args[jqIndex + 1]], {
     input: JSON.stringify(value),
@@ -524,8 +546,11 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     metadata,
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
-      if (control.hostedCi === "scheduled") delete env.NODE_OPTIONS;
-      else env.NODE_OPTIONS = `--import=${clock}`;
+      if (control.hostedCi === "scheduled") {
+        delete env.NODE_OPTIONS;
+      } else {
+        env.NODE_OPTIONS = `--import=${clock}`;
+      }
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

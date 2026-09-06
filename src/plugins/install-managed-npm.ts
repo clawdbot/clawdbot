@@ -34,6 +34,7 @@ import {
   listManagedNpmRootPackageNames,
   listNewManagedNpmRootPackageDirs,
   quarantineManagedNpmProjectRebuildArtifacts,
+  removeEmptyDirectoryIfPresent,
   resolveManagedNpmGenerationUseForInstall,
   resolveManagedNpmInstallRoot,
   resolveManagedNpmRootDependencySpecForInstall,
@@ -64,7 +65,7 @@ import {
 } from "./install-shared.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type {
   InstallPluginResult,
@@ -73,6 +74,7 @@ import type {
   PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
+import { isOfficialCatalogLookupPluginIdReplacement } from "./official-external-install-records.js";
 import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
@@ -548,7 +550,11 @@ export async function installPluginFromManagedNpmRoot(
       if (
         manifestResult.ok &&
         manifestResult.manifest.id === params.expectedReplacementPluginId &&
-        manifestResult.manifest.legacyPluginIds?.includes(expectedPluginId)
+        (manifestResult.manifest.legacyPluginIds?.includes(expectedPluginId) ||
+          isOfficialCatalogLookupPluginIdReplacement({
+            expectedPluginId,
+            expectedReplacementPluginId: params.expectedReplacementPluginId,
+          }))
       ) {
         // Only managed npm updates may replace an expected id, after the downloaded
         // official manifest corroborates the catalog-declared migration.
@@ -621,6 +627,10 @@ export async function installPluginFromManagedNpmRoot(
       logger,
     });
     await cleanupManagedNpmPluginInstallRollbackSnapshot({ snapshot: rollbackSnapshot, logger });
+    // Prepared npm-pack archives must be gone before retiring an empty failed project.
+    await removeEmptyDirectoryIfPresent(npmRoot).catch((error: unknown) =>
+      logger.warn?.(`Failed to remove empty managed npm project ${npmRoot}: ${String(error)}`),
+    );
   };
 
   try {
@@ -636,7 +646,7 @@ export async function installPluginFromManagedNpmRoot(
     preparedDependency = dependencyResult;
     const result = await runManagedNpmInstall(preparedDependency);
     installSucceeded = result.ok;
-    if (!result.ok || !isPluginInstallCommitDeferred(params)) {
+    if (!result.ok || !resolvePluginInstallTransactionRequest(params)) {
       return result;
     }
     deferredTransaction = true;

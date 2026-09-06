@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
@@ -19,18 +18,6 @@ export function forceNpmInstallRecordRepair(record: PluginInstallRecord): Plugin
   delete next.resolvedSpec;
   delete next.resolvedVersion;
   return next;
-}
-
-export function isInstalledRecordMissingOnDisk(
-  record: PluginInstallRecord | undefined,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const installPath = record?.installPath?.trim();
-  if (!installPath) {
-    return true;
-  }
-  const resolved = resolveUserPath(installPath, env);
-  return !existsSync(path.join(resolved, "package.json"));
 }
 
 export function installPathsEqual(left: string, right: string): boolean {
@@ -171,31 +158,5 @@ export function recordMatchesBundledPackage(
   bundled: { name?: string; packageName?: string },
 ): boolean {
   const packageName = bundled.packageName?.trim() || bundled.name?.trim();
-  if (!packageName) {
-    return false;
-  }
-  if (record.source === "npm") {
-    return [record.spec, record.resolvedName, record.resolvedSpec].some(
-      (value) => recordNpmPackageName(value) === packageName,
-    );
-  }
-  if (record.source === "clawhub") {
-    return [record.clawhubPackage, record.spec].some(
-      (value) => recordClawHubPackageName(value) === packageName,
-    );
-  }
-  return false;
-}
-
-function recordNpmPackageName(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? parseRegistryNpmSpec(trimmed)?.name : undefined;
-}
-
-function recordClawHubPackageName(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return parseClawHubPluginSpec(trimmed)?.name ?? trimmed;
+  return Boolean(packageName && collectInstalledRecordPackageNames(record).has(packageName));
 }

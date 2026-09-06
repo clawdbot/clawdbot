@@ -1,6 +1,7 @@
 // Comfy plugin module implements workflow runtime behavior.
 import { randomInt } from "node:crypto";
 import fs from "node:fs/promises";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -13,11 +14,11 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   redactProviderResponseErrorText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeSecretInputString,
   resolveConfiguredSecretInputString,
@@ -390,12 +391,6 @@ function resolveFileExtension(params: { fileName?: string; mimeType?: string }):
   return fileName.slice(dotIndex + 1);
 }
 
-function toBlobBytes(buffer: Buffer): ArrayBuffer {
-  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
-  new Uint8Array(arrayBuffer).set(buffer);
-  return arrayBuffer;
-}
-
 async function uploadInputImage(params: {
   baseUrl: string;
   headers: Headers;
@@ -409,7 +404,7 @@ async function uploadInputImage(params: {
   const form = new FormData();
   form.set(
     "image",
-    new Blob([toBlobBytes(params.image.buffer)], { type: params.image.mimeType }),
+    new Blob([bufferToBlobPart(params.image.buffer)], { type: params.image.mimeType }),
     normalizeOptionalString(params.image.fileName) ||
       `input.${resolveFileExtension({ mimeType: params.image.mimeType })}`,
   );
@@ -633,16 +628,20 @@ async function downloadOutputFile(params: {
     const mimeType =
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
       "application/octet-stream";
-    return {
-      buffer: await readResponseWithLimit(firstResponse.response, params.maxBytes, {
+    const downloadLabel = `Comfy ${params.capability} output download`;
+    const buffer = await readProviderBinaryResponse(
+      firstResponse.response,
+      downloadLabel,
+      params.capability,
+      {
+        maxBytes: params.maxBytes,
         chunkTimeoutMs: params.timeoutMs,
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
+        onOverflow: ({ maxBytes }) => new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
         onIdleTimeout: ({ chunkTimeoutMs }) =>
-          new Error(`Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`),
-      }),
-      mimeType,
-    };
+          new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
+      },
+    );
+    return { buffer, mimeType };
   } finally {
     await firstResponse.release();
   }

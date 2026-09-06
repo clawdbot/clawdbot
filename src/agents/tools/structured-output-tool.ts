@@ -108,15 +108,3 @@ export function createStructuredOutputTool(params: {
     },
   };
 }
-
-const testing = {
-  readSwarmStructuredOutput: peekSwarmStructuredOutput,
-  reset() {
-    states.clear();
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.structuredOutputToolTestApi")] =
-    { testing };
-}

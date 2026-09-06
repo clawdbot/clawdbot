@@ -307,7 +307,11 @@ function prepackPreparationRestoreError(error: unknown, restoreError: unknown): 
 async function main(): Promise<void> {
   ensureSupportedSourcePack();
   const buildEnv = resolvePrepackBuildEnvironment();
-  runPnpm(["build:package"], buildEnv);
+  // Release preflight already built or restored clean outputs for its exact SHA.
+  // Preserve those artifacts while still running the complete packaging lifecycle.
+  if (buildEnv[PREPARED_RELEASE_ENV]?.trim() !== "1") {
+    runPnpm(["build:package"], buildEnv);
+  }
   await preparePrepackArtifacts(buildEnv);
 }
 

@@ -433,7 +433,15 @@ describe("packNpmSpecToArchive", () => {
       },
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
+      [
+        "npm",
+        "pack",
+        "openclaw-plugin@1.2.3",
+        "--ignore-scripts",
+        "--json",
+        "--dry-run=false",
+        `--pack-destination=${cwd}`,
+      ],
       {
         cwd,
         timeoutMs: 300_000,
@@ -485,7 +493,7 @@ describe("packNpmSpecToArchive", () => {
     });
   });
 
-  it("falls back to parsing final stdout line when npm json output is unavailable", async () => {
+  it("uses the workspace archive when npm prints notices without JSON", async () => {
     const cwd = await createFixtureDir();
     const expectedArchivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
     await fs.writeFile(expectedArchivePath, "", "utf-8");

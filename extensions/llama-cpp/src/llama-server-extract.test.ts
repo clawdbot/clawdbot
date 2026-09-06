@@ -33,7 +33,8 @@ async function createTarArchive(
   await fs.mkdir(buildDir, { recursive: true });
   await build(buildDir);
   const archivePath = path.join(root, "asset.tar.gz");
-  await tar.c({ file: archivePath, cwd: stageDir, gzip: true }, [TEST_ARCHIVE_ROOT]);
+  // Keep tiny fixtures synchronous: node-tar's async hard-link queue can close gzip twice.
+  tar.c({ file: archivePath, cwd: stageDir, gzip: true, sync: true }, [TEST_ARCHIVE_ROOT]);
   const destDir = path.join(root, "dest");
   await fs.mkdir(destDir, { recursive: true });
   return { archivePath, destDir };

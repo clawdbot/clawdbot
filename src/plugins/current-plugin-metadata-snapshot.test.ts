@@ -680,7 +680,6 @@ describe("current plugin metadata snapshot", () => {
   it("requires exact plugin scope when the caller derives scope from the current index", () => {
     const config = { plugins: { allow: ["demo", "other"] } };
     const pluginIdScope = {
-      key: "test-scope",
       resolve: () => ["demo", "other"],
     };
     const unscoped = createSnapshot({ config });

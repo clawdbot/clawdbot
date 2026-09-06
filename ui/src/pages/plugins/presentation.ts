@@ -181,8 +181,14 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "zalouser",
 ]);
 
-export function pluginArtPath(slug: string): string | null {
-  return PLUGIN_ART_SLUGS.has(slug)
+// Only the trusted first-party scope may drop package role suffixes. Broader
+// unscoping would let third-party catalog ids claim bundled OpenClaw art.
+const OPENCLAW_PLUGIN_ART_ID = /^@openclaw\/(.+?)(?:-(?:plugin|provider))?$/u;
+
+export function pluginArtPath(id: string): string | null {
+  const scopedSlug = OPENCLAW_PLUGIN_ART_ID.exec(id)?.[1];
+  const slug = PLUGIN_ART_SLUGS.has(id) ? id : scopedSlug;
+  return slug && PLUGIN_ART_SLUGS.has(slug)
     ? inferControlUiPublicAssetPath(`plugin-art/${slug}.webp`)
     : null;
 }

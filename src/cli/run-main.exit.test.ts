@@ -849,7 +849,8 @@ describe("runCli exit behavior", () => {
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
-    stopManagedProviderLocalServicesMock.mockImplementationOnce(() => {
+    stopManagedProviderLocalServicesMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
       order.push("provider-local-services");
     });
     closeProviderTransportDispatcherPoolMock.mockImplementationOnce(async () => {
@@ -4789,9 +4790,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "doctor", "--help"]);
 
-    expect(registerCoreCliByNameMock.mock.calls).toEqual([
-      [program, ctx, "doctor", ["node", "openclaw", "doctor", "--help"]],
-    ]);
+    expect(registerCoreCliByNameMock.mock.calls).toEqual([[program, ctx, "doctor"]]);
     expect(registerSubCliByNameMock.mock.calls).toEqual([
       [program, "doctor", ["node", "openclaw", "doctor", "--help"]],
     ]);

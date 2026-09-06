@@ -44,6 +44,9 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Session active project set, ordered most-recent first; empty before run binding. */
   activeProjectKeys: readonly string[];
   config: OpenClawConfig;
+  /** Native observations retain preparation identity across model-neutral config publications. */
+  observationConfig: OpenClawConfig;
+  isCurrent: () => boolean;
   /** Secret-free usable auth modes captured by this exact lifecycle generation. */
   authModes: PreparedAgentCredentialModes;
   metadataSnapshot: PluginMetadataSnapshot;
@@ -106,6 +109,19 @@ export type PreparedModelRuntimeLease = Readonly<{
   release: () => void;
 }>;
 
+export type PreparedModelRuntimeLeaseOptions = {
+  retainIdleRunOwner?: boolean;
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  abortSignal?: AbortSignal;
+  /** Pure planning against admitted facts; requested selections remain explicit and additive. */
+  deriveRuntimePluginSelections?: (context: {
+    config: OpenClawConfig;
+    metadataSnapshot: PluginMetadataSnapshot;
+  }) => readonly AgentHarnessPluginSelection[];
+};
+
 export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
   provenance?: PreparedModelRuntimeOwner["provenance"];
@@ -157,6 +173,8 @@ export type PreparedModelRuntimeOwner = {
   generation: number;
   needsRefresh: boolean;
   catalogStale: boolean;
+  /** Completed discovery facts; runtime capability projection belongs to each generation. */
+  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
@@ -164,6 +182,7 @@ export type PreparedModelRuntimeOwner = {
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
+  admissionCount?: number;
   leaseCount?: number;
 };
 

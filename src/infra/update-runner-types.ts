@@ -4,6 +4,7 @@ import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
 export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
 
@@ -22,6 +23,7 @@ export type UpdateStepResult = {
 };
 
 export type UpdateRunResult = {
+  runId?: string;
   status: "ok" | "error" | "skipped";
   mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
   root?: string;
@@ -35,18 +37,7 @@ export type UpdateRunResult = {
   };
   steps: UpdateStepResult[];
   durationMs: number;
-  recovery?:
-    | { serviceRestartSafe: true }
-    | {
-        serviceRestartSafe: false;
-        reason:
-          | "source-rollback-failed"
-          | "manager-unavailable"
-          | "deps-install-failed"
-          | "build-failed"
-          | "rollback-checkout-dirty"
-          | "runtime-verification-failed";
-      };
+  recovery?: UpdateRecovery;
   postUpdate?: {
     plugins?: {
       status: "ok" | "warning" | "skipped" | "error";
@@ -123,6 +114,7 @@ export type UpdateStepProgress = {
 };
 
 export type UpdateRunnerOptions = {
+  runId?: string;
   cwd?: string;
   argv1?: string;
   tag?: string;

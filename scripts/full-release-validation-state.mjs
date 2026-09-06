@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { buildFullReleaseCandidateRequest } from "./full-release-candidate-contract.mjs";
+import { validateFullReleaseCandidateRequest } from "./full-release-candidate-contract.mjs";
 import {
   affectedActiveRunIds,
   buildReleaseExecutionPlan,
@@ -33,6 +33,7 @@ import {
   validateReleaseTelegramWaiverBinding,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
@@ -66,14 +67,6 @@ function positiveInteger(value, label) {
     throw new Error(`${label} must be a positive integer`);
   }
   return normalized;
-}
-
-function requiredBoolean(value, label) {
-  const normalized = requiredString(value, label);
-  if (normalized !== "true" && normalized !== "false") {
-    throw new Error(`${label} must be true or false`);
-  }
-  return normalized === "true";
 }
 
 async function abortableSleep(milliseconds, signal) {
@@ -378,20 +371,6 @@ function changedPathsValue(value) {
   }
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalJson);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalJson(entry)]),
-    );
-  }
-  return value;
-}
-
 async function validateReuse(executionPlan, signal) {
   const { children: plan, evidenceReuse, trustedWorkflow } = executionPlan;
   if (!evidenceReuse.requested) {
@@ -452,7 +431,7 @@ async function validateReuse(executionPlan, signal) {
       blockers: [],
       children: hydrateReusedPlan(plan, evidence),
       errors: [],
-      sourceManifest: canonicalJson(evidence.manifest),
+      sourceManifest: sortJsonValueKeys(evidence.manifest),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -586,29 +565,13 @@ function planExpected() {
 }
 
 function candidateRequestFromInputs(planInputs) {
-  return buildFullReleaseCandidateRequest(planInputs.candidateRequestInput);
+  return validateFullReleaseCandidateRequest(planInputs.candidateRequestInput);
 }
 
 function candidateRequestFromEnvironment() {
-  return buildFullReleaseCandidateRequest({
-    repository: process.env.GITHUB_REPOSITORY,
-    targetSha: process.env.TARGET_SHA,
-    toolingSha: process.env.GITHUB_SHA,
-    releaseProfile: process.env.RELEASE_PROFILE,
-    releaseSoak: requiredBoolean(process.env.CANDIDATE_RELEASE_SOAK, "candidate release soak"),
-    upgradeSurvivorBaseline: process.env.CANDIDATE_UPGRADE_SURVIVOR_BASELINE,
-    upgradeSurvivorBaselines: process.env.CANDIDATE_UPGRADE_SURVIVOR_BASELINES,
-    upgradeSurvivorScenarios: process.env.CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS,
-    allowFrozenTargetScenarioOmissions: requiredBoolean(
-      process.env.CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS,
-      "candidate frozen-target policy",
-    ),
-    allowUnreleasedChangelog: requiredBoolean(
-      process.env.CANDIDATE_ALLOW_UNRELEASED_CHANGELOG,
-      "candidate changelog policy",
-    ),
-    sharedImagePolicy: process.env.CANDIDATE_SHARED_IMAGE_POLICY,
-  });
+  return validateFullReleaseCandidateRequest(
+    JSON.parse(requiredString(process.env.CANDIDATE_REQUEST_JSON, "candidate request JSON")),
+  );
 }
 
 function evidenceReuseFromInputs(planInputs, sourceManifest = {}) {
@@ -884,8 +847,8 @@ async function collectMode(mode) {
       };
     }
     if (
-      JSON.stringify(canonicalJson(decisionReuse.sourceManifest)) !==
-      JSON.stringify(canonicalJson(executionPlan.evidenceReuse.sourceManifest))
+      JSON.stringify(sortJsonValueKeys(decisionReuse.sourceManifest)) !==
+      JSON.stringify(sortJsonValueKeys(executionPlan.evidenceReuse.sourceManifest))
     ) {
       decisionReuse = {
         ...decisionReuse,
@@ -1092,18 +1055,19 @@ async function validateManifestMode() {
     manifest.targetSha !== executionPlan.targetSha ||
     manifest.releaseProfile !== executionPlan.releaseProfile ||
     manifest.rerunGroup !== executionPlan.rerunGroup ||
-    JSON.stringify(canonicalJson(manifest.childRunIds)) !==
-      JSON.stringify(canonicalJson(expectedChildRunIds)) ||
-    JSON.stringify(canonicalJson(manifest.evidenceReuse)) !==
-      JSON.stringify(canonicalJson(expectedEvidenceReuse)) ||
+    JSON.stringify(sortJsonValueKeys(manifest.childRunIds)) !==
+      JSON.stringify(sortJsonValueKeys(expectedChildRunIds)) ||
+    JSON.stringify(sortJsonValueKeys(manifest.evidenceReuse)) !==
+      JSON.stringify(sortJsonValueKeys(expectedEvidenceReuse)) ||
     (executionPlan.attemptEvidenceVersion !== undefined &&
-      JSON.stringify(canonicalJson(rawManifest.childEvidence)) !==
-        JSON.stringify(canonicalJson(expectedChildEvidence))) ||
+      JSON.stringify(sortJsonValueKeys(rawManifest.childEvidence)) !==
+        JSON.stringify(sortJsonValueKeys(expectedChildEvidence))) ||
     rawManifest.executionPlanSha256 !== executionPlan.sha256 ||
     Number(rawManifest.sourceParentRunAttempt) !== executionPlan.parentRunAttempt
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
+  rawManifest.advisoryJobs = manifest.advisoryJobs;
   writeArtifact(manifestPath, rawManifest);
 }
 

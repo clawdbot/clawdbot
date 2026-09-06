@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { updateRecoverySchema, type UpdateRecovery } from "./update-recovery.js";
 
 type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -23,6 +24,8 @@ type RestartSentinelStep = {
 };
 
 type RestartSentinelStats = {
+  runId?: string;
+  recovery?: UpdateRecovery;
   mode?: string;
   root?: string;
   requiresRestart?: boolean;
@@ -178,11 +181,14 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   const mode = parseOptionalNullableString(value, "mode");
   const root = parseOptionalNullableString(value, "root");
   const handoffId = parseOptionalNullableString(value, "handoffId");
+  const runId = parseOptionalNullableString(value, "runId");
   const reason = parseOptionalNullableString(value, "reason");
   const before = value.before;
   const after = value.after;
   const steps = value.steps;
   const durationMs = value.durationMs;
+  const recovery =
+    value.recovery === undefined ? undefined : updateRecoverySchema.safeParse(value.recovery);
   if (
     mode === false ||
     mode === null ||
@@ -190,6 +196,8 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     root === null ||
     handoffId === false ||
     handoffId === null ||
+    runId === false ||
+    runId === null ||
     reason === false ||
     (value.requiresRestart !== undefined && typeof value.requiresRestart !== "boolean") ||
     (before !== undefined && before !== null && !isPlainRecord(before)) ||
@@ -201,6 +209,10 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     return null;
   }
   const result: RestartSentinelStats = {};
+  // Recovery is diagnostic here; unsupported metadata must not suppress the restart notice.
+  if (recovery?.success) {
+    result.recovery = recovery.data;
+  }
   if (mode !== undefined) {
     result.mode = mode;
   }
@@ -212,6 +224,9 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   if (handoffId !== undefined) {
     result.handoffId = handoffId;
+  }
+  if (runId !== undefined) {
+    result.runId = runId;
   }
   if (before !== undefined) {
     result.before = before as Record<string, unknown> | null;

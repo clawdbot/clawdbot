@@ -112,7 +112,7 @@ async function normalizeReleasedSessionQueryLocation(params: {
   };
 }
 
-export function normalizeInitialApplicationLocation(
+function normalizeInitialApplicationLocation(
   location: RouteLocation,
   basePath: string,
   sessionKey: string,

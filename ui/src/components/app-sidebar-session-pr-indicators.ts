@@ -5,13 +5,12 @@ import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
   summarizeSessionPullRequests,
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 type IndicatorEntry = {
@@ -36,7 +35,6 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   private store: SessionPullRequestSnapshotStore | null = null;
   private stopStoreUpdates: (() => void) | null = null;
   private connected = false;
-  private refreshScheduled = false;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -50,7 +48,11 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   }
 
   hostUpdated(): void {
-    this.scheduleRefresh();
+    // Reuse the projection before the host releases it in updated(). Changes
+    // here can still schedule a follow-up render to clear stale PR summaries.
+    if (this.connected) {
+      this.refreshVisible();
+    }
   }
 
   hostDisconnected(): void {
@@ -67,19 +69,6 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     const entry = this.states.get(sessionKey);
     // A ready empty snapshot is authoritative; only seed a row before its first snapshot.
     return entry?.worktreeId === worktreeId ? entry.summary : initial;
-  }
-
-  private scheduleRefresh(): void {
-    if (this.refreshScheduled) {
-      return;
-    }
-    this.refreshScheduled = true;
-    globalThis.setTimeout(() => {
-      this.refreshScheduled = false;
-      if (this.connected) {
-        this.refreshVisible();
-      }
-    }, 0);
   }
 
   private releaseStore(): void {
@@ -107,7 +96,7 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   }
 
   private scopedKey(sessionKey: string): string {
-    return scopedSessionPullRequestKey(
+    return scopedSessionArtifactKey(
       sessionKey,
       parseAgentSessionKey(sessionKey)?.agentId ?? this.options.getSelectedAgentId(),
     );

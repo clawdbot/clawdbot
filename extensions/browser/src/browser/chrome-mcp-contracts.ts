@@ -21,6 +21,7 @@ export type ChromeMcpToolResult = {
 export type ChromeMcpSession = {
   client: Client;
   transport: StdioClientTransport;
+  closeTransport: () => Promise<void>;
   ready: Promise<void>;
   processCleanup?: ChromeMcpProcessCleanupState;
   processCleanupRefresh?: Promise<void>;
@@ -96,7 +97,7 @@ export type NormalizedChromeMcpProfileOptions = {
   userDataDir?: string;
   browserUrl?: string;
   command: string;
-  extraArgs: string[];
+  args: string[];
 };
 export type ChromeMcpOptionsInput =
   | string
@@ -166,31 +167,6 @@ export type ChromeMcpProcessCleanupState =
   | { status: "uncertain"; target?: ChromeMcpProcessCleanupTarget }
   | { status: "closed" };
 
-export const DEFAULT_CHROME_MCP_COMMAND = "npx";
-export const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@latest"];
-export const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
-  "--no-usage-statistics",
-  // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
-  "--experimentalStructuredContent",
-  "--experimental-page-id-routing",
-];
-export const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
-export const CHROME_MCP_ENDPOINT_FLAGS = new Set([
-  "--browserUrl",
-  "--browser-url",
-  "-u",
-  "--u",
-  "--wsEndpoint",
-  "--ws-endpoint",
-  "-w",
-  "--w",
-]);
-export const CHROME_MCP_CONNECTION_FLAGS = new Set([
-  "--autoConnect",
-  "--auto-connect",
-  ...CHROME_MCP_ENDPOINT_FLAGS,
-]);
-export const CHROME_MCP_USER_DATA_DIR_FLAGS = new Set(["--userDataDir", "--user-data-dir"]);
 export const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
 export const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 export const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;

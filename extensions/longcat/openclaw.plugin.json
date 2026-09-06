@@ -18,6 +18,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "longcat": "longcat"
+    },
     "providers": {
       "longcat": {
         "baseUrl": "https://api.longcat.chat/openai",

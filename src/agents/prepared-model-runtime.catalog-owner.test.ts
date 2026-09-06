@@ -22,13 +22,13 @@ import {
   resolvePublishedModelCatalogOwner,
 } from "./prepared-model-catalog-owner.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import {
-  startSerializedSnapshotBuild,
-  startSerializedSnapshotBuildBatch,
-} from "./prepared-model-runtime.build.js";
-import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
+  PreparedModelRuntimeOwnerNotPublishedError,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -242,12 +242,82 @@ describe("prepared catalog owner lifecycle", () => {
 });
 
 describe("prepared build candidate lifetime", () => {
+  describe.each([
+    { provenance: "run", acquire: acquireAgentRunPreparedModelRuntime, readOnly: false },
+    { provenance: "ephemeral", acquire: acquireReadOnlyPreparedModelRuntime, readOnly: true },
+  ])("unpublished $provenance owners", ({ acquire, readOnly }) => {
+    it("retires failed lease acquisition and permits a fresh retry", async () => {
+      const input = { config: {}, agentDir: state.agentDir("failed-admission"), readOnly };
+      const failure = new Error("catalog preparation failed");
+      mocks.resolveAmbientCredentials.mockImplementationOnce(() => {
+        throw failure;
+      });
+
+      await expect(acquire(input)).rejects.toBe(failure);
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
+        PreparedModelRuntimeOwnerNotPublishedError,
+      );
+      const lease = await acquire(input);
+      try {
+        expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
+      } finally {
+        lease.release();
+      }
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
+        PreparedModelRuntimeOwnerNotPublishedError,
+      );
+    });
+
+    it("retires a timeout while fencing late work ahead of the retry", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
+      const input = { config: {}, agentDir: state.agentDir("timed-out-admission"), readOnly };
+      const started = createDeferred();
+      const finish = createDeferred();
+      mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
+        started.resolve();
+        await finish.promise;
+        return {};
+      });
+      const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
+      const first = acquire(input);
+      const timedOut = expect(first).rejects.toThrow(
+        "prepared model runtime publication timed out",
+      );
+      let retry: ReturnType<typeof acquire> | undefined;
+      try {
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(1);
+        await timedOut;
+        await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
+          PreparedModelRuntimeOwnerNotPublishedError,
+        );
+        retry = acquire(input);
+        expect(builds).toHaveBeenCalledTimes(2);
+        expect(mocks.resolveAmbientCredentials).toHaveBeenCalledOnce();
+
+        finish.resolve();
+        const lease = await retry;
+        expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
+        expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+        // The retired build must stop after its held preparation, before discovery or publication.
+        expect(mocks.discoverModels).toHaveBeenCalledOnce();
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([first, retry?.then((lease) => lease.release())]);
+        await Promise.all(builds.mock.results.map((result) => result.value.completion));
+        builds.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("fails a timed-out publication without overlapping its late build with a retry", async () => {
     getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
     const source = createDeferred<{ agentDir: string; wrote: false }>();
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => await source.promise);
     const input = { config: {}, agentDir: state.agentDir("timeout") };
-    const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuild");
+    const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
     try {
       await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
         "prepared model runtime publication timed out",
@@ -370,44 +440,16 @@ describe("prepared build candidate lifetime", () => {
     }
   });
 
-  it("allows a direct serialized build without a lifecycle generation guard", async () => {
-    const input = {
-      config: {},
-      agentDir: state.agentDir("direct-prepared-model-runtime-build"),
-      readOnly: true,
-    };
-    const build = startSerializedSnapshotBuild(
-      { input, catalogOwner: preparePublishedModelCatalogOwnerIdentity(input) },
-      new Map(),
-      1_000,
-      "static",
-    );
-
-    try {
-      await expect(build.pending).resolves.toMatchObject({
-        snapshot: {
-          agentDir: input.agentDir,
-          config: input.config,
-        },
-        pluginGeneration: expect.any(Object),
-      });
-    } finally {
-      await build.completion;
-    }
-  });
-
   it.each([
     {
-      name: "single default",
-      single: true,
-      generation: undefined,
-      build: undefined,
+      name: "batch explicit generation",
+      generation: true,
+      build: true,
       allowed: true,
       callbacks: true,
     },
     {
       name: "batch default",
-      single: false,
       generation: undefined,
       build: undefined,
       allowed: true,
@@ -415,7 +457,6 @@ describe("prepared build candidate lifetime", () => {
     },
     {
       name: "batch build-only",
-      single: false,
       generation: undefined,
       build: true,
       allowed: true,
@@ -423,7 +464,6 @@ describe("prepared build candidate lifetime", () => {
     },
     {
       name: "batch missing build predicate",
-      single: false,
       generation: false,
       build: undefined,
       allowed: true,
@@ -431,13 +471,12 @@ describe("prepared build candidate lifetime", () => {
     },
     {
       name: "batch inherited generation predicate",
-      single: false,
       generation: false,
       build: false,
       allowed: false,
       callbacks: false,
     },
-  ])("preserves $name semantics", async ({ single, generation, build, allowed, callbacks }) => {
+  ])("preserves $name semantics", async ({ generation, build, allowed, callbacks }) => {
     const input = { config: {}, agentDir: state.agentDir("candidate-lifetime"), readOnly: true };
     const candidate = {
       input,
@@ -445,15 +484,12 @@ describe("prepared build candidate lifetime", () => {
       ...(generation === undefined ? {} : { isGenerationCurrent: () => generation }),
       ...(build === undefined ? {} : { isBuildCurrent: () => build }),
     };
-    const started = single
-      ? startSerializedSnapshotBuild(candidate, new Map(), 1_000, "static")
-      : startSerializedSnapshotBuildBatch([candidate], new Map(), 1_000, "static");
+    const started = startSerializedSnapshotBuildBatch([candidate], new Map(), 1_000, "static");
     try {
       if (!allowed) {
         await expect(started.pending).rejects.toThrow("superseded");
       } else {
-        const result = await started.pending;
-        const { snapshot } = Array.isArray(result) ? result[0]! : result;
+        const { snapshot } = (await started.pending)[0]!;
         if (callbacks) {
           await expect(snapshot.loadFullModelCatalog!()).resolves.toMatchObject({ entries: [] });
         } else {

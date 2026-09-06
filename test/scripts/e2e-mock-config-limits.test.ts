@@ -154,7 +154,7 @@ describe("mock OpenAI response markers", () => {
     { api: "chat/completions", stream: true },
   ])(
     "emits native exec draft-proof calls from $api (stream=$stream)",
-    async ({ api, stream }, { expect }) => {
+    async ({ api, stream }, { expect: taskExpect }) => {
       await withMockServer(
         mockOpenAiPath,
         { MOCK_DRAFTPROOF_FINAL_DELAY_MS: "80" },
@@ -179,7 +179,7 @@ describe("mock OpenAI response markers", () => {
                 stream,
               }),
             });
-            expect(response.status).toBe(200);
+            taskExpect(response.status).toBe(200);
             if (!stream) {
               return [await response.json()];
             }
@@ -193,37 +193,45 @@ describe("mock OpenAI response markers", () => {
           let call;
           let assistant;
           if (api === "responses") {
+            if (stream) {
+              taskExpect(first.filter((event) => event.item?.type === "message")).toMatchObject([
+                { type: "response.output_item.added", output_index: 0 },
+                { type: "response.output_item.done", output_index: 0 },
+              ]);
+            }
             const items = stream
               ? first
                   .filter((event) => event.type === "response.output_item.done")
                   .map((event) => event.item)
               : first[0].output;
-            expect(items).toHaveLength(2);
-            expect(items[0]).toMatchObject({
+            taskExpect(items).toHaveLength(2);
+            taskExpect(items[0]).toMatchObject({
               type: "message",
               phase: "commentary",
               content: [{ type: "output_text", text: "Checking the workspace before answering." }],
             });
             call = items[1];
-            expect(call).toMatchObject({ type: "function_call", name: "exec" });
+            taskExpect(call).toMatchObject({ type: "function_call", name: "exec" });
             assistant = items;
           } else {
             const messages = first.map((chunk) =>
               stream ? chunk.choices[0].delta : chunk.choices[0].message,
             );
             const toolIndex = messages.findIndex((message) => message.tool_calls?.length);
-            expect(toolIndex).toBeGreaterThanOrEqual(0);
-            expect(
+            taskExpect(toolIndex).toBeGreaterThanOrEqual(0);
+            taskExpect(
               messages
                 .slice(0, toolIndex + 1)
                 .map((message) => message.content ?? "")
                 .join(""),
             ).toBe("Checking the workspace before answering.");
-            expect(messages.slice(toolIndex + 1).some((message) => message.content)).toBe(false);
+            taskExpect(messages.slice(toolIndex + 1).some((message) => message.content)).toBe(
+              false,
+            );
             const toolCalls = messages[toolIndex].tool_calls;
-            expect(toolCalls).toHaveLength(1);
+            taskExpect(toolCalls).toHaveLength(1);
             call = { ...toolCalls[0].function, call_id: toolCalls[0].id };
-            expect(call.name).toBe("exec");
+            taskExpect(call.name).toBe("exec");
             assistant = [
               {
                 role: "assistant",
@@ -241,7 +249,7 @@ describe("mock OpenAI response markers", () => {
             name: call.name,
             arguments: args,
           });
-          expect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+          taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
           let toolOutput = "openclaw-draft-proof\n";
           // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
           if (process.platform !== "win32") {
@@ -252,10 +260,10 @@ describe("mock OpenAI response markers", () => {
               timeout: 10_000,
             });
             const result = await execution;
-            expect(execution.child.exitCode, result.stderr).toBe(0);
-            expect(execution.child.signalCode).toBeNull();
-            expect(result.stdout).toBe(toolOutput);
-            expect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+            taskExpect(execution.child.exitCode, result.stderr).toBe(0);
+            taskExpect(execution.child.signalCode).toBeNull();
+            taskExpect(result.stdout).toBe(toolOutput);
+            taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
             toolOutput = result.stdout;
           }
 
@@ -271,9 +279,9 @@ describe("mock OpenAI response markers", () => {
             const response = stream
               ? final.find((event) => event.type === "response.completed").response
               : final[0];
-            expect(response.output[0].content[0].text).toBe("OPENCLAW_E2E_DRAFTPROOF");
+            taskExpect(response.output[0].content[0].text).toBe("OPENCLAW_E2E_DRAFTPROOF");
           } else {
-            expect(
+            taskExpect(
               final
                 .map((chunk) =>
                   stream
@@ -282,7 +290,7 @@ describe("mock OpenAI response markers", () => {
                 )
                 .join(""),
             ).toBe("OPENCLAW_E2E_DRAFTPROOF");
-            expect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
+            taskExpect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
           }
         },
       );
@@ -325,7 +333,17 @@ describe("mock OpenAI response markers", () => {
         const body = await response.text();
 
         expect(response.status).toBe(200);
-        expect(body.match(/response\.output_text\.delta/gu)).toHaveLength(2);
+        const events = body
+          .split("\n\n")
+          .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+          .map((line) => JSON.parse(line.slice(6)));
+        expect(events.filter((event) => event.type === "response.output_text.delta")).toHaveLength(
+          2,
+        );
+        expect(events.filter((event) => event.item?.type === "message")).toMatchObject([
+          { type: "response.output_item.added", output_index: 0 },
+          { type: "response.output_item.done", output_index: 0 },
+        ]);
         expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
       },
     );

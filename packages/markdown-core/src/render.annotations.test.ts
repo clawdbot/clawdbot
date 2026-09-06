@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToIR, sliceMarkdownIR } from "./ir.js";
+import { markdownToIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 import { renderMarkdownWithAttributedRanges } from "./render-attributed.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
@@ -94,6 +94,43 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
 });
 
 describe("renderMarkdownWithAttributedRanges", () => {
+  it("merges only adjacent mapped styles without mutating the source or sharing results", () => {
+    const ir: MarkdownIR = {
+      text: "abcdef",
+      styles: [
+        { start: 4, end: 6, style: "bold" },
+        { start: 2, end: 4, style: "code" },
+        { start: 1, end: 3, style: "italic" },
+        { start: 0, end: 2, style: "bold" },
+        { start: 0, end: 2, style: "code_block" },
+      ],
+      links: [],
+    };
+    for (const span of ir.styles) {
+      Object.freeze(span);
+    }
+    Object.freeze(ir.styles);
+    Object.freeze(ir.links);
+    const options = {
+      styleMap: { bold: "same", code: "same", code_block: "same", italic: "other" },
+    };
+    const expected = {
+      text: "abcdef",
+      ranges: [
+        { start: 0, length: 2, style: "same" },
+        { start: 1, length: 2, style: "other" },
+        { start: 2, length: 4, style: "same" },
+      ],
+    };
+
+    const result = renderMarkdownWithAttributedRanges(ir, options);
+    expect(result).toEqual(expected);
+    for (const range of result.ranges) {
+      range.length = 99;
+    }
+    expect(renderMarkdownWithAttributedRanges(ir, options)).toEqual(expected);
+  });
+
   it("projects annotations and splits styles around link suffixes", () => {
     const ir = markdownToIR("user[Thu] **[docs](https://example.com) tail**", {
       assistantTranscriptRoleHeaders: true,

@@ -223,6 +223,10 @@ function isOperatorOwnedEnvironmentIssue(
       return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
         environmentValueSources,
       });
+    case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
+      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
+        environmentValueSources,
+      });
     case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
       return hasGatewayServiceEnvironmentOverride(command, issue.environmentKeys ?? [], {
         environmentValueSources,
@@ -337,7 +341,7 @@ export function extraGatewayServiceToHealthFinding(service: ExtraGatewayService)
     target: service.label,
     fixHint:
       service.legacy === true
-        ? "Run openclaw doctor --fix to remove legacy gateway services."
+        ? "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup."
         : "Run a single gateway per machine unless this extra gateway is intentional.",
   };
 }
@@ -525,6 +529,21 @@ export async function maybeRepairGatewayServiceConfig(
     command = null;
   }
   if (!command) {
+    const audit = await auditGatewayServiceConfig({
+      env: process.env,
+      command: null,
+      platform: process.platform,
+    });
+    if (audit.issues.length > 0) {
+      note(
+        audit.issues
+          .map((issue) =>
+            issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+          )
+          .join("\n"),
+        "Gateway service config",
+      );
+    }
     return cfg;
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
@@ -549,7 +568,7 @@ export async function maybeRepairGatewayServiceConfig(
   const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
     ? [
         `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
-        "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
+        "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
       ].join("\n")
     : null;
 
@@ -1012,9 +1031,6 @@ export async function maybeScanExtraGatewayServices(
       }
       if (failed.length > 0) {
         note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
-      }
-      if (removed.length > 0) {
-        runtime.log("Legacy gateway services removed. Installing OpenClaw gateway next.");
       }
     }
   }

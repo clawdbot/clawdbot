@@ -81,32 +81,34 @@ export function renderConnection(props: ConnectionProps) {
         />
       `,
     })}
-    ${isTrustedProxy
-      ? ""
-      : html`
-          ${renderSecretRow({
-            label: t("connection.access.token"),
-            value: props.settings.token,
-            placeholder: "OPENCLAW_GATEWAY_TOKEN",
-            visible: props.showGatewayToken,
-            showLabel: t("connection.access.showToken"),
-            hideLabel: t("connection.access.hideToken"),
-            toggleLabel: t("connection.access.toggleTokenVisibility"),
-            onInput: (next) => props.onConnectionChange({ token: next }),
-            onToggle: props.onToggleGatewayTokenVisibility,
-          })}
-          ${renderSecretRow({
-            label: t("connection.access.password"),
-            value: props.password,
-            placeholder: t("connection.access.passwordPlaceholder"),
-            visible: props.showGatewayPassword,
-            showLabel: t("connection.access.showPassword"),
-            hideLabel: t("connection.access.hidePassword"),
-            toggleLabel: t("connection.access.togglePasswordVisibility"),
-            onInput: props.onPasswordChange,
-            onToggle: props.onToggleGatewayPasswordVisibility,
-          })}
-        `}
+    ${
+      isTrustedProxy
+        ? ""
+        : html`
+            ${renderSecretRow({
+              label: t("connection.access.token"),
+              value: props.settings.token,
+              placeholder: "OPENCLAW_GATEWAY_TOKEN",
+              visible: props.showGatewayToken,
+              showLabel: t("connection.access.showToken"),
+              hideLabel: t("connection.access.hideToken"),
+              toggleLabel: t("connection.access.toggleTokenVisibility"),
+              onInput: (next) => props.onConnectionChange({ token: next }),
+              onToggle: props.onToggleGatewayTokenVisibility,
+            })}
+            ${renderSecretRow({
+              label: t("connection.access.password"),
+              value: props.password,
+              placeholder: t("connection.access.passwordPlaceholder"),
+              visible: props.showGatewayPassword,
+              showLabel: t("connection.access.showPassword"),
+              hideLabel: t("connection.access.hidePassword"),
+              toggleLabel: t("connection.access.togglePasswordVisibility"),
+              onInput: props.onPasswordChange,
+              onToggle: props.onToggleGatewayPasswordVisibility,
+            })}
+          `
+    }
     ${renderSettingsRow({
       title: t("connection.access.sessionKey"),
       control: html`
@@ -121,9 +123,11 @@ export function renderConnection(props: ConnectionProps) {
     <div class="settings-row">
       <div class="settings-row__text">
         <span class="settings-row__desc"
-          >${isTrustedProxy
-            ? t("connection.access.trustedProxy")
-            : t("connection.access.connectHint")}</span
+          >${
+            isTrustedProxy
+              ? t("connection.access.trustedProxy")
+              : t("connection.access.connectHint")
+          }</span
         >
       </div>
       <div class="settings-row__control">
@@ -153,15 +157,17 @@ export function renderConnection(props: ConnectionProps) {
           : t("common.na"),
       ),
     })}
-    ${props.lastError
-      ? renderSettingsRow({
-          title: renderSettingsStatus({
-            kind: "danger",
-            label: t("connection.snapshot.lastError"),
-          }),
-          description: props.lastError,
-        })
-      : ""}
+    ${
+      props.lastError
+        ? renderSettingsRow({
+            title: renderSettingsStatus({
+              kind: "danger",
+              label: t("connection.snapshot.lastError"),
+            }),
+            description: props.lastError,
+          })
+        : ""
+    }
   `;
 
   return renderSettingsPage([

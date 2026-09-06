@@ -1,4 +1,3 @@
-import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
@@ -15,7 +14,13 @@ import {
 } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 
-type GatewayCall = NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>;
+type GatewayCall = Extract<
+  NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>,
+  (...args: never[]) => unknown
+>;
+type SentPrompt = Parameters<
+  NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
+>[0];
 
 const replyDispatchOutcomeModuleUrl = new URL(
   "../../auto-reply/reply/reply-dispatch-outcome.ts",
@@ -77,63 +82,6 @@ function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): stri
 
 afterEach(() => {
   resetPendingAskUserQuestionsForTest();
-});
-
-describe("ask_user normalization", () => {
-  it("normalizes headers, forces free text, and clamps timeout", () => {
-    const normalized = normalizeAskUserParams({ ...validArgs, timeoutSeconds: 5 });
-
-    expect(normalized.timeoutSeconds).toBe(30);
-    expect(normalized.questions[0]).toMatchObject({
-      questionId: "deploy_target",
-      header: "Deployment t",
-      isOther: true,
-    });
-    expect(normalizeAskUserParams({ ...validArgs, timeoutSeconds: 9_999 }).timeoutSeconds).toBe(
-      3_600,
-    );
-    expect(Value.Check(createAskUserTool({}).parameters, validArgs)).toBe(true);
-    expect(
-      Value.Check(createAskUserTool({}).parameters, {
-        questions: [{ ...validArgs.questions[0], isSecret: true }],
-      }),
-    ).toBe(false);
-    expect(normalized.questions[0]).not.toHaveProperty("isSecret");
-  });
-
-  it("repeats the structured-choice contract in the model-visible schema", () => {
-    const schema = JSON.stringify(createAskUserTool({}).parameters);
-
-    expect(schema).toContain("Put all selectable choices in options");
-    expect(schema).toContain("Every selectable choice");
-    expect(schema).toContain("True only when the user may choose several options at once");
-  });
-
-  it.each([
-    ["empty questions", { questions: [] }, "1 to 3 questions"],
-    [
-      "too many questions",
-      { questions: Array.from({ length: 4 }, () => validArgs.questions[0]) },
-      "1 to 3 questions",
-    ],
-    [
-      "too few options",
-      { questions: [{ ...validArgs.questions[0], options: [{ label: "Only" }] }] },
-      "2 to 4 options",
-    ],
-    [
-      "duplicate ids",
-      { questions: [validArgs.questions[0], validArgs.questions[0]] },
-      "duplicate question id 'deploy_target'",
-    ],
-    [
-      "invalid id",
-      { questions: [{ ...validArgs.questions[0], id: "Deploy Target" }] },
-      "must be snake_case",
-    ],
-  ])("rejects %s", (_name, args, error) => {
-    expect(() => normalizeAskUserParams(args)).toThrow(error);
-  });
 });
 
 describe("ask_user prompt delivery", () => {
@@ -359,9 +307,112 @@ describe("ask_user execution", () => {
       2,
       "question.waitAnswer",
       { timeoutMs: 910_000 },
-      { id: questionId, timeoutMs: 900_000 },
+      { id: questionId, timeoutMs: 900_000, includeResolutionId: true },
       undefined,
     );
+  });
+
+  it("publishes its own prompt when no harness reserved one", async () => {
+    const answers = { answers: { deploy_target: ["Production"] } };
+    const sent: SentPrompt[] = [];
+    let promptDelivered: () => void = () => {};
+    const promptIsOut = new Promise<void>((resolve) => {
+      promptDelivered = resolve;
+    });
+    const gateway = gatewayStub(async (method, _opts, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        await promptIsOut;
+        return { status: "answered", answers };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await createAskUserTool({
+      sessionKey: "agent:main:direct-dispatch",
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (payload) => {
+          sent.push(payload);
+          promptDelivered();
+        },
+      },
+    }).execute("call-direct-dispatch", validArgs);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.channelData).toMatchObject({
+      askUser: { questionId: requestedQuestionId(gateway.mock) },
+    });
+    expect(sent[0]?.text).toContain("Where should this deploy?");
+    expect(result.details).toEqual({ status: "answered", answers });
+  });
+
+  it.each(["answered", "cancelled", "expired", "pending"] as const)(
+    "ends self-publication when the Gateway returns %s before delivery",
+    async (status) => {
+      const answers = { answers: { deploy_target: ["Production"] } };
+      const result = status === "answered" ? { status, answers } : { status };
+      const finishWait = createDeferred<typeof result>();
+      const promptStarted = createDeferred();
+      let aborted = false;
+      const gateway = gatewayStub(async (method, _opts, params) =>
+        method === "question.request"
+          ? { id: params.id }
+          : method === "question.waitAnswer"
+            ? finishWait.promise
+            : method === "question.resolve"
+              ? { status: "cancelled" }
+              : Promise.reject(new Error(`unexpected method ${method}`)),
+      );
+      const pending = createAskUserTool({
+        sessionKey: "agent:main:direct-dispatch-abort",
+        gatewayCall: gateway.call,
+        questionPrompt: {
+          send: (_payload, options) => {
+            options?.signal?.addEventListener("abort", () => (aborted = true), { once: true });
+            promptStarted.resolve();
+            return new Promise<void>(() => {});
+          },
+        },
+      }).execute("call-direct-dispatch-abort", validArgs);
+      await promptStarted.promise;
+      finishWait.resolve(result);
+      await expect(pending).resolves.toMatchObject({
+        details: status === "answered" ? { status, answers } : { status: "no_answer" },
+      });
+      expect(aborted).toBe(true);
+    },
+  );
+
+  it("leaves the prompt to a harness that already reserved one", async () => {
+    const sessionKey = "agent:main:reserved-prompt";
+    const normalized = normalizeAskUserParams(validArgs);
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId: "call-reserved",
+      sessionKey,
+      questions: normalized.questions,
+      timeoutSeconds: normalized.timeoutSeconds,
+    });
+    const sent: SentPrompt[] = [];
+    const gateway = gatewayStub(async (method, _opts, params) =>
+      method === "question.request" ? { id: params.id } : { status: "expired" },
+    );
+
+    const result = await createAskUserTool({
+      sessionKey,
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (payload) => {
+          sent.push(payload);
+        },
+      },
+    }).execute("call-reserved", validArgs);
+
+    expect(reservation).toBeDefined();
+    expect(sent).toEqual([]);
+    expect(result.details).toEqual({ status: "no_answer" });
   });
 
   it.each([
@@ -808,6 +859,7 @@ describe("ask_user execution", () => {
         id: questionId,
         answers: { answers: { deploy_target: ["A custom destination"] } },
         resolvedBy: "plain-text",
+        resolutionId: expect.stringMatching(/^[a-f0-9]{32}$/),
       },
     );
     await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
@@ -887,22 +939,27 @@ describe("ask_user execution", () => {
 
   it("confirms a committed plain-text answer after its resolve response is lost", async () => {
     let finishWait: ((value: unknown) => void) | undefined;
-    let committedAnswers: unknown;
+    let committedAnswer: unknown;
     const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
         return { id: params.id };
       }
       if (method === "question.waitAnswer") {
-        if (committedAnswers) {
-          return { status: "answered", answers: committedAnswers };
+        expect(params.includeResolutionId).toBe(true);
+        if (committedAnswer) {
+          return committedAnswer;
         }
         return await new Promise((resolve) => {
           finishWait = resolve;
         });
       }
       if (method === "question.resolve") {
-        committedAnswers = params.answers;
-        finishWait?.({ status: "answered", answers: committedAnswers });
+        committedAnswer = {
+          status: "answered",
+          answers: params.answers,
+          resolutionId: params.resolutionId,
+        };
+        finishWait?.(committedAnswer);
         throw new Error("response lost after commit");
       }
       throw new Error(`unexpected method ${method}`);

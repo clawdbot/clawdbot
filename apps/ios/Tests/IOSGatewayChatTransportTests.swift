@@ -6,6 +6,102 @@ import Testing
 @testable import OpenClawChatUI
 
 struct IOSGatewayChatTransportTests {
+    private actor ProgressRequestRecorder {
+        var params: [Data] = []
+
+        func append(_ data: Data) {
+            self.params.append(data)
+        }
+
+        func snapshot() -> [Data] {
+            self.params
+        }
+    }
+
+    @Test(arguments: [false, true, nil] as [Bool?])
+    func `progress requests negotiate owner scope on the connected server`(supportsOwner: Bool?) async throws {
+        let recorder = ProgressRequestRecorder()
+        let socketSession = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let id = try #require(frame["id"] as? String)
+                var payload = "{}"
+                if frame["method"] as? String == "progressCard.get" {
+                    let params = try #require(frame["params"] as? [String: Any])
+                    try await recorder.append(JSONSerialization.data(withJSONObject: params))
+                    // A released server's closed schema rejects the extra owner field.
+                    #expect(supportsOwner == true || params["agentId"] == nil)
+                    let owner = params["agentId"] as? String ??
+                        OpenClawChatSessionKey.agentID(from: params["sessionKey"] as? String) ?? "main"
+                    payload = #"{"card":{"sessionKey":"agent:\#(owner):global","revision":1,"updatedAt":10,"markdown":"\#(owner)","steps":[]}}"#
+                }
+                socket
+                    .emitReceiveSuccess(.data(Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
+                            .utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                let hello = GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["progressCard.get"],
+                    capabilities: supportsOwner == true ? ["progress-card-agent-scope-v1"] : [])
+                guard supportsOwner == nil else { return .data(hello) }
+                var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
+                var payload = try #require(frame["payload"] as? [String: Any])
+                var features = try #require(payload["features"] as? [String: Any])
+                features.removeValue(forKey: "capabilities")
+                payload["features"] = features
+                frame["payload"] = payload
+                return try .data(JSONSerialization.data(withJSONObject: frame))
+            })
+        })
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://progress-transport-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: socketSession),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            let transport = IOSGatewayChatTransport(gateway: gateway, globalAgentId: "main")
+            let ordinary = try await transport.fetchProgressCard(
+                sessionKey: "agent:research:global",
+                agentID: "research")
+            #expect(ordinary?.markdown == "research")
+            if supportsOwner == true {
+                let global = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                #expect(global?.markdown == "research")
+            } else {
+                do {
+                    _ = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                    Issue.record("Unadvertised owner-scoped progress must not dispatch")
+                } catch let error as NSError {
+                    #expect(error.localizedDescription == OpenClawChatTransportUpgradeMessage.progressCardAgentScope)
+                }
+            }
+            let params = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: String])
+            }
+            #expect(params == (supportsOwner == true ? [
+                ["sessionKey": "agent:research:global"],
+                ["sessionKey": "global", "agentId": "research"],
+            ] : [["sessionKey": "agent:research:global"]]))
+            await gateway.disconnect()
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+    }
+
     private actor RequestRecorder {
         private var requests: [OpenClawChatGatewayRequest] = []
 
@@ -25,6 +121,58 @@ struct IOSGatewayChatTransportTests {
         func all() -> [OpenClawChatGatewayRequest] {
             self.requests
         }
+    }
+
+    @Test(arguments: [
+        ("gateway-a", "gateway-b"),
+        (" gateway-a ", "gateway-a"),
+        ("gateway-e\u{301}", "gateway-\u{E9}"),
+    ])
+    func `chat outbox route keeps the exact gateway owner`(owner: String, otherOwner: String) async throws {
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.deviceAuthGatewayID = owner
+        options.allowStoredDeviceAuth = false
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://chat-transport-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession()),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            let matching = IOSGatewayChatTransport(gateway: gateway, outboxGatewayID: owner)
+            let foreign = IOSGatewayChatTransport(gateway: gateway, outboxGatewayID: otherOwner)
+
+            #expect(await matching.currentSessionMutationRoute() != nil)
+            #expect(await foreign.currentSessionMutationRoute() == nil)
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test func `history compatibility rejects only the old unsupported input run field`() {
+        let unsupportedField = "invalid chat.history params: at root: unexpected property 'inputRunIds'"
+        let cases: [(String, String, String, Bool)] = [
+            ("chat.history", "INVALID_REQUEST", unsupportedField, true),
+            ("chat.send", "INVALID_REQUEST", unsupportedField, false),
+            ("chat.history", "FORBIDDEN", unsupportedField, false),
+            (
+                "chat.history",
+                "INVALID_REQUEST",
+                "invalid chat.history params: at root: unexpected property 'cursor'",
+                false),
+            ("chat.history", "INVALID_REQUEST", "invalid chat.history params: missing sessionKey", false),
+            ("chat.history", "INVALID_REQUEST", "\(unsupportedField); missing sessionKey", false),
+        ]
+        for (method, code, message, expected) in cases {
+            let error = GatewayResponseError(method: method, code: code, message: message, details: nil)
+            #expect(IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error) == expected)
+        }
+        #expect(!IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(URLError(.timedOut)))
     }
 
     @Test func `composer mutation compatibility preserves legacy controls only for unknown catalogs`() {
@@ -167,7 +315,7 @@ struct IOSGatewayChatTransportTests {
               "type":"hello-ok",
               "protocol":4,
               "server":{"version":"test","connId":"test"},
-              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-unread-ack-contract"]},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-scoped-chat-metadata","session-unread-ack-contract"]},
               "snapshot":{
                 "presence":[],
                 "health":{},
@@ -180,6 +328,7 @@ struct IOSGatewayChatTransportTests {
             """#.utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
+        #expect(hello.supportsServerCapability(.sessionScopedChatMetadata))
         #expect(hello.supportsServerCapability(.sessionUnreadAckContract))
         #expect(!hello.supportsServerCapability(.sessionSettingsContract))
         #expect(!hello.supportsServerCapability(.sessionSettingsCAS))
@@ -214,7 +363,9 @@ struct IOSGatewayChatTransportTests {
         #expect(requests.map(\.method) == Array(
             repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
             count: 3).flatMap(\.self))
-        #expect(requests.map(\.timeoutMs) == Array(repeating: 15000, count: 9))
+        #expect(requests.map(\.timeoutMs) == Array(
+            repeating: [15000, 600_000, 15000],
+            count: 3).flatMap(\.self))
 
         for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
             (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),

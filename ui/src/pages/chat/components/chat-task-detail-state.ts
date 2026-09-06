@@ -2,10 +2,11 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { CHAT_HISTORY_REQUEST_LIMIT } from "../chat-history-request.ts";
 import type { ChatHistoryResult } from "../chat-history-snapshot.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
+// The task preview has no back-scroll pagination; retain its wider transcript window.
+const TASK_TRANSCRIPT_REQUEST_LIMIT = 800;
 
 type TaskTranscriptLoad =
   | { status: "loading" }
@@ -90,7 +91,7 @@ function scheduleTranscriptLoad(host: TaskDetailHost, state: TaskDetailState) {
     try {
       const result = await client.request<ChatHistoryResult>("chat.history", {
         sessionKey: state.sessionKey,
-        limit: CHAT_HISTORY_REQUEST_LIMIT,
+        limit: TASK_TRANSCRIPT_REQUEST_LIMIT,
       });
       load = { status: "loaded", messages: visibleChatHistoryMessages(result.messages) };
     } catch {

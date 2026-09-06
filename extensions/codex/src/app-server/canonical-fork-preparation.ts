@@ -131,6 +131,7 @@ export async function prepareCanonicalCodexFork(params: {
   });
   const bundleMcp = await loadCodexBundleMcpThreadConfig({
     workspaceDir,
+    agentId: created.agentId,
     cfg: config,
     toolOverrides,
     preparationOnly: true,

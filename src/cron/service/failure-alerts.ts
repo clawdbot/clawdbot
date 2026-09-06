@@ -9,6 +9,7 @@ import type { FailoverReason } from "../../agents/failover/signal.js";
 import { buildCodexLoginRecovery } from "../../auto-reply/codex-login-recovery.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
@@ -19,6 +20,8 @@ import type {
   CronJob,
   CronMessageChannel,
 } from "../types.js";
+import { locked } from "./locked.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { enqueueCronNotification } from "./wake.js";
 
@@ -192,6 +195,66 @@ export function resolveFailureAlert(
   };
 }
 
+type FailureAlertCycle = {
+  alertAtMs: number | undefined;
+  jobId: string;
+  lifecycleGeneration: number;
+  runAtMs: number | undefined;
+};
+
+const FAILURE_ALERT_ERROR_MAX_LENGTH = 1_000;
+type FailureAlertRecordResult = "recorded" | "stale" | "persistence-failed";
+
+/** Writes one settled transport fact while the exact alert cycle still owns the row. */
+async function recordFailureAlertOutcome(
+  state: CronServiceState,
+  cycle: FailureAlertCycle,
+  outcome: CronFailureNotificationDelivery,
+): Promise<FailureAlertRecordResult> {
+  let ownsCycle = false;
+  try {
+    return await locked(state, async () => {
+      if (state.stopped || state.lifecycleGeneration !== cycle.lifecycleGeneration) {
+        return "stale";
+      }
+      const committedJob = commitCronRuntimeRows({
+        state,
+        jobIds: [cycle.jobId],
+        operationLabel: "cron.failure-alert-outcome",
+        mutate: ({ jobs }) => {
+          const job = jobs.get(cycle.jobId);
+          if (
+            !job ||
+            job.state.lastRunAtMs !== cycle.runAtMs ||
+            job.state.lastFailureAlertAtMs !== cycle.alertAtMs ||
+            job.state.lastFailureNotificationDeliveryStatus !== "unknown"
+          ) {
+            return { value: undefined };
+          }
+          ownsCycle = true;
+          job.state.lastFailureNotificationDelivered = outcome.delivered;
+          job.state.lastFailureNotificationDeliveryStatus = outcome.status;
+          job.state.lastFailureNotificationDeliveryError = outcome.error
+            ? truncateUtf16Safe(formatErrorMessage(outcome.error), FAILURE_ALERT_ERROR_MAX_LENGTH)
+            : undefined;
+          return { upsertJobIds: [job.id], value: job };
+        },
+      });
+      if (committedJob) {
+        applyCronRuntimeRowsToState(state, [committedJob], [], { publish: false });
+        return "recorded";
+      }
+      return "stale";
+    });
+  } catch (err) {
+    state.deps.log.warn(
+      { jobId: cycle.jobId, err: formatErrorMessage(err) },
+      "cron: failed to record failure-alert outcome",
+    );
+    return ownsCycle ? "persistence-failed" : "stale";
+  }
+}
+
 function transportFailureAlert(
   state: CronServiceState,
   params: {
@@ -201,15 +264,14 @@ function transportFailureAlert(
     route: ResolvedFailureAlert;
   },
 ): void {
-  let pendingFallback = true;
-  const fallback = (reachedRecipient = false) => {
-    if (pendingFallback && !reachedRecipient) {
-      enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
-    }
-    pendingFallback = false;
-  };
+  const jobId = params.job.id;
+  const alertAtMs = params.job.state.lastFailureAlertAtMs;
+  const lifecycleGeneration = state.lifecycleGeneration;
   if (!state.deps.sendCronFailureAlert) {
-    fallback();
+    // No transport means no send whose outcome could be recorded: the alert
+    // goes straight to the in-app fallback queue and the intent stays
+    // "unknown", matching the pre-existing contract for transport-less setups.
+    enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
     return;
   }
   void state.deps
@@ -223,14 +285,22 @@ function transportFailureAlert(
       accountId: params.route.accountId,
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
-      onDeliveryAttempt: fallback,
+      onDeliverySettled: async (outcome) => {
+        const recordResult = await recordFailureAlertOutcome(
+          state,
+          { jobId, alertAtMs, runAtMs: params.runAtMs, lifecycleGeneration },
+          outcome,
+        );
+        if (recordResult !== "stale" && outcome.status === "not-delivered") {
+          enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
+        }
+      },
     })
     .catch((err: unknown) => {
       state.deps.log.warn(
         { jobId: params.job.id, err: String(err) },
         "cron: failure alert delivery failed",
       );
-      fallback();
     });
 }
 

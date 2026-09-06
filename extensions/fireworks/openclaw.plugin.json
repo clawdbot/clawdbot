@@ -30,6 +30,9 @@
     }
   ],
   "modelCatalog": {
+    "modelsDev": {
+      "fireworks": "fireworks-ai"
+    },
     "providers": {
       "fireworks": {
         "baseUrl": "https://api.fireworks.ai/inference/v1",

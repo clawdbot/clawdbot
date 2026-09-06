@@ -1,6 +1,7 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -93,7 +94,8 @@ function requireProvisionedEnvironment(
 
 export function createWorkerPlacementDispatchStartup(options: {
   placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
+  environments: WorkerDispatchEnvironmentService & Pick<WorkerEnvironmentService, "recordError">;
+  isShuttingDown?: () => boolean;
   failure: PlacementFailureActions;
   runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
   runActivationBarrier: WorkerActivationBarrier;
@@ -107,6 +109,35 @@ export function createWorkerPlacementDispatchStartup(options: {
   ) => void;
 }) {
   const { environments, failure, placements } = options;
+
+  const retainInterruptedProvisioning = (
+    owned: WorkerDispatchPlacement,
+    error: unknown,
+  ): WorkerDispatchPlacement | undefined => {
+    const current = placements.get(owned.sessionId);
+    if (
+      error instanceof WorkerPlacementAdmissionTargetError ||
+      error instanceof WorkerDispatchTargetChangedError ||
+      !options.isShuttingDown?.() ||
+      current?.state !== "provisioning" ||
+      current.state !== owned.state ||
+      current.generation !== owned.generation ||
+      current.environmentId !== owned.environmentId ||
+      current.sessionKey !== owned.sessionKey ||
+      current.agentId !== owned.agentId ||
+      current.executionMode !== owned.executionMode
+    ) {
+      return undefined;
+    }
+    const environment = current.environmentId ? environments.get(current.environmentId) : undefined;
+    if (!environment || !isPendingProvisioningEnvironment(environment, current.environmentId)) {
+      return undefined;
+    }
+    // No await between owner validation and recording: shutdown retains this exact operation,
+    // while explicit Stop's durable destroy intent must always win.
+    environments.recordError(environment, error);
+    return current;
+  };
 
   const validateDevicePlacement = async (request: WorkerPlacementDispatchRequest) => {
     if (!request.deviceId) {
@@ -330,6 +361,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   ): Promise<WorkerDispatchPlacement | undefined> => {
     const environmentId = placement.environmentId;
     let recoveryRunStarted = false;
+    let interruptedByShutdown = false;
     let result: WorkerDispatchPlacement | undefined;
     let recoveryOwnedPlacement: WorkerDispatchPlacement = placement;
     const report = (next: WorkerDispatchPlacement) => {
@@ -340,6 +372,12 @@ export function createWorkerPlacementDispatchStartup(options: {
     const handleRecoveryFailure = async (
       error: unknown,
     ): Promise<WorkerDispatchPlacement | undefined> => {
+      const retained = retainInterruptedProvisioning(recoveryOwnedPlacement, error);
+      if (retained) {
+        report(retained);
+        interruptedByShutdown = true;
+        throw error;
+      }
       const current = placements.get(placement.sessionId);
       if (
         !current ||
@@ -455,6 +493,9 @@ export function createWorkerPlacementDispatchStartup(options: {
           },
         });
       } catch (error) {
+        if (interruptedByShutdown) {
+          throw error;
+        }
         result = await handleRecoveryFailure(error);
       }
       return result;
@@ -464,12 +505,17 @@ export function createWorkerPlacementDispatchStartup(options: {
     } catch (error) {
       // A refused session owner still owes cleanup. Shutdown and queued cancellation
       // remain with their existing owners and must not destroy an adoptable allocation.
-      if (!(error instanceof WorkerPlacementAdmissionTargetError)) {
+      if (interruptedByShutdown || !(error instanceof WorkerPlacementAdmissionTargetError)) {
         throw error;
       }
       return await handleRecoveryFailure(error);
     }
   };
 
-  return { validateDevicePlacement, continueProvisionedDispatch, resumeProvisioning };
+  return {
+    validateDevicePlacement,
+    continueProvisionedDispatch,
+    retainInterruptedProvisioning,
+    resumeProvisioning,
+  };
 }

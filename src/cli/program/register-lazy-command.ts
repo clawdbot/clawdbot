@@ -8,6 +8,7 @@ type RegisterLazyCommandParams = {
   program: Command;
   name: string;
   description: string;
+  hidden?: boolean;
   options?: readonly {
     flags: string;
     description: string;
@@ -21,11 +22,12 @@ export function registerLazyCommand({
   program,
   name,
   description,
+  hidden,
   options,
   removeNames,
   register,
 }: RegisterLazyCommandParams): void {
-  const placeholder = program.command(name).description(description);
+  const placeholder = program.command(name, { hidden }).description(description);
   markCommanderLazyCommand(placeholder);
   for (const option of options ?? []) {
     placeholder.option(option.flags, option.description);

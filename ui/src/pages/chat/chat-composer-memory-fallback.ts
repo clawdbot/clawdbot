@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import {
   resolveUiConversationIdentity,
@@ -104,6 +104,7 @@ export function storeChatComposerMemoryFallback(
   scope: StoredChatOutboxScope,
   composer: {
     message: string;
+    mentions?: readonly HumanMention[];
     goalMode?: ChatGoalDraftMode | null;
     attachments: ChatAttachment[];
     draftRetry?: ChatComposerDraftRetry;
@@ -115,6 +116,9 @@ export function storeChatComposerMemoryFallback(
     [storedChatOutboxScopeKey(scope)]: {
       ...(!hasUiSessionDefaults(state) ? { awaitingDefaults: true as const } : {}),
       message: composer.message,
+      ...(composer.mentions?.length
+        ? { mentions: composer.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       ...(composer.goalMode ? { goalMode: composer.goalMode } : {}),
       attachments: [...composer.attachments],
       storageFailed: composer.draftRetry !== undefined,
@@ -138,7 +142,7 @@ function chatAttachmentsMatch(
 export function retainChatComposerMemoryFallback(
   state: ChatPageHost,
   scope: StoredChatOutboxScope,
-  composer: { message: string; attachments: ChatAttachment[] },
+  composer: { message: string; mentions?: readonly HumanMention[]; attachments: ChatAttachment[] },
 ): ChatComposerMemoryFallbackOwnership | undefined {
   const { fallback: existing, scopeKey } = resolveChatComposerMemoryFallback(
     state,
@@ -147,6 +151,7 @@ export function retainChatComposerMemoryFallback(
   );
   const existingMatches =
     existing?.message === composer.message &&
+    JSON.stringify(existing.mentions ?? []) === JSON.stringify(composer.mentions ?? []) &&
     chatAttachmentsMatch(existing.attachments, composer.attachments);
   if (existing && existingMatches) {
     return { sequence: existing.sequence };
@@ -157,6 +162,7 @@ export function retainChatComposerMemoryFallback(
       [scopeKey]: {
         ...existing,
         message: composer.message,
+        mentions: composer.mentions,
         attachments: [...composer.attachments],
       },
     };
@@ -174,11 +180,12 @@ export function retainChatComposerMemoryFallback(
 export function captureChatComposerMemoryFallbackOwnership(
   state: ChatPageHost,
   scope: StoredChatOutboxScope,
-  composer: { message: string; attachments: ChatAttachment[] },
+  composer: { message: string; mentions?: readonly HumanMention[]; attachments: ChatAttachment[] },
 ): ChatComposerMemoryFallbackOwnership | undefined {
   const { fallback: existing } = resolveChatComposerMemoryFallback(state, scope.sessionKey, scope);
   if (
     existing?.message !== composer.message ||
+    JSON.stringify(existing?.mentions ?? []) !== JSON.stringify(composer.mentions ?? []) ||
     !chatAttachmentsMatch(existing.attachments, composer.attachments)
   ) {
     return undefined;

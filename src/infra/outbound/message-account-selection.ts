@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { isConfiguredChannel } from "./channel-selection.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
@@ -113,14 +112,11 @@ export function validateExplicitMessageAccountSelection(params: {
   return accountId;
 }
 
-/** Selects configured, enabled, deliverable plugins without bootstrap or config mutation. */
+/** Checks configured and enabled state after channel availability is resolved. */
 export function isPotentialConfiguredMessageChannel(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
 }): params is { cfg: OpenClawConfig; plugin: ChannelPlugin & { id: ChannelId } } {
-  if (!isDeliverableMessageChannel(params.plugin.id)) {
-    return false;
-  }
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.plugin.id
   ];
@@ -162,8 +158,10 @@ export function resolveMessageBroadcastAccountPlan(params: {
     return undefined;
   }
 
-  const candidatePlugins = listRuntimeVisibleChannelPlugins().filter((plugin) =>
-    isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin }),
+  const candidatePlugins = listRuntimeVisibleChannelPlugins().filter(
+    (plugin) =>
+      Boolean(resolveOutboundChannelPlugin({ channel: plugin.id, cfg: params.cfg })) &&
+      isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin }),
   );
   const secretChannels = candidatePlugins.flatMap((plugin) => {
     try {

@@ -12,6 +12,7 @@ const {
   detectNodeFastScope,
   listChangedPaths,
   parseArgs,
+  shouldRunIosScreenshots,
   shouldRunNativeI18n,
   writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
@@ -255,6 +256,7 @@ describe("detectChangedScope", () => {
       "scripts/install-swift-tools.sh",
       "scripts/install-xcodegen.sh",
       "scripts/lint-swift.sh",
+      "scripts/prepare-apple-mermaid.mjs",
     ]) {
       expect(detectChangedScope([toolingPath])).toEqual({
         runNode: true,
@@ -268,6 +270,7 @@ describe("detectChangedScope", () => {
         runControlUiI18n: false,
         runUiTests: false,
       });
+      expect(shouldRunIosScreenshots([toolingPath])).toBe(true);
     }
   });
 
@@ -409,6 +412,8 @@ describe("detectChangedScope", () => {
     "scripts/notarize-mac-artifact.sh",
     "scripts/package-mac-app.sh",
     "scripts/package-mac-dist.sh",
+    "scripts/build-and-run-mac.sh",
+    "scripts/prepush-ci.sh",
     "scripts/stage-mac-node-worker.sh",
     "scripts/restart-mac.sh",
     "scripts/lib/mac-app-bundle.sh",
@@ -465,6 +470,7 @@ describe("detectChangedScope", () => {
     ["scripts/lib/format-generated-module.mts", true, false],
     ["test/scripts/format-generated-module.test.ts", true, false],
     [".github/workflows/openclaw-cross-os-release-checks-reusable.yml", true, false],
+    [".github/workflows/windows-testbox-probe.yml", true, false],
     ["scripts/github/run-openclaw-cross-os-release-checks.sh", true, false],
     ["scripts/openclaw-cross-os-release-checks.ts", true, false],
     ["scripts/lib/cross-os-release-checks/runtime.ts", true, false],

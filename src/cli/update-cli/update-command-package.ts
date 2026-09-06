@@ -22,24 +22,24 @@ import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
 } from "../../infra/update-runner.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
-  createGlobalCommandRunner,
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
   resolveNodeRunner,
   runUpdateStep,
 } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import { resolvePostInstallDoctorEnv } from "./update-command-service-env.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
 
-export async function runPackageInstallUpdate(params: {
+export type PackageInstallUpdateParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
@@ -56,9 +56,12 @@ export async function runPackageInstallUpdate(params: {
   nodeRunner?: string;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
-}): Promise<UpdateRunResult> {
+};
+
+export async function runPackageInstallUpdate(
+  params: PackageInstallUpdateParams,
+): Promise<UpdateRunResult> {
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
-  const runCommand = createGlobalCommandRunner();
   let installTarget = params.installTarget;
   if (!installTarget) {
     const manager = await resolveGlobalManager({
@@ -68,7 +71,7 @@ export async function runPackageInstallUpdate(params: {
     });
     installTarget = await resolveGlobalInstallTarget({
       manager,
-      runCommand,
+      runCommand: runCommandWithTimeout,
       timeoutMs: params.timeoutMs,
       pkgRoot: params.root,
       honorPackageRoot: params.honorPackageRoot === true,
@@ -105,7 +108,7 @@ export async function runPackageInstallUpdate(params: {
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    runCommand,
+    runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>
@@ -118,12 +121,20 @@ export async function runPackageInstallUpdate(params: {
       if (!entryPath) {
         return null;
       }
-      await createUpdateConfigSnapshot();
+      const doctorEnv = resolveUpdateTargetEnv({
+        serviceEnv: params.managedServiceEnv,
+        invocationCwd: params.invocationCwd,
+      });
+      // Backup and Doctor must select the same installation before Doctor can rewrite it.
+      await createUpdateConfigSnapshot(doctorEnv);
       const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
       const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+      // The candidate is live only behind the staged npm rollback boundary. Keep
+      // native service changes external until this verification passes and the
+      // outer update finalizer owns the successful refresh/restart.
       const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
         targetVersion: candidateHostVersion,
-        allowGatewayServiceRepair: params.allowGatewayServiceRepair,
+        allowGatewayServiceRepair: false,
       });
       const doctorArgv = [
         params.nodeRunner ?? resolveNodeRunner(),
@@ -144,13 +155,10 @@ export async function runPackageInstallUpdate(params: {
         argv: doctorArgv,
         cwd: verifiedPackageRoot,
         env: {
-          ...resolvePostInstallDoctorEnv({
-            serviceEnv: params.managedServiceEnv,
-            invocationCwd: params.invocationCwd,
-          }),
+          ...doctorEnv,
           ...buildUpdateDoctorEnv({
-            allowGatewayServiceRepair: params.allowGatewayServiceRepair,
-            allowGatewayActivation: params.allowGatewayActivation,
+            allowGatewayServiceRepair: false,
+            allowGatewayActivation: false,
             deferConfiguredPluginInstallRepair: true,
             serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
             compatibilityHostVersion: candidateHostVersion,
@@ -182,7 +190,7 @@ export async function runPackageInstallUpdate(params: {
     root: packageUpdate.verifiedPackageRoot ?? params.root,
     reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
-    after: { version: packageUpdate.afterVersion ?? beforeVersion },
+    after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,
     recovery: packageUpdate.recovery,
     durationMs: Date.now() - params.startedAt,

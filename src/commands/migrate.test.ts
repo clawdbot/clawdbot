@@ -671,6 +671,46 @@ describe("migrateApplyCommand", () => {
     expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { label: "skills", command: migrateDefaultCommand, acceptSkills: false },
+    { label: "plugins after skills (default)", command: migrateDefaultCommand, acceptSkills: true },
+    { label: "plugins after skills (apply)", command: migrateApplyCommand, acceptSkills: true },
+  ])(
+    "stops before confirmation and apply when cancelling $label",
+    async ({ command, acceptSkills }) => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+      const skillPlan = codexSkillPlan();
+      const items = [...skillPlan.items, ...codexPluginPlan().items];
+      const planned = codexSkillPlan({
+        items,
+        summary: { ...skillPlan.summary, total: items.length, planned: items.length },
+      });
+      const original = structuredClone(planned);
+      mocks.provider.plan.mockResolvedValue(planned);
+      if (acceptSkills) {
+        mocks.multiselect.mockResolvedValueOnce(["skill:alpha"]);
+      }
+      mocks.multiselect.mockResolvedValueOnce(mocks.cancelSymbol);
+
+      const result = await command(runtime, { provider: "codex" });
+
+      expect(result).toBe(planned);
+      expect(planned).toStrictEqual(original);
+      expect(mocks.clackCancel).toHaveBeenCalledWith("Migration cancelled.");
+      expect(runtime.log).toHaveBeenCalledWith("Migration cancelled.");
+      expect(mocks.multiselect).toHaveBeenCalledTimes(acceptSkills ? 2 : 1);
+      expect(String(multiselectPrompt().message)).toContain("Select Codex skills");
+      if (acceptSkills) {
+        expect(String(multiselectPrompt(1).message)).toContain("Select native Codex plugins");
+        expect(runtime.log).toHaveBeenCalledWith("Selected 1 of 2 Codex skills for migration.");
+      }
+      expect(mocks.clackConfirm).not.toHaveBeenCalled();
+      expect(mocks.promptYesNo).not.toHaveBeenCalled();
+      expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+      expect(mocks.provider.apply).not.toHaveBeenCalled();
+    },
+  );
+
   it("prompts for Codex skills before interactive default apply", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,

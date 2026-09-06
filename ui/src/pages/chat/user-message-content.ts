@@ -1,6 +1,7 @@
 // Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { hasVideoMediaFileExtension } from "../../lib/media-file-extension.ts";
 import {
@@ -70,6 +71,7 @@ function buildUserChatMessageContentBlocks(
 
 type LocalUserMessageInput = {
   attachments?: readonly ChatAttachment[];
+  mentions?: readonly HumanMention[];
   createdAt: number;
   pending?: {
     error?: string;
@@ -94,7 +96,7 @@ type LocalUserMessage = {
 /** Bind initial display bytes to their explicit submission, before releasing the draft. */
 export function buildInitialChatSubmission(
   sessionKey: string,
-  input: Pick<LocalUserMessageInput, "text" | "attachments" | "createdAt" | "sender">,
+  input: Pick<LocalUserMessageInput, "text" | "mentions" | "attachments" | "createdAt" | "sender">,
   owner: object,
   runId?: string,
 ) {
@@ -116,6 +118,7 @@ export function buildLocalUserMessage(
   if (!content?.length) {
     return null;
   }
+  const { mentions } = trimHumanMentions(input.text, input.mentions);
   return {
     role: "user",
     content,
@@ -131,6 +134,7 @@ export function buildLocalUserMessage(
           }
         : {}),
       ...(input.replyToId ? { replyToId: input.replyToId } : {}),
+      ...(mentions ? { humanMentions: mentions } : {}),
       ...(input.sender?.id ? { senderId: input.sender.id } : {}),
       ...(input.sender?.identity ? { senderIdentity: input.sender.identity } : {}),
       ...(input.sender?.name ? { senderName: input.sender.name } : {}),

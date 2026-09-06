@@ -10,6 +10,12 @@ extension OnboardingAISetupModel {
     /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
+    enum SetupIntent {
+        case inspectOnly
+        case resumePending
+        case startSetup
+    }
+
     enum ActivationRequest {
         case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
         case manual(key: String, provider: ManualProvider)
@@ -146,11 +152,14 @@ extension OnboardingAISetupModel {
     }
 
     static func activationWizardResult(
+        done: Bool,
         status: String?,
         error: String?,
-        modelActivation: [String: AnyCodable]?) -> Result<ActivateResult, Error>
+        preparedModelRef: String?,
+        modelActivation: [String: AnyCodable]?,
+        activationRejection: [String: AnyCodable]?) -> Result<ActivateResult, Error>
     {
-        if status == "done",
+        if status == "done", activationRejection == nil,
            let modelRef = modelActivation?["modelRef"]?.value as? String,
            !modelRef.isEmpty
         {
@@ -161,11 +170,22 @@ extension OnboardingAISetupModel {
                 error: nil,
                 gatewayRestartRequired: modelActivation?["gatewayRestartRequired"]?.value as? Bool))
         }
-        if status == "cancelled" {
+        if status == "cancelled", modelActivation == nil, activationRejection == nil {
             return .failure(OnboardingAISetupError.activationCancelled)
         }
-        return .failure(OnboardingAISetupError
-            .activationFailed(error ?? "The Gateway did not return a verified model."))
+        // A settled runner can have failed after promotion. Only its explicit,
+        // complete pre-promotion rejection permits another setup mutation.
+        if done, status == "error", modelActivation == nil, preparedModelRef == nil,
+           let rejection = activationRejection, rejection.count == 2,
+           rejection["disposition"]?.value as? String == "rejected-before-promotion",
+           let failureStatus = rejection["status"]?.value as? String,
+           ["auth", "rate_limit", "billing", "timeout", "format", "unavailable", "unknown"].contains(failureStatus)
+        {
+            return .failure(OnboardingAISetupError.activationRejected(status: failureStatus, error: error))
+        }
+        return .failure(status == "error"
+            ? OnboardingAISetupError.activationFailed(error ?? "AI setup failed.")
+            : OnboardingAISetupError.activationOutcomeUnavailable)
     }
 
     struct Candidate: Identifiable, Equatable {
@@ -218,7 +238,7 @@ extension OnboardingAISetupModel {
 
     enum PendingVerificationOutcome: Equatable {
         case connected
-        case freshSetupAllowed
+        case freshSetupAllowed(AttemptContext)
         case notConnected
         case superseded
     }
@@ -233,17 +253,6 @@ extension OnboardingAISetupModel {
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
-        static let activation = AuthOption(
-            id: "activation",
-            brandId: nil,
-            label: "Connect your AI",
-            hint: nil,
-            groupLabel: nil,
-            icon: nil,
-            website: nil,
-            kind: "activation",
-            featured: false)
-
         let id: String
         let brandId: String?
         let label: String
@@ -272,6 +281,36 @@ extension OnboardingAISetupModel {
         let brandId: String?
         let icon: String?
         let website: String?
+    }
+
+    /// Unconfirmed requests still carry cancellation intent when admission replies late.
+    enum ProviderAuthCancellation: Equatable {
+        case requesting
+        case unconfirmed
+    }
+
+    func activationAuthOption(for request: ActivationRequest) -> AuthOption {
+        let id: String
+        let presentation: CandidatePresentation?
+        switch request {
+        case let .candidate(kind, _, _, _):
+            id = kind
+            presentation = self.candidatePresentation[kind]
+        case let .manual(_, provider):
+            id = provider.id
+            presentation = CandidatePresentation(
+                brandId: provider.brandId, icon: provider.icon, website: provider.website)
+        }
+        return AuthOption(
+            id: id,
+            brandId: presentation?.brandId,
+            label: request.label,
+            hint: nil,
+            groupLabel: nil,
+            icon: presentation?.icon,
+            website: presentation?.website,
+            kind: "activation",
+            featured: false)
     }
 
     enum ProviderWizardKind: Equatable {
@@ -333,7 +372,7 @@ extension OnboardingAISetupModel {
     }
 
     func continueProviderAuth() {
-        guard let step = authStep else { return }
+        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return }
         let value: AnyCodable? = switch wizardStepType(step) {
         case "text": AnyCodable(self.authText)
         case "select": self.selectedAuthWizardOption?.value
@@ -459,16 +498,23 @@ extension OnboardingAISetupModel {
             : 150_000
     }
 
-    static func activationFailure(_ error: Error) -> Failure {
-        if case OnboardingAISetupError.activationCancelled = error {
-            return Failure(summary: error.localizedDescription, detail: nil)
+    static func activationFailure(_ error: Error, label: String) -> Failure {
+        switch error {
+        case OnboardingAISetupError.activationCancelled:
+            Failure(summary: error.localizedDescription, detail: nil)
+        case let OnboardingAISetupError.activationRejected(status, detail):
+            self.failure(label: label, status: status, error: detail)
+        default:
+            self.transportFailure(error.localizedDescription)
         }
-        return self.transportFailure(error.localizedDescription)
     }
 
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
-        if case OnboardingAISetupError.activationCancelled = error {
+        switch error {
+        case OnboardingAISetupError.activationCancelled, OnboardingAISetupError.activationRejected:
             return true
+        default:
+            break
         }
         if let response = error as? GatewayResponseError {
             let code = response.code.uppercased()
@@ -591,6 +637,7 @@ enum OnboardingAISetupError: LocalizedError {
     case activationCancelled
     case activationOutcomeUnavailable
     case activationFailed(String)
+    case activationRejected(status: String, error: String?)
 
     var errorDescription: String? {
         switch self {
@@ -600,6 +647,8 @@ enum OnboardingAISetupError: LocalizedError {
             "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."
         case let .activationFailed(message):
             message
+        case let .activationRejected(_, error):
+            error ?? "AI setup failed."
         case .providerCatalogUnavailable:
             "The Gateway is running an older OpenClaw version that doesn’t provide the " +
                 "supported provider list. Update OpenClaw on the gateway, then try again."

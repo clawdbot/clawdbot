@@ -25,7 +25,6 @@ import {
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import {
-  clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -100,7 +99,11 @@ async function createStartupFailureFixture(
       "    }",
       '    const result = message.method === "initialize"',
       '      ? { userAgent: `openclaw/${mode === "unsupported" ? "0.1.0" : "0.149.0"} (macOS; test)` }',
-      `      : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
+      '      : message.method === "config/read"',
+      "        ? { config: {}, origins: {}, layers: [] }",
+      '        : message.method === "configRequirements/read"',
+      "          ? { requirements: null }",
+      `          : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
       "    process.stdout.write(`${JSON.stringify({ id: message.id, result })}\\n`);",
       "  });",
       "}",
@@ -192,7 +195,7 @@ describe("Codex app-server startup retry", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    clearSharedCodexAppServerClient();
+    await clearSharedCodexAppServerClientAndWait();
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
   });
@@ -571,7 +574,7 @@ describe("Codex app-server startup retry", () => {
     }
   });
 
-  it("preserves the shared client and binding after resume overload exhausts", async () => {
+  it("preserves the shared client and binding on an overloaded resume with a sibling lease", async () => {
     const fixture = await createStartupFailureFixture("overload");
     const sibling = await startFixtureAttempt(fixture);
     sibling.turnRoute.release();
@@ -582,10 +585,11 @@ describe("Codex app-server startup retry", () => {
       sessionKey: "agent:agent-1:session-1",
     };
     try {
-      const binding = await testCodexAppServerBindingStore.read(identity);
+      const binding = testCodexAppServerBindingStore.read(identity);
       expect(binding?.threadId).toBe("thread-recovered");
       const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
 
+      // An unrelated lease must not hide a native refusal or lose its healthy client.
       await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({
         name: "CodexAppServerRpcError",
         code: -32_001,
@@ -593,9 +597,9 @@ describe("Codex app-server startup retry", () => {
       });
       const requests = await fs.readFile(fixture.requestLogPath, "utf8");
       expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
-        new Set(["thread/resume"]),
+        new Set(["config/read", "configRequirements/read", "thread/read", "thread/resume"]),
       );
-      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(binding);
+      expect(testCodexAppServerBindingStore.read(identity)).toEqual(binding);
 
       await expect(
         sibling.client.request("thread/read", {

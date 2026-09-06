@@ -536,7 +536,7 @@ describe("discoverSkillCandidates", () => {
     expect(names).not.toContain("too-deep");
   });
 
-  it("does not fall through to child skills when an immediate SKILL.md is invalid", async () => {
+  it("does not inspect child skills when an immediate SKILL.md is invalid", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const parentDir = path.join(workspaceDir, "skills", "group", "parent");
     await fs.mkdir(parentDir, { recursive: true });
@@ -546,9 +546,20 @@ describe("discoverSkillCandidates", () => {
       name: "too-deep",
       description: "Should not be discovered through invalid parent fallback",
     });
+    const nestedFile = path.join(parentDir, "malformed-child", "SKILL.md");
+    await fs.mkdir(path.dirname(nestedFile));
+    await fs.writeFile(
+      nestedFile,
+      "---\nname: [malformed\ndescription: Ignored child\n---\n",
+      "utf-8",
+    );
+    const warn = captureWarningLogger();
 
     const names = loadTestWorkspaceSkills(workspaceDir).map((entry) => entry.skill.name);
     expect(names).not.toContain("too-deep");
+    const warningText = warn.mock.calls.flat().map(String).join("\n");
+    expect(warningText).toContain(path.join(parentDir, "SKILL.md"));
+    expect(warningText).not.toContain(nestedFile);
   });
 
   it("treats an immediate SKILL.md as terminal and does not descend", async () => {

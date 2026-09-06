@@ -2,34 +2,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateNarrationWithUtilityModel } from "./progress-narrator-model.js";
 
 const complete = vi.hoisted(() => vi.fn());
-vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  completeWithPreparedSimpleCompletionModel: complete,
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+vi.mock("../../agents/isolated-completion.js", () => ({
+  runIsolatedCompletion: complete,
+}));
+vi.mock("../../agents/utility-completion.js", () => ({
+  prepareUtilityCompletionForAgent: vi.fn(),
 }));
 
 const prepared: Parameters<typeof generateNarrationWithUtilityModel>[0]["prepared"] = {
-  selection: { provider: "openai", modelId: "gpt-test", agentDir: "/unused-narration-test" },
-  model: {
-    provider: "openai",
-    id: "gpt-test",
-    name: "Narration test",
-    api: "openai-responses",
-    baseUrl: "https://example.invalid/v1",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 4096,
-  },
-  auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
+  config: {},
+  provider: "openai",
+  model: "gpt-test",
+  authProfileId: undefined,
+  outputTextPolicy: "strict-visible",
+  agentId: "main",
+  agentDir: "/unused-narration-test",
 };
 
 beforeEach(() => {
   vi.useFakeTimers();
   complete.mockReset();
   complete.mockResolvedValue({
-    stopReason: "stop",
-    content: [{ type: "text", text: "Working on the request." }],
+    text: "Working on the request.",
+    provider: "openai",
+    model: "gpt-test",
+    owner: { kind: "harness", id: "openclaw" },
   });
 });
 

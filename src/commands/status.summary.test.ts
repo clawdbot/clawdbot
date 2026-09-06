@@ -55,25 +55,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   getInspectableTaskRegistrySummary: vi.fn(
     (_tasks?: TaskRecord[]) => statusSummaryMocks.taskRegistrySummary,
   ),
-  taskAuditFindings: [
-    {
-      severity: "warn",
-      code: "delivery_failed",
-      detail: "terminal update delivery failed",
-      task: {
-        taskId: "task-delivery",
-        runtime: "subagent",
-        ownerKey: "agent:main:main",
-        requesterSessionKey: "agent:main:main",
-        scopeKind: "session",
-        task: "Deliver update",
-        status: "failed",
-        deliveryStatus: "failed",
-        notifyPolicy: "done_only",
-        createdAt: 1,
-      },
-    },
-  ] as TaskAuditFinding[],
+  taskAuditFindings: [] as TaskAuditFinding[],
   getInspectableTaskAuditFindings: vi.fn(
     (_tasks?: TaskRecord[]) => statusSummaryMocks.taskAuditFindings,
   ),
@@ -236,6 +218,7 @@ vi.mock("../status/link-channel.js", () => ({
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveSessionStorePathCore } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
+const { peekSystemEvents } = await import("../infra/system-events.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
 let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
@@ -287,6 +270,7 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
     statusSummaryMocks.loadExactSessionEntryReadOnly.mockImplementation(({ sessionKey }) => {
       const entry = statusSummaryMocks
         .listSessionEntriesCore()
@@ -304,6 +288,8 @@ describe("getStatusSummary", () => {
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }],
@@ -318,6 +304,42 @@ describe("getStatusSummary", () => {
     setSessions: (store) =>
       statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
+
+  it.each(["per-sender", "global"] as const)(
+    "summarizes every configured agent's pending events without an ambient owner (%s)",
+    async (scope) => {
+      const agents = [{ id: "research" }, { id: "ops" }];
+      vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+        defaultId: "research",
+        mainKey: "inbox",
+        scope,
+        agents,
+        ownership: "explicit",
+        selectionRequired: true,
+      });
+      vi.mocked(peekSystemEvents).mockImplementation((key) => [`pending: ${key}`]);
+
+      const summary = await getStatusSummary({
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { research: {}, ops: {} },
+            defaults: { heartbeat: { agentId: "ops", every: "0m" } },
+          },
+          session: { scope, mainKey: "inbox" },
+        },
+        includeSensitive: false,
+        includeChannelSummary: false,
+      });
+
+      expect(summary.sessions.byAgent.map((agent) => agent.agentId)).toEqual(["research", "ops"]);
+      expect(summary.queuedSystemEvents).toEqual(
+        scope === "global"
+          ? ["pending: global"]
+          : ["pending: agent:research:inbox", "pending: agent:ops:inbox"],
+      );
+    },
+  );
 
   it.each([true, false])(
     "keeps public summary fields with includeSensitive=%s",
@@ -801,6 +823,8 @@ describe("getStatusSummary", () => {
   it("passes agent scope when listing configured agent session stores", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],

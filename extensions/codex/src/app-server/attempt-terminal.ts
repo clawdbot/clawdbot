@@ -12,4 +12,7 @@ export type AttemptFailureSource = Extract<
   EmbeddedRunAttemptResult["terminal"],
   { kind: "failed" }
 >["source"];
+export type AttemptSettlementWarning = NonNullable<
+  Extract<EmbeddedRunAttemptResult["terminal"], { kind: "ok" }>["settlementWarning"]
+>;
 export const attemptTerminal = agentHarnessAttemptTerminal;

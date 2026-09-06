@@ -55,3 +55,68 @@ export function mergeProcessEnv(
 
   return merged;
 }
+
+// Native diagnostics need executable/account/temp routing, not the application's environment.
+// Windows names are uppercase here; selection preserves the winning source spelling below.
+const DIAGNOSTIC_PROCESS_ENV_KEYS = new Set([
+  "PATH",
+  "Path",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LANGUAGE",
+  "TZ",
+  "LC_ALL",
+  "LC_COLLATE",
+  "LC_CTYPE",
+  "LC_MESSAGES",
+  "LC_MONETARY",
+  "LC_NUMERIC",
+  "LC_TIME",
+  "LC_ADDRESS",
+  "LC_IDENTIFICATION",
+  "LC_MEASUREMENT",
+  "LC_NAME",
+  "LC_PAPER",
+  "LC_TELEPHONE",
+  // Windows bootstrap, DLL resolution, and native profile directories.
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "SYSTEMDRIVE",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "USERNAME",
+  "USERDOMAIN",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "ALLUSERSPROFILE",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "PROGRAMW6432",
+  "COMMONPROGRAMFILES",
+  "COMMONPROGRAMFILES(X86)",
+  "COMMONPROGRAMW6432",
+  // PowerShell reads this caller-selected module cache location during startup.
+  "PSMODULEANALYSISCACHEPATH",
+]);
+
+/** Project only native port/process diagnostic context; never mutate the parent environment. */
+export function resolveDiagnosticProcessEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  // Merge first so an undefined lexically-first Windows duplicate still masks later spellings.
+  return Object.fromEntries(
+    Object.entries(mergeProcessEnv([env], platform)).filter(([key]) =>
+      DIAGNOSTIC_PROCESS_ENV_KEYS.has(platform === "win32" ? key.toUpperCase() : key),
+    ),
+  );
+}

@@ -501,6 +501,31 @@ describe("Gateway GitHub publication boundaries", () => {
     });
   });
 
+  it("reports missing managed credentials as an identity failure after admission", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const coordinator = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({ database }),
+    });
+    coordinator.read("create-schema");
+    const requestId = "publication-missing-credential";
+    seedLocalPublication(database, { requestId, status: "requested" });
+    const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
+    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+    const { prepareGitHubPublicationIdentity } = await vi.importActual<
+      typeof import("../agents/github-tool-identity.js")
+    >("../agents/github-tool-identity.js");
+    mocks.prepareIdentity.mockImplementation(prepareGitHubPublicationIdentity);
+
+    await coordinator.resumeSessionRequests();
+
+    expect(coordinator.read(requestId)).toMatchObject({
+      status: "failed",
+      code: "identity_unavailable",
+      nextAction: expect.stringContaining("Reconnect"),
+    });
+    expect(commands.some((argv) => argv.includes("push") || argv.includes("POST"))).toBe(false);
+  });
+
   it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const first = createTestGitHubPublicationCoordinator({
@@ -522,12 +547,13 @@ describe("Gateway GitHub publication boundaries", () => {
     await resumed.resumeSessionRequests();
 
     expect(resumed.read(requestId)).toEqual({
+      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
       requestId,
       status: "failed",
       code: "workspace_changed",
       message: "GitHub publication failed.",
       nextAction:
-        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
+        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
     });
     expect(commands).toEqual([]);
   });
@@ -611,6 +637,7 @@ describe("Gateway GitHub publication boundaries", () => {
     { label: "no live claim", claimRunId: undefined, expectedRunId: undefined },
     { label: "another active turn", claimRunId: "run-active", expectedRunId: undefined },
     { label: "a mismatched run identity", claimRunId: "run-active", expectedRunId: "run-other" },
+    { label: "its own active turn", claimRunId: "run-active", expectedRunId: "run-active" },
   ])("queues a cloud session publication with $label", async ({ claimRunId, expectedRunId }) => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
@@ -618,16 +645,16 @@ describe("Gateway GitHub publication boundaries", () => {
       environmentId: "environment-deferred-request",
       ownerEpoch: 2,
     });
-    if (claimRunId) {
-      placements.claimTurn({
-        sessionId: active.sessionId,
-        sessionKey: active.sessionKey,
-        agentId: active.agentId,
-        claimId: "claim-active",
-        runId: claimRunId,
-        owner: { kind: "worker", environmentId: "environment-deferred-request", ownerEpoch: 2 },
-      });
-    }
+    const claim = claimRunId
+      ? placements.claimTurn({
+          sessionId: active.sessionId,
+          sessionKey: active.sessionKey,
+          agentId: active.agentId,
+          claimId: "claim-active",
+          runId: claimRunId,
+          owner: { kind: "worker", environmentId: "environment-deferred-request", ownerEpoch: 2 },
+        })
+      : undefined;
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
     const result = await coordinator.requestForSession({
@@ -636,6 +663,7 @@ describe("Gateway GitHub publication boundaries", () => {
       idempotencyKey: "deferred-cloud-request",
       ...(expectedRunId ? { expectedRunId } : {}),
     });
+    const acceptedClaim = claim?.runId === expectedRunId ? claim : undefined;
 
     expect(result).toMatchObject({ status: "requested" });
     expect(
@@ -645,11 +673,11 @@ describe("Gateway GitHub publication boundaries", () => {
         )
         .get(result.requestId),
     ).toEqual({
-      claim_id: null,
-      run_id: null,
-      environment_id: null,
-      owner_epoch: null,
-      placement_generation: null,
+      claim_id: acceptedClaim?.claimId ?? null,
+      run_id: acceptedClaim?.runId ?? null,
+      environment_id: acceptedClaim?.owner.environmentId ?? null,
+      owner_epoch: acceptedClaim?.owner.ownerEpoch ?? null,
+      placement_generation: acceptedClaim?.placementGeneration ?? null,
       source_head_commit: null,
       source_index_tree: null,
       workspace_tree: null,

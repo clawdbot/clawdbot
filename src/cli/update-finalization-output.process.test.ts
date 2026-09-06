@@ -17,9 +17,19 @@ const doctorDiagnostics = [
   "Doctor console diagnostic",
   "Doctor complete.",
 ];
+const scenarios = [
+  "json",
+  "inherited-json",
+  "doctor-error",
+  "plugin-error",
+  "human",
+  "human-plugin-error",
+  "human-plugin-warning",
+];
 
 describe.each(["repair", "finalize"])("update %s process output", (command) => {
-  it.each(["json", "inherited-json", "doctor-error", "plugin-error", "human"])(
+  // Both spellings share the finalization action; one matrix covers its output modes.
+  it.each(command === "repair" ? scenarios : ["json"])(
     "%s preserves the output and exit contract without restarting",
     async (scenario) => {
       const root = tempDirs.make("openclaw-update-json-");
@@ -50,7 +60,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           logging: { file: path.join(root, "openclaw.log") },
         }),
       );
-      const json = scenario !== "human";
+      const json = !scenario.startsWith("human");
       const args = [
         "update",
         ...(scenario === "inherited-json" ? ["--json"] : []),
@@ -66,6 +76,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       const result = await runCliProcessChild({
         nodeArgs: ["--import", "tsx", fixture, scenario, ...args],
         env: {
+          ESBUILD_WORKER_THREADS: "0",
           PATH: path.dirname(process.execPath),
           HOME: root,
           USERPROFILE: root,
@@ -92,13 +103,43 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       for (const diagnostic of doctorDiagnostics) {
         expect(diagnostics, failure).toContain(diagnostic);
       }
+      expect(diagnostics.match(/Doctor console diagnostic/gu), failure).toHaveLength(1);
       expect(result.stderr, failure).toContain("Doctor stderr diagnostic");
+      const triageNotice = "Update failed. Entering triage...";
+      if (!scenario.endsWith("error")) {
+        expect(result.stdout + result.stderr, failure).not.toContain(triageNotice);
+        expect(result.stdout + result.stderr, failure).not.toContain("triage-fixture-prompt.md");
+      }
       if (!json) {
-        expect(result.stdout).toContain("Update finalization completed.");
+        const terminal =
+          scenario === "human-plugin-error"
+            ? "Update finalization failed."
+            : scenario === "human-plugin-warning"
+              ? "Update finalization completed with warnings."
+              : "Update finalization completed.";
+        if (scenario === "human-plugin-error") {
+          expect(result.stdout, failure).toContain(terminal);
+          const triageIndex = result.stdout.indexOf(triageNotice);
+          const promptIndex = result.stdout.indexOf("Debugging prompt:");
+          const guidanceIndex = result.stdout.indexOf("Ready-to-run agent handoffs:");
+          expect(triageIndex, failure).toBeGreaterThan(result.stdout.indexOf(terminal));
+          expect(promptIndex, failure).toBeGreaterThan(triageIndex);
+          expect(guidanceIndex, failure).toBeGreaterThan(promptIndex);
+          expect(result.stdout.trimEnd().endsWith("openclaw triage --run"), failure).toBe(true);
+        } else {
+          expect(result.stdout.trimEnd().endsWith(terminal), failure).toBe(true);
+        }
         return;
       }
       // Parse the whole pipe: accepting a suffix would hide Clack's direct stdout writes.
       const output = JSON.parse(result.stdout);
+      if (scenario.endsWith("error")) {
+        expect(result.stderr, failure).toContain(triageNotice);
+        expect(result.stderr, failure).toContain('"promptPath":');
+        expect(result.stderr, failure).toContain("triage-fixture-prompt.md");
+        expect(result.stderr, failure).not.toContain("Triage could not complete:");
+        expect(result.stdout, failure).not.toContain("triage-fixture-prompt.md");
+      }
       if (scenario === "doctor-error") {
         expect(output).toMatchObject({
           ok: false,

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { readFileWindowFully } from "../../infra/file-read.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { isPathInside } from "../../infra/path-guards.js";
 
 export type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
 type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
@@ -229,14 +230,8 @@ export function resolveWorkspacePath(
   if (!root) {
     return undefined;
   }
-  const resolved = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(root, filePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  return resolved;
+  const resolved = path.resolve(root, filePath);
+  return isPathInside(root, resolved) ? resolved : undefined;
 }
 
 export function workspaceStatKind(

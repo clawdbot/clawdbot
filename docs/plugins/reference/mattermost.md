@@ -1,5 +1,5 @@
 ---
-summary: "Adds the Mattermost channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw Mattermost channel plugin."
 read_when:
   - You are installing, configuring, or auditing the mattermost plugin
 title: "Mattermost plugin"
@@ -7,7 +7,7 @@ title: "Mattermost plugin"
 
 # Mattermost plugin
 
-Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
+OpenClaw Mattermost channel plugin.
 
 ## Distribution
 

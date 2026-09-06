@@ -1,7 +1,3 @@
-/**
- * Shared utilities for Google Generative AI and Google Vertex providers.
- */
-
 import {
   type Content,
   FinishReason,
@@ -13,6 +9,10 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
+/**
+ * Shared utilities for Google Generative AI and Google Vertex providers.
+ */
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -38,6 +38,7 @@ import type {
   StreamOptions,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -804,6 +805,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   };
 
   for await (const chunk of params.chunks) {
+    notifyLlmRequestActivity(params.signal);
     params.output.responseId ||= chunk.responseId;
     const responseModel = chunk.modelVersion?.trim();
     if (
@@ -926,7 +928,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
           }
           const delta = hasText ? text : "";
           if (currentBlock.type === "thinking") {
-            currentBlock.thinking += delta;
+            appendAssistantThinking(currentBlock, delta);
             currentBlock.thinkingSignature = retainThoughtSignature(
               currentBlock.thinkingSignature,
               part.thoughtSignature,

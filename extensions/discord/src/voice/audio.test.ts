@@ -107,7 +107,11 @@ describe("discord voice opus codec", () => {
 
       const onVerbose = vi.fn();
       const onWarn = vi.fn();
-      const decoded = await decode(Readable.from(packets), { onVerbose, onWarn });
+      const decoded = await decode(Readable.from(packets), {
+        maxBytes: 20 * 1024 * 1024,
+        onVerbose,
+        onWarn,
+      });
       expect(decoded.length).toBe(960 * 2 * 2);
       expect(onVerbose).toHaveBeenCalledWith("opus decoder: libopus-wasm");
       expect(onWarn).not.toHaveBeenCalled();
@@ -123,6 +127,7 @@ describe("discord voice opus codec", () => {
 
     expect(packets).toHaveLength(1);
     const decoded = await decodeOpusStream(Readable.from(packets), {
+      maxBytes: 20 * 1024 * 1024,
       onVerbose: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -142,6 +147,7 @@ describe("discord voice opus codec", () => {
       );
 
       const decoded = await decode(stream, {
+        maxBytes: 20 * 1024 * 1024,
         onError,
         onVerbose: vi.fn(),
         onWarn: vi.fn(),
@@ -151,6 +157,35 @@ describe("discord voice opus codec", () => {
       expect(decoded).toHaveLength(960 * 2 * 2);
     },
   );
+  it("rejects oversized decoded input without returning a truncated successful capture", async () => {
+    const stream = Readable.from([
+      Buffer.from([0xf8, 0xff, 0xfe]),
+      Buffer.from([0xf8, 0xff, 0xfe]),
+    ]);
+    await expect(
+      decodeOpusStream(stream, {
+        maxBytes: 3840,
+        onVerbose: vi.fn(),
+        onWarn: vi.fn(),
+      }),
+    ).rejects.toThrow("speak a shorter segment");
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("streams audio beyond a batch-sized budget without accumulating or truncating it", async () => {
+    let bytes = 0;
+    await decodeOpusStreamChunks(
+      Readable.from(Array.from({ length: 3 }, () => Buffer.from([0xf8, 0xff, 0xfe]))),
+      {
+        onChunk: (pcm) => {
+          bytes += pcm.length;
+        },
+        onVerbose: vi.fn(),
+        onWarn: vi.fn(),
+      },
+    );
+    expect(bytes).toBe(3 * 3840);
+  });
 });
 
 describe("createDiscordOpusPlaybackStream child stream errors", () => {
@@ -201,23 +236,16 @@ describe("createDiscordOpusPlaybackStream child stream errors", () => {
 
 describe("Discord voice WAV workspace ownership", () => {
   async function withVoiceWorkspace(
-    run: (params: { rootDir: string; timeoutSpy: ReturnType<typeof vi.spyOn> }) => Promise<void>,
+    run: (params: { rootDir: string }) => Promise<void>,
   ): Promise<void> {
     const rootDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-voice-workspace-")),
     );
     voiceWorkspaceFixture.rootDir = rootDir;
     voiceWorkspaceFixture.writeError = undefined;
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      await run({ rootDir, timeoutSpy });
+      await run({ rootDir });
     } finally {
-      for (const result of timeoutSpy.mock.results) {
-        if (result.type === "return") {
-          clearTimeout(result.value as ReturnType<typeof setTimeout>);
-        }
-      }
-      timeoutSpy.mockRestore();
       voiceWorkspaceFixture.rootDir = "";
       voiceWorkspaceFixture.writeError = undefined;
       await fs.rm(rootDir, { recursive: true, force: true });
@@ -225,28 +253,18 @@ describe("Discord voice WAV workspace ownership", () => {
   }
 
   it("owns partial WAV writes before surfacing their original failure", async () => {
-    await withVoiceWorkspace(async ({ rootDir, timeoutSpy }) => {
+    await withVoiceWorkspace(async ({ rootDir }) => {
       const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
       voiceWorkspaceFixture.writeError = writeError;
 
       await expect(writeVoiceWavFile(Buffer.alloc(960))).rejects.toBe(writeError);
 
-      const workspaces = await fs.readdir(rootDir);
-      expect(workspaces).toHaveLength(1);
-      expect(await fs.readFile(path.join(rootDir, workspaces[0]!, "segment.wav"))).toHaveLength(8);
-      const scheduledCleanup = timeoutSpy.mock.calls.find(
-        (call: Parameters<typeof setTimeout>) => call[1] === 30 * 60 * 1_000,
-      );
-      expect(scheduledCleanup).toBeDefined();
-
-      (scheduledCleanup![0] as () => void)();
-
-      await vi.waitFor(async () => expect(await fs.readdir(rootDir)).toEqual([]));
+      expect(await fs.readdir(rootDir)).toEqual([]);
     });
   });
 
-  it("retains successful WAV files until the existing scheduled cleanup runs", async () => {
-    await withVoiceWorkspace(async ({ rootDir, timeoutSpy }) => {
+  it("retains successful WAV files until their processing owner releases them", async () => {
+    await withVoiceWorkspace(async ({ rootDir }) => {
       const pcm = Buffer.alloc(960);
 
       const result = await writeVoiceWavFile(pcm);
@@ -254,15 +272,11 @@ describe("Discord voice WAV workspace ownership", () => {
       expect(path.basename(result.path)).toBe("segment.wav");
       expect((await fs.readFile(result.path)).subarray(0, 4).toString()).toBe("RIFF");
       expect(result.durationSeconds).toBe(960 / (4 * 48_000));
-      const scheduledCleanup = timeoutSpy.mock.calls.find(
-        (call: Parameters<typeof setTimeout>) => call[1] === 30 * 60 * 1_000,
-      );
-      expect(scheduledCleanup).toBeDefined();
       expect(await fs.readdir(rootDir)).toHaveLength(1);
 
-      (scheduledCleanup![0] as () => void)();
+      await result.cleanup();
 
-      await vi.waitFor(async () => expect(await fs.readdir(rootDir)).toEqual([]));
+      expect(await fs.readdir(rootDir)).toEqual([]);
     });
   });
 });

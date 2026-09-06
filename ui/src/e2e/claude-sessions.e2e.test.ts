@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -156,7 +158,7 @@ async function navigateToClaudeCatalog(page: Page) {
 }
 
 async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
-  const row = page.locator('[data-session-key^="catalog:"]').filter({
+  const row = page.locator('[data-catalog-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
   await row.click({ button: "right", force: options.force });
@@ -423,6 +425,10 @@ suite.define(() => {
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "claude-terminal-ready.png") });
+      }
     });
   });
 
@@ -609,10 +615,10 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await gateway.deferNext("sessions.catalog.read");
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    // Reader input cancels pending restoration; a direct scrollTop write can
+    // be overwritten before the history sentinel observes the top boundary.
+    await thread.hover();
+    await page.mouse.wheel(0, -10_000);
     await page.clock.runFor(100);
     await catalogPane.locator(".chat-virtual-row").first().waitFor();
     await expect
@@ -789,10 +795,12 @@ suite.define(() => {
         true,
       );
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
+          await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [
+            pane.locator('.chat-history-boundary__action[aria-busy="true"]'),
+          ]),
+        );
       }
 
       await gateway.deferNext("chat.history", { offset: 6 });
@@ -809,10 +817,12 @@ suite.define(() => {
         true,
       );
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "01-native-history-continued-auto-load.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "01-native-history-continued-auto-load.png"),
+          await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [
+            pane.locator('.chat-history-boundary__action[aria-busy="true"]'),
+          ]),
+        );
       }
 
       await gateway.resolveDeferred("chat.history");
@@ -824,10 +834,10 @@ suite.define(() => {
         .toBe(0);
       expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "02-native-history-final-scrollable.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "02-native-history-final-scrollable.png"),
+          await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [thread]),
+        );
       }
       // The second applied page staged one background prefetch (offset 22);
       // the now-scrollable transcript must not consume or chain beyond it.

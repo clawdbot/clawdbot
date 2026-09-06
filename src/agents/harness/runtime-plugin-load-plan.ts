@@ -105,9 +105,12 @@ function resolveSelectedMemoryPluginIds(params: {
 export function resolveAgentRuntimePluginSelections(
   config: OpenClawConfig | undefined,
   selections: readonly AgentHarnessPluginSelection[],
+  configuredHarnessRuntimes: readonly string[] = collectConfiguredAgentHarnessRuntimes(
+    config ?? {},
+  ),
 ): AgentHarnessPluginSelection[] {
   return [
-    ...collectConfiguredAgentHarnessRuntimes(config ?? {}).map((runtime) => ({
+    ...configuredHarnessRuntimes.map((runtime) => ({
       runtime,
       provider: "",
       modelId: "",
@@ -172,7 +175,7 @@ export function createAgentRuntimeMetadataPluginIdScope(params: {
   workspaceDir: string;
   selections: readonly AgentHarnessPluginSelection[];
   shorthandModelIds?: readonly string[];
-}): PluginMetadataSnapshotPluginIdScope {
+}): PluginMetadataSnapshotPluginIdScope & { key: string } {
   return {
     key: hashJson({
       kind: "agent-runtime",

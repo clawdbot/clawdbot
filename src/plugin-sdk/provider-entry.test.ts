@@ -658,12 +658,29 @@ describe("defineSingleProviderPluginEntry", () => {
   });
 
   it("skips unreadable provider catalog model rows while preserving healthy siblings", async () => {
-    const models = Object.defineProperty([createModel("mock-model", "Mock Model")], "1", {
-      enumerable: true,
-      get() {
-        throw new Error("fuzzplugin provider model row read failed");
+    const unreadableModel = Object.defineProperty(
+      createModel("broken-model", "Broken Model"),
+      "id",
+      {
+        get() {
+          throw new Error("fuzzplugin model id read failed");
+        },
       },
-    });
+    );
+    const models = Object.defineProperty(
+      [
+        createModel("mock-model", "Mock Model"),
+        { id: "id-only" } as ModelDefinitionConfig,
+        unreadableModel,
+      ],
+      "3",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin provider model row read failed");
+        },
+      },
+    );
     const entry = defineSingleProviderPluginEntry({
       id: "mockplugin",
       name: "Mock Provider",
@@ -692,6 +709,13 @@ describe("defineSingleProviderPluginEntry", () => {
         provider: "mockplugin",
         model: "mock-model",
         label: "Mock Model",
+        source: "live",
+      },
+      {
+        kind: "text",
+        provider: "mockplugin",
+        model: "id-only",
+        label: "id-only",
         source: "live",
       },
     ]);

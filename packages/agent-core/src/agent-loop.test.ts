@@ -537,12 +537,10 @@ describe("agentLoop streaming updates", () => {
   });
 
   it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "should not run" }],
-        details: {},
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "should not run" }],
+      details: {},
+    }));
     const contexts: Context[] = [];
     let streamCalls = 0;
     const streamFn: StreamFn = async (_model, context) => {
@@ -686,12 +684,10 @@ describe("runAgentLoop deferred tool hydration", () => {
   }
 
   it("hydrates an authorized deferred tool for execution and the continuation", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "hidden ok" }],
-        details: { ok: true },
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "hidden ok" }],
+      details: { ok: true },
+    }));
     const hiddenTool: AgentTool = {
       name: "hidden_search",
       label: "hidden_search",
@@ -806,12 +802,10 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 
   it("rejects deferred tools whose names differ from the requested call", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "wrong tool ran" }],
-        details: { ok: true },
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "wrong tool ran" }],
+      details: { ok: true },
+    }));
     const mismatchedTool: AgentTool = {
       name: "other_deferred",
       label: "other_deferred",
@@ -2669,6 +2663,73 @@ describe("agentLoop tool termination", () => {
         tainted ? { resultContentSource: "network" } : undefined,
       );
       expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
+    },
+  );
+
+  it.each(["execute", "prepare", "immediate", "after-call", "after-outcome"] as const)(
+    "preserves only operation-owned error provenance at %s",
+    async (phase) => {
+      const provenance = { source: "operation-effect-proof" };
+      const failure = attachInternalToolResultProvenance(
+        new Error("operation rejected"),
+        provenance,
+      );
+      const tool: AgentTool = {
+        ...makeTool("operation", []),
+        execute: async () => {
+          if (phase === "execute") {
+            throw failure;
+          }
+          return { content: [{ type: "text", text: "completed" }], details: {} };
+        },
+      };
+      if (phase === "prepare" || phase === "immediate") {
+        attachInternalToolExecutionPreparer(tool, async () => {
+          if (phase === "prepare") {
+            throw failure;
+          }
+          return { kind: "immediate", outcome: { kind: "error", error: failure }, dispose() {} };
+        });
+      }
+      const stream = agentLoop(
+        [{ role: "user", content: "perform operation", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          ...(phase === "after-call"
+            ? {
+                afterToolCall: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+          ...(phase === "after-outcome"
+            ? {
+                afterToolOutcome: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+        },
+        undefined,
+        createTurnSequenceStream([
+          [{ type: "toolCall", id: "operation-call", name: tool.name, arguments: {} }],
+          [{ type: "text", text: "recovered" }],
+        ]),
+      );
+      const events = await collectEvents(stream);
+      const end = events.find((event) => event.type === "tool_execution_end");
+      if (
+        end?.type !== "tool_execution_end" ||
+        typeof end.result !== "object" ||
+        end.result === null
+      ) {
+        throw new Error("Expected the operation's terminal result");
+      }
+      expect(end.isError).toBe(true);
+      expect(getInternalToolResultProvenance(end.result)).toBe(
+        phase === "after-call" || phase === "after-outcome" ? undefined : provenance,
+      );
     },
   );
 

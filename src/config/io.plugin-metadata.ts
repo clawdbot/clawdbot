@@ -4,11 +4,11 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import {
+  finalizePluginMetadataSnapshot,
   projectPluginMetadataSnapshot,
   rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotCacheKey,
-  restorePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
@@ -151,7 +151,7 @@ function resolveConfigWidePluginMetadataSnapshotImpl(
     : undefined;
   const sumMetric = (key: keyof PluginMetadataSnapshot["metrics"]) =>
     snapshots.reduce((total, snapshot) => total + snapshot.metrics[key], 0);
-  return restorePluginMetadataSnapshot(
+  return finalizePluginMetadataSnapshot(
     rebasePluginMetadataSnapshotManifestRegistry(
       {
         ...firstSnapshot,

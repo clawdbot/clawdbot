@@ -313,18 +313,15 @@ export function hasCrossChannelItems<T>(
   items: T[],
   resolveKey: (item: T) => { key?: string; cross?: boolean },
 ): boolean {
-  const keys = new Set<string>();
+  let firstKey: string | undefined;
 
   for (const item of items) {
     const resolved = resolveKey(item);
-    if (resolved.cross) {
+    if (resolved.cross || (resolved.key && firstKey && resolved.key !== firstKey)) {
       return true;
     }
-    if (!resolved.key) {
-      continue;
-    }
-    keys.add(resolved.key);
+    firstKey ||= resolved.key;
   }
 
-  return keys.size > 1;
+  return false;
 }

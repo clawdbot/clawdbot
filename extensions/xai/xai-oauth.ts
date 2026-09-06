@@ -1,5 +1,6 @@
 // Xai plugin module implements xai oauth behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
@@ -14,7 +15,11 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
@@ -61,12 +66,8 @@ type XaiOAuthFetchOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
-
-function xaiOAuthFetchSignal(signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
 
 type XaiDeviceCodeResponse = {
   deviceCode: string;
@@ -87,8 +88,35 @@ type XaiOAuthResponseBody = {
   text: string;
 };
 
-function getFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
-  return fetchImpl ?? fetch;
+function fetchXaiOAuth(url: string, options: XaiOAuthFetchOptions, body?: Record<string, string>) {
+  // The guard rechecks authority after DNS and each redirect; raw fetch follows
+  // redirects internally and cannot fence the next request after owner retirement.
+  return fetchWithSsrFGuard({
+    url,
+    fetchImpl: options.fetchImpl,
+    beforeRequest: options.assertCurrent,
+    mode: "trusted_explicit_proxy",
+    resolveDispatcherPolicy: (target) => {
+      // Operator-owned proxies may be local; NO_PROXY must be reevaluated for every hop.
+      const proxies = resolveEnvHttpProxyAgentOptions();
+      const proxyUrl = target.protocol === "https:" ? proxies?.httpsProxy : proxies?.httpProxy;
+      return proxyUrl && !matchesNoProxy(target.toString())
+        ? { mode: "explicit-proxy", proxyUrl, allowPrivateProxy: true }
+        : undefined;
+    },
+    signal: options.signal,
+    timeoutMs: XAI_OAUTH_FETCH_TIMEOUT_MS,
+    requireHttps: true,
+    auditContext: "xai-oauth",
+    init: {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": xaiUserAgent(),
+        ...(body ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+      },
+      ...(body ? { method: "POST", body: toFormUrlEncoded(body) } : {}),
+    },
+  });
 }
 
 function isTrustedXaiOAuthEndpoint(endpoint: string): boolean {
@@ -110,22 +138,33 @@ function requireTrustedXaiOAuthEndpoint(endpoint: string, label: string): string
   return endpoint;
 }
 
-async function readResponseBody(response: Response): Promise<XaiOAuthResponseBody> {
-  const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
-  });
-  const text = new TextDecoder().decode(buffer);
-  let json: unknown;
+async function readResponseBody({
+  response,
+  release,
+}: Awaited<ReturnType<typeof fetchXaiOAuth>>): Promise<XaiOAuthResponseBody> {
   try {
-    json = JSON.parse(text);
-  } catch {
-    json = null;
+    const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
+    });
+    const text = new TextDecoder().decode(buffer);
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null;
+    }
+    return { json, text };
+  } finally {
+    await release();
   }
-  return { json, text };
 }
 
-async function readJsonResponse(response: Response, context: string): Promise<unknown> {
-  const body = await readResponseBody(response);
+async function readJsonResponse(
+  result: Awaited<ReturnType<typeof fetchXaiOAuth>>,
+  context: string,
+): Promise<unknown> {
+  const { response } = result;
+  const body = await readResponseBody(result);
   if (!response.ok) {
     const json = asOptionalRecord(body.json);
     const errorText = json?.error_description ?? json?.error;
@@ -139,13 +178,7 @@ async function readJsonResponse(response: Response, context: string): Promise<un
 async function fetchXaiOAuthDiscoveryDocument(
   options: XaiOAuthFetchOptions = {},
 ): Promise<Record<string, unknown>> {
-  const response = await getFetchImpl(options.fetchImpl)(XAI_OAUTH_DISCOVERY_URL, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": xaiUserAgent(),
-    },
-    signal: xaiOAuthFetchSignal(options.signal),
-  });
+  const response = await fetchXaiOAuth(XAI_OAUTH_DISCOVERY_URL, options);
   return asOptionalRecord(await readJsonResponse(response, "xAI OAuth discovery")) ?? {};
 }
 
@@ -311,25 +344,17 @@ async function exchangeXaiOAuthToken(
   let lastMessage = `${params.context} failed`;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let response: Response;
+    let result: Awaited<ReturnType<typeof fetchXaiOAuth>>;
     try {
-      response = await getFetchImpl(params.fetchImpl)(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-          "User-Agent": xaiUserAgent(),
-        },
-        body: toFormUrlEncoded(params.body),
-        signal: xaiOAuthFetchSignal(params.signal),
-      });
+      result = await fetchXaiOAuth(endpoint, params, params.body);
     } catch (err) {
       // Transport failures are not safe to retry for refresh grants: xAI rotates
       // refresh tokens, so a response lost after xAI consumed the token would burn
       // it on resend. Only Cloudflare challenge responses are retried below.
       throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
     }
-    const body = await readResponseBody(response);
+    const { response } = result;
+    const body = await readResponseBody(result);
     if (response.ok) {
       return parseXaiOAuthTokenResponse(body.json, params.now ?? Date.now, {
         requireRefreshToken: params.requireRefreshToken,
@@ -352,24 +377,13 @@ async function requestXaiDeviceCode(
     deviceAuthorizationEndpoint: string;
   } & XaiOAuthFetchOptions,
 ): Promise<XaiDeviceCodeResponse> {
-  const response = await getFetchImpl(params.fetchImpl)(
+  const response = await fetchXaiOAuth(
     requireTrustedXaiOAuthEndpoint(
       params.deviceAuthorizationEndpoint,
       "device authorization endpoint",
     ),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-        "User-Agent": xaiUserAgent(),
-      },
-      body: toFormUrlEncoded({
-        client_id: XAI_OAUTH_CLIENT_ID,
-        scope: XAI_OAUTH_SCOPE,
-      }),
-      signal: xaiOAuthFetchSignal(params.signal),
-    },
+    params,
+    { client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE },
   );
   const json = asOptionalRecord(await readJsonResponse(response, "xAI device code request")) ?? {};
   const deviceCode = json.device_code;
@@ -422,35 +436,23 @@ async function pollXaiDeviceCodeToken(
     intervalMs: number;
   } & XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
-  const fetchImpl = getFetchImpl(params.fetchImpl);
   const deadlineMs = Date.now() + params.expiresInMs;
   let intervalMs = params.intervalMs;
 
   while (Date.now() < deadlineMs) {
-    const response = await fetchImpl(
+    const result = await fetchXaiOAuth(
       requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint"),
+      params,
       {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-          "User-Agent": xaiUserAgent(),
-        },
-        body: toFormUrlEncoded({
-          grant_type: XAI_DEVICE_CODE_GRANT_TYPE,
-          client_id: XAI_OAUTH_CLIENT_ID,
-          device_code: params.deviceCode,
-        }),
-        signal: xaiOAuthFetchSignal(params.signal),
+        grant_type: XAI_DEVICE_CODE_GRANT_TYPE,
+        client_id: XAI_OAUTH_CLIENT_ID,
+        device_code: params.deviceCode,
       },
     );
+    const { response } = result;
     let body: unknown;
     try {
-      const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`xAI device code response exceeds ${maxBytes} bytes`),
-      });
-      body = JSON.parse(new TextDecoder().decode(buffer));
+      body = (await readResponseBody(result)).json;
     } catch {
       body = null;
     }
@@ -545,14 +547,6 @@ function resolveXaiOAuthIdentity(tokens: XaiOAuthTokenResponse): XaiOAuthIdentit
   };
 }
 
-function readCredentialString<TKey extends string>(
-  credential: OAuthCredential & Partial<Record<TKey, unknown>>,
-  key: TKey,
-): string | undefined {
-  const value = credential[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
 function isLegacyXaiOAuthTokenEndpoint(endpoint: string): boolean {
   try {
     const url = new URL(endpoint);
@@ -566,7 +560,7 @@ async function resolveXaiOAuthRefreshTokenEndpoint(
   credential: OAuthCredential,
   options: XaiOAuthFetchOptions,
 ): Promise<string> {
-  const cachedEndpoint = readCredentialString(credential, "tokenEndpoint");
+  const cachedEndpoint = normalizeOptionalString(credential.tokenEndpoint);
   // Rediscover when there is no cached endpoint, or when an older persisted
   // credential still points at the retired endpoint, so refresh writes back the
   // current OAuth token endpoint.
@@ -605,14 +599,13 @@ async function noteXaiDeviceCode(
 
 export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const progress = ctx.prompter.progress("Starting xAI OAuth...");
+  const requestOptions = { signal: ctx.signal, assertCurrent: ctx.assertCurrent };
   try {
-    const discovery = await fetchXaiDeviceCodeDiscovery(
-      ctx.signal ? { signal: ctx.signal } : undefined,
-    );
+    const discovery = await fetchXaiDeviceCodeDiscovery(requestOptions);
     progress.update("Requesting xAI OAuth device code...");
     const deviceCode = await requestXaiDeviceCode({
       deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
-      ...(ctx.signal ? { signal: ctx.signal } : {}),
+      ...requestOptions,
     });
     const browserUrl = deviceCode.verificationUriComplete ?? deviceCode.verificationUri;
     let openedBrowser = false;
@@ -636,7 +629,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       deviceCode: deviceCode.deviceCode,
       expiresInMs: deviceCode.expiresInMs,
       intervalMs: deviceCode.intervalMs,
-      ...(ctx.signal ? { signal: ctx.signal } : {}),
+      ...requestOptions,
     });
     const identity = resolveXaiOAuthIdentity(tokens);
     progress.stop("xAI OAuth complete");
@@ -702,5 +695,5 @@ export async function refreshXaiOAuthCredential(
     ...(identity.accountId ? { accountId: identity.accountId } : {}),
     tokenEndpoint,
     issuer: XAI_OAUTH_ISSUER,
-  } as OAuthCredential;
+  };
 }

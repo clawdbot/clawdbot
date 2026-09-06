@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createConfiguredSkillWorkshopTool } from "./skill-workshop-tool-factory.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -39,6 +46,7 @@ describe("skill_workshop operator revision constraint", () => {
     const reviewed = created.details as { id: string; revisionHash: string };
     const revisionTool = createConfiguredSkillWorkshopTool({
       workspaceDir: await tempDirs.make("openclaw-skill-workshop-chat-agent-"),
+      config: {},
       agentId: "writer",
       run: {
         env: testState.env,

@@ -10,6 +10,7 @@ export type {
 } from "./auth-profiles/credential-state.js";
 export type { AuthProfileEligibilityReasonCode } from "./auth-profiles/order.js";
 export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
+export { resolveAuthProfileMetadata } from "./auth-profiles/identity.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 export {
   externalCliDiscoveryForConfigStatus,
@@ -26,6 +27,7 @@ export {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileEligibility,
+  resolveExplicitAuthOrderSelection,
   resolveAuthProfileOrder,
 } from "./auth-profiles/order.js";
 export {
@@ -92,6 +94,7 @@ export type {
   AuthProfileStore,
   OAuthCredential,
   ProfileUsageStats,
+  RuntimeAuthProfileStore,
   TokenCredential,
 } from "./auth-profiles/types.js";
 export {

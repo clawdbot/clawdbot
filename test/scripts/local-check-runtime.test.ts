@@ -458,7 +458,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(children).toEqual([
-        { step: "prep", goEnv: prepGoEnv, args: [] },
+        { step: "prep", goEnv: prepGoEnv, args: ["--mode=package-boundary"] },
         {
           step: "lint",
           goEnv: lintGoEnv,

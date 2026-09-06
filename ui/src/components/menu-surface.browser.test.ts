@@ -25,7 +25,7 @@ afterEach(() => {
 // desktop grid. Dynamic import keeps jsdom collection from touching the
 // browser-only context module.
 async function useDesktopViewport() {
-  const { page } = await import("@vitest/browser/context");
+  const { page } = await import("vitest/browser");
   await page.viewport(1280, 800);
 }
 
@@ -97,10 +97,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     await useDesktopViewport();
     const { nav, divider } = mountShell();
     const dividerBounds = divider.getBoundingClientRect();
-    const dropdown = document.createElement("wa-dropdown") as HTMLElement & {
-      open: boolean;
-      updateComplete: Promise<unknown>;
-    };
+    const dropdown = document.createElement("wa-dropdown");
     dropdown.className = "sidebar-session-sort-menu";
     const trigger = document.createElement("button");
     trigger.slot = "trigger";
@@ -112,13 +109,14 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     item.textContent = "Created";
     dropdown.append(trigger, item);
     nav.append(dropdown);
+    // Popover membership precedes positioning; hit-test only after the completed show.
+    const shown = new Promise<Event>((resolve) => {
+      dropdown.addEventListener("wa-after-show", resolve, { once: true });
+    });
     dropdown.open = true;
-    await dropdown.updateComplete;
+    await shown;
 
-    const popup = dropdown.shadowRoot?.querySelector<
-      HTMLElement & { updateComplete: Promise<unknown> }
-    >("wa-popup");
-    await popup?.updateComplete;
+    const popup = dropdown.shadowRoot?.querySelector<HTMLElement>("wa-popup");
     const popupSurface = popup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
     await expect.poll(() => popupSurface?.matches(":popover-open")).toBe(true);
     expect(dropdown.closest("openclaw-menu-surface")).toBeNull();
@@ -133,6 +131,39 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     );
     expect(hit).not.toBeNull();
     expect(dropdown.contains(hit)).toBe(true);
+  });
+});
+
+describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
+  it("stays opaque while the Web Awesome menu animates open", async () => {
+    await useDesktopViewport();
+    const dropdown = document.createElement("wa-dropdown") as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    dropdown.className = "agent-select";
+    const trigger = document.createElement("button");
+    trigger.slot = "trigger";
+    trigger.textContent = "Agent";
+    const item = document.createElement("wa-dropdown-item");
+    item.textContent = "All agents";
+    dropdown.append(trigger, item);
+    document.body.append(dropdown);
+    await dropdown.updateComplete;
+
+    const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+    expect(menu).not.toBeNull();
+    menu!.style.setProperty("--show-duration", "1s");
+    trigger.click();
+    await expect.poll(() => menu!.getAnimations().length).toBe(1);
+
+    const animation = menu!.getAnimations()[0];
+    if (!animation) {
+      throw new Error("expected the agent picker menu to be animating");
+    }
+    animation.pause();
+    animation.currentTime = 500;
+    expect(getComputedStyle(menu!).opacity).toBe("1");
+    expect(getComputedStyle(menu!).scale).not.toBe("1");
   });
 });
 

@@ -225,6 +225,43 @@ it("skips a timed-out streaming link and processes the next link", async () => {
   );
 });
 
+it("fetches only bare URLs from messages that also contain titled markdown links", async () => {
+  const requests: string[] = [];
+  await withServer(
+    (req, res) => {
+      const requestPath = req.url ?? "";
+      requests.push(requestPath);
+      res.end(requestPath);
+    },
+    async (base) => {
+      const firstBare = `${base}/bare-one`;
+      const secondBare = `${base}/bare-two`;
+      const ctx: MsgContext = {
+        Body: [
+          `[quoted](${base}/quoted "Docs")`,
+          `[parenthesized](${base}/parenthesized (Docs))`,
+          `[escaped](${base}/escaped "A \\"quoted\\" title")`,
+          firstBare,
+          `[angle](<${base}/angle> 'Docs')`,
+          secondBare,
+        ].join(" "),
+      };
+
+      const result = await applyLinkUnderstanding({
+        cfg: config(["-e", "process.stdin.pipe(process.stdout)"]),
+        ctx,
+      });
+
+      expect(requests).toEqual(["/bare-one", "/bare-two"]);
+      expect(result).toEqual({
+        urls: [firstBare, secondBare],
+        outputs: ["/bare-one", "/bare-two"],
+      });
+      expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
+    },
+  );
+});
+
 it("stops processor descendants after caller cancellation", async () => {
   await withTempDir("openclaw-link-cancel-", async (dir) => {
     const pidPath = path.join(dir, "worker.pid");

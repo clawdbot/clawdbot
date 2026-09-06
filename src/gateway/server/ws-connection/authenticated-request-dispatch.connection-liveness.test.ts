@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createGatewayConnectionState } from "../../server-connection-state.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
@@ -27,7 +27,7 @@ vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", async () =
   };
 });
 
-describe.sequential("authenticated request connection liveness", () => {
+describe("authenticated request connection liveness", { concurrent: false }, () => {
   beforeEach(() => {
     runtime.beforeHandler.mockReset();
   });
@@ -52,7 +52,8 @@ describe.sequential("authenticated request connection liveness", () => {
       started.resolve();
       return held.promise;
     });
-    const state = createGatewayConnectionState({ cfg: {} });
+    const state = createGatewayConnectionState({ bootId: "late-subscription", cfg: {} });
+    onTestFinished(() => state.mentionInbox.dispose());
     const client = createOperatorWsClient({
       connId: "late-subscription-connection",
       scopes: ["operator.read"],
@@ -68,17 +69,20 @@ describe.sequential("authenticated request connection liveness", () => {
       }),
     });
 
-    await harness.dispatcher.dispatch(
+    const dispatch = harness.dispatcher.dispatch(
       { type: "req", id: testCase.method, method: testCase.method, params: testCase.params },
       client,
     );
-    await started.promise;
-    expect(runtime.beforeHandler).toHaveBeenCalledOnce();
-
-    state.clients.delete(client);
-    state.sessionEventSubscribers.unsubscribe(client.connId);
-    state.sessionMessageSubscribers.unsubscribeAll(client.connId);
-    held.resolve();
+    try {
+      await started.promise;
+      expect(runtime.beforeHandler).toHaveBeenCalledOnce();
+      state.clients.delete(client);
+      state.sessionEventSubscribers.unsubscribe(client.connId);
+      state.sessionMessageSubscribers.unsubscribeAll(client.connId);
+    } finally {
+      held.resolve();
+      await dispatch;
+    }
 
     expect(await harness.awaitResponseFrame(testCase.method)).toMatchObject({ ok: true });
     testCase.assertEmpty(state);

@@ -2,8 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -118,6 +121,120 @@ function expectStats(value: unknown, fields: Record<string, unknown>) {
 }
 
 describe("getCachedPluginModuleLoader", () => {
+  it("shares native SDK state while keeping plugin source reloadable", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-graph-"));
+    try {
+      const ownerPath = path.join(root, "loader.mjs");
+      await build({
+        stdin: {
+          contents:
+            'export * from "./src/plugins/plugin-module-loader-cache.ts"; export { resetPluginCache } from "./src/plugins/plugin-cache.ts";',
+          resolveDir: process.cwd(),
+        },
+        bundle: true,
+        packages: "external",
+        platform: "node",
+        format: "esm",
+        outfile: ownerPath,
+        logLevel: "silent",
+      });
+      fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+      const result = spawnNodeEvalSync(
+        `
+          import assert from "node:assert/strict";
+          import fs from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          import { getCachedPluginModuleLoader, resetPluginCache } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+          const root = ${JSON.stringify(root)};
+          for (const transformOpenClawDependencies of [false, true]) {
+            const sdk = path.join(root, "sdk-" + transformOpenClawDependencies + ".mts");
+            fs.writeFileSync(sdk, "export const state: object = {};\\n");
+            const native = await import(pathToFileURL(sdk).href);
+            const rootDir = path.join(root, "plugin-" + transformOpenClawDependencies);
+            fs.mkdirSync(rootDir);
+            const modulePath = path.join(rootDir, "entry.ts");
+            const dependency = path.join(rootDir, "dependency.ts");
+            fs.writeFileSync(modulePath, 'export { state } from "openclaw/plugin-sdk/fixture"; export { value } from "./dependency.ts";\\n');
+            fs.writeFileSync(dependency, "export const value: number = 1;\\n");
+            const load = () => getCachedPluginModuleLoader({
+              modulePath, rootDir, importerUrl: import.meta.url, tryNative: false,
+              transformOpenClawDependencies,
+              aliasMap: { "openclaw/plugin-sdk/fixture": sdk },
+            })(modulePath);
+            const first = load();
+            assert.equal(first.state === native.state, !transformOpenClawDependencies, "SDK loading mode must preserve its graph contract");
+            fs.writeFileSync(dependency, "export const value: number = 2;\\n");
+            assert.equal(load(), first);
+            assert.equal(first.value, 1);
+            resetPluginCache();
+            const second = load();
+            assert.equal(second.value, 2, "plugin dependencies reload with their generation");
+            assert.equal(second.state, first.state, "host SDK state survives plugin reload");
+            resetPluginCache();
+          }
+          const loadSdkFixture = (name, source) => {
+            const sdk = path.join(root, name + ".mts");
+            const modulePath = path.join(root, name + "-entry.ts");
+            fs.mkdirSync(path.dirname(sdk), { recursive: true });
+            fs.writeFileSync(sdk, source);
+            fs.writeFileSync(modulePath, 'export * from "openclaw/plugin-sdk/fixture";\\n');
+            const loader = getCachedPluginModuleLoader({
+              modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
+              aliasMap: { "openclaw/plugin-sdk/fixture": sdk },
+            });
+            return () => loader(modulePath);
+          };
+          assert.equal(loadSdkFixture("enum", "enum State { Ready }\\nexport const ready = State.Ready;")().ready, 0);
+          assert.equal(loadSdkFixture("source-host/node_modules/sdk/index", "export const ready: number = 1;")().ready, 1);
+          const broken = loadSdkFixture("broken", 'globalThis.sdkEvaluations = (globalThis.sdkEvaluations ?? 0) + 1; throw new Error("SDK evaluation failed");');
+          assert.throws(broken, /SDK evaluation failed/);
+          assert.equal(globalThis.sdkEvaluations, 1, "terminal native failures must not evaluate SDK source twice");
+        `,
+        {
+          timeout: 30_000,
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            HOME: root,
+            USERPROFILE: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            JITI_FS_CACHE: "0",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const withoutTypeStripping = spawnNodeEvalSync(
+        `
+          import assert from "node:assert/strict";
+          import { getCachedPluginModuleLoader } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+          const root = ${JSON.stringify(root)};
+          const modulePath = root + "/enum-entry.ts";
+          const load = getCachedPluginModuleLoader({
+            modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
+            aliasMap: { "openclaw/plugin-sdk/fixture": root + "/enum.mts" },
+          });
+          assert.equal(load(modulePath).ready, 0);
+        `,
+        {
+          timeout: 30_000,
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            HOME: root,
+            USERPROFILE: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            NODE_OPTIONS: "--no-strip-types",
+            JITI_FS_CACHE: "0",
+          },
+        },
+      );
+      expect(withoutTypeStripping.status, withoutTypeStripping.stderr).toBe(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps deferred module construction and evaluation in the creating cache generation", async () => {
     const { getCachedPluginModuleLoader } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
@@ -497,9 +614,8 @@ describe("getCachedPluginModuleLoader", () => {
       ok: true as const,
       moduleExport: { loadedFrom: target },
     }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: (p: string) =>
-        p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -540,9 +656,8 @@ describe("getCachedPluginModuleLoader", () => {
       ok: true as const,
       moduleExport: { loadedFrom: target },
     }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: (p: string) =>
-        p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -592,8 +707,8 @@ describe("getCachedPluginModuleLoader", () => {
       ok: true as const,
       moduleExport,
     }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -673,8 +788,8 @@ describe("getCachedPluginModuleLoader", () => {
     const nativeStub = vi.fn(() => {
       throw missingDependency;
     });
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -707,8 +822,8 @@ describe("getCachedPluginModuleLoader", () => {
   it("falls back to source transform when the native-require helper declines", async () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -753,8 +868,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginSourceModuleLoader } = await importPluginModuleLoader(
@@ -783,8 +898,8 @@ describe("getCachedPluginModuleLoader", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
     const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
@@ -819,8 +934,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -865,8 +980,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => moduleExport);
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -903,8 +1018,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader } = await importPluginModuleLoader(

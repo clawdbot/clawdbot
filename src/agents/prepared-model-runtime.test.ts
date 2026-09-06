@@ -15,6 +15,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as harnessRuntimes from "./harness-runtimes.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
@@ -269,6 +270,7 @@ describe("prepared model runtime snapshots", () => {
 
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
+      configuredHarnessRuntimes: [],
       env: process.env,
       metadataSnapshot: mocks.pluginMetadataSnapshot,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
@@ -722,6 +724,10 @@ describe("prepared model runtime snapshots", () => {
 
   it("allows a read-only draft owner while the gateway lifecycle is active", async () => {
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const collectHarnessRuntimes = vi.spyOn(
+      harnessRuntimes,
+      "collectConfiguredAgentHarnessRuntimes",
+    );
     const draftConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
 
     await expect(
@@ -739,6 +745,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    expect(collectHarnessRuntimes).not.toHaveBeenCalled();
   });
 
   it("builds credential-free command owners separately from runtime owners", async () => {
@@ -1070,5 +1077,6 @@ describe("prepared model runtime snapshots", () => {
 });
 
 afterEach(async ({ task }) => {
+  vi.restoreAllMocks();
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

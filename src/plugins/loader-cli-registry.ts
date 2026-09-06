@@ -32,12 +32,12 @@ import {
   createPluginLoaderLogger,
   isAuthorizedDreamingSidecarPlugin,
   matchesScopedPluginOrDreamingSidecar,
-  pushPluginValidationError,
   resolveAuthorizedDreamingSidecar,
   safeRealpathOrResolve,
   validatePluginConfig,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
@@ -132,6 +132,7 @@ export async function loadOpenClawPluginCliRegistry(
           config: context.normalized,
           rootConfig: context.cfg,
           enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          channelIds: manifestRecord.channels,
           activationSource: context.activationSource,
           autoEnabledReason: formatAutoEnabledActivationReason(
             context.autoEnabledReasons[pluginId],
@@ -159,6 +160,7 @@ export async function loadOpenClawPluginCliRegistry(
           config: context.normalized,
           rootConfig: context.cfg,
           enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          channelIds: manifestRecord.channels,
           activationSource: context.activationSource,
         });
     const entry = context.normalized.entries[policyId];
@@ -170,13 +172,12 @@ export async function loadOpenClawPluginCliRegistry(
     });
     applyPluginManifestRecordDetails(record, manifestRecord);
     const pushPluginLoadError = (message: string) =>
-      pushPluginValidationError({
+      recordPluginError({
         registry,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         record,
-        message,
+        phase: "validation",
+        error: message,
       });
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -246,6 +247,11 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+      pluginId,
+      packageName: candidate.packageName,
+      packageBuild: candidate.packageManifest?.build,
+    });
     let mod: OpenClawPluginModule | null;
     try {
       mod = withProfile(
@@ -259,12 +265,11 @@ export async function loadOpenClawPluginCliRegistry(
         registry,
         record,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         phase: "load",
         error,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
         diagnosticMessagePrefix: "failed to load plugin: ",
+        missingDependencyHint,
       });
       continue;
     }
@@ -353,12 +358,11 @@ export async function loadOpenClawPluginCliRegistry(
         registry,
         record,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         phase: "register",
         error,
         logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
         diagnosticMessagePrefix: "plugin failed during register: ",
+        missingDependencyHint,
       });
     }
   }

@@ -115,7 +115,6 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
       respond(true, { ok: true, ...result }, undefined);
-      emitSessionsChanged(context, { reason: "groups" });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
@@ -125,6 +124,9 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    } finally {
+      // Interrupted sweeps can retain catalog entries and committed member moves.
+      emitSessionsChanged(context, { reason: "groups" });
     }
   },
   "sessions.groups.update": async ({
@@ -231,12 +233,13 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
       respond(true, { ok: true, ...result }, undefined);
-      emitSessionsChanged(context, { reason: "groups" });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    } finally {
+      emitSessionsChanged(context, { reason: "groups" });
     }
   },
 };

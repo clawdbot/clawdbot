@@ -1,6 +1,6 @@
-import { realpathSync } from "node:fs";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errors.js";
+import { canonicalPathFromExistingAncestor } from "../infra/fs-safe.js";
 import { logWarn } from "../logger.js";
 import {
   clearMemoryArtifactProvenance,
@@ -9,7 +9,7 @@ import {
 } from "../memory/memory-artifact-provenance.js";
 
 export type MemoryWriteProvenanceObserver = {
-  classifies: (absolutePath: string) => boolean;
+  classifies: (absolutePath: string) => Promise<boolean>;
   write: (params: {
     absolutePath: string;
     contentBefore: string;
@@ -36,7 +36,7 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
   return {
     ...operations,
     writeFile: async (absolutePath: string, content: string) => {
-      if (!observer.classifies(absolutePath)) {
+      if (!(await observer.classifies(absolutePath))) {
         await operations.writeFile(absolutePath, content);
         return;
       }
@@ -59,7 +59,7 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
     ...(remove
       ? {
           remove: async (absolutePath: string) => {
-            const contentBefore = observer.classifies(absolutePath)
+            const contentBefore = (await observer.classifies(absolutePath))
               ? await operations
                   .readFile(absolutePath)
                   .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
@@ -79,14 +79,7 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
 }
 
 function resolveMemoryRelativePath(root: string, absolutePath: string): string | undefined {
-  const canonicalPath = (candidate: string) => {
-    try {
-      return realpathSync.native(candidate);
-    } catch {
-      return path.join(realpathSync.native(path.dirname(candidate)), path.basename(candidate));
-    }
-  };
-  const relativePath = path.relative(canonicalPath(root), canonicalPath(absolutePath));
+  const relativePath = path.relative(root, absolutePath);
   if (
     !relativePath ||
     path.isAbsolute(relativePath) ||
@@ -101,17 +94,27 @@ function resolveMemoryRelativePath(root: string, absolutePath: string): string |
 export function createMemoryWriteProvenanceObserver(params: {
   mutationRoot: string;
   workspaceDir: string;
+  resolvePath?: (filePath: string) => Promise<string>;
   resolveOriginClass: () => "agent" | "untrusted";
   sessionId?: string;
   sessionKey?: string;
   now?: () => number;
 }): MemoryWriteProvenanceObserver {
   const now = params.now ?? Date.now;
+  const resolvePath = params.resolvePath ?? canonicalPathFromExistingAncestor;
+  const resolveRelativePath = async (absolutePath: string) => {
+    // Both paths must be canonicalized by the same filesystem owner: container
+    // paths are not host paths, and aliases must retain memory quarantine.
+    const [root, target] = await Promise.all([
+      resolvePath(params.mutationRoot),
+      resolvePath(absolutePath),
+    ]);
+    return resolveMemoryRelativePath(root, target);
+  };
   return {
-    classifies: (absolutePath) =>
-      resolveMemoryRelativePath(params.mutationRoot, absolutePath) !== undefined,
+    classifies: async (absolutePath) => (await resolveRelativePath(absolutePath)) !== undefined,
     write: async ({ absolutePath, contentBefore, contentAfter, commit }) => {
-      const relativePath = resolveMemoryRelativePath(params.mutationRoot, absolutePath);
+      const relativePath = await resolveRelativePath(absolutePath);
       if (!relativePath) {
         await commit();
         return;
@@ -141,7 +144,7 @@ export function createMemoryWriteProvenanceObserver(params: {
       }
     },
     clearAfterDelete: async (absolutePath, contentBefore) => {
-      const relativePath = resolveMemoryRelativePath(params.mutationRoot, absolutePath);
+      const relativePath = await resolveRelativePath(absolutePath);
       if (!relativePath) {
         return;
       }

@@ -28,6 +28,7 @@ type ClientRuntime = {
 
 type RetainedLiveThread = {
   configFingerprint?: string;
+  ephemeralPolicy?: string;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
@@ -42,6 +43,8 @@ type ThreadReleaseTransition = {
 export type CodexAppServerLiveThreadOwnership = {
   assertCurrent: () => void;
   configFingerprint?: string;
+  /** Ephemeral configuration is creation-owned and cannot be refreshed or cold-resumed. */
+  ephemeralPolicy?: string;
   serviceTier?: CodexServiceTier | null;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
 };
@@ -294,7 +297,9 @@ async function releaseRetainedThread(
     ) {
       // A failed unsubscribe leaves the native subscription alive. Restore its
       // exact callback and LRU position; renewing TTL prevents a zero-delay retry spin.
-      retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+      if (retained.ephemeralPolicy === undefined) {
+        retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+      }
       const newerThreads = [...runtime.retainedThreads.entries()].filter(
         ([candidateThreadId]) => !olderThreadIds.has(candidateThreadId),
       );
@@ -332,14 +337,15 @@ async function evictExcessIdleThreads(
   client: CodexAppServerClient,
   runtime: ClientRuntime,
 ): Promise<void> {
-  let idleThreadIds = [...runtime.retainedThreads.keys()].filter(
-    (threadId) => !runtime.protectedThreads.has(threadId),
-  );
-  while (idleThreadIds.length > CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE) {
-    await releaseRetainedThread(client, runtime, idleThreadIds[0]!);
-    idleThreadIds = [...runtime.retainedThreads.keys()].filter(
-      (threadId) => !runtime.protectedThreads.has(threadId),
+  const idleThreads = () =>
+    [...runtime.retainedThreads].filter(
+      ([threadId, thread]) =>
+        thread.ephemeralPolicy === undefined && !runtime.protectedThreads.has(threadId),
     );
+  let idleThreadIds = idleThreads();
+  while (idleThreadIds.length > CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE) {
+    await releaseRetainedThread(client, runtime, idleThreadIds[0]![0]);
+    idleThreadIds = idleThreads();
   }
 }
 
@@ -350,6 +356,7 @@ export async function retainCodexAppServerLiveThread(
   releaseThread?: (threadId: string, assertCurrent?: () => void) => Promise<void>,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
+  ephemeralPolicy?: string,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
@@ -374,8 +381,14 @@ export async function retainCodexAppServerLiveThread(
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
     configFingerprint,
+    ephemeralPolicy,
     serviceTier,
-    expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
+    // Ephemeral history has no disk resume source. Preserve its existing client lifetime,
+    // rather than subjecting it to the persistent registry's idle eviction.
+    expiresAt:
+      ephemeralPolicy === undefined
+        ? Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS
+        : Number.POSITIVE_INFINITY,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
       (async (releasedThreadId, assertCurrent) => {
@@ -526,6 +539,7 @@ function claimCodexAppServerThreadOwnership(
   return {
     assertCurrent,
     configFingerprint: retained.configFingerprint,
+    ephemeralPolicy: retained.ephemeralPolicy,
     serviceTier: retained.serviceTier,
     release,
   };
@@ -647,7 +661,9 @@ export function protectCodexAppServerLiveThread(
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal
         // delivery starts the parent's normal warm-session retention window.
-        retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+        if (retained.ephemeralPolicy === undefined) {
+          retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+        }
         runtime.retainedThreads.delete(threadId);
         runtime.retainedThreads.set(threadId, retained);
       }

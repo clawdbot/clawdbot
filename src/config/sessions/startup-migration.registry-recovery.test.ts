@@ -7,7 +7,10 @@ import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-age
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+  isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -17,6 +20,10 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import {
+  isCanonicalSqliteSessionMainKeyCurrent,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
@@ -26,6 +33,32 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
+
+it.each(["cold", "preexisting"] as const)(
+  "preserves the %s database lifetime for maintenance without a runtime handoff",
+  async (lifetime) => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-handle-lifetime-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const options = { agentId: "main", env };
+    const initial = openOpenClawAgentDatabase(options);
+    setCanonicalSqliteSessionMainKey(initial, "previous");
+    if (lifetime === "cold") {
+      closeOpenClawAgentDatabasesForTest();
+    }
+
+    await runSessionStartupMigration({
+      cfg: { agents: { entries: { main: {} } } },
+      env,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(isCanonicalSqliteSessionMainKeyCurrent(options, undefined)).toBe(true);
+    expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(lifetime === "preexisting");
+    if (lifetime === "preexisting") {
+      expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(initial);
+    }
+  },
+);
 
 it("does not create a missing configured agent database during startup maintenance", async () => {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-missing-agent-db-"));

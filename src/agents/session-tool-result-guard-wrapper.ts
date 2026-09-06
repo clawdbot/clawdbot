@@ -114,6 +114,11 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
+  const preparedUserReplayKey =
+    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+    pendingPreparedUserTurnMessage?.idempotencyKey
+      ? pendingPreparedUserTurnMessage?.idempotencyKey
+      : undefined;
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
   const runtimeUserMessageByPersistedMessage = new WeakMap<
     AgentMessage,
@@ -140,6 +145,13 @@ export function guardSessionManager(
         message.role === "user"
           ? { ...message, __openclaw: { ...Reflect.get(message, "__openclaw") } }
           : undefined;
+      if (preparedMessage?.["__openclaw"].humanMentions !== undefined) {
+        // Hooks may mutate text and spans in place; compare against the submitted selection.
+        preparedMessage.content = structuredClone(preparedMessage.content);
+        preparedMessage["__openclaw"].humanMentions = structuredClone(
+          preparedMessage["__openclaw"].humanMentions,
+        );
+      }
       const next = runAgentHarnessBeforeMessageWriteHook({
         message,
         agentId: opts?.agentId,
@@ -219,6 +231,15 @@ export function guardSessionManager(
       queuedUserTurnTranscriptRecorder = undefined;
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
+      // Replay may reuse the current user without appending it. Its prepared
+      // metadata must not leak onto a later queued user, including staged steering.
+      if (
+        message.role === "user" &&
+        preparedUserReplayKey !== undefined &&
+        Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
+      ) {
+        pendingPreparedUserTurnMessage = undefined;
+      }
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       const recorder =
         runtimeContext?.recorder ??
@@ -257,7 +278,8 @@ export function guardSessionManager(
             contextWindowTokens: opts.contextWindowTokens,
           })
         : undefined,
-    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
+    suppressNextUserMessagePersistence:
+      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
@@ -266,8 +288,10 @@ export function guardSessionManager(
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      recorder?.markRuntimePersisted(message, persistence.anchor);
-      await opts?.onUserMessagePersisted?.(message, runtimeMessage);
+      recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
+        appended: persistence.appended,
+      });
+      await opts?.onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);

@@ -253,16 +253,22 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
-  it.each(["native-live-src-gateway-core", "native-live-src-gateway-backends"])(
-    "prepares the source gateway runtime before %s starts Vitest",
-    (shard) => {
-      expect(resolveLiveShardPreparation(selectLiveShardFiles(shard, allFiles))).toEqual({
-        env: {},
-        profile: "sourcePerformance",
-        requiredArtifact: "dist/.runtime-postbuildstamp",
-      });
-    },
-  );
+  it.each([
+    "native-live-src-gateway-core",
+    "native-live-src-gateway-backends",
+    "native-live-test",
+    "test/e2e/qa-lab/runtime/worker-skill-resources.live.test.ts",
+    "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
+  ])("prepares the built gateway runtime before %s starts Vitest", (target) => {
+    const files = target.endsWith(".live.test.ts")
+      ? [target]
+      : selectLiveShardFiles(target, allFiles);
+    expect(resolveLiveShardPreparation(files)).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+    });
+  });
 
   it("prepares system-agent gateway tests without building unrelated source shards", () => {
     expect(resolveLiveShardPreparation(["src/system-agent/rescue-channel.live.test.ts"])).toEqual({
@@ -528,8 +534,8 @@ describe("scripts/test-live-shard", () => {
     const passingPayload = {
       ...payload,
       numPassedTests: 2,
-      testResults: payload.testResults.map((result) => ({
-        ...result,
+      testResults: payload.testResults.map(({ name }) => ({
+        name,
         assertionResults: [{ status: "passed" }],
       })),
     };

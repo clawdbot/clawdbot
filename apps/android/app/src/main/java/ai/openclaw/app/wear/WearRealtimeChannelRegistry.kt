@@ -246,10 +246,18 @@ internal class WearRealtimeChannelRegistry(
     while (true) {
       currentCoroutineContext().ensureActive()
       when (val selection = reserveClaim(nodeId, attemptId, expectedPath, key, sequence)) {
-        is ChannelClaimSelection.Claimed -> return selection.claim
-        is ChannelClaimSelection.Promote ->
+        is ChannelClaimSelection.Claimed -> {
+          return selection.claim
+        }
+
+        is ChannelClaimSelection.Promote -> {
           return completePromotion(nodeId, attemptId, key, selection.promotion)
-        ChannelClaimSelection.Superseded -> return null
+        }
+
+        ChannelClaimSelection.Superseded -> {
+          return null
+        }
+
         ChannelClaimSelection.Wait -> {
           val remainingNanos = deadlineNanos - System.nanoTime()
           if (remainingNanos <= 0L) return null

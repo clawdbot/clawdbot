@@ -10,13 +10,19 @@ import {
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
-async function loadNodeSqliteWithVersion(version: string) {
+async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitted?: number) {
   vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
     function (this: DatabaseSync, sql) {
       if (sql === "SELECT sqlite_version() AS version") {
         return {
           get: () => ({ version }),
         } as unknown as StatementSync;
+      }
+      if (
+        extensionLoadingOmitted !== undefined &&
+        sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
+      ) {
+        return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
       }
       return originalPrepare.call(this, sql);
     },
@@ -149,6 +155,17 @@ describe("node SQLite safety", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each([0, 1])(
+    "detects the loaded library's extension capability (omitted=%s)",
+    async (omitted) => {
+      const { supportsNodeSqliteExtensionLoading } = await loadNodeSqliteWithVersion(
+        "3.51.3",
+        omitted,
+      );
+      expect(supportsNodeSqliteExtensionLoading()).toBe(omitted === 0);
+    },
+  );
 
   it.each(["3.51.3", "3.51.4", "3.52.0", "4.0.0", "3.50.7", "3.50.8", "3.44.6"])(
     "accepts patched SQLite %s",

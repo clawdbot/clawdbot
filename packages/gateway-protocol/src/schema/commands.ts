@@ -108,6 +108,7 @@ export const CommandEntrySchema = closedObject({
 
 /** Command catalog request filters. */
 export const CommandsListParamsSchema = closedObject({
+  sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   provider: Type.Optional(NonEmptyString),
   scope: Type.Optional(CommandScopeSchema),

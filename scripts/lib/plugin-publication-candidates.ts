@@ -40,6 +40,7 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   "scripts/release-tooling-identity.mjs",
   "scripts/verify-plugin-npm-published-runtime.mts",
   "src/plugins/package-entrypoints.ts",
+  "src/utils/run-with-concurrency.ts",
 ] as const;
 
 function hasAuthorityPathChanges(

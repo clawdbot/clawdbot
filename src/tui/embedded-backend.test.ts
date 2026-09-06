@@ -1,6 +1,7 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -10,6 +11,7 @@ import {
   clearEmbeddedPluginApprovalBroker,
   getEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -83,6 +85,7 @@ const readChatHistoryPageMock = vi.fn(
   }),
 );
 type LoadSessionEntryMockResult = {
+  agentId: string;
   cfg: Record<string, unknown>;
   canonicalKey: string;
   storePath?: string;
@@ -90,8 +93,9 @@ type LoadSessionEntryMockResult = {
   entry?: Record<string, unknown>;
 };
 const loadSessionEntryMock = vi.fn(
-  (sessionKey: string, _opts?: { agentId?: string }): LoadSessionEntryMockResult => ({
+  (sessionKey: string, opts?: { agentId?: string }): LoadSessionEntryMockResult => ({
     cfg: {},
+    agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
     canonicalKey: sessionKey,
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
@@ -261,7 +265,14 @@ vi.mock("../gateway/session-utils.js", () => ({
     primaryKey: key,
     target: { storeKeys: [key] },
   }),
-  resolveGatewaySessionStoreTargetWithStore: ({ key }: { key: string }) => ({
+  resolveGatewaySessionStoreTargetWithStore: ({
+    key,
+    agentId,
+  }: {
+    key: string;
+    agentId?: string;
+  }) => ({
+    agentId: agentId ?? parseAgentSessionKey(key)?.agentId ?? "main",
     canonicalKey: key,
     storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
@@ -334,6 +345,11 @@ function captureBackendEvents(backend: EmbeddedTuiBackendType) {
 function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
   return backend.sendChat({ sessionKey: "agent:main:main", message, runId });
 }
+
+const selectedGlobalSessionCases = [
+  { input: { sessionKey: "global", agentId: "work" }, owner: "work" },
+  { input: { sessionKey: "agent:research:main" }, owner: "research" },
+];
 
 describe("EmbeddedTuiBackend", () => {
   const originalRuntimeLog = defaultRuntime.log;
@@ -427,8 +443,9 @@ describe("EmbeddedTuiBackend", () => {
     readChatHistoryPageMock.mockReset();
     readChatHistoryPageMock.mockResolvedValue({ messages: [] });
     loadSessionEntryMock.mockReset();
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1078,8 +1095,9 @@ describe("EmbeddedTuiBackend", () => {
     agentCommandFromIngressMock
       .mockReturnValueOnce(first.promise)
       .mockResolvedValueOnce({ payloads: [{ text: "second done" }], meta: {} });
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: { messages: { queue: { mode: "followup" } } },
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1117,6 +1135,7 @@ describe("EmbeddedTuiBackend", () => {
   it("creates a local session entry before starting a goal", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
     });
@@ -1134,6 +1153,7 @@ describe("EmbeddedTuiBackend", () => {
     });
     expect(createSessionGoalMock).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      agentId: "main",
       storePath: "/tmp/openclaw-sessions.json",
       objective: "Ship Goal",
       actor: { type: "human" },
@@ -1147,6 +1167,7 @@ describe("EmbeddedTuiBackend", () => {
   it("uses the selected agent when running local global goal commands", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       cfg: {},
+      agentId: "work",
       canonicalKey: "global",
       storePath: "/tmp/openclaw-work-sessions.json",
       entry: { sessionId: "session-work", updatedAt: embeddedEventTimestamp },
@@ -1169,33 +1190,65 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("runs local usage cost with the canonical session entry and selected agent", async () => {
-    const cfg = { session: { scope: "global" } };
-    const sessionEntry = { sessionId: "session-work", updatedAt: embeddedEventTimestamp };
-    loadSessionEntryMock.mockReturnValueOnce({
-      cfg,
-      canonicalKey: "global",
-      storePath: "/tmp/openclaw-work-sessions.json",
-      entry: sessionEntry,
-    });
-    const backend = new EmbeddedTuiBackend();
+  it.each(selectedGlobalSessionCases)(
+    "runs local usage cost with the stored owner: $input.sessionKey",
+    async ({ input, owner }) => {
+      const cfg = { session: { scope: "global" } };
+      const sessionEntry = { sessionId: `session-${owner}`, updatedAt: embeddedEventTimestamp };
+      loadSessionEntryMock.mockReturnValueOnce({
+        cfg,
+        agentId: owner,
+        canonicalKey: "global",
+        storePath: `/tmp/openclaw-${owner}-sessions.json`,
+        entry: sessionEntry,
+      });
+      const backend = new EmbeddedTuiBackend();
 
-    await expect(
-      backend.runUsageCostCommand({ sessionKey: "global", agentId: "work" }),
-    ).resolves.toEqual({
-      text: "💸 Usage cost\nSession $1.23",
-    });
+      await expect(backend.runUsageCostCommand(input)).resolves.toEqual({
+        text: "💸 Usage cost\nSession $1.23",
+      });
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
-    expect(formatSessionUsageCostSummaryMock).toHaveBeenCalledWith({
-      cfg,
-      sessionKey: "global",
-      agentId: "work",
-      sessionEntry,
-      storePath: "/tmp/openclaw-work-sessions.json",
-    });
-    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
-  });
+      expect(loadSessionEntryMock).toHaveBeenCalledWith(
+        input.sessionKey,
+        input.agentId ? { agentId: input.agentId } : undefined,
+      );
+      expect(formatSessionUsageCostSummaryMock).toHaveBeenCalledWith({
+        cfg,
+        sessionKey: "global",
+        agentId: owner,
+        sessionEntry,
+        storePath: `/tmp/openclaw-${owner}-sessions.json`,
+      });
+      expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(selectedGlobalSessionCases)(
+    "records local goal mutations with the stored owner: $input.sessionKey",
+    async ({ input, owner }) => {
+      const entry = { sessionId: `session-${owner}`, updatedAt: embeddedEventTimestamp };
+      const storePath = `/tmp/openclaw-${owner}-sessions.json`;
+      loadSessionEntryMock.mockReturnValueOnce({
+        cfg: { session: { scope: "global" } },
+        agentId: owner,
+        canonicalKey: "global",
+        storePath,
+        entry,
+      });
+      const backend = new EmbeddedTuiBackend();
+      await expect(
+        backend.runGoalCommand({ ...input, command: "/goal start Ship Goal" }),
+      ).resolves.toMatchObject({ text: "Goal started: Ship Goal" });
+      expect(createSessionGoalMock).toHaveBeenCalledWith({
+        sessionKey: "global",
+        storePath,
+        agentId: owner,
+        actor: { type: "human" },
+        objective: "Ship Goal",
+        fallbackEntry: entry,
+      });
+    },
+  );
 
   it("loads history thinking defaults from configured replace-mode models", async () => {
     loadSessionEntryMock.mockReturnValue({
@@ -1209,6 +1262,7 @@ describe("EmbeddedTuiBackend", () => {
           },
         },
       },
+      agentId: "main",
       canonicalKey: "agent:main:main",
       entry: {},
     });
@@ -1223,60 +1277,84 @@ describe("EmbeddedTuiBackend", () => {
     expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
   });
 
-  it("loads selected-agent global history from the selected agent store", async () => {
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      canonicalKey: "global",
-      storePath: "/tmp/openclaw-work-sessions.json",
-      entry: { sessionId: "session-work-global" },
-    });
+  it.each(selectedGlobalSessionCases)(
+    "loads selected-agent global history from the selected agent store: $input.sessionKey",
+    async ({ input, owner }) => {
+      const entry = { sessionId: `session-${owner}-global` };
+      loadSessionEntryMock.mockReturnValue({
+        cfg: { session: { scope: "global" } },
+        agentId: owner,
+        canonicalKey: "global",
+        storePath: `/tmp/openclaw-${owner}-sessions.json`,
+        entry,
+      });
 
-    const backend = new EmbeddedTuiBackend();
+      const backend = new EmbeddedTuiBackend();
 
-    await expect(
-      backend.loadHistory({ sessionKey: "global", agentId: "work" }),
-    ).resolves.toMatchObject({
-      sessionKey: "global",
-      sessionId: "session-work-global",
-      messages: [],
-    });
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", {
-      agentId: "work",
-      includeStoreChildEntries: true,
-    });
-  });
+      await expect(backend.loadHistory(input)).resolves.toMatchObject({
+        sessionKey: input.sessionKey,
+        sessionId: entry.sessionId,
+        sessionInfo: { key: "global", sessionId: entry.sessionId },
+        messages: [],
+      });
+      expect(loadSessionEntryMock).toHaveBeenCalledWith(input.sessionKey, {
+        ...(input.agentId ? { agentId: input.agentId } : {}),
+        includeStoreChildEntries: true,
+      });
+      expect(readChatHistoryPageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ canonicalKey: "global", sessionAgentId: owner, entry }),
+      );
+      expect(buildGatewaySessionInfoMock).toHaveBeenCalledWith(
+        expect.objectContaining({ key: "global", agentId: owner, entry }),
+      );
+    },
+  );
 
-  it("keeps gateway subagent binding off for embedded /btw side questions", async () => {
-    // The embedded TUI runs the side question locally, so it must not borrow the
-    // active registry's subagent and node capabilities. Only gateway-hosted
-    // callers opt into allowGatewaySubagentBinding.
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      canonicalKey: "global",
-      storePath: "/tmp/openclaw-btw-sessions.json",
-      store: {},
-      entry: { sessionId: "session-btw-local" },
-    });
-    runBtwSideQuestionMock.mockResolvedValueOnce({ text: "side done" });
+  it.each([{ input: { sessionKey: "global" }, owner: "main" }, ...selectedGlobalSessionCases])(
+    "keeps the selected owner and gateway subagent binding off for embedded /btw: $input.sessionKey ($owner)",
+    async ({ input, owner }) => {
+      // The embedded TUI runs the side question locally, so it must not borrow the
+      // active registry's subagent and node capabilities. Only gateway-hosted
+      // callers opt into allowGatewaySubagentBinding.
+      loadSessionEntryMock.mockReturnValue({
+        cfg: { session: { scope: "global" } },
+        agentId: owner,
+        canonicalKey: "global",
+        storePath: `/tmp/openclaw-${owner}-sessions.json`,
+        store: {},
+        entry: { sessionId: `session-${owner}-global` },
+      });
+      runBtwSideQuestionMock.mockResolvedValueOnce({ text: "side done" });
 
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await backend.sendChat({
-      sessionKey: "global",
-      message: "/btw local only",
-      runId: "run-btw-local",
-    });
-    await vi.waitFor(() => expect(runBtwSideQuestionMock).toHaveBeenCalledTimes(1));
-    await backend.stop();
-
-    expect(runBtwSideQuestionMock.mock.calls[0]?.[0]).not.toHaveProperty(
-      "allowGatewaySubagentBinding",
-    );
-  });
+      const backend = new EmbeddedTuiBackend();
+      backend.start();
+      try {
+        await backend.sendChat({
+          ...input,
+          message: "/btw local only",
+          runId: "run-btw-local",
+        });
+        await vi.waitFor(() => expect(runBtwSideQuestionMock).toHaveBeenCalledTimes(1));
+        expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: "global",
+            agentId: owner,
+            agentDir: `/tmp/openclaw-agent-${owner}/agent`,
+          }),
+        );
+        expect(runBtwSideQuestionMock.mock.calls[0]?.[0]).not.toHaveProperty(
+          "allowGatewaySubagentBinding",
+        );
+      } finally {
+        await backend.stop();
+      }
+    },
+  );
 
   it("reports the newest matching non-BTW local run in embedded history", async () => {
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-work-sessions.json",
       store: {},
@@ -1328,6 +1406,7 @@ describe("EmbeddedTuiBackend", () => {
   it("uses the canonical gateway projector for embedded TUI history reads", async () => {
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       entry: { sessionId: "sess-main" },
@@ -1356,6 +1435,7 @@ describe("EmbeddedTuiBackend", () => {
     const cfg = { agents: { list: [{ id: "main" }] } };
     loadSessionEntryMock.mockReturnValue({
       cfg,
+      agentId: "main",
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       entry: { spawnedWorkspaceDir: "/tmp/openclaw-custom-workspace" },
@@ -1378,6 +1458,7 @@ describe("EmbeddedTuiBackend", () => {
     });
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       entry: {},
@@ -1399,6 +1480,7 @@ describe("EmbeddedTuiBackend", () => {
       .mockReturnValueOnce(undefined);
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       entry: {},
     });
@@ -1424,6 +1506,7 @@ describe("EmbeddedTuiBackend", () => {
       });
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       entry: {},
     });
@@ -1440,41 +1523,56 @@ describe("EmbeddedTuiBackend", () => {
     );
   });
 
-  it("passes selected-agent global scope into local chat turns", async () => {
-    agentCommandFromIngressMock.mockResolvedValueOnce({
-      payloads: [{ text: "done" }],
-      meta: {},
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    try {
-      await backend.sendChat({
-        sessionKey: "global",
-        agentId: "work",
-        message: "hello",
-        runId: "run-global-work",
+  it.each(selectedGlobalSessionCases)(
+    "passes selected-agent global scope into local chat turns: $input.sessionKey",
+    async ({ input, owner }) => {
+      const entry = { sessionId: `session-${owner}-global` };
+      loadSessionEntryMock.mockReturnValue({
+        cfg: { session: { scope: "global" } },
+        agentId: owner,
+        canonicalKey: "global",
+        storePath: `/tmp/openclaw-${owner}-sessions.json`,
+        entry,
       });
-      await flushMicrotasks();
+      agentCommandFromIngressMock.mockResolvedValueOnce({
+        payloads: [{ text: "done" }],
+        meta: {},
+      });
 
-      expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
-      expect(agentCommandFromIngressMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "global",
-          agentId: "work",
-          message: expect.stringContaining("hello"),
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
-    } finally {
-      await backend.stop();
-    }
-  });
+      const backend = new EmbeddedTuiBackend();
+      backend.start();
+      try {
+        await backend.sendChat({
+          ...input,
+          message: "hello",
+          runId: "run-global-owner",
+        });
+        await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
+
+        expect(loadSessionEntryMock).toHaveBeenCalledWith(
+          input.sessionKey,
+          input.agentId ? { agentId: input.agentId } : undefined,
+        );
+        expect(agentCommandFromIngressMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: "global",
+            agentId: owner,
+            sessionId: entry.sessionId,
+            message: expect.stringContaining("hello"),
+          }),
+          expect.anything(),
+          expect.anything(),
+        );
+      } finally {
+        await backend.stop();
+      }
+    },
+  );
 
   it("stamps the selected global agent on chat, agent, and BTW envelopes", async () => {
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-work-sessions.json",
       store: {},
@@ -1743,8 +1841,9 @@ describe("EmbeddedTuiBackend", () => {
       activeSignal = opts.abortSignal;
       return active.promise;
     });
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: { messages: { queue: { mode: "followup" } } },
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1785,8 +1884,9 @@ describe("EmbeddedTuiBackend", () => {
         return active.promise;
       })
       .mockResolvedValueOnce({ payloads: [{ text: "the later turn completed" }], meta: {} });
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: { messages: { queue: { mode: "followup" } } },
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1842,8 +1942,9 @@ describe("EmbeddedTuiBackend", () => {
     const first = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
     resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1878,6 +1979,30 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
+  it("surfaces uncertain question input without queuing it again", async () => {
+    const first = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
+    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
+    const error = new QuestionAnswerUnconfirmedError("synthetic-question");
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockRejectedValue(error);
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await sendMainChat(backend, "first", "run-local-first");
+    try {
+      await expect(
+        backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "answer",
+          runId: "run-local-second",
+        }),
+      ).rejects.toBe(error);
+    } finally {
+      first.resolve({ payloads: [{ text: "done" }], meta: {} });
+      await flushMicrotasks();
+    }
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+  });
+
   it("queues local sends when active-runtime steering rejects them", async () => {
     const first = deferred<EmbeddedAgentResult>();
     const second = deferred<EmbeddedAgentResult>();
@@ -1885,8 +2010,9 @@ describe("EmbeddedTuiBackend", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1919,8 +2045,9 @@ describe("EmbeddedTuiBackend", () => {
     agentCommandFromIngressMock
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: { messages: { queue: { mode: "steer" } } },
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -1950,8 +2077,9 @@ describe("EmbeddedTuiBackend", () => {
     agentCommandFromIngressMock
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(collected.promise);
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: { messages: { queue: { mode: "collect" } } },
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -2001,13 +2129,16 @@ describe("EmbeddedTuiBackend", () => {
         .mockReturnValueOnce(collected.promise);
       let dropPolicy: "summarize" | "old" | "new" = "summarize";
       let cap = 1;
-      loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
-        cfg: { messages: { queue: { mode: "collect", cap, drop: dropPolicy } } },
-        canonicalKey: sessionKey,
-        storePath: "/tmp/openclaw-sessions.json",
-        store: {},
-        entry: { queueDebounceMs: 0 },
-      }));
+      loadSessionEntryMock.mockImplementation(
+        (sessionKey: string, opts?: { agentId?: string }) => ({
+          cfg: { messages: { queue: { mode: "collect", cap, drop: dropPolicy } } },
+          agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
+          canonicalKey: sessionKey,
+          storePath: "/tmp/openclaw-sessions.json",
+          store: {},
+          entry: { queueDebounceMs: 0 },
+        }),
+      );
 
       const backend = new EmbeddedTuiBackend();
       backend.start();
@@ -2061,10 +2192,11 @@ describe("EmbeddedTuiBackend", () => {
     agentCommandFromIngressMock
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: {
         messages: { queue: { mode: "followup", cap: 1, drop: "new" } },
       },
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -2104,8 +2236,9 @@ describe("EmbeddedTuiBackend", () => {
         return first.promise;
       })
       .mockResolvedValueOnce({ payloads: [{ text: "replacement done" }], meta: {} });
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: { messages: { queue: { mode: "interrupt" } } },
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -2132,8 +2265,9 @@ describe("EmbeddedTuiBackend", () => {
         return first.promise;
       })
       .mockResolvedValueOnce({ payloads: [{ text: "queue updated" }], meta: {} });
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
       cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
       canonicalKey: sessionKey,
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -2908,27 +3042,53 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
-  it("scopes selected global patches to the selected agent", async () => {
-    const backend = new EmbeddedTuiBackend();
-
-    await backend.patchSession({
-      key: "global",
-      agentId: "work",
-      fastMode: true,
-    });
-
-    expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storeKey: "global",
-        agentId: "work",
-        patch: expect.objectContaining({
+  it.each(selectedGlobalSessionCases)(
+    "scopes selected global patch policy and result to the stored owner: $input.sessionKey",
+    async ({ input, owner }) => {
+      const sessionUtils = await import("../gateway/session-utils.js");
+      const entry = { sessionId: `session-${owner}`, updatedAt: embeddedEventTimestamp };
+      const target = {
+        agentId: owner,
+        canonicalKey: "global",
+        storePath: `/tmp/openclaw-${owner}-sessions.json`,
+        storeKeys: ["global"],
+        store: { global: entry },
+      };
+      const resolveTarget = vi
+        .spyOn(sessionUtils, "resolveGatewaySessionStoreTargetWithStore")
+        .mockReturnValue(target);
+      const resolveCanonical = vi
+        .spyOn(sessionUtils, "resolveCanonicalGatewaySessionStoreKey")
+        .mockReturnValue({ target, primaryKey: "global", entry });
+      const resolveModel = vi.spyOn(sessionUtils, "resolveSessionModelRef");
+      projectSessionsPatchEntryMock.mockResolvedValueOnce({ ok: true, entry });
+      const backend = new EmbeddedTuiBackend();
+      const patch = {
+        key: input.sessionKey,
+        ...(input.agentId ? { agentId: input.agentId } : {}),
+        fastMode: true,
+      };
+      try {
+        await expect(backend.patchSession(patch)).resolves.toMatchObject({
+          ok: true,
           key: "global",
-          agentId: "work",
-          fastMode: true,
-        }),
-      }),
-    );
-  });
+          entry,
+        });
+        expect.soft(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            storeKey: "global",
+            agentId: owner,
+            patch,
+          }),
+        );
+        expect.soft(resolveModel).toHaveBeenCalledWith(expect.anything(), entry, owner);
+      } finally {
+        resolveTarget.mockRestore();
+        resolveCanonical.mockRestore();
+        resolveModel.mockRestore();
+      }
+    },
+  );
 
   it("fails a queued local send when the previous finishing run does not settle", async () => {
     await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
@@ -2976,13 +3136,16 @@ describe("EmbeddedTuiBackend", () => {
     await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
       const active = deferred<EmbeddedAgentResult>();
       agentCommandFromIngressMock.mockReturnValueOnce(active.promise);
-      loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
-        cfg: { messages: { queue: { mode: "followup" } } },
-        canonicalKey: sessionKey,
-        storePath: "/tmp/openclaw-sessions.json",
-        store: {},
-        entry: { queueDebounceMs: 0 },
-      }));
+      loadSessionEntryMock.mockImplementation(
+        (sessionKey: string, opts?: { agentId?: string }) => ({
+          cfg: { messages: { queue: { mode: "followup" } } },
+          agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
+          canonicalKey: sessionKey,
+          storePath: "/tmp/openclaw-sessions.json",
+          store: {},
+          entry: { queueDebounceMs: 0 },
+        }),
+      );
       const backend = new EmbeddedTuiBackend();
       const events = captureBackendEvents(backend);
       backend.start();
@@ -3502,6 +3665,7 @@ describe("EmbeddedTuiBackend", () => {
   it("emits side-result events for local /btw runs", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       store: {
@@ -3572,6 +3736,7 @@ describe("EmbeddedTuiBackend", () => {
   it("emits side-result events for local /side alias runs", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       store: {
@@ -3721,6 +3886,7 @@ describe("EmbeddedTuiBackend", () => {
   it("keeps local BTW runs alive during a session-scoped abort", async () => {
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
+      agentId: "main",
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       store: {},

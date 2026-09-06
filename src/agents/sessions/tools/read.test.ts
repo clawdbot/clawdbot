@@ -549,23 +549,82 @@ describe("read tool", () => {
     ).rejects.toThrow(/cursor.*surrogate.*(?:1|3)/i);
   });
 
-  it.each([4, 5])("explains an intra-line cursor at or past EOF (%s)", async (cursor) => {
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        readFile: async () => Buffer.from("done"),
-      },
+  it.each([
+    { cursor: 4, contents: "done", length: 4 },
+    { cursor: 5, contents: "done", length: 4 },
+    { cursor: 1, contents: "\n", length: 0 },
+  ])(
+    "explains an intra-line cursor at or past EOF ($cursor)",
+    async ({ cursor, contents, length }) => {
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          access: async () => {},
+          readFile: async () => Buffer.from(contents),
+        },
+      });
+
+      const result = await tool.execute(
+        "call-cursor-eof",
+        { path: "done.txt", cursor },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(textContent(result)).toBe(
+        `Cursor ${cursor} is at or beyond the end of line 1 (${length} characters).`,
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "an empty first line",
+      contents: "\nsecond line\n",
+      offset: 1,
+      limit: 2000,
+      expected: "\nsecond line\n",
+    },
+    {
+      name: "a later empty line",
+      contents: "first line\n\nsecond line\n",
+      offset: 2,
+      limit: 2000,
+      expected: "\nsecond line\n",
+    },
+    {
+      name: "a nonempty line",
+      contents: "\nsecond line\n",
+      offset: 2,
+      limit: 2000,
+      expected: "second line\n",
+    },
+    {
+      name: "a blank-only file",
+      contents: "\n\n",
+      offset: 1,
+      limit: 2000,
+      expected: "File contains 2 blank lines.",
+    },
+    {
+      name: "a blank-only range",
+      contents: "\n\n",
+      offset: 1,
+      limit: 1,
+      expected:
+        "Selected range contains 1 blank line.\n\n[1 more line in file. Use offset=2 to continue.]",
+    },
+  ])("accepts cursor 0 on $name", async ({ contents, offset, limit, expected }) => {
+    const tempDir = tempDirs.make("openclaw-read-cursor-zero-");
+    await fs.writeFile(path.join(tempDir, "synthetic.txt"), contents);
+    const result = await createReadTool(tempDir).execute("read-zero", {
+      path: "synthetic.txt",
+      offset,
+      limit,
+      cursor: 0,
     });
 
-    const result = await tool.execute(
-      "call-cursor-eof",
-      { path: "done.txt", cursor },
-      undefined,
-      undefined,
-      {} as never,
-    );
-
-    expect(textContent(result)).toMatch(/cursor.*(?:end|beyond).*line 1/i);
+    expect(textContent(result)).toBe(expected);
   });
 
   it("finishes an oversized selected line before continuing at the next line", async () => {

@@ -1,8 +1,44 @@
 import { describe, expect, it } from "vitest";
+import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  installWithSourceFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+
+describe("installWithSourceFallback", () => {
+  it.each(["notarget", "etarget"])(
+    "keeps an integrity refusal terminal for package %s",
+    async (name) => {
+      const spec = `@synthetic/${name}@1.0.0`;
+      const refusal = await resolveNpmIntegrityDriftWithDefaultMessage({
+        spec,
+        expectedIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
+        resolution: {
+          resolvedSpec: spec,
+          integrity: `sha512-${Buffer.alloc(64, 2).toString("base64")}`,
+        },
+        onIntegrityDrift: () => false,
+      });
+      expect(refusal.error).toContain("aborted: npm package integrity drift");
+      const attempted: string[] = [];
+      const result = await installWithSourceFallback({
+        sources: [
+          { source: "npm", spec },
+          { source: "clawhub", spec: `clawhub:${name}@1.0.0` },
+        ],
+        install: async ({ source }) => {
+          attempted.push(source);
+          return source === "npm" ? { ok: false, error: refusal.error } : { ok: true };
+        },
+        result: (attempt) => attempt,
+        onFallback: () => {},
+      });
+      expect(result.attempt).toEqual({ ok: false, error: refusal.error });
+      expect(attempted).toEqual(["npm"]);
+    },
+  );
+});
 
 describe("resolveNpmInstallSpecsForUpdateChannel", () => {
   it.each(["@openclaw/discord", "@openclaw/discord@latest"])(
@@ -60,20 +96,23 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     ).toThrow("requires an exact core version");
   });
 
-  it("targets the exact core version for a stable version-bound plugin", () => {
-    expect(
-      resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@openclaw/codex",
-        updateChannel: "stable",
-        officialPackageName: "@openclaw/codex",
-        coreVersion: "2026.8.1",
-        versionBoundToCore: true,
-      }),
-    ).toEqual({
-      installSpec: "@openclaw/codex@2026.8.1",
-      recordSpec: "@openclaw/codex",
-    });
-  });
+  it.each(["@openclaw/codex", "@openclaw/codex@latest"])(
+    "targets the exact core version for stable version-bound intent %s",
+    (spec) => {
+      expect(
+        resolveNpmInstallSpecsForUpdateChannel({
+          spec,
+          updateChannel: "stable",
+          officialPackageName: "@openclaw/codex",
+          coreVersion: "2026.8.1",
+          versionBoundToCore: true,
+        }),
+      ).toEqual({
+        installSpec: "@openclaw/codex@2026.8.1",
+        recordSpec: spec,
+      });
+    },
+  );
 
   it.each([
     { channel: "stable" as const, expectedVersion: "2026.7.1" },
@@ -93,12 +132,16 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     });
   });
 
-  it.each([false, true])(
-    "targets the installed beta core (version-bound=%s)",
-    (versionBoundToCore) => {
+  it.each(
+    [false, true].flatMap((versionBoundToCore) =>
+      ["@openclaw/codex", "@openclaw/codex@latest"].map((spec) => ({ versionBoundToCore, spec })),
+    ),
+  )(
+    "targets the installed beta core for $spec (version-bound=$versionBoundToCore)",
+    ({ versionBoundToCore, spec }) => {
       expect(
         resolveNpmInstallSpecsForUpdateChannel({
-          spec: "@openclaw/codex@latest",
+          spec,
           updateChannel: "beta",
           officialPackageName: "@openclaw/codex",
           coreVersion: "2026.8.1-beta.3",
@@ -106,8 +149,8 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
         }),
       ).toEqual({
         installSpec: "@openclaw/codex@2026.8.1-beta.3",
-        recordSpec: "@openclaw/codex@latest",
-        fallbackSpec: "@openclaw/codex@latest",
+        recordSpec: spec,
+        fallbackSpec: spec,
         fallbackLabel: "@openclaw/codex@2026.8.1-beta.3",
       });
     },
@@ -156,6 +199,53 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
 });
 
 describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
+  it.each([
+    ["stable", false, "2026.7.33", undefined],
+    ["stable", true, "2026.7.33", "2026.7.33"],
+    ["beta", false, "2026.7.33", "beta"],
+    ["beta", false, "2026.8.1-beta.3", "2026.8.1-beta.3"],
+    ["beta", true, "2026.8.1-beta.3", "2026.8.1-beta.3"],
+    ["extended-stable", false, "2026.7.33", "2026.7.33"],
+  ] as const)(
+    "resolves declared ClawHub defaults on %s (bound: %s, core: %s)",
+    (updateChannel, versionBoundToCore, coreVersion, selector) => {
+      for (const spec of ["clawhub:@openclaw/discord", "clawhub:@openclaw/discord@latest"]) {
+        const installSpec = selector ? `clawhub:@openclaw/discord@${selector}` : spec;
+        expect(
+          resolveClawHubInstallSpecsForUpdateChannel({
+            spec,
+            updateChannel,
+            officialPackageName: "@openclaw/discord",
+            coreVersion,
+            versionBoundToCore,
+          }),
+        ).toEqual({
+          installSpec,
+          recordSpec: spec,
+          ...(updateChannel === "beta" ? { fallbackSpec: spec, fallbackLabel: installSpec } : {}),
+        });
+      }
+    },
+  );
+
+  it.each(["stable", "beta", "extended-stable"] as const)(
+    "preserves exact and non-latest ClawHub selectors on %s",
+    (updateChannel) => {
+      for (const selector of ["2026.6.33", "next", "beta"]) {
+        const spec = `clawhub:@openclaw/discord@${selector}`;
+        expect(
+          resolveClawHubInstallSpecsForUpdateChannel({
+            spec,
+            updateChannel,
+            officialPackageName: "@openclaw/discord",
+            coreVersion: updateChannel === "beta" ? "2026.8.1-beta.3" : "2026.7.33",
+            versionBoundToCore: true,
+          }),
+        ).toEqual({ installSpec: spec, recordSpec: spec });
+      }
+    },
+  );
+
   it("does not rewrite ClawHub on extended-stable", () => {
     expect(
       resolveClawHubInstallSpecsForUpdateChannel({

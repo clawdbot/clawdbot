@@ -77,7 +77,10 @@ function resolveNodePairingSshVerifyPolicy(
   if (!user) {
     return null;
   }
-  const cidrs = cfg.cidrs?.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  const cidrs = cfg.cidrs
+    ?.map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .toSorted();
   return {
     user,
     identity: cfg.identity?.trim() || undefined,
@@ -156,14 +159,23 @@ function parseRemoteIdentity(stdout: string): ParsedRemoteIdentity | null {
 }
 
 // Probe bookkeeping is process-local and bounded: single-flight per
-// host+device, short cooldown after failures so reconnect loops do not
+// verification plan+device, short cooldown after failures so reconnect loops do not
 // re-probe every few seconds, and a small global concurrency cap so a token
 // holder cannot fan out SSH probes through the gateway.
 const inFlightByKey = new Map<string, Promise<NodePairingSshVerifyOutcome>>();
 const cooldownExpiryByKey = new Map<string, number>();
 
-function probeKey(host: string, deviceId: string): string {
-  return `${host}\0${deviceId}`;
+function probeKey(plan: NodePairingSshVerifyPlan, deviceId: string, publicKey: string): string {
+  // Policy reloads must not reuse old credentials' proofs or failure cooldowns.
+  return JSON.stringify([
+    plan.host,
+    deviceId,
+    publicKey,
+    plan.policy.user,
+    plan.policy.identity,
+    plan.policy.timeoutMs,
+    plan.policy.cidrs,
+  ]);
 }
 
 function pruneCooldowns(nowMs: number) {
@@ -192,7 +204,7 @@ export function startNodePairingSshVerify(params: {
 }): { done: Promise<NodePairingSshVerifyOutcome>; alreadyInFlight: boolean } | null {
   const nowMs = params.nowMs ?? Date.now();
   pruneCooldowns(nowMs);
-  const key = probeKey(params.plan.host, params.expectedDeviceId);
+  const key = probeKey(params.plan, params.expectedDeviceId, params.expectedPublicKey);
   const inFlight = inFlightByKey.get(key);
   if (inFlight) {
     return { done: inFlight, alreadyInFlight: true };

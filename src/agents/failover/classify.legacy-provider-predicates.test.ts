@@ -1,5 +1,6 @@
 // Covers provider-specific error-pattern classification hooks.
 import { describe, expect, it, vi } from "vitest";
+import { classifyFailoverClassificationFromHttpStatus } from "./classification-rules.js";
 import type { FailoverReason } from "./signal.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -213,5 +214,36 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     const jsonRateLimit =
       '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}';
     expect(classifyFailoverReason(jsonRateLimit)).toBe("rate_limit");
+  });
+});
+
+describe("context semantics through HTTP status mapping", () => {
+  it.each([400, 404, 422, 499, 500, 502, 503, 504, 529])(
+    "preserves a classified context overflow through HTTP %i",
+    (status) => {
+      expect(
+        classifyFailoverClassificationFromHttpStatus(
+          status,
+          "Context size has been exceeded.",
+          { kind: "context_overflow" },
+          status,
+        ),
+      ).toEqual({ kind: "context_overflow" });
+    },
+  );
+
+  it.each([
+    { status: 401, reason: "auth" },
+    { status: 403, reason: "auth" },
+    { status: 429, reason: "rate_limit" },
+  ])("preserves the HTTP $status access or quota boundary", ({ status, reason }) => {
+    expect(
+      classifyFailoverClassificationFromHttpStatus(
+        status,
+        "Context size has been exceeded.",
+        { kind: "context_overflow" },
+        status,
+      ),
+    ).toEqual({ kind: "reason", reason });
   });
 });

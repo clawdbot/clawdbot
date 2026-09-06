@@ -225,7 +225,7 @@ export type CodexConfigReadParams = {
 
 type CodexConfigMergeStrategy = "replace" | "upsert";
 
-export type CodexConfigEdit = {
+type CodexConfigEdit = {
   keyPath: string;
   value: JsonValue;
   mergeStrategy: CodexConfigMergeStrategy;

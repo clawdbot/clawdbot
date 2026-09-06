@@ -82,10 +82,14 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
+announce_relative="$(
+  openclaw_live_resolve_unique_staged_file "$tmp_dir/src/agents" subagent-announce.live.test.ts
+)"
+announce_test="src/agents/$announce_relative"
 OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_LIVE_SUBAGENT_E2E=1 \
 OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
-openclaw_live_run_staged_script scripts/test-live -- src/agents/subagents/announce/subagent-announce.live.test.ts -- --reporter=verbose
+openclaw_live_run_staged_script scripts/test-live -- "$announce_test" -- --reporter=verbose
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
@@ -98,7 +102,7 @@ if openclaw_live_uses_managed_bind_dirs; then
 fi
 
 echo "==> Run subagent announce live test in Docker"
-echo "==> Target: src/agents/subagents/announce/subagent-announce.live.test.ts"
+echo "==> Target: unique staged subagent-announce.live.test.ts"
 echo "==> Model: ${OPENCLAW_LIVE_SUBAGENT_E2E_MODEL:-openai/gpt-5.6-luna}"
 echo "==> Profile file: $PROFILE_STATUS"
 DOCKER_RUN_ARGS=()

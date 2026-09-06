@@ -10,6 +10,10 @@ import {
 } from "./agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "./openclaw-agent-db-registry-listing.js";
+import {
+  invalidateOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidationsForAgent,
+} from "./openclaw-agent-db-validation-cache.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
@@ -620,7 +624,7 @@ export function registerOpenClawAgentDatabase(params: {
   const lastSeenAt = Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
-      assertAgentDeletionPathFence(database.db, deletionFence);
+      assertAgentDeletionPathFence(database, deletionFence);
       const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
@@ -645,6 +649,7 @@ export function registerOpenClawAgentDatabase(params: {
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidation(params.path);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
@@ -701,6 +706,7 @@ export function unregisterOpenClawAgentDatabase(params: {
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidation(params.path);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
@@ -719,5 +725,6 @@ export function unregisterOpenClawAgentDatabases(params: {
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidationsForAgent(params.agentId);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }

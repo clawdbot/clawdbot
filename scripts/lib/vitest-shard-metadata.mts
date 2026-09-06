@@ -29,6 +29,69 @@ function hashIncludePatterns(patterns: readonly string[]): string {
   return createHash("sha1").update(JSON.stringify(patterns.toSorted())).digest("hex").slice(0, 12);
 }
 
+type CompactSplitTimingGenerationSpec = {
+  configs: readonly string[];
+  env?: Readonly<Record<string, string>>;
+  parentShardName: string;
+  stripes: readonly (readonly string[])[];
+};
+
+export type CompactSplitTimingKey = {
+  expectedParts: number;
+  generationKey: string;
+  part: number;
+  selectorKey: string;
+};
+
+export function parseCompactSplitTimingKey(value: string): CompactSplitTimingKey | undefined {
+  const match =
+    /^(.+#selector-\d+-[a-f0-9]{12})#generation-([a-f0-9]{12})#part-(\d+)-of-(\d+)#include-\d+-[a-f0-9]{12}$/u.exec(
+      value,
+    );
+  if (!match) {
+    return undefined;
+  }
+  const part = Number(match[3]);
+  const expectedParts = Number(match[4]);
+  if (part < 1 || part > expectedParts) {
+    return undefined;
+  }
+  return {
+    expectedParts,
+    generationKey: `${match[1]}#generation-${match[2]}#parts-${expectedParts}`,
+    part,
+    selectorKey: match[1]!,
+  };
+}
+
+export function createCompactSplitTimingGeneration(params: CompactSplitTimingGenerationSpec): {
+  selectorKey: string;
+  timingKeys: string[];
+} {
+  const parentIncludePatterns = params.stripes.flat();
+  if (new Set(parentIncludePatterns).size !== parentIncludePatterns.length) {
+    throw new Error(`split timing generation repeats files for ${params.parentShardName}`);
+  }
+  const selector = JSON.stringify({
+    configs: [...params.configs],
+    env: Object.entries(params.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
+    includePatterns: parentIncludePatterns.toSorted(),
+  });
+  const selectorDigest = createHash("sha1").update(selector).digest("hex").slice(0, 12);
+  const selectorKey = `${params.parentShardName}#selector-${parentIncludePatterns.length}-${selectorDigest}`;
+  const generationDigest = createHash("sha1")
+    .update(JSON.stringify(params.stripes.map((patterns) => patterns.toSorted())))
+    .digest("hex")
+    .slice(0, 12);
+  return {
+    selectorKey,
+    timingKeys: params.stripes.map(
+      (patterns, index) =>
+        `${selectorKey}#generation-${generationDigest}#part-${index + 1}-of-${params.stripes.length}#include-${patterns.length}-${hashIncludePatterns(patterns)}`,
+    ),
+  };
+}
+
 export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
   if (!Array.isArray(spec.includePatterns) || spec.includePatterns.length === 0) {
     return spec.config;
@@ -44,8 +107,8 @@ export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
   )}`;
 }
 
-// Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
-// from single-file local runs (M4 Max) and static import-graph size. Packing
+// Advisory per-file cost hints (seconds) for stripe balancing, from file walls,
+// serial case costs, and static import-graph size. Packing
 // only: a stale entry skews stripe balance but never correctness. Unlisted
 // files use the default, which mostly reflects the per-file module-graph
 // re-evaluation cost that dominates these serial suites.
@@ -54,7 +117,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Runtime prerequisites are charged once per batch, separately from test work.
   ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts", 6],
   ["test/scripts/plugin-release-git-lifecycle.test.ts", 35],
-  ["test/scripts/vitest-report-owner.test.ts", 71],
   ["test/scripts/pr-main-refresh.test.ts", 30],
   ["test/plugin-npm-package-manifest.test.ts", 26],
   ["test/scripts/ci-node-test-plan.test.ts", 24],
@@ -72,13 +134,24 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/acp-cli-exit.process.test.ts", 6],
   ["src/cli/cli-process-child.test-helpers.test.ts", 2],
   ["src/cli/cron-output.process.test.ts", 23],
-  ["src/cli/gateway-backed-exit.process.test.ts", 105],
+  // The cold source proof in run 33492093127 took 198.88s; keep it alone.
+  ["src/cli/gateway-backed-exit.process.test.ts", 200],
+  // Retain the original isolation budget until the split has measured timings.
+  ["src/cli/gateway-backed-exit-health.process.test.ts", 200],
   ["src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts", 4],
   ["src/cli/gateway-cli/shutdown-hard-exit.process.test.ts", 1],
   ["src/cli/help-exit.process.test.ts", 27],
   ["src/cli/hooks-cli.process.test.ts", 12],
   ["src/cli/mcp-cli.import-boundary.test.ts", 4],
   ["src/cli/plugins-authoring.process.test.ts", 10],
+  // Body sums from run 33492093127, rounded up with startup/import allowance.
+  ["src/cli/claws-authoring-state.process.test.ts", 6],
+  ["src/cli/cold-command-plugin-imports.process.test.ts", 20],
+  ["src/cli/doctor-output.process.test.ts", 90],
+  ["src/cli/mcp-cli.probe-exit.process.test.ts", 7],
+  ["src/cli/one-shot-exit.test.ts", 25],
+  ["src/cli/update-cli/update-command-lease.test.ts", 86],
+  ["src/cli/update-finalization-output.process.test.ts", 25],
   // The few CI-derived slow-file hints needed for the three new stripes are
   // rounded checkmark durations from canonical-main run 31691151297.
   ["src/auto-reply/reply/commands-export-session.test.ts", 8],
@@ -96,10 +169,38 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts", 8],
   ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 77],
   ["src/gateway/dashboard-session-title.test.ts", 23],
-  // Successful run 32172905415: 26.9s and 15.9s. Without direct hints the
-  // hosted agent-chat splitter prices both at 3s and puts them in one stripe.
-  ["src/gateway/server.sessions.create.test.ts", 27],
-  ["src/gateway/server.chat.gateway-server-chat.test.ts", 16],
+  // Two-run median case-body anchors from main runs 33504478720/33509347578.
+  // These balance files; membership-specific wrapper spans own admission.
+  ["src/gateway/server.sessions.create.test.ts", 52],
+  ["src/gateway/server.sessions.archive-worktree-lifecycle.test.ts", 34],
+  ["src/gateway/server.sessions.delete-worktree-lifecycle.test.ts", 31],
+  ["src/gateway/server.chat.gateway-server-chat-b.test.ts", 37],
+  ["src/gateway/server.chat.gateway-server-chat.test.ts", 22],
+  ["src/gateway/server.sessions.create.projects.test.ts", 15],
+  // The same runs exposed the 3s fallback on support's worktree owners. Keep
+  // these as relative LPT weights, not whole-parent admission.
+  ["src/agents/worktrees/service.gc.test.ts", 41],
+  ["src/agents/worktrees/service.test.ts", 43],
+  ["src/agents/worktrees/service.configured-root.test.ts", 24],
+  ["src/agents/worktrees/service.input-files.test.ts", 21],
+  ["src/agents/worktrees/service.canonical-paths.test.ts", 17],
+  ["src/agents/worktrees/service.remove-lease.test.ts", 16],
+  ["src/agents/sessions/agent-session-code-mode-source.test.ts", 28],
+  ["src/agents/worktrees/run-lease.test.ts", 13],
+  // Main runs 33537556582/33537739443/33543106647: median case-body sums.
+  // Relative weights distribute files; complete generation spans own admission.
+  ["src/agents/cli-runner/prepare.test.ts", 42],
+  ["src/agents/command/attempt-execution.cli.test.ts", 14],
+  ["src/agents/harness/selection.test.ts", 10],
+  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 17],
+  ["src/agents/runtime-plan/prepare-auth.test.ts", 11],
+  ["src/agents/subagents/registry/subagent-control.retirement.test.ts", 10],
+  ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],
+  ["src/agents/worktrees/service.capacity.test.ts", 19],
+  ["src/agents/worktrees/service.diagnostics.test.ts", 18],
+  ["src/agents/worktrees/service.naming.test.ts", 10],
+  ["src/agents/worktrees/service.provisioned.test.ts", 24],
+  ["src/agents/worktrees/service.run-end-cleanup.test.ts", 11],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
@@ -119,10 +220,16 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
   ["test/scripts/ci-git-owner.test.ts", 187],
-  // Successful hosted run 33388762505: retain the newer lifecycle measurements.
-  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 305],
+  // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
+  // spans; canonical push plans omit this tooling workload.
+  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 136],
   ["test/scripts/ci-linux-git.test.ts", 204],
-  ["test/scripts/pr-merge-outcome.test.ts", 159],
+  // Historical single-file wall from PR run 33576929814; this file has since grown.
+  ["test/scripts/pr-merge-outcome.test.ts", 206],
+  // Relative serial case costs from PR runs 33571672257/33576929814.
+  // These mixed invocations do not report complete file walls.
+  ["test/scripts/vitest-report-owner.test.ts", 203],
+  ["test/scripts/write-plugin-sdk-entry-dts.test.ts", 74],
   ["test/scripts/ci-workflow-guards.test.ts", 38],
   ["test/scripts/crabbox-wrapper.test.ts", 19],
   ["test/scripts/find-reusable-release-validation.test.ts", 8],
