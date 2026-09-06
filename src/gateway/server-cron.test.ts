@@ -745,9 +745,9 @@ describe("buildGatewayCronService", () => {
               : { agentId: "b", enabled: false },
           ),
         );
-        const jobs = state.cron
-          .getLoadedJobs()
-          .filter((job) => job.declarationKey?.startsWith(`${family}:`));
+        const jobs = (await state.cron.list({ includeDisabled: true })).filter((job) =>
+          job.declarationKey?.startsWith(`${family}:`),
+        );
         expect(jobs.map((job) => job.agentId).toSorted()).toEqual(["a", "b"]);
         for (const job of jobs)
           expect(job).toMatchObject(

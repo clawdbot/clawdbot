@@ -51,13 +51,13 @@ describe("reconcileHeartbeatMonitorJobs", () => {
         if (mutation === "remove") recordAttempt(id);
         return { ok: true, removed: true };
       });
-      const cfg = {
+      const cfg: OpenClawConfig = {
         agents: {
           ownership: "explicit",
           defaults: { heartbeat: { every: "30m" } },
           entries: mutation === "add" ? { a: {}, b: {}, c: {} } : { main: {} },
         },
-      } satisfies OpenClawConfig;
+      };
       try {
         const result = await reconcileHeartbeatMonitorJobs({
           cron: {
