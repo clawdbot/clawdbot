@@ -452,6 +452,95 @@ describe("ChannelsPage lifecycle", () => {
     source.channels.dispose();
   });
 
+  it("saves the profile through the next credential when the gateway rejects the first one", async () => {
+    const gateway = createGateway();
+    gateway.connection.token = "saved-token";
+    gateway.connection.password = "password";
+    gateway.emit({
+      hello: {
+        auth: { deviceToken: "device-token" },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      if (auth === "Bearer saved-token") {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return new Response(JSON.stringify({ ok: true, persisted: true }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("old-account", { name: "new" });
+
+    await page.saveNostrProfile();
+
+    // Nostr plugin routes authenticate configured shared credentials only, so
+    // the paired device token is never transmitted; the rejected saved token
+    // falls back to the saved connection password.
+    expect(
+      fetchMock.mock.calls.map(
+        ([, init]) => (init?.headers as Record<string, string> | undefined)?.Authorization,
+      ),
+    ).toEqual(["Bearer saved-token", "Bearer password"]);
+    expect(page.nostrProfileFormState?.error).toBeNull();
+    expect(refresh).toHaveBeenCalled();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("imports the profile through the next credential and merges the result", async () => {
+    const gateway = createGateway();
+    gateway.connection.token = "saved-token";
+    gateway.connection.password = "password";
+    gateway.emit({
+      hello: {
+        auth: { deviceToken: "device-token" },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      if (auth === "Bearer saved-token") {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          imported: true,
+          // Production answers imports requested with autoMerge by saving too.
+          saved: true,
+          merged: { name: "Imported Name" },
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("old-account", { name: "before-import" });
+
+    await page.importNostrProfile();
+
+    expect(
+      fetchMock.mock.calls.map(
+        ([, init]) => (init?.headers as Record<string, string> | undefined)?.Authorization,
+      ),
+    ).toEqual(["Bearer saved-token", "Bearer password"]);
+    expect(page.nostrProfileFormState?.error).toBeNull();
+    expect(page.nostrProfileFormState?.values.name).toBe("Imported Name");
+    expect(refresh).toHaveBeenCalled();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("drops a profile save when the channel source is replaced", async () => {
     const gateway = createGateway();
     const first = createContext(gateway);
