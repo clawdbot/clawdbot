@@ -55,9 +55,11 @@ export type UpdateCheckpointRestoreObservation = {
   after: RestoreResource["after"];
   userVersion: number | null;
 };
-export type UpdateCheckpointRestoreResult = UpdateCheckpointRestoreObservation & {
-  status: "applied" | "already-applied" | "conflict";
-};
+export type UpdateCheckpointRestoreResult = UpdateCheckpointRestoreObservation &
+  (
+    | { status: "applied" | "already-applied" | "conflict" }
+    | { status: "unavailable"; reason: "quiescence-unavailable" }
+  );
 
 function matchesOwnedFile(
   left: RestoreResource["before"],
@@ -230,12 +232,27 @@ export async function inspectUpdateCheckpointRestoreResource(
 export async function restoreUpdateCheckpointResource(
   params: ResourceReadParams & Pick<UpdateCheckpointAccess, "assertQuiescent">,
 ): Promise<UpdateCheckpointRestoreResult> {
-  params.assertQuiescent();
+  // Reconciliation is read-only and does not require mutation authority. Keep
+  // its evidence separate from the executor's current exclusion check below.
   const { resource, observation, current, staged, displaced } = await inspectResource(params);
   if (observation.observed === "conflict") {
     return { ...observation, status: "conflict" };
   }
-  params.assertQuiescent();
+  try {
+    const completion: unknown = params.assertQuiescent();
+    if (completion !== undefined) {
+      // A Promise is not established exclusion. Handle an eventual rejection,
+      // but never await it or use it to authorize this publication attempt.
+      if (isPromiseLike(completion)) {
+        void Promise.resolve(completion).catch(() => {});
+      }
+      throw new Error("Checkpoint exclusion must complete synchronously");
+    }
+  } catch {
+    // No effects have begun. Do not include arbitrary executor error contents
+    // or turn failures after displacement/publication into this safe outcome.
+    return { ...observation, status: "unavailable", reason: "quiescence-unavailable" };
+  }
   if (resource.sqlite) {
     for (const file of [
       resource.sourcePath,

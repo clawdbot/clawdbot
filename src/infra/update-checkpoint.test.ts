@@ -148,6 +148,70 @@ describe("update checkpoint artifacts and publication", () => {
     expect(await fs.readFile(work, "utf8")).toBe("new agent work");
   });
 
+  it.each([
+    ["before", "throw"],
+    ["after", "throw"],
+    ["before", "async"],
+    ["after", "async"],
+  ] as const)(
+    "returns unavailable without changing a verified %s resource when exclusion is %s",
+    async (observed, failure) => {
+      const f = await fixture();
+      const checkpointRef = await f.capture();
+      await fs.writeFile(f.configPath, "candidate");
+      const afterUpdateRef = await f.capture();
+      const prepared = await prepareUpdateCheckpointRestore({
+        ...f.access,
+        checkpointRef,
+        afterUpdateRef,
+        prepareSharedDatabase() {
+          throw new Error("No database in this fixture");
+        },
+      });
+      expect(prepared.status).toBe("ready");
+      if (prepared.status !== "ready") {
+        return;
+      }
+      const params = { ...f.access, planRef: prepared.planRef, resourceCursor: 0 };
+      if (observed === "after") {
+        expect((await restoreUpdateCheckpointResource(params)).status).toBe("applied");
+      }
+      const observation = await inspectUpdateCheckpointRestoreResource(params);
+      expect(observation.observed).toBe(observed);
+      const plan = await reopenUpdateCheckpointRestorePlan(prepared.planRef, f.access);
+      const resource = plan.plan.resources[0];
+      if (!resource) {
+        throw new Error("Missing test resource");
+      }
+      const files = [
+        f.configPath,
+        path.join(resource.stageDirectory, "replacement"),
+        path.join(resource.stageDirectory, "displaced"),
+        prepared.planRef.planPath,
+      ];
+      const before = await Promise.all(files.map(inspectCheckpointFile));
+      const request = {
+        ...params,
+        assertQuiescent() {
+          throw new Error("Exclusion lost");
+        },
+      };
+      if (failure === "async") {
+        // Exercise an untyped caller without passing a Promise into a typed void callback.
+        Reflect.set(request, "assertQuiescent", async () => {
+          throw new Error("Exclusion not established");
+        });
+      }
+      expect(await restoreUpdateCheckpointResource(request)).toEqual({
+        ...observation,
+        status: "unavailable",
+        reason: "quiescence-unavailable",
+      });
+      expect(await Promise.all(files.map(inspectCheckpointFile))).toEqual(before);
+      expect(await inspectUpdateCheckpointRestoreResource(params)).toEqual(observation);
+    },
+  );
+
   it.each(["edited", "recreated", "newly created"])(
     "does not seal a checkpoint when an earlier service resource is %s during capture",
     async (change) => {
