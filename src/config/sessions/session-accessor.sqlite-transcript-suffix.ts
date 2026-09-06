@@ -544,7 +544,8 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     storedRows.some((row, index) => {
       const expected = plan.expectedRows[index];
       return (
-        row.seq !== expected?.seq ||
+        expected === undefined ||
+        row.seq !== expected.seq ||
         row.createdAt !== expected.createdAt ||
         row.eventJson !== expected.eventJson
       );
