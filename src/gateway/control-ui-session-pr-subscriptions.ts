@@ -19,10 +19,13 @@ const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
 type LoadSessionPullRequests = (
   params: ControlUiSessionPullRequestsParams,
+  cacheSignal?: AbortSignal,
 ) => Promise<ControlUiSessionPullRequests>;
 
 type WatchedKeyState = {
   connIds: Set<string>;
+  // Retire cache pins with the shared key, without cancelling another watcher's load.
+  cacheLifetime: AbortController;
   hash?: string;
   snapshot?: ControlUiSessionPullRequestSnapshot;
 };
@@ -48,9 +51,10 @@ type ControlUiSessionPullRequestSubscriptions = {
 
 async function loadSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
+  cacheSignal?: AbortSignal,
 ): Promise<ControlUiSessionPullRequests> {
   const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
-  return await loadControlUiSessionPullRequests(params);
+  return await loadControlUiSessionPullRequests(params, { cacheSignal });
 }
 
 function pushedSnapshot(result: ControlUiSessionPullRequests): ControlUiSessionPullRequestSnapshot {
@@ -155,6 +159,7 @@ export function createControlUiSessionPullRequestSubscriptions(
         const state = keyStates.get(key);
         state?.connIds.delete(connId);
         if (state?.connIds.size === 0) {
+          state.cacheLifetime.abort(null);
           keyStates.delete(key);
         }
       }
@@ -189,7 +194,7 @@ export function createControlUiSessionPullRequestSubscriptions(
           return UNAVAILABLE_SNAPSHOT;
         }
         // Fresh result identity acknowledges forced loads even when the failure is unchanged.
-        const snapshot = await load(loaderParams(sessionKey, refresh))
+        const snapshot = await load(loaderParams(sessionKey, refresh), state.cacheLifetime.signal)
           .then(pushedSnapshot)
           .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
         if (keyStates.get(sessionKey) === state) {
@@ -285,7 +290,10 @@ export function createControlUiSessionPullRequestSubscriptions(
       for (const key of subscription.keys()) {
         let state = keyStates.get(key);
         if (!state) {
-          keyStates.set(key, (state = { connIds: new Set() }));
+          keyStates.set(
+            key,
+            (state = { connIds: new Set(), cacheLifetime: new AbortController() }),
+          );
         }
         state.connIds.add(normalizedConnId);
       }
@@ -340,6 +348,9 @@ export function createControlUiSessionPullRequestSubscriptions(
       timer = null;
     }
     subscriptions.clear();
+    for (const state of keyStates.values()) {
+      state.cacheLifetime.abort(null);
+    }
     keyStates.clear();
     stopPromise = scope.drain().then(() => {
       inflight.clear();

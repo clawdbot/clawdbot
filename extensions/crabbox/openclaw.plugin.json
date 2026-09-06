@@ -1,7 +1,7 @@
 {
   "id": "crabbox",
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "crabbox-warm-profile-v2", "doctorOnly": true }]
   },
   "name": "Crabbox Worker Provider",
   "description": "Cloud worker provider backed by the Crabbox CLI.",

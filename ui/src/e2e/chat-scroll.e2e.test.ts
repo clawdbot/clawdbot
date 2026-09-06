@@ -13,6 +13,7 @@ import {
   scrollChatThreadToTop,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -22,11 +23,7 @@ suite.define(() => {
     const artifactDir = artifactDirParent
       ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
       : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
     const historyMessages = Array.from({ length: 50 }, (_, index) => ({
@@ -210,11 +207,7 @@ suite.define(() => {
   });
 
   it("overlays the scroll-to-bottom affordance without shrinking the transcript", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
     const historyMessages = Array.from({ length: 50 }, (_, index) => ({

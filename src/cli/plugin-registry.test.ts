@@ -36,7 +36,8 @@ function expectConfiguredChannelPluginIdsParams(expected: {
     | { config?: unknown; env?: NodeJS.ProcessEnv; workspaceDir?: string }
     | undefined;
   expect(params?.config).toBe(expected.config);
-  expect(params?.env).toBe(process.env);
+  // Compare identity without exposing ambient credentials in failure output.
+  expect(params?.env === process.env).toBe(true);
   expect(params?.workspaceDir).toBe(expected.workspaceDir);
 }
 

@@ -855,11 +855,13 @@ describe("CLI attempt execution", () => {
         workspaceDir: tmpDir,
         agentDir,
         opts: { pinnedWidgetAuthoring: true },
+        runContext: { replyToMode: "all" },
       });
 
       const run = runtime === "cli" ? firstRunCliAgentArg() : firstEmbeddedAgentArg();
       expect(run.pinnedWidgetAuthoring).toBe(true);
       expect(run.clientCaps).toBeUndefined();
+      expect(run.replyToMode).toBe("all");
     },
   );
 
