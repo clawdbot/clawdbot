@@ -23,6 +23,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
+import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
@@ -560,12 +561,12 @@ function broadcastChatAborted(
     sessionKey: string;
     agentId?: string;
     stopReason?: string;
-    partialText?: string;
+    message?: Record<string, unknown>;
     errorMessage?: string;
     liveTextGroup?: AbortSignal;
   },
 ) {
-  const { runId, sessionKey, stopReason, partialText } = params;
+  const { runId, sessionKey, stopReason } = params;
   const errorMessage = readToolValidationErrorSummary(params.errorMessage);
   const explicitAgentId = normalizeActiveAgentId(params.agentId);
   const defaultGlobalAgentId =
@@ -582,13 +583,7 @@ function broadcastChatAborted(
     state: "aborted" as const,
     stopReason,
     ...(errorMessage ? { errorMessage } : {}),
-    message: partialText
-      ? {
-          role: "assistant",
-          content: [{ type: "text", text: partialText }],
-          timestamp: Date.now(),
-        }
-      : undefined,
+    message: params.message ? { ...params.message, timestamp: Date.now() } : undefined,
   };
   const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
   ops.broadcast("chat", payload, {
@@ -661,8 +656,21 @@ export function abortChatRunById(
   }
 
   const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
-  const liveTextGroup = ops.chatRunState.runs.get(runId)?.liveTextGroup?.signal;
+  const run = ops.chatRunState.runs.get(runId);
+  const liveTextGroup = run?.liveTextGroup?.signal;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
+  const canvasBlocks =
+    run?.bufferIsCurrent?.() !== false &&
+    (partialText || !(run?.rawBuffer ?? run?.buffer ?? "").trim())
+      ? (run?.canvasBlocks ?? [])
+      : [];
+  // Abort listeners can clear buffers and revoke their owner synchronously.
+  const message = appendChatCanvasBlocksToMessage(
+    partialText || canvasBlocks.length
+      ? { role: "assistant", content: partialText ? [{ type: "text", text: partialText }] : [] }
+      : undefined,
+    canvasBlocks,
+  );
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {
     active.abortStopReason = stopReason;
@@ -692,7 +700,7 @@ export function abortChatRunById(
       sessionKey,
       agentId: active.agentId,
       stopReason,
-      partialText,
+      message,
       errorMessage: active.toolErrorSummary,
       liveTextGroup,
     });
