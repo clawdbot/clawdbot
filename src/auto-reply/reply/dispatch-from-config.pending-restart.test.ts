@@ -7,11 +7,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { claimSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { createDedupeCache } from "../../infra/dedupe.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
-import { claimInboundDedupe, commitInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
+import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -69,7 +68,7 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
       if (claim.status !== "claimed") {
         throw new Error("Original input did not acquire inbound dedupe");
       }
-      commitInboundDedupe(claim.key);
+      claim.commit();
       source.finishPendingInput?.("interrupted");
       rotateAgentEventLifecycleGeneration();
       resumed = createRecorder();
@@ -147,16 +146,15 @@ it.each(["initial", "inflight", "cache-miss", "consumed", "session", "input", "r
         SessionKey: target.sessionKey,
         MessageSid: runId,
       });
-      const cache = createDedupeCache({ ttlMs: 20 * 60_000, maxSize: 10 });
-      const inFlight = new Set<string>();
-      const options = { cache, inFlight };
+      resetInboundDedupe();
+      let restoreClock: (() => void) | undefined;
       try {
         expect(await original.stageApproved?.({ runId, assertCurrent })).toBe(true);
-        const first = claimInboundDedupe(ctx, options);
+        const first = claimInboundDedupe(ctx);
         if (first.status !== "claimed") {
           throw new Error("Original input did not acquire inbound dedupe");
         }
-        commitInboundDedupe(first.key, options);
+        first.commit();
         if (control !== "initial") {
           original.finishPendingInput?.("interrupted");
           rotateAgentEventLifecycleGeneration();
@@ -165,16 +163,20 @@ it.each(["initial", "inflight", "cache-miss", "consumed", "session", "input", "r
         }
         const claim = (scope = target, sourceRunId = runId) =>
           claimInboundDedupe(ctx, {
-            ...options,
             reclaimPendingInput: () => claimSessionPendingInputDedupeRecovery(scope, sourceRunId),
           });
+        let activeClaim: ReturnType<typeof claimInboundDedupe> | undefined;
         if (control === "consumed") {
           await recorder.withPendingInput?.(() => recorder.persistApproved());
         } else if (control === "cache-miss") {
-          cache.clear();
+          const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 20 * 60_000 + 1);
+          restoreClock = () => clock.mockRestore();
         } else if (control === "inflight") {
-          inFlight.add(first.key);
+          first.release();
+          activeClaim = claimInboundDedupe(ctx);
+          expect(activeClaim.status).toBe("claimed");
         }
+        let result: ReturnType<typeof claimInboundDedupe> | undefined;
         if (control === "revoked") {
           expect(() =>
             recorder.withPendingInput?.(() => {
@@ -184,29 +186,38 @@ it.each(["initial", "inflight", "cache-miss", "consumed", "session", "input", "r
           ).toThrow("source revoked");
           current = true;
         } else {
-          const result = recorder.withPendingInput?.(() =>
+          result = recorder.withPendingInput?.(() =>
             claim(
               control === "session" ? { ...target, sessionId: "replacement-session" } : target,
               control === "input" ? "another-source" : runId,
             ),
           );
-          expect(result?.status).toBe(control === "cache-miss" ? "claimed" : "duplicate");
+          expect(result?.status).toBe(
+            control === "cache-miss"
+              ? "claimed"
+              : control === "inflight"
+                ? "inflight"
+                : "duplicate",
+          );
         }
         if (control === "initial" || control === "consumed") {
-          expect(cache.peek(first.key)).toBe(true);
-          expect(inFlight.size).toBe(0);
+          expect(claimInboundDedupe(ctx).status).toBe("duplicate");
           return;
         }
-        if (control === "inflight") {
-          inFlight.delete(first.key);
+        activeClaim?.release?.();
+        const recovered =
+          control === "cache-miss" ? result : recorder.withPendingInput?.(() => claim());
+        if (recovered?.status !== "claimed") {
+          throw new Error("Recovered input did not acquire inbound dedupe");
         }
-        if (control !== "cache-miss") {
-          expect(recorder.withPendingInput?.(() => claim()).status).toBe("claimed");
-        }
-        commitInboundDedupe(first.key, options);
+        recovered.commit();
+        // Old finalizers cannot erase or recommit the replacement's receipt.
+        first.release();
+        first.commit();
         expect(recorder.withPendingInput?.(() => claim()).status).toBe("duplicate");
-        expect(inFlight.size).toBe(0);
       } finally {
+        restoreClock?.();
+        resetInboundDedupe();
         current = true;
         recorder.finishPendingInput?.("interrupted");
         original.finishPendingInput?.("interrupted");
