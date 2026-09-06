@@ -736,6 +736,14 @@ async function appendMemoryFlushContent(params: {
   });
 }
 
+/**
+ * Tools a memory flush turn may use. Exported so the flush caller can declare
+ * the same allowlist to the CLI-backend dispatch gate, which needs a named
+ * list to bound its loopback grant; a second hand-written copy there would be
+ * free to drift away from the set actually constructed here.
+ */
+export const MEMORY_FLUSH_ALLOWED_TOOLS: readonly string[] = ["read", "write"];
+
 /** Restrict a write tool to appending memory-flush content to one path. */
 export function wrapToolMemoryFlushAppendOnlyWrite(
   tool: AnyAgentTool,

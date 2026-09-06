@@ -10,6 +10,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { MEMORY_FLUSH_ALLOWED_TOOLS } from "../../agents/agent-tools.read.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -83,6 +84,8 @@ import {
   resolveMemoryFlushContextWindowTokens,
   resolveCompactionThreshold,
   resolveResponsesServerCompactionThreshold,
+  hasAlreadyFlushedForCliRearmBucket,
+  resolveCliMemoryFlushRearmBucket,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -1270,7 +1273,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const isCli =
     followupUsesCliRuntime(runtimeParams, runtimeId) ||
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat;
   if (!canAttemptFlush) {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
   }
@@ -1279,8 +1282,11 @@ export async function runMemoryFlushIfNeeded(params: {
   let flushRunRegistered = false;
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore ?? {};
-  const recordFailure = (error: unknown) =>
-    recordMemoryFlushFailure(error, params, activeSessionEntry);
+  // The CLI re-arm bucket is resolved further below, once the transcript size
+  // is known, so callers pass it explicitly: a failure raised before then has
+  // no bucket to record, which is exactly what should be persisted.
+  const recordFailure = (error: unknown, cliRearmBucket?: number) =>
+    recordMemoryFlushFailure(error, params, activeSessionEntry, cliRearmBucket);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveContextConfigProviderForRuntime({
@@ -1337,23 +1343,46 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     entry && Number.isFinite(forceFlushTranscriptBytes) && forceFlushTranscriptBytes > 0,
   );
+  // CLI backends anchor their re-arm window on transcript bytes, so they need
+  // the size even when byte forcing is off (forceFlushTranscriptBytes: 0).
+  // Without this they would never resolve an anchor and never flush.
+  const shouldReadTranscriptSize =
+    shouldCheckTranscriptSizeForForcedFlush || Boolean(entry && isCli);
   const shouldReadTurnTaint = Boolean(entry);
   const shouldReadSessionLog =
-    shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush || shouldReadTurnTaint;
+    shouldReadTranscript || shouldReadTranscriptSize || shouldReadTurnTaint;
   const sessionLogSnapshot = shouldReadSessionLog
     ? readSessionLogSnapshot({
         agentId: params.followupRun.run.agentId,
         sessionId: params.followupRun.run.sessionId,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
         storePath: params.storePath,
-        includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
+        includeByteSize: shouldReadTranscriptSize,
         includeTurnTaint: shouldReadTurnTaint,
         includeUsage: shouldReadTranscript,
       })
     : undefined;
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
+  // The size is now read for CLI sessions even when byte forcing is off, so the
+  // threshold gate has to be explicit here: `forceFlushTranscriptBytes: 0`
+  // disables the trigger, and `size >= 0` would otherwise make it always true.
   const shouldForceFlushByTranscriptSize =
-    typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
+    shouldCheckTranscriptSizeForForcedFlush &&
+    typeof transcriptByteSize === "number" &&
+    transcriptByteSize >= forceFlushTranscriptBytes;
+
+  // CLI backends were excluded from the flush entirely because their
+  // compaction watermark can never advance, so one flush would lock the
+  // dedup for the rest of the session. Lift the exclusion only where a
+  // transcript-byte anchor is available to replace that watermark; a CLI
+  // session without one keeps the original skip rather than flushing once
+  // and then silently never again.
+  const cliRearmBucket = resolveCliMemoryFlushRearmBucket({ isCli, transcriptByteSize });
+  if (isCli && cliRearmBucket === undefined) {
+    return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
+  }
+  const cliAlreadyFlushed =
+    cliRearmBucket !== undefined && hasAlreadyFlushedForCliRearmBucket(entry, cliRearmBucket);
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
   const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
@@ -1443,14 +1472,22 @@ export async function runMemoryFlushIfNeeded(params: {
   );
 
   const shouldFlushMemory =
-    shouldRunMemoryFlush({
-      entry,
-      tokenCount: tokenCountForFlush,
-      threshold: flushThreshold,
-    }) ||
-    (shouldForceFlushByTranscriptSize &&
-      entry != null &&
-      !hasAlreadyFlushedForCurrentCompaction(entry));
+    cliRearmBucket !== undefined
+      ? shouldRunMemoryFlush({
+          entry,
+          tokenCount: tokenCountForFlush,
+          threshold: flushThreshold,
+          alreadyFlushed: cliAlreadyFlushed,
+        }) ||
+        (shouldForceFlushByTranscriptSize && !cliAlreadyFlushed)
+      : shouldRunMemoryFlush({
+          entry,
+          tokenCount: tokenCountForFlush,
+          threshold: flushThreshold,
+        }) ||
+        (shouldForceFlushByTranscriptSize &&
+          entry != null &&
+          !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
@@ -1506,7 +1543,7 @@ export async function runMemoryFlushIfNeeded(params: {
   try {
     preparedAttempt = await prepareMemoryFlushAttempt();
   } catch (error) {
-    return await recordFailure(error);
+    return await recordFailure(error, cliRearmBucket);
   }
   if (!preparedAttempt) {
     return { sessionEntry: activeSessionEntry, outcome: "skipped" };
@@ -1526,6 +1563,10 @@ export async function runMemoryFlushIfNeeded(params: {
     abortSignal,
   });
   const flushedCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+  // CLI backends re-arm on this instead, because their compaction count never
+  // advances. It is stored separately so neither value has to stand in for the
+  // other.
+  const flushedCliRearmBucket = cliRearmBucket;
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   let visibleErrorPayloads: ReplyPayload[] = [];
   // Only runnable maintenance owns a run context. The matching finally is
@@ -1627,6 +1668,20 @@ export async function runMemoryFlushIfNeeded(params: {
             terminalReplyExpectation: "optional",
             trigger: "memory",
             memoryFlushWritePath,
+            // Maintenance must execute on the runtime the session was
+            // configured for. Without this opt-in an embedded flush targeting
+            // a CLI runtime falls through to the direct-API passthrough, which
+            // Anthropic bills as metered extra usage rather than the plan
+            // limits the CLI runtime was chosen for. The dispatch gate itself
+            // decides eligibility, so non-CLI and API-key runs keep the
+            // passthrough untouched.
+            cliBackendDispatch: "subscription-auth",
+            // The gate needs the run's tool state as a named allowlist. This
+            // is the set agent-tools already constructs for a flush, so the
+            // read-only/append-only restriction is unchanged: the dispatch
+            // exposes no native CLI tools and bounds the loopback grant to
+            // these two, keeping the append-only write wrapper in force.
+            toolsAllow: [...MEMORY_FLUSH_ALLOWED_TOOLS],
             initialTurnTainted:
               !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
             prompt: activeMemoryFlushPlan.prompt,
@@ -1703,7 +1758,13 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await updateSessionEntry(
           { storePath: params.storePath, sessionKey: params.sessionKey },
           async () => ({
-            memoryFlush: { kind: "succeeded", compactionCount: flushedCompactionCount },
+            memoryFlush: {
+              kind: "succeeded",
+              compactionCount: flushedCompactionCount,
+              ...(flushedCliRearmBucket !== undefined
+                ? { cliRearmBucket: flushedCliRearmBucket }
+                : {}),
+            },
           }),
           { skipMaintenance: true, takeCacheOwnership: true },
         );
@@ -1722,7 +1783,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     return { sessionEntry: activeSessionEntry, outcome: "completed" };
   } catch (error) {
-    return await recordFailure(error);
+    return await recordFailure(error, cliRearmBucket);
   } finally {
     await deferredLifecycle.complete();
     if (flushRunRegistered) {
@@ -1736,6 +1797,7 @@ async function recordMemoryFlushFailure(
   error: unknown,
   run: MemoryFlushRunParams,
   initialSessionEntry?: SessionEntry,
+  cliRearmBucket?: number,
 ): Promise<MemoryFlushResult> {
   let sessionEntry = initialSessionEntry;
   let outcome: MemoryFlushOutcome = "failed";
@@ -1762,6 +1824,7 @@ async function recordMemoryFlushFailure(
           ...(currentEntry.memoryFlush?.compactionCount !== undefined
             ? { compactionCount: currentEntry.memoryFlush.compactionCount }
             : {}),
+          ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
           failureCount:
             (currentEntry.memoryFlush?.kind === "failed"
               ? currentEntry.memoryFlush.failureCount
@@ -1783,6 +1846,9 @@ async function recordMemoryFlushFailure(
           memoryFlush: {
             kind: "succeeded",
             compactionCount: currentEntry.compactionCount ?? 0,
+            // CLI sessions re-arm on the byte bucket, so suppression has to be
+            // recorded there too or the exhausted cycle retries every turn.
+            ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
           },
         }));
         adoptEntry(exhaustedEntry);

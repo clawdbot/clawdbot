@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { hasAlreadyFlushedForCliRearmBucket } from "../../auto-reply/reply/memory-flush.js";
 import { withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
@@ -512,4 +513,32 @@ describe("session work admission", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+it("upgrades a memory flush row persisted before the CLI re-arm bucket existed", () => {
+  // Rows written by an older build carry no cliRearmBucket. Normalization must
+  // not invent one: hasAlreadyFlushedForCliRearmBucket suppresses on an exact
+  // match, so a fabricated 0 would silently skip the first CLI flush after
+  // upgrade -- the exact case this field was added to make work.
+  const upgraded = normalizePersistedSessionEntryShape({
+    sessionId: "session",
+    updatedAt: 42,
+    compactionCount: 2,
+    memoryFlush: { kind: "succeeded", compactionCount: 2 },
+  });
+
+  expect(upgraded?.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 2 });
+  expect(upgraded?.memoryFlush && "cliRearmBucket" in upgraded.memoryFlush).toBe(false);
+  expect(hasAlreadyFlushedForCliRearmBucket(upgraded, 0)).toBe(false);
+  expect(hasAlreadyFlushedForCliRearmBucket(upgraded, 3)).toBe(false);
+
+  // A row that does carry one still round-trips through persistence.
+  const rearmed = normalizePersistedSessionEntryShape({
+    sessionId: "session",
+    updatedAt: 42,
+    memoryFlush: { kind: "succeeded", compactionCount: 2, cliRearmBucket: 3 },
+  });
+
+  expect(hasAlreadyFlushedForCliRearmBucket(rearmed, 3)).toBe(true);
+  expect(hasAlreadyFlushedForCliRearmBucket(rearmed, 4)).toBe(false);
 });

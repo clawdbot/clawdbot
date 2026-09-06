@@ -6,7 +6,12 @@ import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { modelKey } from "../../shared/model-key.js";
-import { resolveResponsesServerCompactionThreshold } from "./memory-flush.js";
+import {
+  hasAlreadyFlushedForCliRearmBucket,
+  resolveCliMemoryFlushRearmBucket,
+  shouldRunMemoryFlush,
+  resolveResponsesServerCompactionThreshold,
+} from "./memory-flush.js";
 
 const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
@@ -277,5 +282,84 @@ describe("Anthropic server compaction host threshold", () => {
         modelId,
       }),
     ).toBe(expected);
+  });
+});
+
+describe("CLI memory-flush re-arm bucket", () => {
+  it("keeps the token threshold shared when an external dedup verdict is supplied", () => {
+    // Fresh persisted totals with no explicit tokenCount: the threshold check
+    // must still see them, so a CLI session reaches the same verdict as an
+    // embedded one instead of silently never firing the token trigger.
+    const entry = {
+      totalTokens: 90_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    } as const;
+    expect(shouldRunMemoryFlush({ entry, threshold: 80_000, alreadyFlushed: false })).toBe(true);
+    expect(shouldRunMemoryFlush({ entry, threshold: 80_000, alreadyFlushed: true })).toBe(false);
+    expect(shouldRunMemoryFlush({ entry, threshold: 100_000, alreadyFlushed: false })).toBe(false);
+  });
+
+  it("buckets transcript growth for CLI backends", () => {
+    const rearmBytes = 256 * 1024;
+    expect(resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: 0 })).toBe(0);
+    for (const [transcriptByteSize, bucket] of [
+      [rearmBytes - 1, 0],
+      [rearmBytes, 1],
+      [rearmBytes * 3 + 10, 3],
+    ] as const) {
+      expect(resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize })).toBe(bucket);
+      expect(
+        resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize, rearmBytes }),
+      ).toBe(bucket);
+    }
+  });
+
+  it("keeps the compaction watermark when the byte anchor cannot apply", () => {
+    // Not a CLI backend: compactionCount advances there, so it stays authoritative.
+    expect(
+      resolveCliMemoryFlushRearmBucket({ isCli: false, transcriptByteSize: 1_000 }),
+    ).toBeUndefined();
+    // No transcript size to anchor on.
+    expect(resolveCliMemoryFlushRearmBucket({ isCli: true })).toBeUndefined();
+    expect(
+      resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: Number.NaN }),
+    ).toBeUndefined();
+    // A non-positive window would make every bucket zero and lock the dedup.
+    expect(
+      resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: 1_000, rearmBytes: 0 }),
+    ).toBeUndefined();
+  });
+
+  it("re-arms only once the transcript reaches the next bucket", () => {
+    const entry = {
+      memoryFlush: { kind: "succeeded" as const, compactionCount: 0, cliRearmBucket: 2 },
+    };
+    expect(hasAlreadyFlushedForCliRearmBucket(entry, 2)).toBe(true);
+    expect(hasAlreadyFlushedForCliRearmBucket(entry, 3)).toBe(false);
+    // The compaction count is a separate value and must not stand in for it.
+    expect(
+      hasAlreadyFlushedForCliRearmBucket(
+        { memoryFlush: { kind: "succeeded" as const, compactionCount: 2 } },
+        2,
+      ),
+    ).toBe(false);
+    // A failed attempt carries its bucket for attribution but must not
+    // suppress: the retry and exhaustion lifecycle still owns that bucket.
+    expect(
+      hasAlreadyFlushedForCliRearmBucket(
+        { memoryFlush: { kind: "failed" as const, failureCount: 1, cliRearmBucket: 2 } },
+        2,
+      ),
+    ).toBe(false);
+    // Exhaustion records `succeeded`, which does suppress until the next bucket.
+    expect(
+      hasAlreadyFlushedForCliRearmBucket(
+        { memoryFlush: { kind: "succeeded" as const, compactionCount: 0, cliRearmBucket: 2 } },
+        2,
+      ),
+    ).toBe(true);
+    expect(hasAlreadyFlushedForCliRearmBucket(undefined, 0)).toBe(false);
+    expect(hasAlreadyFlushedForCliRearmBucket({}, 0)).toBe(false);
   });
 });
