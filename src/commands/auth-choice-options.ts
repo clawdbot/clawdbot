@@ -1,6 +1,5 @@
 // Builds provider-aware auth-choice options and grouped onboarding menus.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
 import {
@@ -98,14 +97,12 @@ export function formatAuthChoiceChoicesForCli(params?: {
 
 /** Build flat auth-choice options from core choices plus provider setup flows. */
 function buildAuthChoiceOptions(params: {
-  store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  void params.store;
   const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
   for (const option of CORE_AUTH_CHOICE_OPTIONS) {
     optionByValue.set(option.value, option);
@@ -133,7 +130,6 @@ function buildAuthChoiceOptions(params: {
 
 /** Build grouped auth choices, filtering manual-only methods by default. */
 export function buildAuthChoiceGroups(params: {
-  store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;

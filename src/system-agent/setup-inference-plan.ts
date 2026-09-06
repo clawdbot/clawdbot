@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
@@ -28,7 +27,7 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
-import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -49,74 +48,12 @@ import {
 } from "./setup-inference-core.js";
 import {
   type SetupInferenceTestPlan,
+  buildPreparedProviderTestPlan,
   canonicalizeSetupModelRef,
   parseRef,
   prepareManualAuthForActivation,
-  projectManualInferenceConfig,
 } from "./setup-inference-plan-helpers.js";
 import { runProviderManualSecretMethod } from "./setup-inference-plan-provider-auth.js";
-
-function buildPreparedProviderTestPlan(params: {
-  cfg: OpenClawConfig;
-  sourceCfg: OpenClawConfig;
-  preparedConfig: OpenClawConfig;
-  profiles: ProviderAuthResult["profiles"];
-  selectedProfileId?: string;
-  providerPlugin?: ProviderPlugin;
-  modelRef: string;
-  pluginId?: string;
-  routeAgentId: string;
-  agentDir: string;
-}): SetupInferenceTestPlan {
-  const ref = parseRef(params.modelRef);
-  // Auth starters are raw provider input; guided discovery already chose its canonical model.
-  ref.model =
-    normalizeOptionalString(
-      params.providerPlugin?.normalizeModelId?.({
-        provider: ref.provider,
-        modelId: ref.model,
-      }),
-    ) ?? ref.model;
-  const modelRef = `${ref.provider}/${ref.model}`;
-  const projection = {
-    baseConfig: params.cfg,
-    preparedConfig: params.preparedConfig,
-    modelRef: params.modelRef,
-    targetModelRef: modelRef,
-    providerId: ref.provider,
-    pluginId: params.pluginId,
-    agentId: params.routeAgentId,
-  };
-  const prepared = params.selectedProfileId
-    ? prepareManualAuthForActivation({
-        ...projection,
-        profiles: params.profiles,
-        selectedProfileId: params.selectedProfileId,
-      })
-    : {
-        config: projectManualInferenceConfig(projection),
-        profiles: [],
-        selectedProfileId: undefined,
-      };
-  return {
-    runner: "embedded",
-    ...ref,
-    modelRef,
-    agentDir: params.agentDir,
-    config: prepared.config,
-    agentId: "openclaw",
-    routeAgentId: params.routeAgentId,
-    ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
-    persistModelRef: modelRef,
-    manualAuth: {
-      profiles: prepared.profiles,
-      runtimeConfigBase: params.cfg,
-      sourceConfigBase: params.sourceCfg,
-      configPatch: createMergePatch(params.cfg, prepared.config),
-      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-    },
-  };
-}
 
 async function prepareSetupProviderAuthChoice(
   params: Parameters<typeof buildTestPlan>[0],
@@ -459,10 +396,13 @@ export async function buildTestPlan(params: {
       const authChoice = params.authChoice?.trim();
       if (interactive && authChoice === "custom-api-key") {
         if (params.isRemoteProviderAuth) {
-          return { error: "For a custom provider, run openclaw onboard on the Gateway host." };
+          return {
+            error:
+              "For a custom provider, run openclaw onboard --auth-choice custom-api-key on the Gateway host, then return here and refresh connections.",
+          };
         }
         if (!params.prompter) {
-          return { error: "Custom provider setup requires an interactive CLI session." };
+          return { error: "Custom provider setup requires an interactive setup session." };
         }
         const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
         throwIfSetupInferenceCancelled(params);
@@ -509,8 +449,12 @@ export async function buildTestPlan(params: {
           })
         : undefined;
       const managedWizardChoice = !choice
-        ? installEntry
-        : choice.appGuidedSecret === true
+        ? installEntry && supportsSetupTextInference(installEntry.onboardingScopes)
+          ? installEntry
+          : undefined
+        : supportsSetupTextInference(choice.onboardingScopes) &&
+            (choice.appGuidedSecret === true ||
+              (!choice.appGuidedAuth && choice.appGuidedDiscovery !== true))
           ? { pluginId: choice.pluginId, label: choice.groupLabel ?? choice.choiceLabel }
           : undefined;
       if (interactive && authChoice && managedWizardChoice) {
@@ -547,10 +491,12 @@ export async function buildTestPlan(params: {
           preparedConfig: prepared.config,
           profiles: prepared.authProfiles,
           selectedProfileId: prepared.authProfiles[0]?.profileId,
+          providerPlugin: prepared.provider,
           modelRef,
           pluginId: managedWizardChoice.pluginId,
           routeAgentId,
           agentDir: params.agentDir,
+          pendingPluginInstalls: prepared.pendingPluginInstalls,
         });
       }
       if (

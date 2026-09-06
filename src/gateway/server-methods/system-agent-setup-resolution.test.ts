@@ -613,70 +613,74 @@ describe("openclaw.setup provider resolution", () => {
       expect(wizardSessions.has(sessionId)).toBe(false);
     },
   );
-  it("runs the selected provider method in a shared wizard session and commits its config", async () => {
-    const preparedConfig: OpenClawConfig = {
-      ...config,
-      models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-    };
-    providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockImplementationOnce(
-      async (params) => {
-        await params.prompter.note("Model ready", "Ollama");
-        await params.beforePersistentEffect();
-        return { config: preparedConfig, agentModelOverride: "ollama/qwen3:0.6b" };
-      },
-    );
-    const { wizardSessions, context } = makeContext();
-    const { calls, respond } = makeRespond();
+  it.each([false, true])(
+    "runs provider preparation with native discovery preference %s",
+    async (nativeSessionCatalogsEnabled) => {
+      const preparedConfig: OpenClawConfig = {
+        ...config,
+        models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
+      };
+      providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockImplementationOnce(
+        async (params) => {
+          await params.prompter.note("Model ready", "Ollama");
+          await params.beforePersistentEffect();
+          return { config: preparedConfig, agentModelOverride: "ollama/qwen3:0.6b" };
+        },
+      );
+      const { wizardSessions, context } = makeContext();
+      const { calls, respond } = makeRespond();
 
-    await systemAgentHandler("openclaw.setup.prepare.start")({
-      params: {
+      await systemAgentHandler("openclaw.setup.prepare.start")({
+        params: {
+          sessionId: "prepare-session-1",
+          nativeSessionCatalogsEnabled,
+          agentId: "research",
+          authChoice: "ollama",
+          workspace: "/tmp/models-workspace",
+        },
+        respond,
+        context,
+      } as never);
+
+      expect(calls[0]).toMatchObject({
+        ok: true,
+        payload: { sessionId: "prepare-session-1", done: false, status: "running" },
+      });
+      const session = expectDefined(
+        wizardSessions.get("prepare-session-1"),
+        "prepare wizard session",
+      );
+      const note = await callWizardNext(context, { sessionId: "prepare-session-1" });
+      expect(note).toMatchObject({
+        done: false,
+        step: { type: "note", title: "Ollama", message: "Model ready" },
+      });
+      expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authChoice: "ollama",
+          agentId: "research",
+          config,
+          workspaceDir: "/tmp/models-workspace",
+          setDefaultModel: false,
+          preserveExistingDefaultModel: true,
+          signal: session.signal,
+          isRemote: true,
+        }),
+      );
+      const done = await callWizardNext(context, {
         sessionId: "prepare-session-1",
-        agentId: "research",
-        authChoice: "ollama",
-        workspace: "/tmp/models-workspace",
-      },
-      respond,
-      context,
-    } as never);
-
-    expect(calls[0]).toMatchObject({
-      ok: true,
-      payload: { sessionId: "prepare-session-1", done: false, status: "running" },
-    });
-    const session = expectDefined(
-      wizardSessions.get("prepare-session-1"),
-      "prepare wizard session",
-    );
-    const note = await callWizardNext(context, { sessionId: "prepare-session-1" });
-    expect(note).toMatchObject({
-      done: false,
-      step: { type: "note", title: "Ollama", message: "Model ready" },
-    });
-    expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authChoice: "ollama",
-        agentId: "research",
-        config,
-        workspaceDir: "/tmp/models-workspace",
-        setDefaultModel: false,
-        preserveExistingDefaultModel: true,
-        signal: session.signal,
-        isRemote: true,
-      }),
-    );
-    const done = await callWizardNext(context, {
-      sessionId: "prepare-session-1",
-      answer: { stepId: expectDefined(note.step, "prepare wizard step").id, value: null },
-    });
-    expect(done).toEqual({
-      done: true,
-      status: "done",
-      preparedModelRef: "ollama/qwen3:0.6b",
-    });
-    expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
-      allowConfigSizeDrop: false,
-      baseSnapshot: expect.objectContaining({ hash: "setup-resolution-config" }),
-      baseHash: "setup-resolution-config",
-    });
-  });
+        answer: { stepId: expectDefined(note.step, "prepare wizard step").id, value: null },
+      });
+      expect(done).toEqual({
+        done: true,
+        status: "done",
+        preparedModelRef: "ollama/qwen3:0.6b",
+      });
+      expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
+        allowConfigSizeDrop: false,
+        baseSnapshot: expect.objectContaining({ hash: "setup-resolution-config" }),
+        baseHash: "setup-resolution-config",
+      });
+    },
+  );
 });

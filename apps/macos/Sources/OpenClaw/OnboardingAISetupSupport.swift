@@ -280,7 +280,9 @@ extension OnboardingAISetupModel {
         let label: String
         let detail: String?
 
-        var id: String { self.pluginId }
+        var id: String {
+            self.pluginId
+        }
     }
 
     struct PrepareOption: Identifiable, Equatable, Decodable {
@@ -382,15 +384,6 @@ extension OnboardingAISetupModel {
     }
 
     func startProviderAuth(_ option: AuthOption) {
-        if option.kind == "custom", self.connectionModeProvider() == .remote {
-            self.clearProviderAuth()
-            self.activeAuthOption = option
-            self.providerWizardKind = .auth
-            self.authError = Failure(
-                summary: "Set up this endpoint on the Gateway host.",
-                detail: "For security, OpenClaw will not collect a remote Gateway credential on this Mac. On the Gateway host, run `openclaw onboard --auth-choice custom-api-key`, finish the endpoint wizard there, then return here and choose Try again.")
-            return
-        }
         self.startProviderWizard(option, kind: .auth)
     }
 
@@ -403,19 +396,6 @@ extension OnboardingAISetupModel {
         default: nil
         }
         self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
-    /// Retained for deterministic presentation tests; startup never calls this.
-    func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
     }
 
     func startProviderPrepare(_ option: PrepareOption) {

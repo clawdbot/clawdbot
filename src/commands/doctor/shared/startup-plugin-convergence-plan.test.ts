@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 
 const loadInstalledPluginIndexInstallRecords = vi.hoisted(() => vi.fn(async () => ({})));
 const inspectBundledPluginStartupMetadata = vi.hoisted(() => vi.fn());
@@ -29,6 +30,24 @@ describe("startup plugin convergence planning", () => {
 
     expect(plan).toEqual({ required: false, installRecords: {} });
     expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({ env });
+  });
+
+  it("keeps a freshly initialized catalog opt-out out of plugin convergence", async () => {
+    const config = initializeNativeSessionCatalogPreferences({ gateway: { mode: "local" } });
+    await expect(planStartupPluginConvergence({ config, env: {} })).resolves.toEqual({
+      required: false,
+      installRecords: {},
+    });
+  });
+
+  it("retains convergence when an opted-out catalog plugin is explicitly enabled", async () => {
+    const config = initializeNativeSessionCatalogPreferences({
+      plugins: { entries: { codex: { enabled: true } } },
+    });
+    await expect(planStartupPluginConvergence({ config, env: {} })).resolves.toEqual({
+      required: true,
+      installRecords: {},
+    });
   });
 
   it("carries managed install records into convergence", async () => {

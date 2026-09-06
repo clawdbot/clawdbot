@@ -110,7 +110,7 @@ export async function persistActivatedSetupInference(input: {
     resolveSystemAgentConfiguredRouteFromConfig(config, requestedAgentId, routeDeps);
 
   const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
-  const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
+  const agentRuntimeId = plan.selectedAgentRuntimeId ?? resolveSetupAgentRuntimeId(params.kind);
   const selectModel = plan.persistModelRef
     ? await createSystemAgentModelSelectionUpdater({
         model: plan.persistModelRef,

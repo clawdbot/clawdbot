@@ -8,6 +8,7 @@ import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-pl
 import { resolveConfiguredGenericEmbeddingProviderId } from "../../../plugins/embedding-provider-config.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-record-reader.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   hasOfficialExternalChannelTarget,
   hasOfficialExternalContractTarget,
@@ -32,7 +33,10 @@ function hasPotentialPluginConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv
     return false;
   }
   return Object.entries(entries).some(([pluginId, entry]) => {
-    if (isRecord(entry) && entry.enabled === false) {
+    if (
+      (isRecord(entry) && entry.enabled === false) ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       return false;
     }
     return !inspectBundledPluginStartupMetadata({ pluginId, env });

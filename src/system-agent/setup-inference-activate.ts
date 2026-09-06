@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
@@ -66,6 +65,7 @@ import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 import {
   applySetupNativeSessionCatalogPreference,
   requiresSetupNativeSessionCatalogConsent,
+  listSetupNativeSessionCatalogs,
   resolveSetupNativeSessionCatalogPreference,
 } from "./setup-native-session-catalogs.js";
 import {
@@ -203,10 +203,9 @@ async function activateSetupInferenceUnredacted(
     }
     let plan = builtPlan;
     const catalogConsentRequired = requiresSetupNativeSessionCatalogConsent({
-      configPath: snapshot.path,
+      configExists: snapshot.exists,
       config: sourceCfg,
-      setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, routeAgentId)),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+      catalogs: listSetupNativeSessionCatalogs({ config: sourceCfg, workspaceDir: workspace }),
     });
     const catalogPreference = resolveSetupNativeSessionCatalogPreference({
       consentRequired: catalogConsentRequired,
@@ -236,7 +235,7 @@ async function activateSetupInferenceUnredacted(
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
     let testPlan = plan;
     if (plan.persistModelRef) {
-      const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
+      const agentRuntimeId = plan.selectedAgentRuntimeId ?? resolveSetupAgentRuntimeId(params.kind);
       const stagedConfig = await applySystemAgentModelSelection({
         config: testPlan.config,
         model: plan.persistModelRef,
@@ -391,6 +390,28 @@ async function activateSetupInferenceUnredacted(
       if (preparationFailure) {
         return preparationFailure;
       }
+    }
+    if (catalogPreference !== undefined) {
+      // A managed runtime can add its manifest after the first setup snapshot.
+      // Re-resolve declarations before the probe so a newly installed catalog
+      // receives the same explicit fresh-install preference.
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: testPlan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      testPlan = { ...testPlan, config: preferenceConfig };
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          runtimeConfigBase: cfg,
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
+      };
     }
     const metadataWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
     const routeMetadataSnapshot =

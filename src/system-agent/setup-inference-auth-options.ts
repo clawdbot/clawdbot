@@ -39,8 +39,7 @@ export function listSetupInferenceInstallOptions(
     if (
       installed.has(entry.choiceId) ||
       options.has(entry.choiceId) ||
-      !supportsSetupTextInference(entry.onboardingScopes) ||
-      entry.assistantVisibility === "manual-only"
+      !supportsSetupTextInference(entry.onboardingScopes)
     ) {
       continue;
     }
@@ -131,8 +130,8 @@ export function listSetupInferenceAuthOptions(
       !id ||
       choices.has(id) ||
       !supportsSetupTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
-      !choice.appGuidedAuth
+      (!choice.appGuidedAuth &&
+        (choice.appGuidedSecret === true || choice.appGuidedDiscovery === true))
     ) {
       continue;
     }
@@ -146,7 +145,7 @@ export function listSetupInferenceAuthOptions(
         ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
         ...(choice.icon ? { icon: choice.icon } : {}),
         ...(choice.website ? { website: choice.website } : {}),
-        kind: choice.appGuidedAuth,
+        kind: choice.appGuidedAuth ?? "install",
         featured: choice.onboardingFeatured === true,
       },
     });
@@ -176,25 +175,31 @@ export function listSetupInferenceEnableOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceAuthOption[] {
   return choices
-    .filter(
-      (choice) =>
-        supportsSetupTextInference(choice.onboardingScopes) &&
-        choice.assistantVisibility !== "manual-only" &&
-        (choice.appGuidedSecret === true ||
-          choice.appGuidedAuth !== undefined ||
-          choice.appGuidedDiscovery === true),
-    )
-    .map((choice) => ({
-      id: choice.choiceId,
-      brandId: choice.providerId,
-      label: choice.choiceLabel,
-      ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-      ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-      ...(choice.icon ? { icon: choice.icon } : {}),
-      ...(choice.website ? { website: choice.website } : {}),
-      kind: "install" as const,
-      featured: choice.onboardingFeatured === true,
-    }))
+    .filter((choice) => supportsSetupTextInference(choice.onboardingScopes))
+    .map((choice) => {
+      const option: SetupInferenceAuthOption = {
+        id: choice.choiceId,
+        brandId: choice.providerId,
+        label: choice.choiceLabel,
+        kind: "install",
+        featured: choice.onboardingFeatured === true,
+      };
+      const hint = choice.choiceHint?.trim();
+      const groupLabel = choice.groupLabel?.trim();
+      if (hint) {
+        option.hint = hint;
+      }
+      if (groupLabel) {
+        option.groupLabel = groupLabel;
+      }
+      if (choice.icon) {
+        option.icon = choice.icon;
+      }
+      if (choice.website) {
+        option.website = choice.website;
+      }
+      return option;
+    })
     .toSorted(
       (a, b) =>
         Number(b.featured) - Number(a.featured) ||
@@ -220,7 +225,6 @@ export function listSetupInferencePrepareOptions(
       !id ||
       choices.has(id) ||
       !supportsSetupTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
       choice.appGuidedDiscovery !== true
     ) {
       continue;

@@ -112,20 +112,20 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
   ].filter(
     (option, index, options) => options.findIndex((entry) => entry.id === option.id) === index,
   );
+  const nativeSessionCatalogs = listSetupNativeSessionCatalogs({
+    config: cfg,
+    workspaceDir: workspace,
+    metadataSnapshot: pluginMetadataSnapshot,
+  });
   const manual = {
     manualProviders: listSetupInferenceManualProviders(authChoices),
     authOptions,
     prepareOptions: listSetupInferencePrepareOptions(authChoices),
-    nativeSessionCatalogs: listSetupNativeSessionCatalogs({
-      config: cfg,
-      workspaceDir: workspace,
-      metadataSnapshot: pluginMetadataSnapshot,
-    }),
+    nativeSessionCatalogs,
     nativeSessionCatalogPreferenceRequired: requiresSetupNativeSessionCatalogConsent({
-      configPath: snapshot.path,
+      configExists: snapshot.exists,
       config: snapshot.sourceConfig ?? snapshot.config,
-      setupComplete,
-      ...(agentId ? { agentId } : {}),
+      catalogs: nativeSessionCatalogs,
     }),
     workspace,
     // Declining discovery must not turn an already configured install into fresh setup.

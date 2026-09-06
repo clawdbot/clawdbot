@@ -32,6 +32,7 @@ import type {
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestNativeSessionCatalogSetup,
 } from "./manifest-types.js";
 import type {
   PluginManifestContracts,
@@ -465,6 +466,7 @@ type PluginConversationBindingResolvedHandlerRegistration = {
 
 export type PluginRecord = {
   id: string;
+  nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   name: string;
   packageVersion?: string;
   version?: string;

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
-import { listSetupInferenceInstallOptions } from "./setup-inference-auth-options.js";
+import {
+  listSetupInferenceAuthOptions,
+  listSetupInferenceInstallOptions,
+} from "./setup-inference-auth-options.js";
 
 const metaEntry: ProviderInstallCatalogEntry = {
   pluginId: "meta",
@@ -18,6 +21,11 @@ const metaEntry: ProviderInstallCatalogEntry = {
 };
 
 describe("setup inference install options", () => {
+  it("offers a provider-owned wizard without app-specific auth metadata", () => {
+    expect(listSetupInferenceAuthOptions([metaEntry])).toEqual([
+      expect.objectContaining({ id: "meta-api-key", kind: "install" }),
+    ]);
+  });
   it("surfaces uninstalled text providers as managed install choices", () => {
     expect(listSetupInferenceInstallOptions([metaEntry], [])).toEqual([
       {

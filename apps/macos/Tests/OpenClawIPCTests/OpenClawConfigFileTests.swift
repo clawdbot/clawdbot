@@ -5,10 +5,75 @@ import Testing
 @Suite(.serialized)
 struct OpenClawConfigFileTests {
     private func makeConfigOverridePath() -> String {
-        FileManager().temporaryDirectory
+        // Foundation otherwise uses the account's temp directory, outside the test launcher's sandbox root.
+        let temporaryRoot = ProcessInfo.processInfo.environment["TMPDIR"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager().temporaryDirectory
+        return temporaryRoot
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
             .path
+    }
+
+    @MainActor
+    @Test
+    func `fresh config defaults native discovery off and preserves explicit choice`() async throws {
+        let override = self.makeConfigOverridePath()
+        let directory = URL(fileURLWithPath: override).deletingLastPathComponent()
+        defer { try? FileManager().removeItem(at: directory) }
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": override,
+            "OPENCLAW_STATE_DIR": directory.path,
+        ]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "plugins": ["entries": ["codex": ["config": ["sessionCatalog": ["enabled": true]]]]],
+            ]))
+            let data = try Data(contentsOf: URL(fileURLWithPath: override))
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let entries = try #require((root["plugins"] as? [String: Any])?["entries"] as? [String: Any])
+            let claude = try #require((entries["anthropic"] as? [String: Any])?["config"] as? [String: Any])
+            let codex = try #require((entries["codex"] as? [String: Any])?["config"] as? [String: Any])
+            #expect((claude["sessionCatalog"] as? [String: Any])?["enabled"] as? Bool == false)
+            #expect((codex["sessionCatalog"] as? [String: Any])?["enabled"] as? Bool == true)
+            #expect((entries["codex"] as? [String: Any])?["enabled"] == nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `dangling config link is not initialized as a fresh file`() async throws {
+        let override = self.makeConfigOverridePath()
+        let url = URL(fileURLWithPath: override)
+        let target = url.deletingLastPathComponent().appendingPathComponent("missing.json")
+        defer { try? FileManager().removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager().createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager().createSymbolicLink(at: url, withDestinationURL: target)
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": override,
+            "OPENCLAW_STATE_DIR": url.deletingLastPathComponent().path,
+        ]) {
+            #expect(!OpenClawConfigFile.saveDict(["browser": ["enabled": false]]))
+            let destination = try FileManager().destinationOfSymbolicLink(atPath: override)
+            #expect(destination == target.path)
+            #expect(!FileManager().fileExists(atPath: target.path))
+        }
+    }
+
+    @MainActor
+    @Test
+    func `existing unversioned config keeps omitted discovery preferences`() async throws {
+        let override = self.makeConfigOverridePath()
+        let url = URL(fileURLWithPath: override)
+        defer { try? FileManager().removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager().createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: url)
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": override,
+            "OPENCLAW_STATE_DIR": url.deletingLastPathComponent().path,
+        ]) {
+            #expect(OpenClawConfigFile.saveDict(["browser": ["enabled": false]]))
+            #expect(OpenClawConfigFile.loadDict()["plugins"] == nil)
+        }
     }
 
     @Test
@@ -163,7 +228,7 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func `save dict preserves gateway auth unless explicitly allowed`() async throws {
+    func `save dict preserves gateway auth unless explicitly allowed`() async {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
@@ -212,7 +277,7 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func `save dict can merge local fallback writes with fresh config`() async throws {
+    func `save dict can merge local fallback writes with fresh config`() async {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")

@@ -1,6 +1,5 @@
 // Grouped auth-choice prompt tests cover configured-provider setup affordances.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import { isKeepCurrentAuthChoice, promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -20,8 +19,6 @@ vi.mock("./auth-choice-options.js", () => ({
   compareAuthChoiceGroups,
   isFeaturedAuthChoiceGroup,
 }));
-
-const EMPTY_STORE: AuthProfileStore = { version: 1, profiles: {} };
 
 function createPromptHarness(
   onSelect: (params: WizardSelectParams<unknown>) => Promise<unknown>,
@@ -128,7 +125,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       allowKeepCurrentProvider: true,
       config: {
@@ -182,7 +178,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       allowKeepCurrentProvider: true,
       config: {
@@ -274,7 +269,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       allowedChoices: new Set([
         "openai",
@@ -341,7 +335,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       additionalGroups: [
         {
@@ -380,7 +373,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     const result = await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: false,
       additionalGroups: [
         {
@@ -411,7 +403,6 @@ describe("promptAuthChoiceGrouped", () => {
 
     await promptAuthChoiceGrouped({
       prompter,
-      store: EMPTY_STORE,
       includeSkip: true,
       detectedProviderIds: new Set(["ollama"]),
     });

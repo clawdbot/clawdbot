@@ -114,10 +114,12 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    const normalizedProvider = { ...provider, id, label };
     registry.sessionCatalogs.push({
       pluginId: record.id,
       pluginName: record.name,
-      provider: { ...provider, id, label },
+      provider:
+        state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider,
       source: record.source,
       rootDir: record.rootDir,
     });

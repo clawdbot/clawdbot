@@ -1,8 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import {
+  applyNativeSessionCatalogPreference,
+  hasLegacyNativeSessionCatalogDefault,
+  readNativeSessionCatalogPreference,
+  shippedNativeSessionCatalogs,
+} from "../plugins/native-session-catalog-config.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { readLocalOnboardingStateForConfig } from "../state/local-onboarding-state.js";
 
 export type SetupNativeSessionCatalogOption = {
   pluginId: string;
@@ -10,31 +14,30 @@ export type SetupNativeSessionCatalogOption = {
   detail?: string;
 };
 
-export function requiresSetupNativeSessionCatalogConsent(params: {
-  configPath: string;
+type CatalogOptions = {
   config: OpenClawConfig;
-  setupComplete: boolean;
-  agentId?: string;
-  completedLocalOnboarding?: boolean;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+};
+
+export function requiresSetupNativeSessionCatalogConsent(params: {
+  configExists: boolean;
+  config: OpenClawConfig;
+  catalogs: readonly SetupNativeSessionCatalogOption[];
 }): boolean {
-  if (params.agentId || params.setupComplete) {
+  if (params.catalogs.length === 0) {
     return false;
   }
-  if (
-    params.config.wizard?.lastRunAt?.trim() ||
-    (params.completedLocalOnboarding ??
-      readLocalOnboardingStateForConfig(params.configPath, params.config)?.status === "completed")
-  ) {
-    return false;
-  }
-  const hasExistingSetup =
-    Object.keys(params.config.auth?.profiles ?? {}).length > 0 ||
-    Object.keys(params.config.models?.providers ?? {}).length > 0 ||
-    Object.keys(params.config.channels ?? {}).length > 0 ||
-    Object.keys(params.config.plugins?.entries ?? {}).length > 0 ||
-    Object.keys(params.config.plugins?.installs ?? {}).length > 0 ||
-    (params.config.agents?.list?.length ?? 0) > 0;
-  return !hasExistingSetup;
+  // A fresh writer records false before any plugin runs. Legacy missing or mixed
+  // preferences remain untouched. Doctor and baseline setup metadata do not establish consent.
+  return params.catalogs.every(({ pluginId }) => {
+    const enabled = readNativeSessionCatalogPreference(params.config, pluginId);
+    return (
+      enabled === false ||
+      (enabled === undefined &&
+        (!params.configExists || !hasLegacyNativeSessionCatalogDefault(pluginId)))
+    );
+  });
 }
 
 export function resolveSetupNativeSessionCatalogPreference(params: {
@@ -44,34 +47,9 @@ export function resolveSetupNativeSessionCatalogPreference(params: {
   return params.consentRequired ? (params.requested ?? false) : undefined;
 }
 
-function supportsNativeSessionCatalog(plugin: PluginMetadataSnapshot["plugins"][number]): boolean {
-  const properties = isRecord(plugin.configSchema?.properties)
-    ? plugin.configSchema.properties
-    : undefined;
-  const sessionCatalog = isRecord(properties?.sessionCatalog)
-    ? properties.sessionCatalog
-    : undefined;
-  const sessionProperties = isRecord(sessionCatalog?.properties)
-    ? sessionCatalog.properties
-    : undefined;
-  const enabled = isRecord(sessionProperties?.enabled) ? sessionProperties.enabled : undefined;
-  return enabled?.type === "boolean";
-}
-
-function nativeSessionCatalogLabel(plugin: PluginMetadataSnapshot["plugins"][number]): string {
-  const hint = plugin.configUiHints?.["sessionCatalog.enabled"]?.label?.trim();
-  const conciseHint = hint
-    ?.replace(/^Discover\s+/u, "")
-    .replace(/\s+Sessions?$/u, "")
-    .replace(/\s+Session Catalog$/u, "");
-  return conciseHint || plugin.name?.trim() || plugin.id;
-}
-
-export function listSetupNativeSessionCatalogs(params: {
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): SetupNativeSessionCatalogOption[] {
+export function listSetupNativeSessionCatalogs(
+  params: CatalogOptions,
+): SetupNativeSessionCatalogOption[] {
   const snapshot =
     params.metadataSnapshot ??
     loadManifestMetadataSnapshot({
@@ -79,46 +57,35 @@ export function listSetupNativeSessionCatalogs(params: {
       workspaceDir: params.workspaceDir,
       env: process.env,
     });
-  return snapshot.plugins
-    .filter(supportsNativeSessionCatalog)
-    .map((plugin) => {
-      const hint = plugin.configUiHints?.["sessionCatalog.enabled"];
-      return {
-        pluginId: plugin.id,
-        label: nativeSessionCatalogLabel(plugin),
-        ...(hint?.help?.trim() ? { detail: hint.help.trim() } : {}),
-      };
+  const catalogs = new Map(
+    shippedNativeSessionCatalogs.map((catalog) => [catalog.pluginId, catalog]),
+  );
+  for (const plugin of snapshot.plugins) {
+    if (plugin.setup?.nativeSessionCatalog) {
+      catalogs.set(plugin.id, { pluginId: plugin.id, ...plugin.setup.nativeSessionCatalog });
+    }
+  }
+  return [...catalogs.values()]
+    .map(({ pluginId, label, description }) => {
+      const option: SetupNativeSessionCatalogOption = { pluginId, label };
+      if (description) {
+        option.detail = description;
+      }
+      return option;
     })
     .toSorted(
       (a, b) => a.label.localeCompare(b.label, "en") || a.pluginId.localeCompare(b.pluginId, "en"),
     );
 }
 
-export function applySetupNativeSessionCatalogPreference(params: {
-  config: OpenClawConfig;
-  enabled: boolean;
-  workspaceDir?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): OpenClawConfig {
-  const options = listSetupNativeSessionCatalogs(params);
-  if (options.length === 0) {
-    return params.config;
-  }
-  const entries = { ...params.config.plugins?.entries };
-  for (const option of options) {
-    const entry = entries[option.pluginId] ?? {};
-    const config = isRecord(entry.config) ? entry.config : {};
-    const sessionCatalog = isRecord(config.sessionCatalog) ? config.sessionCatalog : {};
-    entries[option.pluginId] = {
-      ...entry,
-      config: {
-        ...config,
-        sessionCatalog: { ...sessionCatalog, enabled: params.enabled },
-      },
-    };
-  }
-  return {
-    ...params.config,
-    plugins: { ...params.config.plugins, entries },
-  };
+export function applySetupNativeSessionCatalogPreference(
+  params: CatalogOptions & {
+    enabled: boolean;
+  },
+): OpenClawConfig {
+  return applyNativeSessionCatalogPreference(
+    params.config,
+    listSetupNativeSessionCatalogs(params).map(({ pluginId }) => pluginId),
+    params.enabled,
+  );
 }

@@ -676,15 +676,35 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   it("installs a missing provider plugin and retries setup resolution", async () => {
     const provider = buildProvider();
+    const method = expectDefined(provider.auth[0], "provider.auth[0] test invariant");
+    const run = method.run;
+    method.run = async (context) => ({
+      ...(await run(context)),
+      configPatch: {
+        plugins: {
+          installs: { "local-provider-plugin": { source: "npm", spec: "provider-authored" } },
+        },
+      },
+    });
+    const installRecord = { source: "npm" as const, spec: "@openclaw/local-provider" };
+    const installed = buildInstalledLocalProviderPluginResult();
     resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
-    ensureOnboardingPluginInstalled.mockResolvedValue(buildInstalledLocalProviderPluginResult());
+    ensureOnboardingPluginInstalled.mockResolvedValue({
+      ...installed,
+      cfg: {
+        ...installed.cfg,
+        plugins: { ...installed.cfg.plugins, installs: { "local-provider-plugin": installRecord } },
+      },
+    });
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
       provider,
-      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
+      method,
     });
 
-    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+    const result = await prepareAuthChoiceLoadedPluginProvider(buildParams());
+    expect(result?.pendingPluginInstalls).toEqual({ "local-provider-plugin": installRecord });
+    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
 
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
     const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];

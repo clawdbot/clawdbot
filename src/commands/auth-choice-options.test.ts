@@ -1,6 +1,5 @@
 // Auth-choice option tests cover provider wizard options, grouping, and onboarding scope filters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import {
   buildAuthChoiceGroups,
@@ -84,11 +83,8 @@ vi.mock("../flows/provider-flow.js", () => ({
   ),
 }));
 
-const EMPTY_STORE: AuthProfileStore = { version: 1, profiles: {} };
-
 function getOptions(includeSkip = false) {
   const { groups, skipOption } = buildAuthChoiceGroups({
-    store: EMPTY_STORE,
     includeSkip,
     assistantVisibleOnly: false,
   });
@@ -426,7 +422,6 @@ describe("buildAuthChoiceOptions", () => {
       },
     ]);
     const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
       includeSkip: false,
     });
     const chutesGroup = requireChoiceGroup(groups, "chutes");
@@ -516,7 +511,6 @@ describe("buildAuthChoiceOptions", () => {
     ]);
 
     const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
       includeSkip: false,
     });
 
@@ -563,7 +557,6 @@ describe("buildAuthChoiceOptions", () => {
       },
     ]);
     const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
       includeSkip: false,
     });
     const anthropicGroup = requireChoiceGroup(groups, "anthropic");
@@ -617,7 +610,6 @@ describe("buildAuthChoiceOptions", () => {
     ]);
 
     const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
       includeSkip: false,
     });
     const openAIGroup = requireChoiceGroup(groups, "openai");
@@ -651,7 +643,6 @@ describe("buildAuthChoiceOptions", () => {
     ]);
 
     const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
       includeSkip: false,
       assistantVisibleOnly: false,
     });
@@ -684,7 +675,6 @@ describe("buildAuthChoiceOptions", () => {
       },
     ]);
     const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
       includeSkip: false,
     });
     const openCodeGroup = requireChoiceGroup(groups, "opencode");

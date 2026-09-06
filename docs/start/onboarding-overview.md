@@ -10,8 +10,8 @@ sidebarTitle: "Onboarding Overview"
 OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
 desktop companion. Every path establishes inference first: it detects existing
 AI access, requires a live completion, and only then starts OpenClaw to
-configure the remaining setup. Desktop apps verify an already configured
-model before opening the normal agent UI instead of repeating guided onboarding.
+configure the remaining setup. During macOS onboarding, selecting an already
+configured model verifies that route before opening the normal dashboard.
 The terminal flow also offers the full classic wizard for detailed setup.
 
 ## Which path should I use?
@@ -55,14 +55,18 @@ Run in any terminal:
 openclaw onboard
 ```
 
-The guided flow detects existing AI access, live-tests candidates in order,
-and falls through on failure. If detection is exhausted, it shows OpenAI,
-Anthropic, xAI (Grok), Google, and OpenRouter first. **More…** contains the
-remaining providers in provider groups, with regions, plans, and supported
-browser, device, API-key, or token methods in a second menu. It saves the model
-and credential only after a passing completion, then starts OpenClaw to
+The guided flow detects existing AI access, then waits for you to choose a
+connection. The picker includes detected connections and every supported provider,
+including official providers that need a plugin installed. **More…** contains
+additional provider groups, with regions, plans, and supported browser, device,
+API-key, or token methods in a second menu. Only your selected connection is
+tested. Failure returns to the picker; cancellation stops that attempt without
+trying another provider. It saves the model and credential only after a passing
+completion, then starts OpenClaw to
 configure the workspace, Gateway, channels, agents, plugins, and other optional
-features. **Skip for now** exits without starting OpenClaw. There is no
+features. In local onboarding, **Skip for now** prepares the named agent's workspace
+and local Gateway configuration, then exits without starting a Gateway or AI chat.
+Run `openclaw onboard` again to connect AI and finish setup. There is no
 in-flow classic handoff; exit and run `openclaw onboard --classic` when you want
 the classic wizard instead.
 
@@ -84,8 +88,9 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 [Download the macOS app](/platforms/macos#download), then open it. If its
 configured local or remote Gateway is reachable and the default agent already
-has a configured model, the app verifies that model with a real reply before
-opening the normal dashboard.
+has a configured model, onboarding offers **Current model**. Select it to run a
+real model check and open the normal dashboard. Loading the page only detects
+available connections, including when this Mac is new to an existing Gateway.
 
 For a fresh or incomplete Gateway, native setup handles the Gateway connection,
 any needed local CLI/runtime install, and AI access. It detects existing

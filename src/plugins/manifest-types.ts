@@ -215,6 +215,17 @@ export type PluginManifestSetupProviderAuthEvidence = {
   source?: string;
 };
 
+export type PluginManifestNativeSessionCatalogSetup = {
+  /** Provider/product name shown in fresh-install consent. */
+  label: string;
+  /** Optional explanation of the native catalog source. */
+  description?: string;
+  /** Node commands that read or resume this native catalog. */
+  nodeCommands?: string[];
+  /** Host-generated upgrade exception for a previously shipped implicit-on catalog. */
+  legacyDefaultEnabled?: boolean;
+};
+
 export type PluginManifestSetup = {
   /** Cheap provider setup metadata exposed before runtime loads. */
   providers?: PluginManifestSetupProvider[];
@@ -222,6 +233,8 @@ export type PluginManifestSetup = {
   cliBackends?: string[];
   /** Config migration ids owned by this plugin's setup surface. */
   configMigrations?: string[];
+  /** Native conversation catalog controlled by config.sessionCatalog.enabled. */
+  nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   /**
    * Whether setup still needs plugin runtime execution after descriptor lookup.
    * Explicit false disables setup runtime; omission preserves the legacy fallback.

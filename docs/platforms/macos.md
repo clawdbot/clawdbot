@@ -42,18 +42,18 @@ has no macOS app asset, use the newest one that does, or build from source with
 3. For a new local Gateway, wait while the app installs its external CLI runtime
    and starts the Gateway. Connecting to a remote or independently managed local
    Gateway does not require installing a CLI on this Mac.
-4. Establish inference with a live model check. If the app reused a login you
-   did not want, **Choose a different AI** on the success banner reopens the
-   picker, including the API-key option.
+4. Choose the AI connection you want. Detection only presents available
+   connections; selecting one starts its live model check. An existing configured
+   route appears as **Current model**.
 5. Finish. The app opens the dashboard, where OpenClaw guides the rest of the
    setup (memory import, channels, permissions) in one conversation. Grant
    macOS permissions any time from **Dashboard → Settings → This Mac → Permissions**.
 
-If the app reaches an existing Gateway whose default agent has a configured
-model, it treats that Gateway as already set up, skips provider onboarding and
-OpenClaw, and opens the dashboard. If the Gateway cannot connect or its
-default agent has no model, inference onboarding remains available for
-recovery.
+During onboarding, an existing Gateway's configured model also waits for your
+selection before its live check. A successful check opens the normal dashboard
+and preserves the configured route. If the Gateway cannot connect or its default
+agent has no model, inference onboarding remains available for recovery.
+Normal app launches after onboarding continue to use the saved Gateway.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).

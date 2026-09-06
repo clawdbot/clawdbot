@@ -9,6 +9,7 @@ import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-share
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { openUrl } from "../infra/browser-open.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -57,6 +58,10 @@ type ApplyProviderAuthChoiceResult = {
 };
 
 type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
+  /** The resolved provider owns starter-model normalization. */
+  provider?: ProviderPlugin;
+  /** Installer-owned records captured before provider authentication executes. */
+  pendingPluginInstalls?: Record<string, PluginInstallRecord>;
   authProfiles: ProviderAuthResult["profiles"];
   persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 };
@@ -421,6 +426,7 @@ export async function prepareAuthChoiceLoadedPluginProvider(
   // Import the reviewed generation while locked; authentication may outlive the lease.
   const prepared = await withPluginLifecycleLease({ env: params.env }, async () => {
     let nextConfig = params.config;
+    let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;
     let enabledConfig = params.config;
     const manifestAuthChoice = resolveManifestAuthChoiceScope({
       authChoice: params.authChoice,
@@ -521,6 +527,10 @@ export async function prepareAuthChoiceLoadedPluginProvider(
         return preparedWithoutAuthProfiles({ config: installResult.cfg, retrySelection: true });
       }
       nextConfig = installResult.cfg;
+      const installRecord = nextConfig.plugins?.installs?.[installResult.pluginId];
+      if (installRecord) {
+        pendingPluginInstalls = { [installResult.pluginId]: structuredClone(installRecord) };
+      }
       providers = resolveScopedRuntimeProviders(nextConfig);
       resolved = resolveProviderPluginChoice({
         providers,
@@ -536,7 +546,7 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       nextConfig = enabledConfig;
     }
 
-    return { nextConfig, resolved };
+    return { nextConfig, resolved, pendingPluginInstalls };
   });
   if (!prepared || !("resolved" in prepared)) {
     return prepared;
@@ -598,6 +608,10 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       nextConfig = defaultModelConfig;
       return {
         config: nextConfig,
+        provider: resolved.provider,
+        ...(prepared.pendingPluginInstalls
+          ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
+          : {}),
         authProfiles: applied.authProfiles,
         persistAuthProfiles: applied.persistAuthProfiles,
       };
@@ -609,6 +623,10 @@ export async function prepareAuthChoiceLoadedPluginProvider(
   return {
     config: nextConfig,
     agentModelOverride,
+    provider: resolved.provider,
+    ...(prepared.pendingPluginInstalls
+      ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
+      : {}),
     authProfiles: applied.authProfiles,
     persistAuthProfiles: applied.persistAuthProfiles,
   };

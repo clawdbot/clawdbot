@@ -1,5 +1,6 @@
 // Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
 
 const mocks = vi.hoisted(() => ({
@@ -111,6 +112,30 @@ describe("configured plugin install release step", () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [],
       warnings: [],
+    });
+  });
+
+  it.each(["2026.5.1", "2026.9.1"])(
+    "does not install native catalog plugins from first-write opt-outs (touched %s)",
+    async (touchedVersion) => {
+      const cfg = initializeNativeSessionCatalogPreferences({ gateway: { mode: "local" } });
+      await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg,
+        env: {},
+        currentVersion: "2026.9.1",
+        touchedVersion,
+      });
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains install intent when an opted-out catalog plugin is explicitly enabled", async () => {
+    const cfg = initializeNativeSessionCatalogPreferences({
+      plugins: { entries: { codex: { enabled: true } } },
+    });
+    expect(await collectReleaseConfiguredPluginIdsThroughDoctor({ cfg, env: {} })).toEqual({
+      pluginIds: ["codex"],
+      channelIds: [],
     });
   });
 

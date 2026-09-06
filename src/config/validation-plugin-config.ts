@@ -11,6 +11,7 @@ import {
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { shippedNativeSessionCatalogs } from "../plugins/native-session-catalog-config.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
@@ -403,7 +404,27 @@ export function validateExplicitPluginConfig(params: {
             });
           }
         } else if (shouldReplacePluginConfig) {
-          params.replacePluginEntryConfig(pluginId, result.value as Record<string, unknown>);
+          let nextValue = result.value as Record<string, unknown>;
+          const nativeCatalog =
+            record.setup?.nativeSessionCatalog ??
+            shippedNativeSessionCatalogs.find((catalog) => catalog.pluginId === pluginId);
+          const authoredCatalog =
+            isRecord(entry?.config) && isRecord(entry.config.sessionCatalog)
+              ? entry.config.sessionCatalog
+              : undefined;
+          if (
+            nativeCatalog &&
+            isRecord(nextValue.sessionCatalog) &&
+            Object.hasOwn(nextValue.sessionCatalog, "enabled") &&
+            !Object.hasOwn(authoredCatalog ?? {}, "enabled")
+          ) {
+            // Plugin-local defaults remain intact. Root runtime config must not
+            // mistake a schema default for an authored discovery preference.
+            const sessionCatalog = { ...nextValue.sessionCatalog };
+            delete sessionCatalog.enabled;
+            nextValue = { ...nextValue, sessionCatalog };
+          }
+          params.replacePluginEntryConfig(pluginId, nextValue);
         }
       } else if (record.format === "bundle") {
         // Compatible bundles currently expose no native OpenClaw config schema.

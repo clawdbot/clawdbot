@@ -1,118 +1,124 @@
 import { describe, expect, it } from "vitest";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { applyWizardMetadata } from "../commands/onboard-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   applySetupNativeSessionCatalogPreference,
   listSetupNativeSessionCatalogs,
+  requiresSetupNativeSessionCatalogConsent,
   resolveSetupNativeSessionCatalogPreference,
 } from "./setup-native-session-catalogs.js";
 
-function metadata(): PluginMetadataSnapshot {
-  const catalogPlugin = (id: string, label: string) => ({
-    id,
-    name: label,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: "/fixture",
-    source: "/fixture/index.js",
-    manifestPath: "/fixture/openclaw.plugin.json",
-    configSchema: {
-      type: "object",
-      properties: {
-        sessionCatalog: {
-          type: "object",
-          properties: { enabled: { type: "boolean", default: true } },
-        },
-      },
-    },
-    configUiHints: {
-      "sessionCatalog.enabled": {
-        label: `Discover ${label} Sessions`,
-        help: `Show existing ${label} conversations.`,
-      },
-    },
-  });
-  return {
-    plugins: [catalogPlugin("codex", "Codex"), catalogPlugin("anthropic", "Claude Code")],
-  } as unknown as PluginMetadataSnapshot;
-}
+const metadataSnapshot = createPluginMetadataSnapshotFixture();
+const catalogs = listSetupNativeSessionCatalogs({ config: {}, metadataSnapshot });
 
-describe("native session catalog onboarding", () => {
-  it("defaults fresh setup off and ignores stale explicit values for existing installs", () => {
-    expect(resolveSetupNativeSessionCatalogPreference({ consentRequired: true })).toBe(false);
+describe("native conversation setup preferences", () => {
+  it("offers and persists consent for an installed catalog outside the generated defaults", () => {
+    const config = initializeNativeSessionCatalogPreferences({});
+    const installed = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "fixture", setup: { nativeSessionCatalog: { label: "Fixture" } } }],
+    });
+    const options = listSetupNativeSessionCatalogs({ config, metadataSnapshot: installed });
     expect(
-      resolveSetupNativeSessionCatalogPreference({ consentRequired: true, requested: true }),
+      requiresSetupNativeSessionCatalogConsent({ config, configExists: true, catalogs: options }),
     ).toBe(true);
-    expect(
-      resolveSetupNativeSessionCatalogPreference({ consentRequired: false, requested: true }),
-    ).toBeUndefined();
+    for (const enabled of [false, true]) {
+      const selected = applySetupNativeSessionCatalogPreference({
+        config,
+        metadataSnapshot: installed,
+        enabled,
+      });
+      expect(selected.plugins?.entries?.fixture?.config).toEqual({ sessionCatalog: { enabled } });
+    }
   });
-  it("requires consent only for an otherwise fresh default-agent setup", async () => {
-    const { requiresSetupNativeSessionCatalogConsent } =
-      await import("./setup-native-session-catalogs.js");
-    const configPath = "/fixture/openclaw.json";
-    const classify = (params: Parameters<typeof requiresSetupNativeSessionCatalogConsent>[0]) =>
-      requiresSetupNativeSessionCatalogConsent({ ...params, completedLocalOnboarding: false });
-    expect(classify({ configPath, config: {}, setupComplete: false })).toBe(true);
+  it.each(["doctor", "onboard"])(
+    "keeps discovery opt-in available after %s writes machine setup metadata",
+    (command) => {
+      const config = initializeNativeSessionCatalogPreferences(
+        applyWizardMetadata({}, { command, mode: "local" }),
+      );
+      expect(config.wizard?.lastRunAt).toBeTruthy();
+      expect(config.wizard?.lastRunCommand).toBe(command);
+      const required = requiresSetupNativeSessionCatalogConsent({
+        config,
+        configExists: true,
+        catalogs,
+      });
+      expect(required).toBe(true);
+      expect(resolveSetupNativeSessionCatalogPreference({ consentRequired: required })).toBe(false);
+      expect(
+        applySetupNativeSessionCatalogPreference({ config, enabled: false, metadataSnapshot }),
+      ).toBe(config);
+    },
+  );
+
+  it("preserves an authored malformed value for the plugin validator", () => {
+    const config = initializeNativeSessionCatalogPreferences({
+      plugins: { entries: { codex: { config: { sessionCatalog: { enabled: "invalid" } } } } },
+    });
+    expect(config.plugins?.entries?.codex?.config).toEqual({
+      sessionCatalog: { enabled: "invalid" },
+    });
+  });
+
+  it("offers an unchecked choice after fresh configuration creation, even with an explicit agent", () => {
+    const config = initializeNativeSessionCatalogPreferences({
+      agents: { entries: { research: {} } },
+    });
+    const required = requiresSetupNativeSessionCatalogConsent({
+      config,
+      configExists: true,
+      catalogs,
+    });
+    expect(required).toBe(true);
+    expect(resolveSetupNativeSessionCatalogPreference({ consentRequired: required })).toBe(false);
     expect(
-      classify({
-        configPath,
-        config: { wizard: { lastRunAt: "2026-09-05T00:00:00.000Z" } },
-        setupComplete: false,
-      }),
-    ).toBe(false);
-    expect(
-      classify({
-        configPath,
-        config: { channels: { telegram: {} } },
-        setupComplete: false,
-      }),
-    ).toBe(false);
-    expect(
-      classify({
-        configPath,
-        config: {
-          plugins: {
-            entries: { codex: { config: { sessionCatalog: { enabled: true } } } },
+      resolveSetupNativeSessionCatalogPreference({ consentRequired: required, requested: true }),
+    ).toBe(true);
+  });
+
+  it("preserves missing and mixed legacy preferences without inferring consent from a new agent", () => {
+    const configs: OpenClawConfig[] = [
+      { agents: { entries: { research: {} } } },
+      { plugins: { entries: { anthropic: { config: { sessionCatalog: { enabled: false } } } } } },
+      {
+        plugins: {
+          entries: {
+            anthropic: { config: { sessionCatalog: { enabled: false } } },
+            codex: { config: { sessionCatalog: { enabled: true } } },
           },
         },
-        setupComplete: false,
-      }),
-    ).toBe(false);
-    expect(classify({ configPath, config: {}, setupComplete: false, agentId: "research" })).toBe(
-      false,
-    );
-    expect(classify({ configPath, config: {}, setupComplete: true })).toBe(false);
-  });
-  it("lists manifest-declared catalogs without provider-id policy", () => {
-    expect(listSetupNativeSessionCatalogs({ config: {}, metadataSnapshot: metadata() })).toEqual([
-      {
-        pluginId: "anthropic",
-        label: "Claude Code",
-        detail: "Show existing Claude Code conversations.",
       },
-      {
-        pluginId: "codex",
-        label: "Codex",
-        detail: "Show existing Codex conversations.",
-      },
-    ]);
+    ];
+    for (const config of configs) {
+      const required = requiresSetupNativeSessionCatalogConsent({
+        config,
+        configExists: true,
+        catalogs,
+      });
+      expect(required).toBe(false);
+      expect(
+        resolveSetupNativeSessionCatalogPreference({ consentRequired: required, requested: false }),
+      ).toBeUndefined();
+    }
   });
 
-  it("persists an explicit decline for every declared native catalog", () => {
+  it("includes an absent official plugin before install and retains its unchecked preference", () => {
+    expect(catalogs.map(({ pluginId }) => pluginId)).toContain("codex");
     const config = applySetupNativeSessionCatalogPreference({
       config: {},
       enabled: false,
-      metadataSnapshot: metadata(),
+      metadataSnapshot,
     });
-    expect(config.plugins?.entries?.anthropic?.config).toEqual({
-      sessionCatalog: { enabled: false },
+    expect(config.plugins?.entries?.codex).toEqual({
+      config: { sessionCatalog: { enabled: false } },
     });
-    expect(config.plugins?.entries?.codex?.config).toEqual({
-      sessionCatalog: { enabled: false },
+    expect(config.plugins?.entries?.anthropic).toEqual({
+      config: { sessionCatalog: { enabled: false } },
     });
+    expect(
+      applySetupNativeSessionCatalogPreference({ config, enabled: false, metadataSnapshot }),
+    ).toBe(config);
   });
 });

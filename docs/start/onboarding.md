@@ -76,10 +76,10 @@ and proceeds to AI checks without taking over its CLI or service installation.
 See [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup).
 </Step>
 <Step title="Connect your AI">
-If the connected Gateway already has a configured agent model, the app
-verifies it with a real completion before opening the normal dashboard.
-A configured model name alone does not skip verification. Fresh or incomplete
-Gateways continue through provider setup.
+If the connected Gateway already has a configured agent model, it appears as
+**Current model**. Select it to verify that exact route with a real completion
+and open the normal dashboard. Opening onboarding does not test an existing
+route or choose a different provider.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a

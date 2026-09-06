@@ -250,10 +250,17 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    const normalizedCommand = {
+      ...nodeCommand,
+      command,
+      cap: normalizeOptionalString(nodeCommand.cap),
+    };
     registry.nodeHostCommands.push({
       pluginId: record.id,
       pluginName: record.name,
-      command: { ...nodeCommand, command, cap: normalizeOptionalString(nodeCommand.cap) },
+      command: record.nativeSessionCatalog?.nodeCommands?.includes(command)
+        ? (state.getNativeCatalogGate(record)?.node(normalizedCommand) ?? normalizedCommand)
+        : normalizedCommand,
       source: record.source,
       rootDir: record.rootDir,
     });

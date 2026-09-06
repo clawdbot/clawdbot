@@ -1087,7 +1087,10 @@ extension OnboardingAISetupModel {
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         if request.isManual { self.manualKey = "" }
         guard restartRequired else {
-            self.finishConnected(kind: kind, activationOwner: activationOwner)
+            self.finishConnected(
+                kind: kind,
+                activationOwner: activationOwner,
+                handoff: kind == "existing-model" ? .dashboard : .custodianOnboarding)
             return
         }
         self.pendingActivationVerification = true
@@ -1161,14 +1164,25 @@ extension OnboardingAISetupModel {
         else { return false }
         finishConnected(
             kind: kind,
-            activationOwner: activationOwner)
+            activationOwner: activationOwner,
+            handoff: kind == "existing-model" ? .dashboard : .custodianOnboarding)
         return self.connected
     }
 }
 
 extension OnboardingAISetupModel {
     func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
-        guard !isBusy, self.activeAuthOption == nil, let serverLease else { return }
+        guard !isBusy, self.activeAuthOption == nil else { return }
+        if kind == .auth, option.kind == "custom", self.connectionModeProvider() == .remote {
+            self.clearProviderAuth()
+            self.activeAuthOption = option
+            self.providerWizardKind = kind
+            self.authError = Failure(
+                summary: "Set up this endpoint on the Gateway host.",
+                detail: "Custom endpoint setup is available here only for a local Gateway. On the Gateway host, run `openclaw onboard --auth-choice custom-api-key`, finish the endpoint wizard there, then return here and choose Try again.")
+            return
+        }
+        guard let serverLease else { return }
         var params = ["authChoice": AnyCodable(option.id)]
         if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
             params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
@@ -1670,16 +1684,5 @@ extension OnboardingAISetupModel {
         } : nil
         self.pendingActivationRequiresFreshActivation = false
         self.onConnected?()
-    }
-
-    private func tryNextAfterFailure(of kind: String, context: AttemptContext) async {
-        guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        if let next = autoCandidateAfter(kind: kind) {
-            await self.activate(kind: next.kind, context: context)
-            return
-        }
-        self.phase = .ready
-        self.exhaustedAutoCandidates = true
-        self.showManualEntry = true
     }
 }
