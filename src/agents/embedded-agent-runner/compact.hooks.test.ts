@@ -1958,6 +1958,68 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       limitHistoryTurnsMock.mockImplementation(originalHistoryLimit);
     });
 
+    it("returns a structured automatic retention skip without reporting compaction failure", async () => {
+      const { isBenignCompactionSkipResult } = await import("./compact-reasons.js");
+      const { createAgentSessionForEmbeddedRunner } = await import("../sessions/sdk.js");
+      const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
+      const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
+      const { attachCompactionAccountingRecorder } =
+        await import("./run/compaction-accounting-bridge.js");
+      const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
+      sessionManager.appendMessage({ role: "user", content: "a".repeat(46_191), timestamp: 1 });
+      const assistant = createAssistant(testModel, [{ type: "text", text: "ACK" }]);
+      sessionManager.appendMessage({
+        ...assistant,
+        usage: { ...assistant.usage, input: 19_140, output: 2, totalTokens: 19_142 },
+      });
+      const pendingUserEntryId = sessionManager.appendMessage({
+        role: "user",
+        content: "b".repeat(52_602),
+        timestamp: 3,
+      });
+      const contextEngineRuntimeContext = {};
+      attachCompactionAccountingRecorder(contextEngineRuntimeContext, { pendingUserEntryId });
+      const conversation = () =>
+        sessionManager.getBranch().filter((entry) => entry.type === "message");
+      const before = structuredClone(conversation());
+      const stream = vi.fn<StreamFn>();
+      vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
+      limitHistoryTurnsMock.mockImplementation((messages) => messages);
+      vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+        streamFn: stream,
+        strategy: "session-custom",
+      });
+      vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(async ({ model }) => {
+        if (!model) {
+          throw new Error("Expected prepared compaction model");
+        }
+        return await createTestSession({
+          model: { ...testModel, ...model },
+          sessionManager,
+          settingsManager: SettingsManager.inMemory({
+            compaction: { keepRecentTokens: 20_000 },
+            retry: { enabled: false },
+          }),
+          resourceLoader: createResourceLoader(),
+        });
+      });
+      const result = await compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({ trigger: "budget", contextEngineRuntimeContext }),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        compacted: false,
+        reason: "Nothing to compact (session too small)",
+      });
+      expect(isBenignCompactionSkipResult(result)).toBe(true);
+      expect(conversation()).toEqual(before);
+      expect(
+        sessionManager.getBranch().filter((entry) => entry.type === "compaction"),
+      ).toHaveLength(0);
+      expect(stream).not.toHaveBeenCalled();
+      expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    });
+
     it.each([
       { scenario: "provider timeout", errorMessage: "request timed out", outcome: "fallback" },
       {

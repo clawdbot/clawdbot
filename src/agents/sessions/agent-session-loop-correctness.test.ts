@@ -797,7 +797,8 @@ describe("AgentSession loop correctness", () => {
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
     const settingsManager = createAutoCompactionSettings();
-    const getSummaryRequests = mockInvalidThenTextSummary("recovered caller-owned summary");
+    const summary = "recovered caller-owned summary";
+    const getSummaryRequests = mockInvalidThenTextSummary(summary);
     const { session } = await createTestSession({
       sessionManager,
       settingsManager,
@@ -807,7 +808,7 @@ describe("AgentSession loop correctness", () => {
     const result = await session[agentSessionAutomaticCompaction]();
 
     expect(getSummaryRequests()).toBe(2);
-    expect(result.summary).toContain("recovered caller-owned summary");
+    expect(result.status === "completed" && result.result.summary).toContain(summary);
     const compactions = sessionManager.getBranch().filter((entry) => entry.type === "compaction");
     expect(compactions).toHaveLength(1);
   });

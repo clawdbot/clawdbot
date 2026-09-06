@@ -6,6 +6,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -186,9 +187,13 @@ export async function executePreparedReplyAgentRun(
 
   await typingSignals.signalRunStart();
 
+  const preflightAdmission = readPendingUserTurnTranscriptAdmission(
+    followupRun.userTurnTranscriptRecorder,
+  );
   const checkpointMemory = async (entry: SessionEntry) => {
     const flushed = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
+        preflightAdmission,
         cfg,
         followupRun,
         promptForEstimate: followupRun.prompt,
@@ -216,6 +221,7 @@ export async function executePreparedReplyAgentRun(
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
     runSessionCompactionIfNeeded({
+      pendingUserEntryId: preflightAdmission?.entryId,
       cfg,
       followupRun,
       promptForEstimate: followupRun.prompt,

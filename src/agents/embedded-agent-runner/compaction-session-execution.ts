@@ -525,13 +525,16 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             try {
               // The client watchdog starts here; refresh the delegated host watchdog with it.
               params.compactionTimeoutReset?.();
-              clientResult = await compactWithSafetyTimeout(
-                (_signal, resetTimeout) => {
+              const outcome = await compactWithSafetyTimeout(
+                async (_signal, resetTimeout) => {
                   resetCompactionTimeout = resetTimeout;
                   setCompactionSafeguardCancellation(compactionSessionManager, undefined);
                   const requestState = trigger === "overflow" ? ("unresolved" as const) : undefined;
                   if (trigger === "manual") {
-                    return activeSession.compact(params.customInstructions);
+                    return {
+                      status: "completed" as const,
+                      result: await activeSession.compact(params.customInstructions),
+                    };
                   }
                   return activeSession[agentSessionAutomaticCompaction](
                     params.customInstructions,
@@ -539,7 +542,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     resolveEffectiveCompactionMode(params.config) === "default"
                       ? undefined
                       : "none",
-                    accountingRecorder?.requestBudget,
+                    {
+                      requestBudget: accountingRecorder?.requestBudget,
+                      pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    },
                   );
                 },
                 compactionTimeoutMs,
@@ -548,6 +554,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   onCancel: () => activeSession.abortCompaction(),
                 },
               );
+              if (outcome.status === "skipped") {
+                assertActive();
+                return { ok: true, compacted: false, reason: outcome.reason };
+              }
+              clientResult = outcome.result;
             } finally {
               resetCompactionTimeout = undefined;
             }

@@ -2,6 +2,7 @@ import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import {
   prepareAgentCommandExecutionIdentity,
   type AgentCommandAdmissionIngress,
@@ -139,6 +140,9 @@ async function runCommandPreflightMaintenance(
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   };
   assertActive();
+  const preflightAdmission = readPendingUserTurnTranscriptAdmission(
+    opts.userTurnTranscriptRecorder,
+  );
   const memory = await loadAgentRunnerMemoryRuntime();
   assertActive();
   const followupRun = createCommandMaintenanceFollowup({
@@ -156,6 +160,7 @@ async function runCommandPreflightMaintenance(
   });
   followupRun.prompt = prepared.body;
   return memory.runSessionCompactionIfNeeded({
+    pendingUserEntryId: preflightAdmission?.entryId,
     cfg: prepared.cfg,
     followupRun,
     promptForEstimate: prepared.body,
@@ -175,6 +180,7 @@ async function runCommandPreflightMaintenance(
     onCompactionCommitted: (accepted) => params.onCommittedSessionId(accepted.sessionId),
     beforeCompaction: async (entry) => {
       const flushed = await memory.runMemoryFlushIfNeeded({
+        preflightAdmission,
         cfg: prepared.cfg,
         followupRun,
         promptForEstimate: prepared.body,

@@ -24,6 +24,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
@@ -62,6 +63,7 @@ import { resolveMemoryFlushPlan, type MemoryFlushPlan } from "../../plugins/memo
 import { CommandLane } from "../../process/lanes.js";
 import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { TemplateContext } from "../templating.js";
@@ -105,6 +107,9 @@ const memoryFlushLog = createSubsystemLogger("auto-reply/memory-flush");
 
 const embeddedAgentRuntimeLoader = createLazyImportLoader<EmbeddedAgentRuntime>(
   () => import("../../agents/embedded-agent.js"),
+);
+const memoryFlushCheckpointRuntimeLoader = createLazyImportLoader(
+  () => import("./memory-flush-checkpoint.js"),
 );
 const toolResultTruncationRuntimeLoader = createLazyImportLoader<ToolResultTruncationRuntime>(
   () => import("../../agents/embedded-agent-runner/tool-result-truncation.js"),
@@ -680,6 +685,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
+  pendingUserEntryId?: string;
   compactionRequestBudget?: CompactionRequestBudget;
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -1080,6 +1086,7 @@ export async function runSessionCompactionIfNeeded(params: {
       {
         assertActive,
         requestBudget: params.compactionRequestBudget,
+        pendingUserEntryId: params.pendingUserEntryId,
         ...(compactionTrigger === "transcript_bytes" && isCodexRuntime
           ? {
               transcriptBytePreflightHarness: "codex" as const,
@@ -1232,6 +1239,8 @@ type MemoryFlushRunParams = Parameters<typeof runMemoryFlushIfNeeded>[0];
 
 /** Runs pre-compaction memory flush when transcript state warrants it. */
 export async function runMemoryFlushIfNeeded(params: {
+  /** Supplied only by required preflight, while this admitted input is unprocessed. */
+  preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   promptForEstimate?: string;
@@ -1494,6 +1503,33 @@ export async function runMemoryFlushIfNeeded(params: {
       return null;
     }
     const writePath = plan.relativePath;
+    let checkpoint:
+      | Awaited<
+          ReturnType<typeof import("./memory-flush-checkpoint.js").prepareMemoryFlushCheckpoint>
+        >
+      | undefined;
+    if (params.preflightAdmission) {
+      if (!params.sessionKey || !activeSessionEntry) {
+        throw new Error("Required memory checkpoint has no current transcript target.");
+      }
+      const agentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
+      const runtime = await memoryFlushCheckpointRuntimeLoader.load();
+      checkpoint = await runtime.prepareMemoryFlushCheckpoint({
+        admission: params.preflightAdmission,
+        source: {
+          agentId,
+          sessionId: activeSessionEntry.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: resolveSessionStorePathForScope(
+            { agentId, sessionKey: params.sessionKey, storePath: params.storePath },
+            params.cfg,
+          ),
+        },
+        runId: flushRunId,
+        workspaceDir: params.followupRun.run.workspaceDir,
+        signal: abortSignal,
+      });
+    }
     await ensureMemoryFlushTargetFile({
       workspaceDir: params.followupRun.run.workspaceDir,
       relativePath: writePath,
@@ -1518,6 +1554,7 @@ export async function runMemoryFlushIfNeeded(params: {
       systemPrompt,
       selection,
       preparedRunAdmission,
+      checkpoint,
     };
   };
   let preparedAttempt: Awaited<ReturnType<typeof prepareMemoryFlushAttempt>>;
@@ -1535,12 +1572,33 @@ export async function runMemoryFlushIfNeeded(params: {
     systemPrompt: flushSystemPrompt,
     selection,
     preparedRunAdmission,
+    checkpoint,
   } = preparedAttempt;
+  const sourcePolicySessionKey =
+    params.runtimePolicySessionKey ??
+    params.followupRun.run.runtimePolicySessionKey ??
+    params.sessionKey ??
+    params.followupRun.run.sessionKey;
+  const executionSessionId =
+    checkpoint?.sessionId ?? activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
+  const executionSessionKey = checkpoint?.sessionKey ?? params.sessionKey;
+  const checkpointRun = checkpoint
+    ? createSessionMaintenanceFollowup({
+        run: params.followupRun.run,
+        sessionEntry: { sessionId: checkpoint.sessionId, updatedAt: Date.now() },
+        cfg: params.cfg,
+        sessionKey: checkpoint.sessionKey,
+        runtimePolicySessionKey: sourcePolicySessionKey,
+        provider: selection.provider,
+        model: selection.model,
+        auth: params.followupRun.run,
+      }).run
+    : undefined;
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId: flushRunId,
-    sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
-    sessionKey: params.sessionKey,
-    sessionFile: params.followupRun.run.sessionFile,
+    sessionId: executionSessionId,
+    sessionKey: executionSessionKey,
+    sessionFile: checkpoint?.sessionFile ?? params.followupRun.run.sessionFile,
     abortSignal,
   });
   const flushedCompactionCount = activeSessionEntry?.compactionCount ?? 0;
@@ -1551,8 +1609,8 @@ export async function runMemoryFlushIfNeeded(params: {
   try {
     if (params.sessionKey) {
       registerAgentRunContext(flushRunId, {
-        sessionKey: params.sessionKey,
-        ...(activeSessionEntry?.sessionId ? { sessionId: activeSessionEntry.sessionId } : {}),
+        sessionKey: executionSessionKey,
+        sessionId: executionSessionId,
         verboseLevel: params.resolvedVerboseLevel,
         isControlUiVisible: false,
         projectSessionActive: false,
@@ -1565,8 +1623,11 @@ export async function runMemoryFlushIfNeeded(params: {
       memoryFlushLog.debug("memory flush dispatched", {
         event: "memory_flush_dispatched",
         runId: flushRunId,
-        sessionKey: params.sessionKey,
-        sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
+        sessionKey: executionSessionKey,
+        sessionId: executionSessionId,
+        ...(checkpoint
+          ? { sourceSessionKey: params.sessionKey, sourceSessionId: activeSessionEntry?.sessionId }
+          : {}),
       });
       await runEmbeddedAgentEntry({
         selection: {
@@ -1584,8 +1645,8 @@ export async function runMemoryFlushIfNeeded(params: {
         identity: {
           runId: flushRunId,
           agentId: params.followupRun.run.agentId,
-          sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
-          sessionKey: selection.sessionKey,
+          sessionId: executionSessionId,
+          sessionKey: checkpoint?.sessionKey ?? selection.sessionKey,
           lane: CommandLane.Main,
         },
         harness: {
@@ -1628,13 +1689,17 @@ export async function runMemoryFlushIfNeeded(params: {
           });
           const { embeddedContext, senderContext, runBaseParams } =
             await buildEmbeddedRunExecutionParams({
-              run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
-              replyRoute: params.followupRun,
-              sessionCtx: params.sessionCtx,
-              hasRepliedRef: params.opts?.hasRepliedRef,
+              run: {
+                ...(checkpointRun ?? params.followupRun.run),
+                thinkLevel: candidateThinkLevel,
+              },
+              replyRoute: checkpoint ? undefined : params.followupRun,
+              sessionCtx: checkpoint ? {} : params.sessionCtx,
+              hasRepliedRef: checkpoint ? undefined : params.opts?.hasRepliedRef,
               provider,
               model,
               runId: flushRunId,
+              ...(checkpoint ? { promptCacheKey: params.opts?.promptCacheKey } : {}),
               allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
             });
           const result = await runEmbeddedAgent({
@@ -1642,9 +1707,10 @@ export async function runMemoryFlushIfNeeded(params: {
             ...embeddedContext,
             ...senderContext,
             ...runBaseParams,
+            ...checkpoint,
             agentHarnessId: resolveSessionPinnedHarnessId(activeSessionEntry),
             agentHarnessRuntimeOverride: sessionRuntimeOverride,
-            sandboxSessionKey: params.runtimePolicySessionKey,
+            sandboxSessionKey: checkpoint ? sourcePolicySessionKey : params.runtimePolicySessionKey,
             allowGatewaySubagentBinding: true,
             silentExpected: true,
             allowEmptyAssistantReplyAsSilent: true,
@@ -1674,7 +1740,7 @@ export async function runMemoryFlushIfNeeded(params: {
             },
             onDeferredLifecycleOwner: deferredLifecycle.adopt,
             onDeferredLifecycleAbort: deferredLifecycle.abort,
-            replyOperation: params.replyOperation,
+            replyOperation: checkpoint ? undefined : params.replyOperation,
             assistantErrorTranscript: runOptions.assistantErrorTranscript,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,

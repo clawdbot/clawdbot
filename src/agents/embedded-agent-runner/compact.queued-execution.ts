@@ -31,7 +31,7 @@ import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
-import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/index.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
@@ -62,8 +62,7 @@ type QueuedCompactionHostCommit = {
 };
 
 /** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
-export type QueuedCompactionHostOptions = {
-  requestBudget?: CompactionRequestBudget;
+export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
   assertActive?: () => void;
   transcriptBytePreflightHarness?: "codex";
   withCompactionPersistence?: TranscriptByteCompactionPersistence;
@@ -327,9 +326,10 @@ export async function executeQueuedContextEngineCompaction(input: {
         const ownedCompactor: Pick<ContextEngine, "compact" | "info"> = {
           info: contextEngine.info,
           compact: inheritRuntimeCompactionDelegate(compact, (backendParams) => {
-            if (host.requestBudget && backendParams.runtimeContext) {
+            if ((host.requestBudget || host.pendingUserEntryId) && backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: host.requestBudget,
+                pendingUserEntryId: host.pendingUserEntryId,
               });
             }
             // Retained backend work keeps the original owner and the timer's

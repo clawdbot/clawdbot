@@ -265,12 +265,9 @@ it.each([
       model.contextWindow,
     );
   }
-  const result = session[agentSessionAutomaticCompaction](
-    undefined,
-    undefined,
-    undefined,
-    processed ? { ...budget, pendingTokens: 0 } : budget,
-  );
+  const result = session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {
+    requestBudget: processed ? { ...budget, pendingTokens: 0 } : budget,
+  });
   if (processed) {
     await result;
     expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(

@@ -475,11 +475,15 @@ interface CutPointResult {
 
 /** Automatic callers supply the remaining foreground budget and its message estimator. */
 interface CompactionRetentionBudget {
-  /** A prepared, unprocessed user must remain intact even when a carrier follows it. */
-  preserveFromEntryId?: string;
   maxTokens: number;
   reserveTokens: number;
   estimateTokens: (message: AgentMessage) => number;
+}
+
+interface CompactionRetentionConstraints {
+  /** An admitted, unprocessed user remains intact even before its budget is prepared. */
+  preserveFromEntryId?: string;
+  budget?: CompactionRetentionBudget;
 }
 
 /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
@@ -488,8 +492,9 @@ export function findCutPoint(
   startIndex: number,
   endIndex: number,
   keepRecentTokens: number,
-  retention?: CompactionRetentionBudget,
+  constraints?: CompactionRetentionConstraints,
 ): CutPointResult {
+  const retention = constraints?.budget;
   // Projection validates persisted custom/branch timestamps even outside the
   // retained tail. Keep that eager validation without storing every cut point.
   let cutIndex: number | undefined;
@@ -497,7 +502,7 @@ export function findCutPoint(
   for (let i = startIndex; i < endIndex; i++) {
     const entry = entries[i];
     const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-    if (entry && entry.id === retention?.preserveFromEntryId) {
+    if (entry && entry.id === constraints?.preserveFromEntryId) {
       lastAllowedCut = i;
     }
     if (message && isCutPointMessage(message)) {
@@ -528,8 +533,8 @@ export function findCutPoint(
       break;
     }
   }
+  cutIndex = Math.min(cutIndex, lastAllowedCut);
   if (retention) {
-    cutIndex = Math.min(cutIndex, lastAllowedCut);
     let retainedTokens = 0;
     let fittingCut = endIndex;
     let tailLimit = retention.maxTokens;
@@ -836,7 +841,7 @@ export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
   requestState?: "unresolved",
-  retention?: CompactionRetentionBudget,
+  constraints?: CompactionRetentionConstraints,
 ): Result<CompactionPreparation | undefined, CompactionError> {
   const lastEntry = pathEntries.at(-1);
   if (
@@ -909,7 +914,7 @@ export function prepareCompaction(
   // units to the cut walk, capped at a one-token retained tail; otherwise a small transcript
   // can leave the cut at the first entry and free nothing.
   const triggerUnitScale =
-    !retention &&
+    !constraints?.budget &&
     totalEstimatedTokens > 0 &&
     Number.isFinite(totalEstimatedTokens) &&
     Number.isFinite(contextUsage.usageTokens)
@@ -934,7 +939,7 @@ export function prepareCompaction(
     boundaryStart,
     boundaryEnd,
     keepRecentTokens,
-    retention,
+    constraints,
   );
   if (cutPoint.firstKeptEntryIndex === boundaryEnd) {
     return err(

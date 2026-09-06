@@ -16,6 +16,12 @@ export type CompactionRequestBudget = Readonly<{
   pendingUserIdempotencyKey?: string;
 }>;
 
+/** Input preservation exists before the foreground prompt can supply a token budget. */
+export type CompactionRequestConstraints = Readonly<{
+  requestBudget?: CompactionRequestBudget;
+  pendingUserEntryId?: string;
+}>;
+
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
 
 /** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */

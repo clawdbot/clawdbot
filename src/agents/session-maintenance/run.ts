@@ -56,6 +56,7 @@ export function createSessionMaintenanceFollowup(params: {
     | "agentAccountId"
     | "chatType"
     | "conversationRoutePeerId"
+    | "conversationToolPolicy"
     | "groupId"
     | "groupChannel"
     | "groupSpace"
@@ -90,6 +91,7 @@ export function createSessionMaintenanceFollowup(params: {
       agentAccountId: run.agentAccountId,
       chatType: run.chatType,
       conversationRoutePeerId: run.conversationRoutePeerId,
+      conversationToolPolicy: run.conversationToolPolicy,
       groupId: run.groupId,
       groupChannel: run.groupChannel,
       groupSpace: run.groupSpace,

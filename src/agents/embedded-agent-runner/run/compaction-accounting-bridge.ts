@@ -1,11 +1,10 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../../context-engine/types.js";
-import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestConstraints } from "../../sessions/compaction/request-budget.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
 import type { NormalizedUsage } from "../../usage.js";
 
-type CompactionAccountingRecorder = {
-  requestBudget?: CompactionRequestBudget;
+type CompactionAccountingRecorder = CompactionRequestConstraints & {
   /** The caller's buffer owns recovery; its portable identity grants no durable access. */
   memoryTranscript?: {
     sessionManager: SessionManager;
