@@ -1,7 +1,8 @@
 // Source install tests cover installing skill sources from local and remote inputs.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
@@ -143,6 +144,63 @@ describe("installSkillFromSource", () => {
         name: "frontmatter-skill",
         skillKey: "custom-name",
       });
+    });
+  });
+
+  it("rejects unfenced SKILL.md metadata before copying the source", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-invalid-metadata-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      const childDir = path.join(sourceDir, "child-skill");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "SKILL.md"),
+        "name: probe-x\nversion: 1.0.0\ndescription: probe\n\nUse when testing.\n",
+      );
+      await writeSkill(childDir, { name: "child-skill" });
+
+      const readdir = vi.spyOn(fsSync, "readdirSync");
+      try {
+        const result = await installSkillFromSource({
+          workspaceDir,
+          spec: sourceDir,
+          slug: "probe-x",
+        });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("invalid or missing frontmatter"),
+        });
+        await expect(fs.access(path.join(workspaceDir, "skills", "probe-x"))).rejects.toThrow();
+        expect(readdir.mock.calls.some(([dir]) => dir === sourceDir)).toBe(false);
+      } finally {
+        readdir.mockRestore();
+      }
+    });
+  });
+
+  it("rejects a valid root that exceeds the configured discovery byte limit", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-oversized-root-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, {
+        name: "oversized-root",
+        description: "A description that exceeds this test's deliberately small limit",
+      });
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+        config: { skills: { limits: { maxSkillFileBytes: 32 } } },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("invalid or missing frontmatter"),
+      });
+      await expect(
+        fs.access(path.join(workspaceDir, "skills", "oversized-root")),
+      ).rejects.toThrow();
     });
   });
 
