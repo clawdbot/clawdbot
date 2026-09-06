@@ -708,6 +708,27 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__public-share-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.chat-pane__public-share-indicator svg {
+  width: 13px;
+  height: 13px;
+}
+
 .chat-pane__header-center .chat-pane__sharing-menu,
 .chat-pane__header-center .chat-pane__draft-indicator {
   position: absolute;

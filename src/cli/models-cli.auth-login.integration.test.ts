@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { testing as authStoreTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";

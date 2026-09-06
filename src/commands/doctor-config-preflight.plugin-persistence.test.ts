@@ -254,7 +254,7 @@ describe("Doctor plugin persistence", () => {
   });
 
   it.each(["alpha", "beta"])(
-    "persists the original %s scope while retaining the config-wide inventory",
+    "reuses and persists the original %s scope while retaining the config-wide inventory",
     async (first) => {
       const names = [first, first === "alpha" ? "beta" : "alpha"];
       await withPreflightPluginFixture(async (writeVersion, config, workspaces) => {
@@ -268,6 +268,38 @@ describe("Doctor plugin persistence", () => {
               .map((p) => p.pluginId)
               .toSorted(),
           ).toEqual(["preflight-alpha", "preflight-beta"]);
+          const sourceConfig = initial.snapshot.sourceConfig;
+          const metadataScope = createDoctorPluginMetadataSnapshotScope({
+            baseSnapshot: aggregate,
+          });
+          // Unqualified Doctor work inherits its prepared view, not the system-agent workspace.
+          metadataScope.run({ config: sourceConfig }, () => {
+            expect(getCurrentPluginMetadataSnapshot({ config: sourceConfig }) === aggregate).toBe(
+              true,
+            );
+          });
+          const otherWorkspace = workspaces[names[1]!];
+          metadataScope.run({ config: sourceConfig, workspaceDir: otherWorkspace }, () => {
+            const selected = getCurrentPluginMetadataSnapshot({ config: sourceConfig });
+            expect(selected === aggregate).toBe(false);
+            expect(selected?.workspaceDir).toBe(otherWorkspace);
+          });
+          const changedPolicy = {
+            ...sourceConfig,
+            plugins: { ...sourceConfig.plugins, deny: ["preflight-alpha"] },
+          };
+          metadataScope.run({ config: changedPolicy }, () => {
+            const selected = getCurrentPluginMetadataSnapshot({ config: changedPolicy });
+            expect(selected === aggregate).toBe(false);
+            expect(selected?.policyHash).toBe(
+              resolveInstalledPluginIndexPolicyHash(changedPolicy, process.env),
+            );
+          });
+          metadataScope.run({ config: sourceConfig }, () => {
+            expect(getCurrentPluginMetadataSnapshot({ config: sourceConfig }) === aggregate).toBe(
+              true,
+            );
+          });
           const preflight = () =>
             runDoctorConfigPreflight({
               migrateState: false,

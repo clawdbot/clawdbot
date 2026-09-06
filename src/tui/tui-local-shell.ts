@@ -36,7 +36,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let cancelPendingApproval: (() => void) | undefined;
   const supervisor = getProcessSupervisor();
   const scopeKey = `tui-local:${randomUUID()}`;
-  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
@@ -131,8 +131,6 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       run = await supervisor.spawn({
         mode: "anchored-shell",
         command: cmd,
-        sessionId: scopeKey,
-        backendId: "tui-local-shell",
         scopeKey,
         cwd,
         env: { ...env, OPENCLAW_SHELL: "tui-local" },

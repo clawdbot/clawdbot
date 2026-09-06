@@ -297,18 +297,23 @@ describe("createGatewayRequestContext", () => {
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
   });
 
-  it("publishes the worker disk-space reader through the kernel bridge", () => {
+  it("publishes worker services through the kernel bridge", () => {
     const workerPlacementDiskSpaceReader = { read: vi.fn(), version: vi.fn(() => 1) };
+    const repositoryWorkspaceMutationService = { mutate: vi.fn() };
     const context = createGatewayRequestContext(
       makeContextParams({
         workerPlacementRuntime: {
           diskSpace: workerPlacementDiskSpaceReader,
           runnerAvailability: undefined,
+          repositoryWorkspaceMutationService,
         },
       }),
     );
 
     expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
+    expect(context.workerRepositoryWorkspaceMutationService).toBe(
+      repositoryWorkspaceMutationService,
+    );
   });
 
   it("routes plugin metadata changes through the kernel bridge", () => {

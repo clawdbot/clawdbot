@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { bindAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
+import {
+  bindAgentToolSourceExecutionGuard,
+  captureAgentToolSourceExecutionGuard,
+} from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { getRuntimeConfigSnapshot } from "../config/io.js";
@@ -106,6 +109,32 @@ describe("bounded agent exec", () => {
     expect(source).not.toHaveBeenCalled();
   });
 
+  it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
+    let retainedGuard: (() => void) | undefined;
+    const effect = vi.fn();
+    await agentExecCommand("inspect", {}, runtime, {
+      baseConfig,
+      isCurrent: () => true,
+      runAgent: async () => {
+        retainedGuard = captureAgentToolSourceExecutionGuard();
+        return success();
+      },
+    });
+    const replacement = await agentExecCommand("inspect", {}, runtime, {
+      baseConfig,
+      isCurrent: () => true,
+      runAgent: async () => {
+        expect(() => {
+          retainedGuard?.();
+          effect();
+        }).toThrow("execution scope is no longer active");
+        return success();
+      },
+    });
+    expect(replacement.exitCode).toBe(0);
+    expect(effect).not.toHaveBeenCalled();
+  });
+
   it("aborts an unattended turn at its millisecond deadline even without a state lock", async () => {
     const result = await agentExecCommand("inspect", {}, runtime, {
       baseConfig,
@@ -148,9 +177,7 @@ describe("bounded agent exec", () => {
                process.stdout.write("ready");
                setInterval(() => {}, 1000);`,
             ],
-            sessionId: String(opts.sessionId),
             scopeKey: String(opts.sessionKey),
-            backendId: "budget-test",
             timeoutMs: 30_000,
             onStdout: (chunk) => {
               output += chunk;

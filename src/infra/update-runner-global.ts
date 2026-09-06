@@ -37,8 +37,6 @@ export async function runGlobalUpdate(params: {
   timeoutMs: number;
   startedAt: number;
   beforeVersion: string | null;
-  allowGatewayServiceRepair: boolean;
-  allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
   const { opts, pkgRoot, globalManager, runCommand, timeoutMs, startedAt, beforeVersion } = params;
   const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
@@ -151,9 +149,11 @@ export async function runGlobalUpdate(params: {
     status: packageUpdate.failedStep ? "error" : "ok",
     mode: globalManager,
     root: packageUpdate.activePackageRoot ?? undefined,
-    reason: packageUpdate.failedStep
-      ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
-      : undefined,
+    reason:
+      packageUpdate.reason ??
+      (packageUpdate.failedStep
+        ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+        : undefined),
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,

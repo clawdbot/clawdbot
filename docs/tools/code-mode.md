@@ -391,6 +391,14 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 | `searchDefaultLimit`  | `8`                            | clamped to `maxSearchLimit`                     |
 | `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
 
+`timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
+computation, and inline tool waits share that budget; approval waits pause it.
+The model-facing `exec` description includes the effective limit. Blocking guest
+computation that exhausts the budget fails with `timeout`. Unfinished tool calls
+can instead return `waiting`, so a later `wait` can resume them with a fresh call
+budget. When the shell `exec` tool is available, use it for heavier computation
+and keep guest JavaScript focused on coordinating tools and processing results.
+
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
 for that run; it does not silently expose normal tools as a fallback. This
 holds for `true` and for `"auto"` runs where the model resolves as preferred:
@@ -986,6 +994,13 @@ declare namespace MCP.github {
 }
 ```
 
+Dictionary inputs retain their value types. Nullable enums and fields marked
+`nullable: true` include `null`, unless an explicit enum excludes it.
+Top-level fields with defaults may be omitted from calls.
+These declarations approximate JSON Schema; for constraints that TypeScript
+cannot express, inspect the original schema with
+`MCP.<server>.$api("<tool>", { schema: true })`.
+
 MCP tool calls return their original JSON-safe content blocks, including block
 annotations and block-level `_meta`, plus top-level `structuredContent` and
 `isError` when provided. Top-level MCP `_meta` and private app metadata never
@@ -1024,6 +1039,12 @@ the bridge as JSON-compatible values with explicit size caps.
 ```typescript
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
+
+Await async values before emitting them or returning arrays or plain objects that
+contain them. Unawaited Promises appear as a diagnostic string with `await` and
+`Promise.all` guidance. For example, use
+`return await Promise.all(handles.map((tool) => tool.describe()));` to return tool
+descriptions. Output serialization does not await nested Promises for you.
 
 Output order matches guest calls. Each nested tool result is bounded separately
 by `maxOutputBytes`. Cumulative guest output and the final value or failure
@@ -1307,6 +1328,15 @@ Telemetry must not include secrets, raw environment values, or unredacted
 tool inputs beyond existing OpenClaw trajectory policy.
 
 ## Debugging
+
+JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
+from the submitted code, excluding internal wrappers and headless setup. For
+TypeScript, compiler diagnostics labeled `openclaw-code-mode:user.ts` refer to
+the submitted TypeScript; runtime frames labeled `openclaw-code-mode:generated.js`
+refer to the transformed JavaScript. Internal wrapper and controller frames are
+omitted from new cells' failures; error messages still share the existing output
+budget. Resumed older snapshots without location metadata retain their previous
+stack format.
 
 Use targeted model transport logging when code mode behaves differently from
 a normal tool run:

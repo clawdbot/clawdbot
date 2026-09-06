@@ -20,6 +20,16 @@
       "discord-voice"
     ]
   },
+  "transcriptSources": {
+    "discord-voice": {
+      "name": "Discord Voice",
+      "autoStart": {
+        "accountId": "optional",
+        "guildId": "required",
+        "channelId": "required"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

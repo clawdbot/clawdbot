@@ -29,6 +29,7 @@ import {
   resolveAnthropicContextManagementBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
+import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import {
   assignTransportErrorDetails,
   finalizeTransportStream,
@@ -258,7 +259,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           requestOptions?.thinkingEnabled === true,
           requestOptions?.interleavedThinking ?? true,
           shouldUseFineGrainedToolStreamingBeta(model, requestContext),
-          requestOptions?.headers,
+          resolveOpencodeSessionHeaders(model, requestOptions),
           copilotDynamicHeaders,
           cacheSessionId,
         );

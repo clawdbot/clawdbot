@@ -137,9 +137,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
         payload.isError === true &&
         Object.keys(payload).every((key) => key === "text" || key === "isError") &&
         (metadata?.toolErrorWarning ||
-          (input.attempt.terminal.kind === "failed" &&
-            input.attempt.settledTurnFinalizationContext &&
-            metadata?.terminalProviderError))
+          (input.attempt.settledTurnFinalizationContext && metadata?.terminalProviderError))
       );
     }),
   );

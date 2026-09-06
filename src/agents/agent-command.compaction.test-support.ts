@@ -139,9 +139,9 @@ vi.mock("./workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async () => undefined),
 }));
 
-vi.mock("./auth-profiles/store.js", async () => {
-  const actual = await vi.importActual<typeof import("./auth-profiles/store.js")>(
-    "./auth-profiles/store.js",
+vi.mock("./auth-profiles/store-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-profiles/store-runtime.js")>(
+    "./auth-profiles/store-runtime.js",
   );
   return {
     ...actual,

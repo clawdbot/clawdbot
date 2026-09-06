@@ -53,6 +53,7 @@ describe("test runtime prerequisites", () => {
   it.each([
     ["lifecycle file", ["extensions/qa-lab/src/suite-process-lifecycle.test.ts"], "private-qa"],
     ["QA directory", ["extensions/qa-lab"], "private-qa"],
+    ["tooling config", ["test/vitest/vitest.tooling.config.ts"], "private-qa"],
     ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
@@ -71,6 +72,7 @@ describe("test runtime prerequisites", () => {
       ["src/cli/update-cli/update-command-post-update-recovery.test.ts"],
       "runtime",
     ],
+    ["update repair", ["src/cli/update-cli/update-command-post-update-repair.test.ts"], "runtime"],
     [
       "update service recovery",
       ["src/cli/update-cli/update-command-service.integration.test.ts"],
@@ -105,6 +107,11 @@ describe("test runtime prerequisites", () => {
       "Doctor source module probe",
       ["src/commands/doctor-config-preflight.pristine.process.test.ts"],
       undefined,
+    ],
+    [
+      "Codex delivery Gateway",
+      ["test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts"],
+      "private-qa",
     ],
     ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
     ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
@@ -165,6 +172,7 @@ describe("test runtime prerequisites", () => {
     ],
     ["gateway", ["gateway-*.test.ts"], "runtime"],
     ["gateway", ["server*.test.ts"], "runtime"],
+    ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
   ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
     const selections = resolveVitestRuntimeCliSelections(
       `test/vitest/vitest.${project}.config.ts`,
@@ -2552,6 +2560,7 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/cli/update-cli/update-command-migrated.test.ts",
     "src/cli/update-cli/update-command-rollback.test.ts",
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-post-update-repair.test.ts",
     "src/cli/update-cli/update-command-service.integration.test.ts",
     "src/cli/one-shot-exit.test.ts",
     "src/cli/program/subcli-descriptors.test.ts",

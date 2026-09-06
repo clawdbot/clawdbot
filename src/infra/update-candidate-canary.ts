@@ -1,47 +1,24 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { runCommandBuffered } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
 import {
   parseOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errors.js";
-import { resolveUserPath } from "./home-dir.js";
 import { readPackageVersion } from "./package-json.js";
-import { tryListenOnPort } from "./ports-probe.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import {
-  resolveUpdateCandidateStatePath,
-  UpdateStateSchemaVersionsSchema,
-} from "./update-candidate-state.js";
-import {
-  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
-  UPDATE_RUN_ID_ENV,
-} from "./update-control-plane-sentinel.js";
-import {
-  POST_CORE_UPDATE_ENV,
-  POST_CORE_UPDATE_CHANNEL_ENV,
-  POST_CORE_UPDATE_RESULT_PATH_ENV,
-  POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
-  POST_CORE_UPDATE_STARTED_AT_ENV,
-  POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
-  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
-} from "./update-post-core-context.js";
-import {
-  buildUpdateDoctorEnv,
-  resolveUpdateDoctorExecutionPolicy,
-} from "./update-runner-doctor.js";
+  prepareUpdateCandidateRehearsal,
+  type UpdateCandidateRehearsal,
+} from "./update-candidate-rehearsal.js";
+import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
 type CanaryPhase =
@@ -67,76 +44,30 @@ type CanaryResult = {
     }
 );
 
-function isolatedConfig(
-  config: OpenClawConfig,
-  sourceRoot: string,
-  stateDir: string,
-  port: number,
-  sourceEnv: NodeJS.ProcessEnv,
-): OpenClawConfig {
-  const copied = structuredClone(config);
-  const workspace = path.join(stateDir, "workspace");
-  const entries =
-    copied.agents?.entries ??
-    Object.fromEntries((copied.agents?.list ?? []).map(({ id, ...agent }) => [id, agent]));
-  copied.agents = {
-    ...copied.agents,
-    defaults: { ...copied.agents?.defaults, workspace, cwd: workspace, heartbeat: { every: "0m" } },
-    entries: Object.fromEntries(
-      Object.entries(entries).map(([id, agent]) => [
-        id,
-        {
-          ...agent,
-          workspace: path.join(workspace, id),
-          cwd: path.join(workspace, id),
-          agentDir: agent.agentDir
-            ? resolveUpdateCandidateStatePath(
-                sourceRoot,
-                stateDir,
-                resolveUserPath(agent.agentDir, sourceEnv),
-              )
-            : path.join(stateDir, "agents", id, "agent"),
-          heartbeat: { every: "0m" },
-        },
-      ]),
-    ),
-  };
-  delete copied.agents.list;
-  // Copy effective config, never its include graph or ambient shell overrides.
-  delete copied.env;
-  delete copied.diagnostics;
-  if (copied.session) {
-    delete copied.session.store;
-  }
-  copied.logging = { ...copied.logging, file: path.join(stateDir, "canary.log") };
-  copied.gateway = {
-    ...copied.gateway,
-    mode: "local",
-    bind: "loopback",
-    port,
-    auth: { mode: "token", token: randomUUID() },
-    tls: { enabled: false },
-    tailscale: { mode: "off" },
-    controlUi: { enabled: false },
-  };
-  copied.cron = { ...copied.cron, enabled: false, triggers: { enabled: false } };
-  copied.hooks = { enabled: false, internal: { enabled: false } };
-  copied.transcripts = { enabled: false, autoStart: [] };
-  copied.discovery = { mdns: { mode: "off" } };
-  return copied;
-}
-
-async function waitBounded(promise: Promise<unknown>, milliseconds: number): Promise<void> {
+async function waitBounded(
+  promise: Promise<unknown>,
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
   try {
     await Promise.race([
       promise,
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, Math.max(0, milliseconds));
+        abort = resolve;
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) {
+          resolve();
+        }
       }),
     ]);
   } finally {
     clearTimeout(timer);
+    if (abort) {
+      signal?.removeEventListener("abort", abort);
+    }
   }
 }
 
@@ -170,8 +101,11 @@ export async function validateUpdateCandidateCanary(params: {
   config: OpenClawConfig;
   stateDir: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  rehearsal?: UpdateCandidateRehearsal;
+  assertCurrent?: () => void;
   /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
   onStep?: (step: UpdateStepResult) => void;
 }): Promise<CanaryResult> {
@@ -180,86 +114,21 @@ export async function validateUpdateCandidateCanary(params: {
   const deadline = started + budget;
   const workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
   const remaining = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const milliseconds = workDeadline - Date.now();
     if (milliseconds <= 0) {
       throw new Error("Candidate validation deadline exceeded");
     }
     return milliseconds;
   };
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-"));
+  let rehearsal = params.rehearsal;
   const sourceEnv = params.env ?? process.env;
-  const copiedAgentDir = (directory: string | undefined) =>
-    directory?.trim()
-      ? resolveUpdateCandidateStatePath(
-          path.resolve(params.stateDir),
-          tempDir,
-          resolveUserPath(directory, sourceEnv),
-        )
-      : undefined;
   const logTail: string[] = [];
   const steps: UpdateStepResult[] = [];
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
   let phase: CanaryPhase = "snapshot";
-  const env: NodeJS.ProcessEnv = {
-    ...sourceEnv,
-    HOME: tempDir,
-    USERPROFILE: tempDir,
-    TMPDIR: tempDir,
-    TMP: tempDir,
-    TEMP: tempDir,
-    XDG_CONFIG_HOME: path.join(tempDir, "config"),
-    XDG_CACHE_HOME: path.join(tempDir, "cache"),
-    XDG_DATA_HOME: path.join(tempDir, "data"),
-    XDG_STATE_HOME: path.join(tempDir, "state"),
-    OPENCLAW_HOME: tempDir,
-    OPENCLAW_STATE_DIR: tempDir,
-    OPENCLAW_CONFIG_PATH: path.join(tempDir, "openclaw.json"),
-    OPENCLAW_WORKSPACE_DIR: path.join(tempDir, "workspace"),
-    OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),
-    PI_CODING_AGENT_DIR: copiedAgentDir(sourceEnv.PI_CODING_AGENT_DIR),
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    OPENCLAW_SKIP_CHANNELS: "1",
-    OPENCLAW_SKIP_PROVIDERS: "1",
-    OPENCLAW_SKIP_CRON: "1",
-    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-    OPENCLAW_SKIP_CANVAS_HOST: "1",
-    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_GATEWAY_SERVICE_PID: undefined,
-    OPENCLAW_GATEWAY_PORT: undefined,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
-    OPENCLAW_GATEWAY_TOKEN: undefined,
-    OPENCLAW_GATEWAY_PASSWORD: undefined,
-    OPENCLAW_PROFILE: undefined,
-    OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-    ...buildUpdateDoctorEnv({
-      allowGatewayServiceRepair: false,
-      allowGatewayActivation: false,
-      serviceRepairPolicy: "external",
-      deferConfiguredPluginInstallRepair: true,
-    }),
-  };
-  // These selectors name the serving owner's service or files outside copied
-  // state. Rehearsal must never inherit its update continuation authority.
-  for (const key of [
-    ...SUPERVISOR_HINT_ENV_VARS,
-    CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
-    UPDATE_RUN_ID_ENV,
-    "OPENCLAW_UPDATE_RUN_HANDOFF",
-    POST_CORE_UPDATE_ENV,
-    POST_CORE_UPDATE_CHANNEL_ENV,
-    POST_CORE_UPDATE_RESULT_PATH_ENV,
-    POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
-    POST_CORE_UPDATE_STARTED_AT_ENV,
-    POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
-    POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
-  ]) {
-    delete env[key];
-  }
+  let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
     const safe = redactSupportString(
       String(chunk),
@@ -275,6 +144,7 @@ export async function validateUpdateCandidateCanary(params: {
     logTail.splice(0, Math.max(0, logTail.length - 40));
   };
   const launch = (entry: string, args: string[]) => {
+    params.assertCurrent?.();
     const child = spawn(params.nodeRunner ?? process.execPath, [entry, ...args], {
       cwd: params.root,
       env,
@@ -284,7 +154,7 @@ export async function validateUpdateCandidateCanary(params: {
     });
     let stdout = "";
     let outputExceeded = false;
-    child.stdout?.on("data", (chunk: Buffer) => {
+    child.stdout.on("data", (chunk: Buffer) => {
       if (stdout.length + chunk.length <= 1024 * 1024) {
         stdout += chunk.toString("utf8");
       } else {
@@ -294,7 +164,7 @@ export async function validateUpdateCandidateCanary(params: {
     const flushers = [child.stdout, child.stderr].map((stream) => {
       let pending = "";
       let droppingLine = false;
-      stream?.on("data", (chunk: Buffer) => {
+      stream.on("data", (chunk: Buffer) => {
         let text = chunk.toString("utf8");
         if (droppingLine) {
           const newline = text.indexOf("\n");
@@ -388,51 +258,16 @@ export async function validateUpdateCandidateCanary(params: {
     if (!policy.fix) {
       throw new Error("Candidate Doctor cannot enforce isolated service-repair ownership");
     }
-    const snapshot = await runCommandBuffered(
-      [
-        params.nodeRunner ?? process.execPath,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-          params.nodeRunner,
-        ),
-      ],
-      {
-        input: JSON.stringify({
-          mode: "snapshot",
-          stateDir: params.stateDir,
-          config: params.config,
-          targetStateDir: tempDir,
-          env: {
-            HOME: sourceEnv.HOME,
-            OPENCLAW_HOME: sourceEnv.OPENCLAW_HOME,
-            USERPROFILE: sourceEnv.USERPROFILE,
-            OPENCLAW_AGENT_DIR: sourceEnv.OPENCLAW_AGENT_DIR,
-            PI_CODING_AGENT_DIR: sourceEnv.PI_CODING_AGENT_DIR,
-          },
-        }),
-        baseEnv: env,
-        timeoutMs: remaining(),
-        killGraceMs: 500,
-        maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-      },
-    );
-    if (snapshot.code !== 0) {
-      capture(snapshot.stderr);
-      throw new Error(`Candidate state snapshot failed (${snapshot.termination})`);
-    }
-    UpdateStateSchemaVersionsSchema.parse(JSON.parse(snapshot.stdout.toString("utf8")));
-    const port = await tryListenOnPort({
-      port: 0,
-      host: "127.0.0.1",
-      signal: AbortSignal.timeout(remaining()),
+    rehearsal ??= await prepareUpdateCandidateRehearsal({
+      config: params.config,
+      stateDir: params.stateDir,
+      env: sourceEnv,
+      nodeRunner: params.nodeRunner,
+      timeoutMs: remaining(),
+      signal: params.signal,
     });
-    await fs.writeFile(
-      env.OPENCLAW_CONFIG_PATH!,
-      JSON.stringify(
-        isolatedConfig(params.config, path.resolve(params.stateDir), tempDir, port, sourceEnv),
-      ),
-      { mode: 0o600 },
-    );
+    env = { ...rehearsal.env };
+    const { port } = rehearsal;
     const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
       {
         phase: "doctor",
@@ -476,6 +311,7 @@ export async function validateUpdateCandidateCanary(params: {
             code = value;
           }),
           remaining(),
+          params.signal,
         );
       } finally {
         await terminateCanary(running.child, running.closed, deadline);
@@ -552,7 +388,10 @@ export async function validateUpdateCandidateCanary(params: {
           }
           try {
             const response = await fetch(`http://127.0.0.1:${port}/${endpoint}`, {
-              signal: AbortSignal.timeout(Math.min(1_000, remaining())),
+              signal: AbortSignal.any([
+                AbortSignal.timeout(Math.min(1_000, remaining())),
+                ...(params.signal ? [params.signal] : []),
+              ]),
             });
             const payload: unknown = await response.json();
             if (
@@ -567,7 +406,7 @@ export async function validateUpdateCandidateCanary(params: {
           } catch {
             // The listener may not exist yet; only the common deadline permits another probe.
           }
-          await sleep(Math.min(100, remaining()));
+          await sleep(Math.min(100, remaining()), undefined, { signal: params.signal });
         }
       }
       const step: UpdateStepResult = {
@@ -594,20 +433,22 @@ export async function validateUpdateCandidateCanary(params: {
     capture(
       `${phase}: ${error instanceof Error ? error.message : String(error)} (${Date.now() - started}ms)`,
     );
-    if (!steps.length || steps.at(-1)?.exitCode === 0 || steps.at(-1)?.advisory) {
-      steps.push({
-        name: `candidate ${phase}`,
+    let failed = steps.at(-1);
+    if (!failed || failed.exitCode === 0 || failed.advisory) {
+      failed = {
+        name:
+          phase === "startup" || phase === "readiness"
+            ? "candidate gateway canary"
+            : `candidate ${phase}`,
         command: "candidate validation",
         cwd: params.root,
         durationMs: Date.now() - started,
         exitCode: 1,
-      });
+      };
+      steps.push(failed);
     }
-    const failed = steps.at(-1);
-    if (failed) {
-      failed.stderrTail = logTail.join("\n");
-      params.onStep?.(failed);
-    }
+    failed.stderrTail = logTail.join("\n");
+    params.onStep?.(failed);
     return {
       status: "error",
       reason:
@@ -619,6 +460,8 @@ export async function validateUpdateCandidateCanary(params: {
       steps,
     };
   } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (!params.rehearsal) {
+      await rehearsal?.cleanup();
+    }
   }
 }

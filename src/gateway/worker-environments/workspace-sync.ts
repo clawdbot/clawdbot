@@ -4,10 +4,13 @@ import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
 import type {
   WorkerTunnelHandle,
   WorkerWorkspaceCommand,
+  WorkerLocalWorkspaceSyncRequest,
+  WorkerLocalWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileResult,
   WorkerWorkspaceSyncRequest,
@@ -144,6 +147,9 @@ export function createWorkerWorkspaceActions(
   const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(options.bundleHash);
 
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
+    if (isWorkspaceInspectionCommand(command.argv)) {
+      throw new Error("Repository workspace inspection requires a managed node runtime");
+    }
     const timeoutMs = command.timeoutMs ?? WORKSPACE_TIMEOUT_MS;
     const deadlineMs = Date.now() + timeoutMs;
     const signal = command.signal
@@ -206,7 +212,7 @@ export function createWorkerWorkspaceActions(
   });
 
   const syncWorkspaceImpl = async (
-    request: WorkerWorkspaceSyncRequest,
+    request: WorkerLocalWorkspaceSyncRequest,
   ): Promise<WorkerWorkspaceSyncResult> => {
     validateWorkspaceSyncRequest(request);
     const prepared = await waitForPrepared(
@@ -432,7 +438,7 @@ export function createWorkerWorkspaceActions(
   };
 
   const reconcileWorkspaceRun = async (
-    request: WorkerWorkspaceReconcileRequest,
+    request: WorkerLocalWorkspaceReconcileRequest,
     metrics: WorkspaceReconcileMetrics,
   ): Promise<WorkerWorkspaceReconcileResult> => {
     if (!path.isAbsolute(request.localPath) || !path.posix.isAbsolute(request.remoteWorkspaceDir)) {
@@ -670,16 +676,48 @@ export function createWorkerWorkspaceActions(
     }
   };
 
-  const reconcileWorkspaceImpl = (
+  const reconcileWorkspaceImpl = async (
     request: WorkerWorkspaceReconcileRequest,
-  ): Promise<WorkerWorkspaceReconcileResult> =>
-    runInstrumentedWorkspaceReconcile((metrics) => reconcileWorkspaceRun(request, metrics));
+  ): Promise<WorkerWorkspaceReconcileResult> => {
+    if (request.source.kind === "repository") {
+      throw new Error(
+        "Repository sessions require a managed node or cloud provider; SSH-only workers cannot preserve repository checkpoints.",
+      );
+    }
+    const localRequest: WorkerLocalWorkspaceReconcileRequest = {
+      remoteWorkspaceDir: request.remoteWorkspaceDir,
+      baseManifestRef: request.baseManifestRef,
+      localPath: request.source.path,
+      journal: request.source.journal,
+      stagedResult: request.source.stagedResult,
+    };
+    return await runInstrumentedWorkspaceReconcile((metrics) =>
+      reconcileWorkspaceRun(localRequest, metrics),
+    );
+  };
 
   return {
     quiesceWorkspace,
     reconcileWorkspace: (request) => track(reconcileWorkspaceImpl(request)),
     runWorkspaceCommand,
     // Keep the outer task registered across local-file phases so tunnel stop drains all owner work.
-    syncWorkspace: (request) => track(syncWorkspaceImpl(request)),
+    syncWorkspace: (request: WorkerWorkspaceSyncRequest) => {
+      if (request.source.kind === "repository") {
+        return Promise.reject(
+          new Error(
+            "Repository sessions require a managed node or cloud provider; SSH-only workers cannot clone repository sessions.",
+          ),
+        );
+      }
+      return track(
+        syncWorkspaceImpl({
+          sessionId: request.sessionId,
+          generation: request.generation,
+          gitAuthor: request.gitAuthor,
+          localPath: request.source.path,
+          projectKey: request.source.projectKey,
+        }),
+      );
+    },
   };
 }

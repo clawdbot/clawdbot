@@ -262,7 +262,7 @@ describe("qwen provider plugin", () => {
   });
 
   it("switches Token Plan regions without replacing custom catalog rows", () => {
-    const initialGlobal = applyQwenTokenPlanConfig({}, "global");
+    const initialGlobal = applyQwenTokenPlanConfig({ models: { mode: "replace" } }, "global");
     const globalProvider = initialGlobal.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
     if (!globalProvider) {
       throw new Error("Token Plan provider missing after onboarding");
@@ -287,6 +287,7 @@ describe("qwen provider plugin", () => {
       ...initialGlobal,
       models: {
         ...initialGlobal.models,
+        mode: "merge",
         providers: {
           ...initialGlobal.models?.providers,
           [QWEN_TOKEN_PLAN_PROVIDER_ID]: {

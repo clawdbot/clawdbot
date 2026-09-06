@@ -43,6 +43,7 @@ const runtimeConsumers = [
     "src/cli/update-cli/update-command-migrated.test.ts",
     "src/cli/update-cli/update-command-rollback.test.ts",
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-post-update-repair.test.ts",
     "src/cli/update-cli/update-command-service.integration.test.ts",
   ].map((file) => ({
     file,
@@ -50,12 +51,15 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "",
   })),
-  {
-    file: "src/infra/update-candidate-canary.integration.test.ts",
+  ...[
+    "src/infra/update-candidate-canary.integration.test.ts",
+    "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.infra.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src",
-  },
+  })),
   ...[
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -67,6 +71,12 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "src/commands",
   })),
+  {
+    file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "private-qa",
+    dir: "",
+  },
   {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
@@ -90,6 +100,7 @@ const runtimeConsumers = [
     "src/gateway/gateway-auth-rewarm.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
+    "src/gateway/gateway-route-model-reuse.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],

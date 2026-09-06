@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import type { ProviderExternalAuthProfile } from "./provider-external-auth.types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
@@ -15,7 +16,6 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import type {
   AnyAgentTool,
-  ProviderExternalAuthProfile,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
@@ -304,6 +304,17 @@ describe("provider-runtime", () => {
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
     }));
+    vi.doMock("./provider-hook-runtime.js", async () => {
+      const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
+      const providers = await import("./providers.runtime.js");
+      return createProviderHookRuntime(providers);
+    });
+    vi.doMock("./provider-external-auth.js", async () => {
+      const { createProviderExternalAuthResolver } =
+        await import("./provider-external-auth-core.js");
+      const hooks = await import("./provider-hook-runtime.js");
+      return createProviderExternalAuthResolver(hooks);
+    });
     vi.doMock("../logging/subsystem.js", () => ({
       createSubsystemLogger: () => ({
         debug: vi.fn(),

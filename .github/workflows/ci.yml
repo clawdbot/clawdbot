@@ -1585,6 +1585,28 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
+          // Grouped rows list every striped test file. Current targets pack the
+          // projected runner contract; older targets retain the same projection
+          // as legacy JSON because their shard runner predates the codec.
+          const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
+          const nodeTestGroupsCodec =
+            rawNodeTestShards.some((shard) => shard.groups) &&
+            existsSync(nodeTestGroupsCodecPath)
+              ? await importTargetPlan(nodeTestGroupsCodecPath)
+              : null;
+          const encodeNodeTestGroups = (groups) => {
+            if (typeof nodeTestGroupsCodec?.encodeNodeTestGroups !== "function") {
+              throw new Error("CI target emits grouped Node test rows without scripts/lib/ci-node-test-groups-codec.mts");
+            }
+            return nodeTestGroupsCodec.encodeNodeTestGroups(groups);
+          };
+          const projectNodeTestGroup = ({
+            configs,
+            env,
+            includePatterns,
+            shard_name,
+            timing_key,
+          }) => ({ configs, env, includePatterns, shard_name, timing_key });
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1594,12 +1616,16 @@ jobs:
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
-            .map((shard) => ({
+            .map((shard) => {
+              const groups = shard.groups?.map(projectNodeTestGroup);
+              return {
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
-                groups: shard.groups,
+                groups_gzip_base64:
+                  groups && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined,
+                groups: groups && !nodeTestGroupsCodec ? groups : undefined,
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
@@ -1634,8 +1660,9 @@ jobs:
                       ) ||
                       (group.shard_name === "agentic-agents-support" &&
                         !group.includePatterns),
-                  ),
-              }));
+                   ),
+              };
+            });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
           const nodeMatrixLimit = compactPlanMode === "pull-request" ? 120 : 64;
@@ -3403,6 +3430,7 @@ jobs:
           path: .ci-workflow
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
+            scripts/lib/ci-node-test-groups-codec.mts
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
             scripts/lib/numeric-options.mjs
@@ -3433,7 +3461,8 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ matrix.groups && toJson(matrix.groups) || '' }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
@@ -3454,7 +3483,7 @@ jobs:
             runner=".ci-workflow/${runner}"
             [[ -f "$runner" ]]
           fi
-          node --import tsx "$runner"
+          time -p node --import tsx "$runner"
 
       - &runner_memory_peak_step
         name: Record runner memory peak
@@ -4741,6 +4770,14 @@ jobs:
           fi
           swift test "${openclawkit_test_args[@]}"
 
+      - name: Swabble tests
+        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
+          trap 'rm -rf "$swabble_scratch"' EXIT
+          swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --no-parallel
+
       - name: Swift test
         id: swift-test
         if: matrix.phase == 'tests'
@@ -5001,6 +5038,8 @@ jobs:
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
+            -only-testing:OpenClawTests/LocationServiceCallbackTests \
+            -only-testing:OpenClawTests/LocationServiceOrderingTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
             -only-testing:OpenClawTests/WatchSessionActivationGateTests \
@@ -5552,6 +5591,15 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
         run: pnpm test:docker:all
+
+      - name: Upload Fleet Docker proof
+        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' fleet-cache ')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fleet-cache-docker-proof
+          path: .artifacts/docker-tests/**/fleet-cache.log
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - *runner_memory_peak_step
 

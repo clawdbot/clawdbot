@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as childAdapter from "./adapters/child.js";
 import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorPayload,
@@ -35,7 +36,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function createRelay(platform: "linux" | "win32") {
+async function createRelay(platform: "linux" | "darwin" | "win32") {
   platformMock = mockProcessPlatform(platform);
   const groupProbe = vi.spyOn(process, "kill").mockImplementation(() => {
     throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
@@ -108,10 +109,14 @@ async function createRelay(platform: "linux" | "win32") {
     emit({ type: "root-result", code: 0, signal: null });
     endOutput();
   };
-  const close = () => {
-    control.destroy();
+  const closeControl = () => control.destroy();
+  const exitRelay = () => {
     stub.disconnectMock();
     stub.emitExit(0);
+  };
+  const close = () => {
+    closeControl();
+    exitRelay();
   };
   const floodControl = (chunk: string | Buffer) => {
     control.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -126,6 +131,8 @@ async function createRelay(platform: "linux" | "win32") {
     completeRoot,
     endOutput,
     close,
+    closeControl,
+    exitRelay,
     floodControl,
     controlEncoding,
     killSpy,
@@ -235,13 +242,11 @@ it.each(["linux", "win32"] as const)(
     mocks.spawn.mockReturnValue(stub.child);
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:rejected-construction";
-    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
     const pending = supervisor.spawn({
       runId: "rejected-construction",
       mode: "anchored-shell",
       command: "synthetic-command",
-      sessionId: "rejected-construction",
-      backendId: "test",
       scopeKey,
     });
     await nextTurn();
@@ -274,8 +279,6 @@ it("refreshes the supervisor deadline from text-only Windows Job output", async 
   const run = await supervisor.spawn({
     mode: "anchored-shell",
     command: "synthetic-command",
-    sessionId: "windows-job-output",
-    backendId: "windows-job-output",
     noOutputTimeoutMs: 1_000,
   });
   try {
@@ -462,15 +465,94 @@ it("drains output after losing cleanup authority without erasing the observed ro
   await expect(root).resolves.toEqual({ code: 23, signal: null });
 });
 
+it("waits for relay reaping before observing POSIX group extinction", async () => {
+  const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe } =
+    await createRelay("darwin");
+  groupProbe.mockImplementation(() => {
+    throw Object.assign(new Error("synthetic unreaped anchor group"), { code: "EPERM" });
+  });
+  completeRoot();
+  await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  const settled = vi.fn();
+  const extinction = adapter.waitForExtinction();
+  void extinction.then(settled, settled);
+
+  closeControl();
+  await nextTurn();
+  expect(settled).not.toHaveBeenCalled();
+  expect(groupProbe).not.toHaveBeenCalled();
+
+  groupProbe.mockImplementation(() => {
+    throw Object.assign(new Error("synthetic reaped anchor group"), { code: "ESRCH" });
+  });
+  exitRelay();
+  await expect(extinction).resolves.toBeUndefined();
+  expect(groupProbe).toHaveBeenCalledExactlyOnceWith(-1235, 0);
+});
+
+it("does not renew the group disappearance deadline after joining the relay", async () => {
+  const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe } =
+    await createRelay("darwin");
+  const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+  groupProbe.mockReturnValue(true);
+  completeRoot();
+  await adapter.wait();
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  const settled = vi.fn();
+  void adapter.waitForExtinction().then(settled, settled);
+
+  closeControl();
+  await nextTurn();
+  expect(groupProbe).not.toHaveBeenCalled();
+  now.mockReturnValue(10_000 + GRACEFUL_CANCEL_TIMEOUT_MS);
+  exitRelay();
+  await nextTurn();
+
+  expect(settled).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      message: expect.stringContaining("owned process group remained after its anchor closed"),
+    }),
+  );
+  expect(groupProbe).toHaveBeenCalledExactlyOnceWith(-1235, 0);
+});
+
+it("bounds relay reaping by the original graceful cleanup deadline", async () => {
+  const { adapter, completeRoot, emit, closeControl, groupProbe } = await createRelay("darwin");
+  completeRoot();
+  await adapter.wait();
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const rejected = expect(adapter.waitForExtinction()).rejects.toThrow(
+      "service child relay did not exit before cleanup deadline",
+    );
+    closeControl();
+    await nextTurn();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS);
+    await rejected;
+    expect(groupProbe).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it.each(["EPERM", "EIO", "still present"])(
   "keeps graceful cleanup uncertain when the kernel group is %s",
   async (failure) => {
     const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+    const cause =
+      failure === "still present"
+        ? undefined
+        : Object.assign(new Error(`synthetic ${failure}`), { code: failure });
     groupProbe.mockImplementation(() => {
-      if (failure === "still present") {
-        return true;
+      if (cause) {
+        throw cause;
       }
-      throw Object.assign(new Error(`synthetic ${failure}`), { code: failure });
+      return true;
     });
     completeRoot();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
@@ -480,6 +562,9 @@ it.each(["EPERM", "EIO", "still present"])(
     vi.spyOn(Date, "now").mockReturnValueOnce(10_000).mockReturnValue(15_000);
     close();
     await expect(adapter.waitForExtinction()).rejects.toThrow("owned process group");
+    await expect(adapter.waitForExtinction()).rejects.toSatisfy(
+      (error: unknown) => error instanceof Error && error.cause === cause,
+    );
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
     expect(groupProbe).toHaveBeenCalledWith(-1235, 0);
     expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);

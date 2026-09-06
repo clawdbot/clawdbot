@@ -15,6 +15,9 @@ import android.graphics.Bitmap
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.captureToImage
@@ -27,6 +30,15 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -59,6 +71,8 @@ import java.io.File
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
@@ -70,6 +84,11 @@ class SettingsScreensContrastTest {
   private lateinit var runtime: NodeRuntime
   private var previousRuntime: NodeRuntime? = null
   private lateinit var gateway: OperationalCaptionsGateway
+  private val noticeReached = CountDownLatch(1)
+  private val releaseNotice = CountDownLatch(1)
+  private val observationScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+  @Volatile private var noticeReleasedWithinBound = false
 
   // Dispose Compose before joining the actual runtime and socket, including on the contrast red.
   @get:Rule
@@ -79,6 +98,8 @@ class SettingsScreensContrastTest {
         object : ExternalResource() {
           override fun after() {
             try {
+              releaseNotice.countDown()
+              runBlocking { observationScope.coroutineContext[Job]!!.cancelAndJoin() }
               models.clear()
             } finally {
               try {
@@ -122,9 +143,11 @@ class SettingsScreensContrastTest {
       }
     }
     composeRule.runOnIdle { model.connect(gateway.endpoint) }
+    // Both screens retain visible data during refresh; wait for completion before measuring.
     try {
       composeRule.waitUntil(10_000) {
-        composeRule.onAllNodesWithText("Enabled").fetchSemanticsNodes().isNotEmpty()
+        composeRule.onAllNodesWithText("Enabled").fetchSemanticsNodes().isNotEmpty() &&
+          model.isConnected.value && !model.cronRefreshing.value && model.cronStatus.value.enabled
       }
     } finally {
       File(evidence, "cron-readiness.json").writeText(
@@ -140,7 +163,6 @@ class SettingsScreensContrastTest {
           .toString(2),
       )
     }
-    assertTrue(model.isConnected.value && !model.cronRefreshing.value && model.cronStatus.value.enabled)
     assertTrue(gateway.methods.containsAll(listOf("cron.status", "cron.list")))
 
     fun observe(
@@ -188,13 +210,11 @@ class SettingsScreensContrastTest {
     }
     composeRule.runOnIdle { route.value = SettingsRoute.Approvals }
     composeRule.waitUntil(10_000) {
-      composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes().isNotEmpty()
+      composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes().isNotEmpty() &&
+        !model.execApprovalInbox.value.refreshing && model.execApprovalInbox.value.approvals
+          .singleOrNull()
+          ?.commandPreview == "echo"
     }
-    assertTrue(
-      !model.execApprovalsRefreshing.value && model.execApprovals.value
-        .singleOrNull()
-        ?.commandPreview == "echo",
-    )
     composeRule
       .onNodeWithText("Deny")
       .performScrollTo()
@@ -210,9 +230,15 @@ class SettingsScreensContrastTest {
     gateway.terminal = true
     composeRule.onNodeWithText("Refresh").performScrollTo().performClick()
     composeRule.waitUntil(10_000) {
-      composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isNotEmpty()
+      val inbox = model.execApprovalInbox.value
+      composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isNotEmpty() &&
+        inbox.approvals.isEmpty() && inbox.notice?.approvalId == "approval-1"
     }
-    assertTrue(model.execApprovals.value.isEmpty() && model.execApprovalsNotice.value?.approvalId == "approval-1")
+    assertTrue(
+      model.execApprovalInbox.value.approvals
+        .isEmpty() && model.execApprovalInbox.value.notice
+        ?.approvalId == "approval-1",
+    )
     assertTrue(gateway.methods.count { it == "approval.get" } > readsBeforeRefresh)
     composeRule.onNodeWithText("A prior response already denied this approval.").performScrollTo().assertIsDisplayed()
     themes.forEach { theme ->
@@ -221,7 +247,7 @@ class SettingsScreensContrastTest {
     }
     composeRule.onNodeWithContentDescription("Dismiss approval notice").performClick()
     composeRule.waitUntil(10_000) { composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isEmpty() }
-    assertEquals(null, model.execApprovalsNotice.value)
+    assertEquals(null, model.execApprovalInbox.value.notice)
     assertTrue(composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isEmpty())
     assertFalse(gateway.methods.any { it in setOf("approval.resolve", "exec.approval.resolve", "chat.send", "cron.run") })
     File(evidence, "observations.json").writeText(
@@ -237,6 +263,110 @@ class SettingsScreensContrastTest {
         .toString(2),
     )
     assertTrue("Operational captions must retain 4.5:1 contrast:\n${failures.joinToString("\n")}", failures.isEmpty())
+  }
+
+  @Test
+  fun terminalNoticeDoesNotCoexistWithItsActionableCard() {
+    app = RuntimeEnvironment.getApplication() as NodeApp
+    previousRuntime = app.peekRuntime()
+    gateway = OperationalCaptionsGateway()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("approval-coherence-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    prefs.setManualTls(false)
+    prefs.saveGatewayCredentials(gateway.endpoint.stableId, token = "synthetic-coherence-proof")
+    runtime = NodeRuntime(app, prefs)
+    bindNodeRuntimeTestFixture(app, runtime)
+    val model = MainViewModel(app, prefs, SavedStateHandle())
+    models.put("approval-coherence", model)
+    model.setForeground(true)
+    val evidence = File("build/outputs/approval-inbox-coherence", UUID.randomUUID().toString())
+    check(!evidence.exists() && evidence.mkdirs())
+    composeRule.setContent {
+      ClawDesignTheme(dark = false) {
+        SettingsDetailScreen(viewModel = model, route = SettingsRoute.Approvals, onBack = {})
+      }
+    }
+    composeRule.runOnIdle { model.connect(gateway.endpoint) }
+    composeRule.waitUntil(10_000) {
+      composeRule.onAllNodesWithText("Refresh").fetchSemanticsNodes().any {
+        SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
+      } && composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes().isNotEmpty() &&
+        !model.execApprovalInbox.value.refreshing && model.execApprovalInbox.value.approvals
+          .singleOrNull()
+          ?.id == "approval-1"
+    }
+    composeRule
+      .onNodeWithText("Deny")
+      .performScrollTo()
+      .assertIsDisplayed()
+      .assertIsEnabled()
+    // Public subscription pauses the publisher, not the UI or an injected state setter.
+    observationScope.launch(start = CoroutineStart.UNDISPATCHED) {
+      runtime.execApprovalInbox.collect { inbox ->
+        if (inbox.notice?.approvalId == "approval-1" && noticeReached.count != 0L) {
+          noticeReached.countDown()
+          noticeReleasedWithinBound = releaseNotice.await(10, TimeUnit.SECONDS)
+        }
+      }
+    }
+    val renderedTogether =
+      try {
+        gateway.terminal = true
+        composeRule.onNodeWithText("Refresh").performScrollTo().performClick()
+        composeRule.waitUntil(10_000) {
+          composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isNotEmpty() && noticeReached.count == 0L
+        }
+        composeRule.onNodeWithText("A prior response already denied this approval.").assertIsDisplayed()
+        composeRule.onNodeWithText("Approval approval-1").assertIsDisplayed()
+        val commands = composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes()
+        val deny = composeRule.onAllNodesWithText("Deny").fetchSemanticsNodes()
+        val mixed =
+          commands.isNotEmpty() &&
+            deny.any {
+              SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
+            }
+        if (mixed) {
+          composeRule.onNodeWithText("echo ok").assertIsDisplayed()
+          composeRule
+            .onNodeWithText("Deny")
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .assertHasClickAction()
+          assertEquals(
+            "approval-1",
+            model.execApprovalInbox.value.approvals
+              .single()
+              .id,
+          )
+        }
+        assertEquals(
+          "approval-1",
+          model.execApprovalInbox.value.notice
+            ?.approvalId,
+        )
+        val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
+        File(evidence, "terminal-inbox.png").outputStream().use {
+          assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+        }
+        mixed
+      } finally {
+        releaseNotice.countDown()
+        runBlocking { observationScope.coroutineContext[Job]!!.cancelAndJoin() }
+      }
+    assertTrue(noticeReleasedWithinBound)
+    composeRule.waitUntil(10_000) {
+      composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes().isEmpty() &&
+        model.execApprovalInbox.value.approvals
+          .isEmpty() && model.execApprovalInbox.value.notice
+          ?.approvalId == "approval-1"
+    }
+    composeRule.onNodeWithText("Approval approval-1").assertIsDisplayed()
+    composeRule.onNodeWithText("Deny").assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("Dismiss approval notice").performClick()
+    composeRule.waitUntil(10_000) {
+      composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isEmpty() && model.execApprovalInbox.value.notice == null
+    }
+    assertFalse(gateway.methods.any { it in setOf("approval.resolve", "exec.approval.resolve", "chat.send", "cron.run") })
+    assertFalse("A rendered terminal notice must not coexist with its same-ID actionable card", renderedTogether)
   }
 }
 

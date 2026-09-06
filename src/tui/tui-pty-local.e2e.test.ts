@@ -16,7 +16,7 @@ import {
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

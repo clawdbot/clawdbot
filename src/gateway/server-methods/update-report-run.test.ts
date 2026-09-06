@@ -24,6 +24,14 @@ import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 const mocks = vi.hoisted(() => ({
   runGh: vi.fn<RunGithubCli>(),
   sentinel: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
+  select: vi.fn<() => Promise<string | symbol>>(),
+  confirm: vi.fn<() => Promise<boolean | symbol>>(),
+}));
+
+vi.mock("../../commands/configure.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/configure.shared.js")>()),
+  select: mocks.select,
+  confirm: mocks.confirm,
 }));
 
 vi.mock("../../infra/github-issue.js", async () => {
@@ -154,6 +162,8 @@ async function reportFiles() {
 
 beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-report-run-");
+  mocks.select.mockReset().mockResolvedValue("report");
+  mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.sentinel.mockReset().mockResolvedValue(null);
   mocks.runGh.mockReset().mockImplementation(async (args) => ({
     started: true,
@@ -313,12 +323,6 @@ describe("Report action from the authoritative update ledger", () => {
             durationMs: 1,
           },
           runtime,
-          dependencies: {
-            prompts: {
-              chooseAction: async () => "report",
-              confirmSubmission: async () => true,
-            },
-          },
         }),
       ).resolves.toBe("handled");
       expect(runtime.error).not.toHaveBeenCalled();

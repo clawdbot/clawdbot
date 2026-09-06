@@ -95,8 +95,12 @@ export async function resolveBranchLanding(
     "--quiet",
     `refs/remotes/origin/${params.branch}`,
   ]);
-  // HEAD is only used to compare landed PR heads; keep its read order when needed.
-  const headSha = params.mergedHeads.length ? await gitOutput(root, ["rev-parse", "HEAD"]) : null;
+  const possibleLandings = params.mergedHeads.filter(
+    (head) =>
+      head.baseRef === params.defaultBranch || Boolean(params.defaultBranch && head.mergeCommitSha),
+  );
+  // Only possible landings consume HEAD; keep its read order for those records.
+  const headSha = possibleLandings.length ? await gitOutput(root, ["rev-parse", "HEAD"]) : null;
   // Only merges whose content reached this checkout's default branch prove
   // the tip landed there: a direct default-base merge, or a landing through
   // another branch (feature -> release -> main) whose merge commit is now
@@ -105,7 +109,7 @@ export async function resolveBranchLanding(
   // the snapshot cache, because the cache key has no default branch.
   const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
   const landedHeads: MergedPullHead[] = [];
-  for (const head of params.mergedHeads) {
+  for (const head of possibleLandings) {
     if (head.baseRef === params.defaultBranch) {
       landedHeads.push(head);
     } else if (
@@ -116,7 +120,8 @@ export async function resolveBranchLanding(
       landedHeads.push(head);
     }
   }
-  const landedShas = landedHeads.map((head) => head.sha);
+  // PRs may share a head; their distinct landing receipts still need individual checks below.
+  const landedShas = new Set(landedHeads.map((head) => head.sha));
   const mergeBase = defaultRef ? await gitOutput(root, ["merge-base", defaultRef, "HEAD"]) : null;
   // The stats base is the newest commit whose content is known-published:
   // the ordinary default-branch merge base, or a merged PR head related to
@@ -147,7 +152,7 @@ export async function resolveBranchLanding(
   // head or a fetch-stale tracking ref proves nothing, so those states keep
   // the row stats-only until a rebase or fetch.
   let provenNewPushedWork = false;
-  if (pushedSha && mergeBase && !landedShas.includes(pushedSha.toLowerCase())) {
+  if (pushedSha && mergeBase && !landedShas.has(pushedSha.toLowerCase())) {
     provenNewPushedWork = landedHeads.length > 0;
     for (const head of landedHeads) {
       const incorporated =

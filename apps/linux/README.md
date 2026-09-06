@@ -2,6 +2,8 @@
 
 The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
+Dashboard widgets load inside the app. Sign-in links and external links opened in a new window use your system browser.
+
 The tray's **Stop Gateway** and **Restart Gateway** actions request graceful shutdown. Running work can delay completion; **Start Gateway** brings a stopped local Gateway back online.
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or

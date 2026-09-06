@@ -443,15 +443,16 @@ describe("worker turn launcher failure recovery", () => {
       environments,
       runnerAvailability: { read: () => undefined, version: () => 0 },
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run(root),
+      runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
+      runReclaimBarrier: async ({ begin, reclaim }) =>
+        await reclaim({ kind: "local", path: root }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       workspaceOperations,
-      resolveWorkspacePath: async () => root,
+      resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
       reportWorkspaceResultConflict: async () => {},
       resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
@@ -732,7 +733,10 @@ describe("worker turn launcher failure recovery", () => {
           throw new Error("unexpected workspace sync");
         }),
         reconcileWorkspace: vi.fn(async (request) => {
-          request.journal.commit(MANIFEST_REF);
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
+          request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

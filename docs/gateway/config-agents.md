@@ -51,7 +51,7 @@ in the managed agent workspace.
 {
   agents: {
     defaults: { workspace: "~/.openclaw/workspace" },
-    entries: { coder: { cwd: "~/Projects/app", sandbox: { mode: "off" } } },
+    entries: { coder: { cwd: "~/path/to/app", sandbox: { mode: "off" } } },
   },
 }
 ```
@@ -69,7 +69,7 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 
 ```json5
 {
-  agents: { defaults: { repoRoot: "~/Projects/openclaw" } },
+  agents: { defaults: { repoRoot: "~/path/to/openclaw" } },
 }
 ```
 

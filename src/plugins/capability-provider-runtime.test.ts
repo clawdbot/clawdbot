@@ -155,7 +155,6 @@ vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
 vi.mock("./bundled-compat.js", () => ({
   withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
 }));
-
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
 let prepareMediaCapabilityProviders: typeof import("./capability-provider-runtime.js").prepareMediaCapabilityProviders;

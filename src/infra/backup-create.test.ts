@@ -6,7 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
@@ -1193,7 +1193,7 @@ describe("createBackupArchive", () => {
             db.prepare("DELETE FROM durable_records WHERE value LIKE ?").run(`${deletedMarker}%`);
             db.prepare("INSERT INTO durable_records (value) VALUES (?)").run("committed-in-wal");
             expect((await fs.readFile(dbPath)).includes(Buffer.from(deletedMarker))).toBe(true);
-            await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+            await fs.access(`${dbPath}-wal`);
 
             archive = await createBackupArchive({
               output: state.path("owned-agent.tar.gz"),
@@ -2159,7 +2159,7 @@ describe("createBackupArchive", () => {
             PRAGMA wal_checkpoint(TRUNCATE);
             INSERT INTO markers (value) VALUES ('committed-in-wal');
           `);
-          await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+          await fs.access(`${dbPath}-wal`);
 
           const result = await createBackupArchive({
             output: outputDir,
@@ -2602,8 +2602,8 @@ describe("createBackupArchive", () => {
         await fs.writeFile(`${dbPath}-journal`, "");
 
         try {
-          await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
-          await expect(fs.access(`${dbPath}-shm`)).resolves.toBeUndefined();
+          await fs.access(`${dbPath}-wal`);
+          await fs.access(`${dbPath}-shm`);
           const result = await createBackupArchive({
             output: outputDir,
             includeWorkspace: false,

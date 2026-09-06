@@ -69,7 +69,7 @@ import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "../auth-profiles/store.js";
+} from "../auth-profiles/store-runtime.js";
 import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,

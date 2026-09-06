@@ -5,6 +5,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { emitPluginAgentEvent } from "./agent-event-emission.js";
 import { buildPluginApi } from "./api-builder.js";
+import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
 import {
   clearPluginRunContext,
   getPluginRunContext,
@@ -142,6 +143,27 @@ export function createPluginApiFactory(
               ...bound,
               registerHook: (events, handler, opts) =>
                 bound.registerHook(events, handler, opts, params.config, params.pluginConfig),
+              registerSpeechProvider: (entry) => {
+                const provider = resolveCapabilityProviderRegistration(
+                  entry,
+                  registryParams.resolveCapabilityCatalogContext,
+                );
+                bound.registerSpeechProvider(provider);
+              },
+              registerRealtimeTranscriptionProvider: (entry) => {
+                const provider = resolveCapabilityProviderRegistration(
+                  entry,
+                  registryParams.resolveCapabilityCatalogContext,
+                );
+                bound.registerRealtimeTranscriptionProvider(provider);
+              },
+              registerRealtimeVoiceProvider: (entry) => {
+                const provider = resolveCapabilityProviderRegistration(
+                  entry,
+                  registryParams.resolveCapabilityCatalogContext,
+                );
+                bound.registerRealtimeVoiceProvider(provider);
+              },
               registerNodeInvokePolicy: (policy) =>
                 bound.registerNodeInvokePolicy(policy, params.pluginConfig),
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,

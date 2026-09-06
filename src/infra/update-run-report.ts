@@ -6,7 +6,7 @@ import { summarizeUpdateStepFailure, type UpdateRunRecord } from "./update-run-r
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
-export type UpdateRunNoticeKind = "ack" | "activating" | "verifying" | "finished";
+export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type ReportInput = Pick<
   UpdateRunRecord,
   | "status"
@@ -30,7 +30,9 @@ export function renderUpdateRunNotice(
   if (kind === "finished") {
     return run.status === "running" ? null : renderUpdateRunReport(run).markdown;
   }
-  if (run.status !== "running" || run.phase !== (kind === "ack" ? "requested" : kind)) {
+  // Managed parking precedes updater staging; its notice must not advance the ledger phase.
+  const noticePhase = kind === "ack" || kind === "parking" ? "requested" : kind;
+  if (run.status !== "running" || run.phase !== noticePhase) {
     return null;
   }
   const from = run.before.version ? bounded(run.before.version, 120) : undefined;
@@ -39,7 +41,7 @@ export function renderUpdateRunNotice(
   if (kind === "ack") {
     return `⬆️ Updating OpenClaw ${from ?? "the current version"} → ${to ?? "the latest release"}. The gateway stays available while the update is validated; you'll get a message here when it finishes.`;
   }
-  if (kind === "activating") {
+  if (kind === "activating" || kind === "parking") {
     return `⏳ Restarting the gateway now${from && to ? ` (v${from} → v${to})` : ""}…`;
   }
   const running = run.verification.runningVersion
@@ -173,18 +175,31 @@ export function renderUpdateRunReport(
     lines.push(`Gateway downtime: ${formatDurationPrecise(run.downtimeMs)}.`);
   }
   const nextAction = opts.nextAction ?? run.origin.nextAction;
+  const repairStopReason = run.repair.at(-1)?.reason ?? run.reason;
+  const repairHint =
+    run.status === "failed" && repairStopReason === "requester-revoked"
+      ? nextAction
+        ? "Repair stopped because the chat requester is no longer a command owner. Further recovery requires a current command owner."
+        : "Repair stopped because the chat requester is no longer a command owner. A current command owner must start a new update, or the operator can run openclaw triage locally."
+      : run.status === "failed" && repairStopReason === "repair-requires-config-change"
+        ? nextAction
+          ? "Rehearsal config changes were not promoted. Review the named top-level keys before continuing recovery."
+          : "Rehearsal config changes were not promoted. Review the named top-level keys, then run openclaw doctor --fix under your own authority, or openclaw triage."
+        : undefined;
   const hints =
     run.status === "running"
       ? recoveryHints(run)
-      : [
-          ...new Set(
-            [
-              opts.doctorHint ?? facts.doctorHint ?? run.origin.doctorHint,
-              ...recoveryHints(run, nextAction),
-              nextAction,
-            ].filter((line): line is string => Boolean(line)),
-          ),
-        ];
+      : repairHint
+        ? [repairHint, ...(nextAction ? [nextAction] : [])]
+        : [
+            ...new Set(
+              [
+                opts.doctorHint ?? facts.doctorHint ?? run.origin.doctorHint,
+                ...recoveryHints(run, nextAction),
+                nextAction,
+              ].filter((line): line is string => Boolean(line)),
+            ),
+          ];
   lines.push(...hints);
   const next = hints.at(-1);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");

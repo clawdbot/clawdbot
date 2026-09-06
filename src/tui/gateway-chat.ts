@@ -11,7 +11,6 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import type { ErrorShape } from "../../packages/gateway-protocol/src/frame-guards.js";
 import {
   type HelloOk,
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -21,6 +20,7 @@ import {
   type CommandsListResult,
   type SessionsListParams,
   type SessionsResolveParams,
+  type SessionsResolveResult,
   type SessionsPatchResult,
   type SessionsPatchParams,
   type TaskSuggestionsAcceptResult,
@@ -161,15 +161,6 @@ type GatewayModelChoice = TuiModelChoice;
 type HandoffSessionResolveParams = Required<
   Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
 >;
-type HandoffSessionResolveResult =
-  | { ok: true; key: string; agentId: string }
-  | { ok: true; missing: true }
-  | {
-      ok: true;
-      ambiguous: true;
-      candidates: Array<{ key: string; agentId: string; displayName?: string }>;
-    }
-  | { ok: false; error: ErrorShape };
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
@@ -392,8 +383,8 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
   }
 
-  async resolveSession(opts: HandoffSessionResolveParams): Promise<HandoffSessionResolveResult> {
-    return await this.client.request<HandoffSessionResolveResult>("sessions.resolve", opts);
+  async resolveSession(opts: HandoffSessionResolveParams): Promise<SessionsResolveResult> {
+    return await this.client.request<SessionsResolveResult>("sessions.resolve", opts);
   }
 
   async listAgents() {

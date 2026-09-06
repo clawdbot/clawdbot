@@ -2,7 +2,7 @@
  * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
  * checks, shared-client leasing, and isolated-client shutdown handling.
  */
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
+import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
@@ -11,15 +11,7 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./protocol.js";
-import { resolveCodexAppServerDirectSandboxBypassBlock } from "./sandbox-guard.js";
-import {
-  createIsolatedCodexAppServerClient,
-  getLeasedSharedCodexAppServerClient,
-  isCodexAppServerStartSelectionChangedError,
-  releaseLeasedSharedCodexAppServerClient,
-  retireSharedCodexAppServerClientIfCurrent,
-  type CodexAppServerClientOptions,
-} from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
 
 type CodexAppServerClientRequestParams = {
@@ -38,6 +30,7 @@ type CodexAppServerClientRequestParams = {
 export async function requestCodexAppServerClientJson<T = JsonValue | undefined>(
   params: CodexAppServerClientRequestParams,
 ): Promise<T> {
+  const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
     requestParams: params.requestParams,
@@ -95,6 +88,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   params: CodexAppServerJsonClientOptions & { method: string; requestParams?: unknown },
 ): Promise<T> {
   // Fail closed before spawning or leasing a client for a guard-blocked method.
+  const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
     requestParams: params.requestParams,
@@ -253,6 +247,15 @@ export async function withCodexAppServerJsonClient<T>(
   try {
     return await withTimeout(
       (async () => {
+        const { resolveCodexAppServerDirectSandboxBypassBlock } =
+          await import("./sandbox-guard.js");
+        const {
+          createIsolatedCodexAppServerClient,
+          getLeasedSharedCodexAppServerClient,
+          isCodexAppServerStartSelectionChangedError,
+          releaseLeasedSharedCodexAppServerClient,
+          retireSharedCodexAppServerClientIfCurrent,
+        } = await import("./shared-client.js");
         for (let attempt = 0; attempt < 2; attempt += 1) {
           throwIfAbandoned();
           const acquireClient = params.isolated

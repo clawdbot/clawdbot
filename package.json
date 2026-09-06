@@ -396,7 +396,13 @@
     "!dist/plugin-sdk/blob-runtime.d.ts",
     "!dist/plugin-sdk/realtime-transcription-session.d.ts",
     "!dist/plugin-sdk/speech-provider.d.ts",
-    "!dist/plugin-sdk/realtime-voice-provider.d.ts"
+    "!dist/plugin-sdk/realtime-voice-provider.d.ts",
+    "!dist/plugin-sdk/provider-thinking-runtime.d.ts",
+    "!dist/plugin-sdk/embedding-provider-adapter.d.ts",
+    "!dist/plugin-sdk/agent-harness-registration.d.ts",
+    "!dist/plugin-sdk/session-catalog-paging.d.ts",
+    "!dist/plugin-sdk/provider-auth-aliases.d.ts",
+    "!dist/plugin-sdk/provider-model-metadata.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -716,6 +722,9 @@
     "./plugin-sdk/embedding-providers": {
       "default": "./dist/plugin-sdk/embedding-providers.js"
     },
+    "./plugin-sdk/embedding-provider-adapter": {
+      "default": "./dist/plugin-sdk/embedding-provider-adapter.js"
+    },
     "./plugin-sdk/media-generation-runtime": {
       "default": "./dist/plugin-sdk/media-generation-runtime.js"
     },
@@ -839,6 +848,9 @@
     },
     "./plugin-sdk/agent-harness-exec-review-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
+    },
+    "./plugin-sdk/agent-harness-registration": {
+      "default": "./dist/plugin-sdk/agent-harness-registration.js"
     },
     "./plugin-sdk/agent-harness-runtime": {
       "types": "./dist/plugin-sdk/agent-harness-runtime.d.ts",
@@ -1134,6 +1146,9 @@
       "types": "./dist/plugin-sdk/session-catalog.d.ts",
       "default": "./dist/plugin-sdk/session-catalog.js"
     },
+    "./plugin-sdk/session-catalog-paging": {
+      "default": "./dist/plugin-sdk/session-catalog-paging.js"
+    },
     "./plugin-sdk/session-catalog-runtime": {
       "default": "./dist/plugin-sdk/session-catalog-runtime.js"
     },
@@ -1342,6 +1357,9 @@
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
     },
+    "./plugin-sdk/provider-auth-aliases": {
+      "default": "./dist/plugin-sdk/provider-auth-aliases.js"
+    },
     "./plugin-sdk/provider-oauth-runtime": {
       "default": "./dist/plugin-sdk/provider-oauth-runtime.js"
     },
@@ -1390,6 +1408,9 @@
     "./plugin-sdk/provider-model-types": {
       "default": "./dist/plugin-sdk/provider-model-types.js"
     },
+    "./plugin-sdk/provider-model-metadata": {
+      "default": "./dist/plugin-sdk/provider-model-metadata.js"
+    },
     "./plugin-sdk/provider-model-shared": {
       "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
@@ -1401,6 +1422,9 @@
     },
     "./plugin-sdk/provider-stream-shared": {
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
+    },
+    "./plugin-sdk/provider-thinking-runtime": {
+      "default": "./dist/plugin-sdk/provider-thinking-runtime.js"
     },
     "./plugin-sdk/provider-transport-runtime": {
       "default": "./dist/plugin-sdk/provider-transport-runtime.js"
@@ -1879,6 +1903,7 @@
     "test:docker:codex-media-path": "bash scripts/e2e/codex-media-path-docker.sh",
     "test:docker:doctor-switch": "bash scripts/e2e/doctor-install-switch-docker.sh",
     "test:docker:compose-setup": "bash scripts/e2e/compose-setup.sh",
+    "test:docker:fleet-cache": "bash scripts/e2e/fleet-cache-docker.sh",
     "test:docker:e2e-build": "bash scripts/e2e/build-image.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:kitchen-sink-plugin": "bash scripts/e2e/kitchen-sink-plugin-docker.sh",
@@ -2039,7 +2064,7 @@
     "test:voicecall:closedloop": "node --import ./scripts/tsx.mjs scripts/test-voicecall-closedloop.mts",
     "test:watch": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --watch",
     "test:windows:ci": "pnpm test:windows:ci:1 && pnpm test:windows:ci:2",
-    "test:windows:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts extensions/acpx/src/runtime-argv.process.test.ts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/gateway/gateway-cron-process-identity.windows.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/check-openclaw-package-tarball.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts extensions/canvas/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts test/scripts/vitest-worker-artifacts.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
+    "test:windows:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts extensions/acpx/src/runtime-argv.process.test.ts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/gateway/gateway-cron-process-identity.windows.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/check-openclaw-package-tarball.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts extensions/canvas/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts test/scripts/vitest-worker-artifacts.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/daemon/schtasks.env-case.real.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
     "test:windows:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/skills/runtime/refresh.windows.test.ts src/skills/runtime/refresh-watch-path.test.ts src/skills/runtime/refresh.missing-root.integration.test.ts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/diagnostic-process-siblings.env.test.ts src/infra/windows-diagnostic-env.test.ts src/infra/windows-encoding.test.ts src/infra/windows-process-start.test.ts src/infra/windows-process-start.native.test.ts src/shared/pid-alive.env.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/agents/cli-executable-identity.test.ts src/plugin-sdk/windows-spawn.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts test/scripts/vitest-worker-artifacts.transforms.test.ts test/scripts/ci-platform-checkout.test.ts test/scripts/install-ps1.test.ts test/scripts/write-plugin-sdk-entry-dts.test.ts test/scripts/write-unified-entry-dts.test.ts test/scripts/tsdown-declaration-resolution.test.ts src/test-utils/openclaw-test-state.test.ts test/helpers/openclaw-test-instance.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/completion-runtime.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/path-comparison.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
     "test:windows:schtasks:integration": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --check",
@@ -2088,6 +2113,8 @@
     "native:i18n:baseline": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts sync --write",
+    "native-catalogs:gen": "node scripts/generate-native-session-catalogs.mjs",
+    "native-catalogs:check": "node scripts/generate-native-session-catalogs.mjs --check",
     "native:i18n:verify": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts verify",
     "android:i18n:check": "node --import ./scripts/tsx.mjs scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import ./scripts/tsx.mjs scripts/apple-app-i18n.ts check",

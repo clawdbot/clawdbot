@@ -100,6 +100,11 @@
       "types": "./dist/internal/shared.d.mts",
       "import": "./dist/internal/shared.mjs",
       "default": "./dist/internal/shared.mjs"
+    },
+    "./internal/tool-schema": {
+      "types": "./dist/internal/tool-schema.d.mts",
+      "import": "./dist/internal/tool-schema.mjs",
+      "default": "./dist/internal/tool-schema.mjs"
     }
   },
   "dependencies": {

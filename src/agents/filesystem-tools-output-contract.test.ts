@@ -155,6 +155,59 @@ describe("filesystem tool output contracts", () => {
     },
   );
 
+  it("keeps oversized find output inside the Code Mode value budget", async () => {
+    // ASCII output fits once, but its duplicate crosses the Code Mode value budget.
+    const longName = "f".repeat(240);
+    await Promise.all(
+      Array.from({ length: 260 }, (_, index) =>
+        fs.writeFile(path.join(tmpDir, `${longName}-${index}.txt`), "fixture\n"),
+      ),
+    );
+    const tool = createFindTool(tmpDir, {
+      operations: {
+        exists: (absolutePath) =>
+          fs.access(absolutePath).then(
+            () => true,
+            () => false,
+          ),
+        glob: async (pattern, cwd, options) => {
+          const matches: string[] = [];
+          for await (const match of fs.glob(pattern, { cwd })) {
+            matches.push(match);
+          }
+          return matches.toSorted().slice(0, options.limit);
+        },
+      },
+    });
+    const args = { pattern: "*.txt" };
+
+    const direct = await tool.execute("direct-find", args);
+    expect(direct.details.truncation?.truncated).toBe(true);
+    expect(direct.details.content).toContain(longName);
+
+    const result = await callThroughCodeMode(tool, args);
+    expect(result).toMatchObject({ status: "completed", value: direct.details });
+    expect(direct.details.truncation).not.toHaveProperty("content");
+  });
+
+  it("keeps oversized grep output inside the Code Mode value budget", async () => {
+    // The path prefix makes 100 capped match rows exceed the tool's byte limit.
+    const longDir = path.join(tmpDir, "d".repeat(60));
+    await fs.mkdir(longDir, { recursive: true });
+    const matchLine = `${"m".repeat(500)}\n`;
+    await fs.writeFile(path.join(longDir, "sample.txt"), matchLine.repeat(120), "utf8");
+    const tool = createGrepTool(tmpDir);
+    const args = { pattern: "m+" };
+
+    const direct = await tool.execute("direct-grep", args);
+    expect(direct.details.truncation?.truncated).toBe(true);
+    expect(direct.details.content).toContain("sample.txt:");
+
+    const result = await callThroughCodeMode(tool, args);
+    expect(result).toMatchObject({ status: "completed", value: direct.details });
+    expect(direct.details.truncation).not.toHaveProperty("content");
+  });
+
   it("validates read text, image, truncation, and optional-not-found results", async () => {
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "ordinary text\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "pixel.png"), Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));

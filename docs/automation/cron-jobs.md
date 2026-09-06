@@ -118,7 +118,7 @@ When a stream job also has `trigger.script`, the gate runs once per closed batch
 
 Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `automations add|edit` (`--clear-pacing` removes both bounds).
 
-During an agent-turn run, a paced job can call the `automations` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
+During an agent-turn run, a paced job can call the `automations` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds. A future paced deadline remains the next scheduled check after a Gateway restart.
 
 Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
 
@@ -615,6 +615,8 @@ openclaw automations edit <jobId> --clear-agent
 Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
+
+Run-now delivery measures lateness from when the manual request was accepted. An old pending scheduled slot does not make its fresh output stale; automatic and `--due` runs keep the original scheduled time for that check. A manual run still preserves the job's recurring cadence or future one-shot occurrence.
 
 Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Requested delivery is required unless the admitted job explicitly sets `delivery.bestEffort: true`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`. An adapter send without a delivery identity stays `unknown`, without an automatic resend that could duplicate the message.
 

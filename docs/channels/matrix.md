@@ -442,6 +442,8 @@ printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --r
 
 `backup status` shows whether a server-side backup exists and whether this device can decrypt it. `backup restore` imports backed-up room keys into the local crypto store; omit `--recovery-key-stdin` if the recovery key is already on disk.
 
+OpenClaw reads prior edits to notify only newly mentioned recipients. If an edit reports that its history is not fully decrypted, restore the missing room keys with `backup restore`, then retry the edit. If those keys are unavailable, send a new message.
+
 To replace a broken backup with a fresh baseline (accepts losing unrecoverable old history; can also recreate secret storage if the current backup secret is unloadable):
 
 ```bash

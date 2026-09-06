@@ -3,27 +3,19 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
-  getCachedLiveProviderModelRows,
-  LiveModelCatalogHttpError,
-  readLiveModelCatalogBooleanField,
-  readLiveModelCatalogPositiveSafeIntegerField,
-  readLiveModelCatalogStringField,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import {
+  buildFamilyForwardCompatModel,
   buildManifestModelProviderConfig,
-  type ProviderCatalogOutcome,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
-  resolveFamilyForwardCompatModel,
-  type ModelDefinitionConfig,
-  type ModelProviderConfig,
-  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-metadata";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+  ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -76,6 +68,13 @@ import {
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+
+type OpenAILiveModelReaders = Pick<
+  typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
+  | "readLiveModelCatalogBooleanField"
+  | "readLiveModelCatalogPositiveSafeIntegerField"
+  | "readLiveModelCatalogStringField"
+>;
 
 const PROVIDER_ID = "openai";
 
@@ -157,7 +156,6 @@ type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
   baseUrl?: string;
   discoveryApiKey?: string;
-  rejectionScope?: "catalog";
   env?: Record<string, string | undefined>;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
@@ -271,6 +269,17 @@ async function buildOpenAILiveProviderConfig(
   if (!shouldFetchOpenAILiveModels(baseUrl)) {
     return { provider: fallback };
   }
+  const [
+    { getCachedLiveProviderModelRows, LiveModelCatalogHttpError },
+    { isNonSecretApiKeyMarker },
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
+    import("openclaw/plugin-sdk/provider-auth"),
+  ]);
+  const rejectionScope =
+    params.apiKey && !params.discoveryApiKey && isNonSecretApiKeyMarker(params.apiKey)
+      ? "catalog"
+      : undefined;
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
@@ -320,7 +329,7 @@ async function buildOpenAILiveProviderConfig(
         provider: { ...fallback, models: [] },
         outcome: {
           provider: PROVIDER_ID,
-          ...(params.rejectionScope ? { rejectionScope: "catalog" } : {}),
+          ...(rejectionScope ? { rejectionScope } : {}),
           status: "auth-rejected",
         },
       };
@@ -375,7 +384,8 @@ function readCodexModelRows(body: unknown): readonly unknown[] {
   return models;
 }
 
-function shouldIncludeCodexModelRow(row: unknown): boolean {
+function shouldIncludeCodexModelRow(row: unknown, readers: OpenAILiveModelReaders): boolean {
+  const { readLiveModelCatalogStringField, readLiveModelCatalogBooleanField } = readers;
   const visibility = normalizeLowercaseStringOrEmpty(
     readLiveModelCatalogStringField(row, "visibility") ?? "",
   );
@@ -452,8 +462,12 @@ function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | und
   return fallbackModel ? normalizeOpenAICodexCatalogModel(fallbackModel) : undefined;
 }
 
-function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
-  if (!shouldIncludeCodexModelRow(row)) {
+function buildOpenAICodexModelFromLiveRow(
+  row: unknown,
+  readers: OpenAILiveModelReaders,
+): ModelDefinitionConfig | undefined {
+  const { readLiveModelCatalogStringField, readLiveModelCatalogPositiveSafeIntegerField } = readers;
+  if (!shouldIncludeCodexModelRow(row, readers)) {
     return undefined;
   }
   const modelId =
@@ -555,6 +569,8 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<OpenAILiveProviderCatalog> {
+  const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
+  const { getCachedLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
@@ -579,7 +595,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       ],
     });
     const models = rows
-      .map(buildOpenAICodexModelFromLiveRow)
+      .map((row) => buildOpenAICodexModelFromLiveRow(row, catalogRuntime))
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     // A successful account-scoped response is authoritative even when all
     // rows are hidden; static hints must not invent subscription access.
@@ -613,15 +629,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
 
 function isCodexCatalogAuthMode(mode: string): boolean {
   return mode === "oauth" || mode === "token";
-}
-
-function resolveOpenAICatalogRejectionScope(auth: {
-  apiKey?: string;
-  discoveryApiKey?: string;
-}): "catalog" | undefined {
-  return auth.apiKey && !auth.discoveryApiKey && isNonSecretApiKeyMarker(auth.apiKey)
-    ? "catalog"
-    : undefined;
 }
 
 function resolveOpenAICatalogBaseUrl(ctx: {
@@ -845,7 +852,7 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
     match: [OPENAI_GPT_54_NANO_MODEL_ID],
     templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
   },
-] satisfies Parameters<typeof resolveFamilyForwardCompatModel>[0]["cases"];
+] satisfies Parameters<typeof buildFamilyForwardCompatModel>[0]["cases"];
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
@@ -866,7 +873,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const catalogModel = OPENAI_MANIFEST_PROVIDER.models.find(
     ({ id }) => id === (modelId === OPENAI_GPT_56_MODEL_ID ? OPENAI_GPT_56_SOL_MODEL_ID : modelId),
   );
-  return resolveFamilyForwardCompatModel({
+  return buildFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
     ctx,
     cases: OPENAI_GPT_FORWARD_COMPAT_CASES,
@@ -938,8 +945,16 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
-          await import("openclaw/plugin-sdk/provider-auth-runtime");
+        if (auth.preparationFailed) {
+          return null;
+        }
+        const [
+          { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata },
+          { isNonSecretApiKeyMarker },
+        ] = await Promise.all([
+          import("openclaw/plugin-sdk/provider-auth-runtime"),
+          import("openclaw/plugin-sdk/provider-auth"),
+        ]);
         let runtimeAuth: Awaited<ReturnType<typeof resolveApiKeyForProvider>> | undefined;
         if (auth.profileId || auth.mode === "none") {
           try {
@@ -1037,10 +1052,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
               apiKey: auth.apiKey,
               baseUrl: resolveOpenAICatalogBaseUrl(ctx),
               discoveryApiKey,
-              rejectionScope: resolveOpenAICatalogRejectionScope({
-                apiKey: auth.apiKey,
-                discoveryApiKey,
-              }),
             }),
             auth.profileId,
           );

@@ -53,6 +53,7 @@ import {
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -105,11 +106,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       extractDeliveryInfo(sessionKey);
     let deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
     const threadId = requestedThreadId ?? sessionThreadId;
-    const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
-    const timeoutMs =
-      typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
-        ? Math.max(1000, Math.floor(timeoutMsRaw))
-        : undefined;
+    const timeoutMs = params.timeoutMs === undefined ? undefined : Math.max(1000, params.timeoutMs);
 
     const requesterChannel = params.requester?.channel;
     const trigger =
@@ -164,8 +161,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     let handoff:
       | { status: "started"; pid?: number; command: string }
-      | { status: "already-running"; command: string; message: string }
-      | { status: "unavailable"; command: string; message: string }
+      | { status: "already-running" | "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffOwner: GatewayRestartIntent["successorOwner"];
     let ackDelivered = false;
@@ -399,8 +395,12 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               runId,
               beforePark: async () => {
-                const activating = recordUpdateRunPhase(runId, "activating");
-                await notify(activating, "activating");
+                // Parking and stop completion preserve the phase so the updater can record staging/validation.
+                const current = getUpdateRun(runId);
+                if (!current) {
+                  throw new Error("Update run disappeared before managed Gateway parking.");
+                }
+                await notify(current, current.phase === "requested" ? "parking" : "activating");
               },
               requester: params.requester,
               root: installRoot,
@@ -579,17 +579,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       },
     );
     for (const step of result.steps) {
+      const completed =
+        step.exitCode === 0 ||
+        step.advisory ||
+        (step.exitCode === null && result.status !== "error");
       recordUpdateRunStep(runId, {
         step: step.name,
-        status:
-          step.exitCode === 0 ||
-          step.advisory ||
-          (step.exitCode === null && result.status !== "error")
-            ? "completed"
-            : "failed",
-        ...(step.exitCode !== 0
-          ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-          : {}),
+        status: completed ? "completed" : "failed",
+        ...(!completed ? { detail: summarizeUpdateStepFailure(step) } : {}),
       });
     }
     // A managed orchestrator or the replacement Gateway owns terminal success;
@@ -687,12 +684,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null;
-    if (
-      (ackDelivered || ackQueued) &&
-      result.status !== "ok" &&
-      handoff?.status !== "started" &&
-      !restart
-    ) {
+    if ((ackDelivered || ackQueued) && result.status !== "ok" && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
     context?.logGateway?.info(
