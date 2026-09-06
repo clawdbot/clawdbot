@@ -4,6 +4,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
 import {
+  withPinnedTrustedHostWebToolsEndpoint,
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
@@ -80,6 +81,65 @@ describe("web-guarded-fetch", () => {
     expect(policy?.allowRfc2544BenchmarkRange).toBe(true);
     expect(policy?.allowIpv6UniqueLocalRange).toBe(true);
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
+  });
+
+  it("grants exact-host trust to the configured endpoint hostname only", async () => {
+    // An operator-configured endpoint may resolve to private address space, but
+    // only that exact hostname is trusted and its DNS answers stay checked.
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://tavily.gateway.internal/search",
+      release: async () => {},
+    });
+
+    await withPinnedTrustedHostWebToolsEndpoint(
+      { url: "https://tavily.gateway.internal/search" },
+      async () => undefined,
+    );
+
+    const call = firstFetchCall();
+    expect(call?.url).toBe("https://tavily.gateway.internal/search");
+    expect(call?.policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["tavily.gateway.internal"],
+      allowedHostnames: ["tavily.gateway.internal"],
+    });
+    expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
+  });
+
+  it.each(["https://169.254.169.254/search", "https://metadata.google.internal/search"])(
+    "does not widen the policy for the pinned cloud-metadata destination %s",
+    async (url) => {
+      vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: url,
+        release: async () => {},
+      });
+
+      await withPinnedTrustedHostWebToolsEndpoint({ url }, async () => undefined);
+
+      const call = firstFetchCall();
+      expect(call?.policy).toBeUndefined();
+      expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
+    },
+  );
+
+  it("does not widen the policy for a pinned endpoint that is not an http(s) URL", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "ftp://tavily.gateway.internal/search",
+      release: async () => {},
+    });
+
+    await withPinnedTrustedHostWebToolsEndpoint(
+      { url: "ftp://tavily.gateway.internal/search" },
+      async () => undefined,
+    );
+
+    const call = firstFetchCall();
+    expect(call?.policy).toBeUndefined();
+    expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
   });
 
   it("keeps strict endpoint policy unchanged", async () => {

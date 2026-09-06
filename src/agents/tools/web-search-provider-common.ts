@@ -23,7 +23,9 @@ import type { CacheEntry } from "./web-shared.js";
 
 type WebGuardedFetchModule = Pick<
   typeof import("./web-guarded-fetch.js"),
-  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
+  | "withPinnedTrustedHostWebToolsEndpoint"
+  | "withSelfHostedWebToolsEndpoint"
+  | "withTrustedWebToolsEndpoint"
 >;
 
 const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
@@ -34,6 +36,22 @@ type WebSearchEndpointOptions = {
   url: string;
   timeoutSeconds: number;
   init: RequestInit;
+  signal?: AbortSignal;
+};
+
+type WebSearchEndpointRunner = <T>(
+  params: WebSearchEndpointOptions,
+  run: (response: Response) => Promise<T>,
+) => Promise<T>;
+
+type PostWebToolsJsonParams = {
+  url: string;
+  timeoutSeconds: number;
+  apiKey: string;
+  body: Record<string, unknown>;
+  errorLabel: string;
+  maxErrorBytes?: number;
+  extraHeaders?: Record<string, string>;
   signal?: AbortSignal;
 };
 
@@ -99,24 +117,45 @@ export async function withSelfHostedWebSearchEndpoint<T>(
   return withSelfHostedWebToolsEndpoint(params, async ({ response }) => run(response));
 }
 
+async function withPinnedTrustedHostWebSearchEndpoint<T>(
+  params: WebSearchEndpointOptions,
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const { withPinnedTrustedHostWebToolsEndpoint } = await webGuardedFetchLoader.load();
+  return withPinnedTrustedHostWebToolsEndpoint(params, async ({ response }) => run(response));
+}
+
+/** Posts JSON to a hosted provider endpoint under the trusted pinned-host policy. */
 export async function postTrustedWebToolsJson<T>(
-  params: {
-    url: string;
-    timeoutSeconds: number;
-    apiKey: string;
-    body: Record<string, unknown>;
-    errorLabel: string;
-    maxErrorBytes?: number;
-    extraHeaders?: Record<string, string>;
-    signal?: AbortSignal;
-  },
+  params: PostWebToolsJsonParams,
+  parseResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  return postWebToolsJson(withTrustedWebSearchEndpoint, params, parseResponse);
+}
+
+/**
+ * Posts JSON to an operator-configured endpoint with exact-host trust. Only the
+ * host of `params.url` is permitted, honored as typed, including loopback and
+ * private addresses. Cloud-metadata destinations are refused, as is a name
+ * whose DNS answer is loopback, link-local or cloud-metadata.
+ */
+export async function postPinnedTrustedHostWebToolsJson<T>(
+  params: PostWebToolsJsonParams,
+  parseResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  return postWebToolsJson(withPinnedTrustedHostWebSearchEndpoint, params, parseResponse);
+}
+
+async function postWebToolsJson<T>(
+  withEndpoint: WebSearchEndpointRunner,
+  params: PostWebToolsJsonParams,
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
   const headers = new Headers(params.extraHeaders);
   headers.set("Accept", "application/json");
   headers.set("Authorization", `Bearer ${params.apiKey}`);
   headers.set("Content-Type", "application/json");
-  return withTrustedWebSearchEndpoint(
+  return withEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
