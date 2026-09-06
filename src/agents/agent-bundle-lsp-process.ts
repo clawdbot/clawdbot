@@ -1,30 +1,30 @@
 /** Spawns bundled LSP server processes with sanitized environment and platform handling. */
-import { spawn, type ChildProcess } from "node:child_process";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
+import { createOwnedStdioProcess, type OwnedStdioProcess } from "../process/owned-stdio.js";
 import type { StdioMcpServerLaunchConfig } from "./mcp-stdio.js";
 
 type LspSpawnDependencies = {
-  spawn: typeof spawn;
+  spawn: typeof createOwnedStdioProcess;
   sanitizeHostExecEnv: typeof sanitizeHostExecEnv;
   resolveWindowsSpawnProgram: typeof resolveWindowsSpawnProgram;
   materializeWindowsSpawnProgram: typeof materializeWindowsSpawnProgram;
 };
 
 const defaultLspSpawnDependencies: LspSpawnDependencies = {
-  spawn,
+  spawn: createOwnedStdioProcess,
   sanitizeHostExecEnv,
   resolveWindowsSpawnProgram,
   materializeWindowsSpawnProgram,
 };
 
-export function spawnLspServerProcess(
+export async function spawnLspServerProcess(
   config: StdioMcpServerLaunchConfig,
   dependencies: LspSpawnDependencies = defaultLspSpawnDependencies,
-): ChildProcess {
+): Promise<OwnedStdioProcess> {
   const mergedEnv = dependencies.sanitizeHostExecEnv({
     baseEnv: process.env,
     overrides: config.env ?? null,
@@ -35,12 +35,12 @@ export function spawnLspServerProcess(
     allowShellFallback: true,
   });
   const invocation = dependencies.materializeWindowsSpawnProgram(program, config.args ?? []);
-  return dependencies.spawn(invocation.command, invocation.argv, {
-    stdio: ["pipe", "pipe", "pipe"],
+  return await dependencies.spawn({
+    argv: [invocation.command, ...invocation.argv],
     env: mergedEnv,
+    exactEnv: true,
     cwd: config.cwd,
-    detached: process.platform !== "win32",
-    windowsHide: invocation.windowsHide ?? process.platform === "win32",
-    shell: invocation.shell,
+    // Stable LSP config permits unresolved Windows wrappers to use Node's shell parsing.
+    ...(invocation.shell === true ? { windowsShell: true } : {}),
   });
 }

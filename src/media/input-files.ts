@@ -243,12 +243,23 @@ async function fetchWithGuard(params: {
   }
 }
 
-function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
+function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number): string {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
+  const limit = Math.max(0, Math.floor(maxChars));
+  const decode = (label: string) => {
+    const decoder = new TextDecoder(label);
+    let text = "";
+    for (let offset = 0; offset < buffer.length && text.length < limit; offset += 16_384) {
+      const end = Math.min(offset + 16_384, buffer.length);
+      // Preserve charset state across chunks; only actual EOF flushes incomplete bytes.
+      text += decoder.decode(buffer.subarray(offset, end), { stream: end < buffer.length });
+    }
+    return truncateUtf16Safe(text, limit);
+  };
   try {
-    return new TextDecoder(encoding).decode(buffer);
+    return decode(encoding);
   } catch {
-    return new TextDecoder("utf-8").decode(buffer);
+    return decode("utf-8");
   }
 }
 
@@ -408,7 +419,7 @@ export async function extractFileContentFromSource(params: {
   });
 }
 
-/** Extracts owned bytes after shared size and MIME checks; no source encoding is required. */
+/** Extracts text from borrowed bytes or PDFs from owned bytes after shared size and MIME checks. */
 export async function extractFileContentFromBuffer(params: {
   buffer: Buffer;
   filename?: string;
@@ -462,6 +473,6 @@ export async function extractFileContentFromBuffer(params: {
     };
   }
 
-  const text = truncateUtf16Safe(decodeTextContent(buffer, charset), limits.maxChars);
+  const text = decodeTextContent(buffer, charset, limits.maxChars);
   return { filename, text };
 }

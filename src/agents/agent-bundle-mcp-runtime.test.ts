@@ -41,6 +41,7 @@ import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
@@ -647,6 +648,7 @@ function makeRuntime(
       content: [{ type: "text", text: toolName }],
       isError: false,
     }),
+    joinCleanup: async () => {},
     dispose: async () => {},
   };
 }
@@ -6036,7 +6038,7 @@ process.stdin.on("end", () => {
   );
 
   it(
-    "force-closes streamable-http transport when DELETE hangs past the timeout",
+    "retains failed HTTP retirement for a later materialized cleanup after eviction",
     { timeout: 15_000 },
     async () => {
       testing.setBundleMcpDisposeTimeoutMsForTest(50);
@@ -6117,11 +6119,22 @@ process.stdin.on("end", () => {
         const catalog = await runtime.getCatalog();
         expect(catalog.tools).toHaveLength(1);
 
+        const materialized = await materializeBundleMcpToolsForRun({ runtime });
         const start = Date.now();
         await runtime.dispose();
         const elapsed = Date.now() - start;
 
         expect(elapsed).toBeLessThan(1_000);
+        await retireSessionMcpRuntime({
+          sessionId: runtime.sessionId,
+          reason: "external retirement before final run cleanup",
+        });
+        const cleanupScope = createAgentCleanupScope();
+        await cleanupScope.run(async () => {
+          await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
+          await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
+        });
+        expect(cleanupScope.outcome).toBe("uncertain");
       } finally {
         server.close();
       }

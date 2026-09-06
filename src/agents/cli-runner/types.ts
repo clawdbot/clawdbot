@@ -324,6 +324,10 @@ type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Exact process cleanup retained across attempt copies and natural registry removal. */
+  closeLiveSession?: (
+    reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,
+  ) => Promise<void>;
   /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
   claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Private child-only credential transport; never serialized into env or public plugin state. */

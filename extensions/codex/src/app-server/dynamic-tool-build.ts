@@ -398,6 +398,7 @@ export async function buildDynamicTools(
     hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
     computerContextEpoch: input.computerContextEpoch,
+    oneShotCliRun: params.oneShotCliRun,
     registerRunCleanup: input.registerRunCleanup,
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),

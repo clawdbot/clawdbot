@@ -50,7 +50,7 @@ describe("waitForEmbeddedAbortSettle timeout policy", () => {
 
       expect(settled).toBe(true);
       expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
-        `embedded abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${timeoutMs}`,
+        `agent cleanup timed out: runId=run-1 sessionId=session-1 step=embedded-abort-settle timeoutMs=${timeoutMs}`,
       );
       expect(vi.getTimerCount()).toBe(0);
     },
@@ -70,7 +70,7 @@ describe("waitForSessionsYieldAbortSettle", () => {
     await wait;
 
     expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
-      "sessions_yield abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=1250",
+      "agent cleanup timed out: runId=run-1 sessionId=session-1 step=sessions_yield-abort-settle timeoutMs=1250",
     );
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -84,7 +84,7 @@ describe("waitForSessionsYieldAbortSettle", () => {
     });
 
     expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
-      "sessions_yield abort settle failed: runId=run-1 sessionId=session-1 err=Error: settle failed",
+      "agent cleanup failed: runId=run-1 sessionId=session-1 step=sessions_yield-abort-settle error=settle failed",
     );
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -169,7 +169,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
 
     expect(order).toEqual(["flush", "dispose"]);
     expect(mocks.warn).toHaveBeenCalledWith(
-      `embedded abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${abortSettleTimeoutMs}`,
+      `agent cleanup timed out: runId=run-1 sessionId=session-1 step=embedded-abort-settle timeoutMs=${abortSettleTimeoutMs}`,
     );
   });
 
