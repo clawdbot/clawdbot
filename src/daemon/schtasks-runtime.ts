@@ -29,6 +29,7 @@ import {
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
@@ -158,7 +159,7 @@ export async function launchFallbackTaskScript(
       ).toString("base64"),
     ],
     {
-      env: scriptEnv,
+      env: { ...resolveServiceManagerEnv(), OPENCLAW_TASK_SCRIPT: scriptPath },
       stdio: "ignore",
       windowsHide: true,
     },

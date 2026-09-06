@@ -238,8 +238,10 @@ The explicit tsdown heap override is also the supported opt-in for attempting a 
 `OPENCLAW_EXTENSIONS` selects plugin manifest ids from the source checkout;
 existing source-directory names are also accepted when they differ. The Docker
 build resolves the selection to source directories once, installs production
-dependencies, and includes the selected plugin runtime in the image. Source
-checkouts also compile first-party plugins published separately with
+dependencies, links each selected plugin's own runtime dependencies under its
+packaged root in `/app/dist/extensions/<id>`, and includes the selected plugin
+runtime in the image. Source checkouts also compile first-party plugins
+published separately with
 `openclaw.build.bundledDist: false`; that marker still preserves the plugin's
 external npm or ClawHub ownership and does not change either artifact contract.
 Unknown, invalid, or ambiguous ids fail the image build.

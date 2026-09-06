@@ -9,7 +9,7 @@ import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
-  shouldSuppressBuiltInModelCore,
+  buildSuppressedBuiltInModelError,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
@@ -38,7 +38,7 @@ import {
 type ExplicitModelResolution =
   | { kind: "resolved"; model: Model; source: "configured" }
   | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
-  | { kind: "suppressed" };
+  | { kind: "suppressed"; error?: string };
 
 function getRegistryProviderMetadataOwners(
   modelRegistry: CoreModelRegistry,
@@ -143,16 +143,15 @@ export function resolveExplicitModelWithRegistry(params: {
         ? (model as { baseUrl: string }).baseUrl
         : undefined;
     const effectiveBaseUrl = configuredBaseUrl ?? discoveredBaseUrl;
-    if (
-      shouldSuppressBuiltInModelCore({
-        provider,
-        id: modelId,
-        ...(cfg ? { config: cfg } : {}),
-        ...(effectiveBaseUrl ? { baseUrl: effectiveBaseUrl } : {}),
-        ...(workspaceDir ? { workspaceDir } : {}),
-      })
-    ) {
-      return { kind: "suppressed" };
+    const error = buildSuppressedBuiltInModelError({
+      provider,
+      id: modelId,
+      config: cfg,
+      baseUrl: effectiveBaseUrl,
+      workspaceDir,
+    });
+    if (error) {
+      return { kind: "suppressed", error };
     }
     return {
       kind: "resolved",
@@ -188,18 +187,14 @@ export function resolveExplicitModelWithRegistry(params: {
   if (inlineMatch) {
     return undefined;
   }
-  if (
-    shouldSuppressBuiltInModelCore({
-      provider,
-      id: modelId,
-      ...(cfg ? { config: cfg } : {}),
-      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    })
-  ) {
-    return { kind: "suppressed" };
-  }
-  return undefined;
+  const error = buildSuppressedBuiltInModelError({
+    provider,
+    id: modelId,
+    config: cfg,
+    baseUrl: providerConfig?.baseUrl,
+    workspaceDir,
+  });
+  return error ? { kind: "suppressed", error } : undefined;
 }
 
 export function resolveDynamicModelAuthProfile(params: {

@@ -12,7 +12,7 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../agents/auth-profiles/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./doctor-auth.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";

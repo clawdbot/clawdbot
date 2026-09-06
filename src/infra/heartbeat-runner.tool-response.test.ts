@@ -13,6 +13,7 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
+import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-delivery.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -27,6 +28,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
+import { heartbeatLog } from "./heartbeat-runner-config.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -57,6 +59,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   const TELEGRAM_GROUP = "-1001234567890";
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     resetHeartbeatEventsForTest();
     resetSystemEventsForTest();
@@ -301,10 +304,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
-  it("commits a scratch replacement without exposing it as reply channel data", async () => {
+  it.each([true, false])("handles private scratch with monitor present: %s", async (hasMonitor) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
       const jobId = await seedHeartbeatScratchForTest({ content: "old scratch" });
+      if (!hasMonitor) {
+        await saveCronJobsStore(resolveCronJobsStorePath(), { version: 1, jobs: [] });
+      }
+      const warn = vi.spyOn(heartbeatLog, "warn").mockImplementation(() => undefined);
       await seedTelegramSession(storePath, cfg);
       const reply = createHeartbeatToolResponsePayload({
         outcome: "progress",
@@ -313,13 +320,16 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         scratch: "new private scratch",
       });
       expect(JSON.stringify(reply)).not.toContain("new private scratch");
-      replySpy.mockResolvedValue(reply);
+      replySpy.mockResolvedValue(normalizeReplyPayloadDirectives({ payload: reply }).payload);
 
       const result = await runHeartbeat(cfg, replySpy, vi.fn(), { source: "manual" });
 
       expect(result.status).toBe("ran");
       expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
-        "new private scratch",
+        hasMonitor ? "new private scratch" : "old scratch",
+      );
+      expect(warn.mock.calls).toEqual(
+        hasMonitor ? [] : [["heartbeat: scratch update ignored because no monitor job exists"]],
       );
     });
   });

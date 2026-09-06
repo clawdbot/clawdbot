@@ -13,7 +13,7 @@ import {
   modelSupportsDocument,
   modelSupportsVision,
 } from "./model-catalog.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
 type AugmentModelCatalogWithProviderPlugins =
@@ -69,6 +69,7 @@ async function build(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
   readOnly?: boolean;
   includeProviderPluginAugmentation?: boolean;
+  providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"];
 }) {
   return await buildPreparedModelCatalogSnapshot({
     agentDir: "/tmp/model-catalog-test",
@@ -77,6 +78,7 @@ async function build(params: {
     metadataSnapshot: params.metadataSnapshot ?? metadataSnapshot,
     modelRegistry: registry(params.entries ?? []),
     readOnly: params.readOnly ?? true,
+    providerOutcomes: params.providerOutcomes,
     ...(params.includeProviderPluginAugmentation !== undefined
       ? { includeProviderPluginAugmentation: params.includeProviderPluginAugmentation }
       : {}),
@@ -88,6 +90,30 @@ describe("prepared model catalog builder", () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockReset();
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
   });
+
+  it.each(["ready", "unavailable", "auth-rejected"] as const)(
+    "preserves %s provider membership without replenishing it from metadata",
+    async (status) => {
+      const entries =
+        status === "unavailable" ? [{ provider: "demo", id: "fallback", name: "Fallback" }] : [];
+      mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
+        { provider: "demo", id: "augmentation", name: "Augmentation" },
+      ]);
+      const snapshot = await build({
+        metadataSnapshot: providerManifestSnapshot({
+          provider: "demo",
+          discovery: "refreshable",
+          modelIds: ["manifest-only"],
+        }),
+        entries,
+        providerOutcomes: [{ provider: "demo", status }],
+        readOnly: false,
+      });
+      expect(snapshot.entries).toMatchObject(entries);
+      expect(snapshot.routeVariants).toMatchObject(entries);
+      expect(snapshot.authoritative).toBe(status === "ready");
+    },
+  );
 
   it("projects and sorts one lifecycle registry generation", async () => {
     const snapshot = await build({
@@ -111,6 +137,42 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.entries[0]?.thinkingLevelMap).toEqual({ off: null, max: "max" });
     expect(snapshot.routeVariants).toEqual(snapshot.entries);
   });
+
+  it("keeps successful profile rows when a sibling profile cannot refresh", async () => {
+    const healthy = { provider: "demo", id: "healthy", name: "Healthy" };
+    const snapshot = await build({
+      entries: [healthy],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "demo",
+        discovery: "refreshable",
+        modelIds: ["manifest-only"],
+      }),
+      providerOutcomes: [
+        { provider: "demo", profileId: "demo:first", status: "unavailable" },
+        { provider: "demo", profileId: "demo:second", status: "ready" },
+      ],
+    });
+    expect(snapshot.entries).toMatchObject([healthy]);
+    expect(snapshot.authoritative).toBe(false);
+  });
+
+  it.each(["unowned", "disabled"] as const)(
+    "ignores %s provider-alias declarations",
+    async (kind) => {
+      const plugin = createPluginManifestRecordFixture({
+        id: "alias-owner",
+        origin: "bundled",
+        providers: kind === "unowned" ? ["unrelated"] : ["target"],
+        modelCatalog: { aliases: { source: { provider: "target" } } },
+      });
+      const snapshot = await build({
+        config: { plugins: { entries: { "alias-owner": { enabled: kind !== "disabled" } } } },
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
+        entries: [{ provider: "source", id: "model", name: "Model" }],
+      });
+      expect(snapshot.entries).toMatchObject([{ provider: "source", id: "model" }]);
+    },
+  );
 
   it("keeps unranked registry rows in deterministic model-id order", async () => {
     const snapshot = await build({

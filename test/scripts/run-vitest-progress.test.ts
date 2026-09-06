@@ -162,7 +162,7 @@ export default {
         const result = await watched.completion;
         // Vitest's logger handles SIGTERM and exits with 128 + 15, rather than
         // leaving Node to report a signal-only exit (as a bare silent child does).
-        expect(result, output).toEqual({ code: stall ? 143 : 0, signal: null });
+        expect(result, output).toEqual({ code: stall ? 143 : 0, signal: null, groupJoined: true });
         expect(casePassed(4)).toBe(!stall);
         expect(isProcessAlive(watched.child.pid!)).toBe(false);
         expect(isProcessAlive(workerPid!)).toBe(false);

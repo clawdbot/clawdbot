@@ -52,7 +52,10 @@ console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.exists
     child.stderr?.on("data", (chunk: Buffer) => {
       errorOutput += chunk.toString();
     });
-    expect((await completion).code, errorOutput).toBe(0);
+    expect(await completion, errorOutput).toMatchObject({
+      code: 0,
+      groupJoined: process.platform !== "win32",
+    });
     const observed = JSON.parse(output);
     expect(observed.output).toBe("42\n");
     expect(observed.cached).toBe(homeMode !== "tooling");

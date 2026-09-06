@@ -280,6 +280,9 @@ const enSettings = {
       permissionsIntro: "macOS access for notifications, capture, voice, and device context.",
       app: "App",
       showDockIcon: "Show Dock icon",
+      iconStyle: "Dock icon",
+      iconStyleHint:
+        "Original uses your Mac’s icon style. Other designs follow light/dark mode while OpenClaw runs.",
       showDockIconHint:
         "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
       iconAnimations: "Icon animations",
@@ -309,6 +312,19 @@ const enSettings = {
       peekabooBridgeHint:
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
+      chromeExtension: "Chrome extension",
+      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionHint:
+        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Preparing Chrome…",
+      chromeExtensionPending:
+        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
+      chromeExtensionStoreRequired:
+        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
+      chromeExtensionInstalled:
+        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+      chromeExtensionFailed:
+        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",

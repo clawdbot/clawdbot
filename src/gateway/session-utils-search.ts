@@ -259,6 +259,7 @@ type LoadGatewaySessionRowOptions = {
   includeLastMessage?: boolean;
   now?: number;
   transcriptUsageMaxBytes?: number;
+  includeSwarmSummary?: boolean;
 };
 
 function loadGatewaySessionSnapshot(
@@ -278,10 +279,14 @@ function loadGatewaySessionSnapshot(
   if (!entry) {
     return { row: null };
   }
+  const rowContext = options?.includeSwarmSummary
+    ? buildSessionListRowMetadataContext({ now })
+    : undefined;
   const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
     store,
     key: canonicalKey,
     now,
+    subagentRuns: rowContext?.subagentRuns,
   });
   const lifecycleRunId = (entry as InternalSessionEntry).lifecycleRunId;
   return {
@@ -300,6 +305,8 @@ function loadGatewaySessionSnapshot(
       skipTranscriptUsageFallback: lightweight,
       lightweightListRow: lightweight,
       agentId,
+      // Event snapshots carry complete counts, while ordinary exact-row reads stay scoped.
+      rowContext,
     }),
   };
 }

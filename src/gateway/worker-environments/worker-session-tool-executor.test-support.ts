@@ -11,6 +11,7 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -19,6 +20,91 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
+
+const sharedMocks = vi.hoisted(() => ({
+  sessionEntries: new Map<string, SessionEntry>(),
+  delivered: vi.fn(),
+  gatewayRequest: vi.fn(),
+  gatewayCreate: vi.fn(),
+  gatewayRuntimeIdentity: vi.fn(),
+  dispatchChild: vi.fn(),
+  spawnCallerIdentity: vi.fn(),
+  spawnArgs: vi.fn(),
+  scopedSessionAccess: vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
+}));
+
+export function workerSessionToolTestMocks() {
+  return sharedMocks;
+}
+
+vi.mock("../session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-utils.js")>();
+  return {
+    ...actual,
+    loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
+      agentId: parseAgentSessionKey(sessionKey)?.agentId,
+      canonicalKey: sessionKey,
+      entry: structuredClone(sharedMocks.sessionEntries.get(sessionKey)),
+    }),
+  };
+});
+
+vi.mock("../../agents/tools/sessions-send-tool.js", () => ({
+  createSessionsSendTool: (options: unknown) => ({
+    execute: async (toolCallId: string, args: unknown) => {
+      await sharedMocks.delivered({ args, options, toolCallId });
+      return {
+        content: [{ type: "text", text: "sent" }],
+        details: { status: "ok" },
+      };
+    },
+  }),
+}));
+
+vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
+  const { getGatewayToolCallerIdentity } =
+    await import("../../agents/tools/gateway-caller-context.js");
+  return {
+    createSessionsSpawnTool: (options: {
+      agentSessionKey: string;
+      callGateway: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+    }) => ({
+      execute: async (_toolCallId: string, args: { task: string; worktree?: boolean }) => {
+        sharedMocks.spawnCallerIdentity(getGatewayToolCallerIdentity());
+        sharedMocks.spawnArgs(args);
+        const details = await options.callGateway("sessions.create", {
+          parentSessionKey: options.agentSessionKey,
+          task: args.task,
+          ...(args.worktree ? { worktree: true } : {}),
+        });
+        return {
+          content: [{ type: "text", text: "spawned" }],
+          details,
+        };
+      },
+    }),
+  };
+});
+
+vi.mock("../../agents/tools/scoped-session-access.js", () => ({
+  runWithScopedSessionAccess: (params: unknown) => sharedMocks.scopedSessionAccess(params as never),
+}));
+
+vi.mock("../../agents/tools/in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (request: unknown) => sharedMocks.gatewayRequest(request),
+  callInProcessGatewayTool: (method: string, params: Record<string, unknown>) =>
+    sharedMocks.gatewayRequest({ method, params }),
+  callInProcessGatewayToolWithCreation: (
+    method: string,
+    params: Record<string, unknown>,
+    creation: unknown,
+    options: unknown,
+  ) => sharedMocks.gatewayCreate({ creation, method, options, params }),
+  withAgentToolGatewayRuntimeIdentity: (request: unknown, identity: unknown) => {
+    sharedMocks.gatewayRuntimeIdentity(request, identity);
+    return request;
+  },
+}));
 
 export const SOURCE = {
   agentId: "main",
@@ -151,7 +237,9 @@ async function createWorkerSessionToolTestFixture(
   dispatchChild.mockReset();
   spawnCallerIdentity.mockReset();
   spawnArgs.mockReset();
-  scopedSessionAccess.mockClear();
+  // Shared mocks must discard unused once overrides before the next fixture starts.
+  scopedSessionAccess.mockReset();
+  scopedSessionAccess.mockImplementation(async (params) => await params.run());
   const spawnState: { childSessionKey: string | undefined; order: string[] } = {
     childSessionKey: undefined,
     order: [],
