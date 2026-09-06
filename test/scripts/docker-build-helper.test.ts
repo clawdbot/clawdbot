@@ -6568,9 +6568,9 @@ process.exit(73);
     expectTextToIncludeAll(runner, [
       "MCP_CODE_MODE_SEED_ENV_ARGS=()",
       "OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE=agent",
+      "OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE=legacy",
       '"${MCP_CODE_MODE_SEED_ENV_ARGS[@]}"',
     ]);
-    expect(runner).not.toContain("OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE");
     for (const path of [
       MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH,
       ONBOARD_DOCKER_E2E_PATH,
@@ -6580,6 +6580,9 @@ process.exit(73);
       expect(source).not.toContain('-e "OPENCLAW_SELECTED_SHA=$OPENCLAW_SELECTED_SHA"');
       expect(source).not.toContain('-e "OPENCLAW_TOOLING_SHA=$OPENCLAW_TOOLING_SHA"');
     }
+    const liveGateway = readFileSync("scripts/test-live-gateway-models-docker.sh", "utf8");
+    expect(liveGateway).not.toContain("OPENCLAW_SELECTED_SHA");
+    expect(liveGateway).not.toContain("OPENCLAW_TOOLING_SHA");
   });
 
   it.each([
