@@ -73,7 +73,7 @@ extension DashboardWindowController {
             permissions: .init(
                 entries: permissions,
                 location: .init(
-                    mode: DeviceSettingsLocationMode(locationMode),
+                    mode: locationMode,
                     precise: defaults.object(forKey: locationPreciseKey) as? Bool ?? true)),
             voice: .init(
                 supported: voiceWakeSupported && SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(

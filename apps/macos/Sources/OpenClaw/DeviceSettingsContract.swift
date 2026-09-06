@@ -71,7 +71,7 @@ enum DeviceSettingKey: String, CaseIterable {
         case .string, .nullableString, .provider, .location, .iconStyle:
             guard let value = raw as? String else { return nil }
             if self.valueType == .provider, ComputerControlProvider(rawValue: value) == nil { return nil }
-            if self.valueType == .location, DeviceSettingsLocationMode(rawValue: value) == nil { return nil }
+            if self.valueType == .location, OpenClawLocationMode(rawValue: value) == nil { return nil }
             if self.valueType == .iconStyle, AppIconStyle(rawValue: value) == nil { return nil }
             return .string(value)
         }
@@ -117,26 +117,6 @@ enum DeviceSettingsPermissionStatus: String, Encodable {
     init(automation state: AppleEventPermissionState) {
         self = state == .notDetermined ? .notDetermined :
             Self(TerminalAutomationPermission.authorizationStatus(for: state))
-    }
-}
-
-enum DeviceSettingsLocationMode: String, CaseIterable, Encodable {
-    case off, whileUsing, always
-
-    init(_ mode: OpenClawLocationMode) {
-        switch mode {
-        case .off: self = .off
-        case .whileUsing: self = .whileUsing
-        case .always: self = .always
-        }
-    }
-
-    var nativeMode: OpenClawLocationMode {
-        switch self {
-        case .off: .off
-        case .whileUsing: .whileUsing
-        case .always: .always
-        }
     }
 }
 
@@ -284,7 +264,7 @@ struct DeviceSettingsSnapshot: Encodable {
         }
 
         struct Location: Encodable {
-            let mode: DeviceSettingsLocationMode
+            let mode: OpenClawLocationMode
             let precise: Bool
         }
 

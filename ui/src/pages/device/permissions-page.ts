@@ -39,8 +39,7 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
   private renderPermissions(snapshot: NativeDeviceSettingsSnapshot) {
     const capability = this.context.nativeDeviceSettings;
     const { permissions } = snapshot;
-    // Native owners distinguish first-use prompts, denied access, and recoverable missing targets.
-    // Coarse status alone cannot choose between requesting permission and opening System Settings.
+    // Preserve denial recovery; unavailable native targets may recover through another request.
     return html`
       ${renderSettingsSection(
         { title: t("configPage.deviceSettings.systemAccess") },
@@ -51,7 +50,7 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
             stackedOnNarrow: true,
             control: html`
               ${renderSettingsStatus({ kind: status === "granted" ? "ok" : status === "denied" ? "danger" : "muted", label: t(`configPage.deviceSettings.permissionStatuses.${status}`) })}
-              ${status !== "granted" ? html`<button type="button" class="btn" @click=${() => capability?.requestPermission(id)}>${status === "unavailable" ? t("common.retry") : t("configPage.deviceSettings.grant")}</button>` : nothing}
+              ${status === "notDetermined" || status === "unavailable" ? html`<button type="button" class="btn" @click=${() => capability?.requestPermission(id)}>${status === "unavailable" ? t("common.retry") : t("configPage.deviceSettings.grant")}</button>` : status === "denied" ? html`<button type="button" class="btn" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
             `,
           }),
         ),

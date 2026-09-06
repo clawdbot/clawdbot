@@ -75,7 +75,7 @@ extension DashboardWindowController {
             cookieSyncEnabled: state.cookieSyncEnabled,
             cookieDomains: state.cookieSyncDomains,
             cookieProfile: state.cookieSyncIntoProfile,
-            locationMode: DeviceSettingsLocationMode(locationMode))
+            locationMode: locationMode)
     }
 
     private static let booleanStateSettings: [DeviceSettingKey: ReferenceWritableKeyPath<AppState, Bool>] = [
@@ -106,9 +106,9 @@ extension DashboardWindowController {
         case let (.wakeEnabled, .boolean(enabled)):
             await AppStateStore.shared.setVoiceWakeEnabled(enabled) { self.canUseDeviceSettings(sourceID: sourceID) }
         case let (.locationMode, .string(value)):
-            guard let mode = DeviceSettingsLocationMode(rawValue: value) else { return }
+            guard let mode = OpenClawLocationMode(rawValue: value) else { return }
             await AppStateStore.shared
-                .setLocationMode(mode.nativeMode) { self.canUseDeviceSettings(sourceID: sourceID) }
+                .setLocationMode(mode) { self.canUseDeviceSettings(sourceID: sourceID) }
         case let (_, .boolean(enabled)):
             self.setDeviceBoolean(key, enabled: enabled)
         case let (_, .string(value)):

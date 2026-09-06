@@ -167,10 +167,9 @@ struct DeviceSettingsBridgeTests {
         let locations: [(OpenClawLocationMode, String)] = [
             (.off, "off"), (.whileUsing, "whileUsing"), (.always, "always"),
         ]
-        for (native, wire) in locations {
-            let mapped = DeviceSettingsLocationMode(native)
-            #expect(mapped.nativeMode == native)
-            #expect(try String(decoding: JSONEncoder().encode(mapped), as: UTF8.self) == "\"\(wire)\"")
+        #expect(Set(OpenClawLocationMode.allCases.map(\.rawValue)) == Set(locations.map(\.1)))
+        for (mode, wire) in locations {
+            #expect(try String(decoding: JSONEncoder().encode(mode), as: UTF8.self) == "\"\(wire)\"")
         }
         #expect(DeviceSettingsPermissionStatus(.granted) == .granted)
         #expect(DeviceSettingsPermissionStatus(.notGranted) == .denied)
