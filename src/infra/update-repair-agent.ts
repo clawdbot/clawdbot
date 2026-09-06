@@ -289,8 +289,18 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
 export async function prepareUnattendedUpdateRepair(
   params: UpdateRepairParams,
 ): Promise<UpdateRepairResult> {
-  if (params.context.phase !== "verifying" || repairActive) {
+  if (params.context.phase !== "verifying") {
     return runUpdateRepairLoop(params);
+  }
+  if (repairActive) {
+    const reason = "Another installation repair is already running.";
+    params.onEvent?.({ type: "stopped", status: "unavailable", reason });
+    return {
+      status: "unavailable",
+      attempts: [],
+      finalValidation: { ok: false, score: 0, summary: "Validation did not complete." },
+      reason,
+    };
   }
   repairActive = true;
   try {
