@@ -14,6 +14,7 @@ import {
   type ChannelIngressMonitorPayloadCodec,
   type CreateChannelIngressMonitorOptions,
 } from "../channels/message/ingress-monitor.js";
+import { inheritIngressProcessingClaims } from "../channels/message/ingress-processing-handoff.js";
 export {
   channelIngressRoutes,
   createChannelIngressResolver,
@@ -171,12 +172,17 @@ export function fanInChannelIngressLifecycles(
     fanOut((lifecycle) =>
       lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
     );
+  const abortSignal =
+    lifecycles.length === 1
+      ? first.abortSignal
+      : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal));
+  inheritIngressProcessingClaims(
+    abortSignal,
+    lifecycles.map((lifecycle) => lifecycle.abortSignal),
+  );
   return {
     lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? first.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+      abortSignal,
       onAdopted: async () => {
         handedOff = true;
         await adoptAll();

@@ -9,10 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 const metaPackagePath = "extensions/meta/package.json";
@@ -166,6 +167,8 @@ describe("plugin npm extended-stable workflow", () => {
   ])(
     "publishes the sealed artifact without a source install: $publishTag / identity $identityExit",
     ({ publishTag, identityExit }) => {
+      const nodeExecutable = requireNodeTool("node");
+      const npmCli = realpathSync(requireNodeTool("npm"));
       const root = mkdtempSync(join(tmpdir(), "plugin-oidc-artifact-"));
       try {
         const bin = join(root, "bin");
@@ -181,7 +184,7 @@ describe("plugin npm extended-stable workflow", () => {
         for (const command of ["node", "npm"]) {
           writeFileSync(
             join(bin, command),
-            `#!${process.execPath}
+            `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (${JSON.stringify(command)} === "npm") {
@@ -218,7 +221,7 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
               PATH: `${bin}:/usr/bin:/bin`,
               ...publish.env,
               EVENTS: events,
-              NPM_CLI: realpathSync(join(dirname(process.execPath), "npm")),
+              NPM_CLI: npmCli,
               RUNNER_TEMP: root,
               IDENTITY_EXIT: String(identityExit),
               TARBALL_PATH: tarball,

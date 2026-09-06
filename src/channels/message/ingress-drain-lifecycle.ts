@@ -55,6 +55,5 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
   };
 }
 
-// Timeout handoff is drain-internal (ALS + abort-signal setter), not a public
-// monitor/reply-options callback. onAdoptionFinalizing stays drain-only too;
-// channels call it via the spooled-replay ALS lifecycle frame during settlement.
+// onAdoptionFinalizing stays drain-only (not reply-options); channels call it
+// via the spooled-replay ALS lifecycle frame during settlement hold.

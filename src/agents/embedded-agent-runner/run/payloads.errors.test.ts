@@ -27,7 +27,7 @@ import {
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
-  const REDACTED_TEST_MODEL_FAILURE_TEXT = "⚠️ openai/test-model request failed.";
+  const REDACTED_TEST_MODEL_FAILURE_TEXT = "⚠️ Agent run failed (model: openai/test-model).";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{

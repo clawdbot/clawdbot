@@ -252,7 +252,7 @@ describe("SQLite session snapshots and reset content revision", () => {
         sessionId,
         updatedAt: 2,
       }),
-      resetBoundary: { context: "preserve-tail", reason: "reset" },
+      resetBoundary: { context: "preserve-tail", reason: "reset", cwd: tmpDir },
       storePath,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });

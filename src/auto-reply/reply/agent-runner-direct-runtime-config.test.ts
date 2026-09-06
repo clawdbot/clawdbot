@@ -4,13 +4,6 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
-import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
-import {
-  createTestIngressQueue,
-  withTempState,
-} from "../../channels/message/ingress-drain.test-helpers.js";
-import { bindIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -29,13 +22,13 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const freshCfg = { runtimeFresh: true };
 const staleCfg = {
@@ -156,52 +149,12 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
-  let sessionId = "session-1";
-  return {
-    key: "test",
-    get sessionId() {
-      return sessionId;
-    },
-    turnKind: "visible",
-    abortSignal: new AbortController().signal,
-    resetTriggered: false,
-    phase: "queued",
-    result: null,
-    startedAtMs: Date.now(),
-    lastActivityAtMs: Date.now(),
-    recordActivity: vi.fn(),
-    setPhase: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-    updateSessionId: vi.fn((nextSessionId: string) => {
-      sessionId = nextSessionId;
-    }),
-    updateSessionKey: vi.fn(),
+  const { replyOperation } = createMockReplyOperation({ key: "test", sessionId: "session-1" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
+    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     hasOwnedSessionId: vi.fn(() => false),
-    bindToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityProjector: vi.fn(),
-    projectToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityRoute: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    freezeAbort: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
-    supersede: vi.fn(),
-    terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
-    markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-  };
+  });
 }
 
 function createDirectRuntimeReplyParams({
@@ -351,74 +304,6 @@ describe("runReplyAgent runtime config", () => {
     );
     expect(preflightCall.cfg).toBe(freshCfg);
     expect(preflightCall.followupRun).toBe(followupRun);
-  });
-
-  it("hands pre-adoption ownership to the bounded reply runtime before memory flush", async () => {
-    const onProcessingStarted = vi.fn();
-    const abort = new AbortController();
-    bindIngressBoundedProcessingStarted(abort.signal, onProcessingStarted);
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
-    replyParams.opts = {
-      turnAdoptionLifecycle: {
-        onAdopted: async () => undefined,
-        abortSignal: abort.signal,
-      },
-    };
-
-    await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
-
-    expect(onProcessingStarted).toHaveBeenCalledTimes(1);
-    expect(onProcessingStarted.mock.invocationCallOrder[0]).toBeLessThan(
-      runMemoryFlushIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("retains and adopts one durable claim after pre-run maintenance exceeds the ingress timeout", async () => {
-    vi.useFakeTimers();
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("long-maintenance", { text: "hello" }, { laneKey: "main" });
-      let releaseCompaction!: () => void;
-      const compactionReleased = new Promise<void>((resolve) => {
-        releaseCompaction = resolve;
-      });
-      runSessionCompactionIfNeededMock.mockImplementationOnce(async () => {
-        await compactionReleased;
-        return undefined;
-      });
-      const drain = createChannelIngressDrain({
-        queue,
-        adoptionStallTimeoutMs: 5_000,
-        dispatchClaimedEvent: async (_event, lifecycle) => {
-          const { replyParams } = createDirectRuntimeReplyParams({
-            shouldFollowup: false,
-            isActive: false,
-          });
-          replyParams.opts = bindIngressLifecycleToReplyOptions(lifecycle);
-          await runReplyAgent(replyParams);
-          return { kind: "completed" };
-        },
-      });
-
-      await drain.drainOnce();
-      await vi.waitFor(() => {
-        expect(runSessionCompactionIfNeededMock).toHaveBeenCalledTimes(1);
-      });
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(await queue.listClaims()).toHaveLength(1);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-
-      releaseCompaction();
-      await drain.waitForIdle();
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-      expect(executeAgentTurnMock).toHaveBeenCalledTimes(1);
-      drain.dispose();
-    });
   });
 
   it("passes the derived runtime-policy key to pre-run maintenance", async () => {

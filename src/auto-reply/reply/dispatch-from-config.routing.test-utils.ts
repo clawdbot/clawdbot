@@ -39,6 +39,68 @@ beforeAll(globalBeforeAll0);
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
 
+  it.each(["local", "routed"] as const)(
+    "drops a maintenance notice cancelled during media preparation on the %s path",
+    async (route) => {
+      setNoAbort();
+      installThreadingTestPlugin({ id: "telegram" });
+      const preparationEntered = Promise.withResolvers<void>();
+      const releasePreparation = Promise.withResolvers<void>();
+      const expiredPhase = new AbortController();
+      const healthyPhase = new AbortController();
+      const expiredNotice: ReplyPayload = {
+        text: "Old maintenance notice",
+        isCompactionNotice: true,
+        mediaUrl: "/tmp/maintenance-notice.png",
+      };
+      const healthyNotice: ReplyPayload = {
+        text: "Current maintenance notice",
+        isCompactionNotice: true,
+      };
+      replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValueOnce(async (payload) => {
+        preparationEntered.resolve();
+        await releasePreparation.promise;
+        return payload;
+      });
+      const dispatcher = createDispatcher();
+      const dispatch = dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: route === "routed" ? "slack" : "telegram",
+          Surface: route === "routed" ? "slack" : "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:999",
+        }),
+        cfg: automaticDirectReplyConfig,
+        dispatcher,
+        replyResolver: async (_ctx, options) => {
+          const onBlockReply = requireBlockReplyHandler(options?.onBlockReply);
+          await onBlockReply(expiredNotice, { abortSignal: expiredPhase.signal });
+          await onBlockReply(healthyNotice, { abortSignal: healthyPhase.signal });
+          return undefined;
+        },
+      });
+      try {
+        await preparationEntered.promise;
+        expiredPhase.abort(new Error("Compaction timed out"));
+        releasePreparation.resolve();
+        await dispatch;
+
+        if (route === "local") {
+          expect(dispatcher.sendBlockReply.mock.calls).toEqual([[healthyNotice]]);
+          expect(mocks.routeReply).not.toHaveBeenCalled();
+        } else {
+          expect(mocks.routeReply.mock.calls.map(([params]) => params.payload)).toEqual([
+            healthyNotice,
+          ]);
+          expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+        }
+      } finally {
+        releasePreparation.resolve();
+        await Promise.allSettled([dispatch]);
+      }
+    },
+  );
+
   it("honors sendPolicy deny for recovered exec-event delivery channel", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -1160,7 +1222,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps tool-error fallbacks available when verbose is disabled during the run", async () => {
+  it("hides failed tool progress when verbose is disabled during the run", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -1174,14 +1236,11 @@ describe("dispatchReplyFromConfig", () => {
       From: "whatsapp:group:789@g.us",
       SessionKey: "agent:main:whatsapp:group:789@g.us",
     });
-    let receivedOptions: GetReplyOptions | undefined;
-
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      receivedOptions = opts;
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
       sessionStoreMocks.currentEntry = {
         verboseLevel: "off",
@@ -1198,7 +1257,6 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });

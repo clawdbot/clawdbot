@@ -1,4 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { captureIngressProcessingDeadline } from "../../../channels/message/ingress-processing-handoff.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -24,6 +25,7 @@ import type {
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
+import { resolveSessionPlacementTurnSettlementAssertion } from "../../session-placement-forced-terminal-settlement.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -49,6 +51,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   setParams: (params: TParams) => void;
 }) {
   const initialParams = options.getParams();
+  const processingDeadline =
+    initialParams.trigger === "memory" ? captureIngressProcessingDeadline("memory") : undefined;
   const sessionLanePolicy = resolveEmbeddedRunSessionLanePolicy(
     initialParams.trigger,
     initialParams.inputProvenance,
@@ -108,6 +112,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
+  let assertPlacementCurrent: (() => void) | undefined;
   let activeAttemptOwner: object | undefined;
   const createAttemptControls = (input: {
     admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
@@ -115,6 +120,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     initialTimeoutMs?: number;
     onAbort?: () => void;
   }) => {
+    // Awaited preflight may finish after recovery has released this lane's claim.
+    assertPlacementCurrent?.();
     const owner = {};
     activeAttemptOwner = owner;
     const lifecycleGeneration = options.getLifecycleGeneration();
@@ -135,6 +142,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     const onAttemptDeadlineChanged = (deadline: CommandQueueTaskDeadline) => {
       if (isCurrent()) {
         deadlineOwned = true;
+        processingDeadline?.update(deadline);
         setLaneTaskDeadline(deadline);
       }
     };
@@ -180,6 +188,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           activeAttemptOwner = undefined;
           noteLaneTaskProgress();
           if (deadlineOwned) {
+            processingDeadline?.update(undefined);
             setLaneTaskDeadline(undefined);
           }
         }
@@ -187,6 +196,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
   };
   const throwIfAborted = () => {
+    // Bind only this lane's admitted claim; queued children can inherit a closed parent.
+    assertPlacementCurrent?.();
     if (!abortSignal.aborted) {
       return;
     }
@@ -312,7 +323,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             runId: params.runId,
           },
           params,
-          task,
+          () => {
+            assertPlacementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+            return task();
+          },
           () => {
             throwIfAborted();
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -397,6 +411,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       throw error;
     }
     return queuedRun.finally(() => {
+      processingDeadline?.close();
       releaseQueuedContext("abandoned");
     });
   };

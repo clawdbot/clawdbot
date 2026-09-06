@@ -3,6 +3,7 @@ import { ButtonStyle, TextInputStyle } from "discord-api-types/v10";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   DiscordComponentBlock,
@@ -35,19 +36,16 @@ function requireObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function readRequiredString(
-  value: unknown,
-  label: string,
-  opts?: { allowEmpty?: boolean },
-): string {
+// Body whitespace carries Markdown; control labels still use trimmed values.
+function readRequiredString(value: unknown, label: string, trim = true): string {
   if (typeof value !== "string") {
     throw new Error(`${label} must be a string`);
   }
   const trimmed = value.trim();
-  if (!opts?.allowEmpty && !trimmed) {
+  if (!trimmed) {
     throw new Error(`${label} cannot be empty`);
   }
-  return opts?.allowEmpty ? value : trimmed;
+  return trim ? trimmed : value;
 }
 
 function readOptionalCallbackDataKind(
@@ -295,13 +293,13 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
     case "text":
       return {
         type: "text",
-        text: readRequiredString(obj.text, `${label}.text`),
+        text: readRequiredString(obj.text, `${label}.text`, false),
       };
     case "section": {
-      const text = normalizeOptionalString(obj.text);
+      const text = readNonBlankString(obj.text);
       const textsRaw = obj.texts;
       const texts = Array.isArray(textsRaw)
-        ? textsRaw.map((entry, idx) => readRequiredString(entry, `${label}.texts[${idx}]`))
+        ? textsRaw.map((entry, idx) => readRequiredString(entry, `${label}.texts[${idx}]`, false))
         : undefined;
       if (!text && (!texts || texts.length === 0)) {
         throw new Error(`${label}.text or ${label}.texts is required for section blocks`);
@@ -443,7 +441,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     };
   }
   return {
-    text: normalizeOptionalString(obj.text),
+    text: readNonBlankString(obj.text),
     reusable: typeof obj.reusable === "boolean" ? obj.reusable : undefined,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)

@@ -129,13 +129,18 @@ describe("OpenAI Responses provider", () => {
   });
 
   it("clamps small output limits and disables implicit SDK retries", async () => {
-    const result = await streamOpenAIResponses(model(), context, {
+    const requestModel = model();
+    const options = {
       apiKey: String(1),
       maxTokens: 1,
-    }).result();
+    };
+    const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
+    const result = await streamOpenAIResponses(requestModel, context, options).result();
 
     expect(result.stopReason).toBe("error");
-    expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
+    for (const params of [transportParams, openAiMockState.params[0]]) {
+      expect(params).toMatchObject({ max_output_tokens: 16, store: false });
+    }
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 
@@ -187,18 +192,12 @@ describe("OpenAI Responses provider", () => {
   it.each([
     { reasoningEffort: undefined, expectedEffort: undefined },
     { reasoningEffort: "minimal", expectedEffort: "low" },
+    { reasoningEffort: "xhigh", expectedEffort: "xhigh" },
     { reasoningEffort: "max", expectedEffort: "max" },
   ] as const)(
-    "honors Astra reasoning and sampling capabilities for $reasoningEffort",
+    "honors Astra reasoning and sampling without catalog metadata for $reasoningEffort",
     async ({ reasoningEffort, expectedEffort }) => {
-      const requestModel = {
-        ...model({ id: "gpt-6-astra" }),
-        thinkingLevelMap: { off: null, minimal: "low", xhigh: "xhigh", max: "max" } as const,
-        compat: {
-          supportsTemperature: false,
-          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-        },
-      };
+      const requestModel = model({ id: "gpt-6-astra" });
       const options = { apiKey: "sentinel-key", reasoningEffort, temperature: 0.5, topP: 0.8 };
       const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
       await streamOpenAIResponses(requestModel, context, options).result();

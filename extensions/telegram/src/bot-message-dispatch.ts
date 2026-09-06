@@ -321,7 +321,8 @@ export const dispatchTelegramMessage = async (
     (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
-  const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
+  const isDispatchSuperseded = () =>
+    (dispatchParams.abortSignal ?? turnAdoptionLifecycle?.abortSignal)?.aborted === true;
   const turnConfig = {
     ...dispatchParams,
     allowProviderPreview,

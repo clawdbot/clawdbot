@@ -33,8 +33,6 @@ describe("channel ingress drain lifecycle", () => {
     });
     expect("onFailed" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(false);
-    expect("onProcessingStarted" in bound.turnAdoptionLifecycle).toBe(false);
-    expect("onAdoptionFinalizing" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onAdopted" in bound).toBe(false);
     expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
     bound.turnAdoptionLifecycle.onDeferred();

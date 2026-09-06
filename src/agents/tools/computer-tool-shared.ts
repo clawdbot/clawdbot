@@ -79,6 +79,9 @@ export type ComputerObservationState = {
   nodeId: string;
   providerGeneration: string;
   observationId: string;
+  imageCoordinates?:
+    | { kind: "unavailable" }
+    | { kind: "available"; scaleX: number; scaleY: number };
 };
 
 export type ComputerContextEpoch = {

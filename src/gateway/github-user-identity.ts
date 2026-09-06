@@ -5,7 +5,8 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveCachedGitHubIdentity } from "../state/user-profile-github-identity.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
 import { syncGitHubIdentity } from "../state/user-profiles.js";
@@ -13,11 +14,13 @@ import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
   ControlUiGitHubError,
+  discardResponse,
   fetchGitHubApi,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
   GITHUB_REQUEST_TIMEOUT_MS,
   githubApiToken,
+  githubApiCredentialCacheScope,
   readBoundedResponse,
   readGitHubJsonResponse,
   withOptionalGitHubAuth,
@@ -30,8 +33,17 @@ const CLOUDFLARE_ACCESS_IDENTITY_PATH = "/cdn-cgi/access/get-identity";
 const ACCESS_ASSERTION_MAX_BYTES = 16 * 1024;
 const ACCESS_IDENTITY_MAX_BYTES = 64 * 1024;
 const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const GITHUB_IDENTITY_CACHE_MS = 15 * 60_000;
+const GITHUB_IDENTITY_CACHE_LIMIT = 200;
+const GITHUB_ETAG_MAX_LENGTH = 1_024;
 
 type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
+type GitHubIdentityLookup = { identity: ResolvedGitHubUserIdentity; refreshed: boolean };
+type GitHubIdentityMetadataCache = {
+  values: Map<string, { identity: ResolvedGitHubUserIdentity; expiresAt: number; etag?: string }>;
+  pending: Map<string, Promise<ResolvedGitHubUserIdentity>>;
+};
+const identityMetadataCaches = new WeakMap<typeof fetch, GitHubIdentityMetadataCache>();
 type AuthenticatedGitHubIdentitySyncResult = { profileId: string; updatedAt: number };
 export type AuthenticatedGitHubIdentitySync = () => Promise<AuthenticatedGitHubIdentitySyncResult>;
 
@@ -159,6 +171,72 @@ function parseGitHubUserIdentity(accountId: number, payload: unknown): ResolvedG
   return { accountId, login, name: readNonBlankString(payload.name) };
 }
 
+function resolveGitHubUserIdentityById(
+  accountId: number,
+  token: string | undefined,
+  fetchImpl: typeof fetch,
+): Promise<GitHubIdentityLookup> {
+  const cache: GitHubIdentityMetadataCache = identityMetadataCaches.get(fetchImpl) ?? {
+    values: new Map(),
+    pending: new Map(),
+  };
+  identityMetadataCaches.set(fetchImpl, cache);
+  const key = `${accountId}:${githubApiCredentialCacheScope(token)}`;
+  const cached = cache.values.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return Promise.resolve({ identity: cached.identity, refreshed: false });
+  }
+  const promise = getOrCreatePromise(
+    cache.pending,
+    key,
+    async () => {
+      try {
+        const response = await fetchGitHubApi(
+          `${GITHUB_API_ORIGIN}/user/${accountId}`,
+          fetchImpl,
+          token,
+          undefined,
+          undefined,
+          cached?.etag,
+        );
+        let identity: ResolvedGitHubUserIdentity;
+        if (response.status === 304 && cached?.etag) {
+          await discardResponse(response);
+          identity = cached.identity;
+        } else {
+          identity = parseGitHubUserIdentity(accountId, await readGitHubJsonResponse(response));
+        }
+        const rawEtag =
+          response.headers.get("etag") ?? (response.status === 304 ? cached?.etag : undefined);
+        const etag = rawEtag && rawEtag.length <= GITHUB_ETAG_MAX_LENGTH ? rawEtag : undefined;
+        // Cache public metadata, never Access assertions, local profiles, or roles.
+        // An evicted in-flight lookup cannot replace its successor's metadata.
+        if (cache.pending.get(key) === promise) {
+          cache.values.set(key, {
+            identity,
+            etag,
+            expiresAt: Date.now() + GITHUB_IDENTITY_CACHE_MS,
+          });
+          pruneMapToMaxSize(cache.values, GITHUB_IDENTITY_CACHE_LIMIT);
+        }
+        return identity;
+      } catch (error) {
+        if (
+          cache.pending.get(key) === promise &&
+          error instanceof ControlUiGitHubError &&
+          !error.retryable
+        ) {
+          cache.values.delete(key);
+        }
+        throw error;
+      }
+    },
+    { evictOnSettled: true },
+  );
+  pruneMapToMaxSize(cache.pending, GITHUB_IDENTITY_CACHE_LIMIT);
+  return promise.then((identity) => ({ identity, refreshed: true }));
+}
+
 function cloudflareAccessAssertion(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
@@ -187,8 +265,6 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
   requestHeaders?: IncomingHttpHeaders;
-  /** Reuse an exact verified Access account/email binding before refreshing GitHub metadata. */
-  preferCachedIdentity?: boolean;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
@@ -214,42 +290,18 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       access.assertion,
       access.principal,
     );
+    const identityBinding = { accountId: accessIdentity.accountId, email: access.principal };
     // Service auth raises public-data quota; Access still owns the signed-in account id.
     const token = githubApiToken();
-    if (params.preferCachedIdentity) {
-      const cached = resolveCachedGitHubIdentity({
-        accountId: accessIdentity.accountId,
-        email: access.principal,
-      });
-      if (cached) {
-        return cached;
-      }
-    }
-    let response: Response | undefined;
-    let payload: unknown;
+    let lookup: GitHubIdentityLookup;
     try {
-      payload = await withOptionalGitHubAuth(token, async (requestToken) => {
-        // A failed anonymous retry must not inherit the authenticated response's status.
-        response = undefined;
-        response = await fetchGitHubApi(
-          `${GITHUB_API_ORIGIN}/user/${accessIdentity.accountId}`,
-          fetch,
-          requestToken,
-        );
-        return readGitHubJsonResponse(response);
-      });
+      lookup = await withOptionalGitHubAuth(token, (requestToken) =>
+        resolveGitHubUserIdentityById(accessIdentity.accountId, requestToken, fetch),
+      );
     } catch (error) {
-      const retryable = response
-        ? response.status === 429 ||
-          response.status >= 500 ||
-          (error instanceof ControlUiGitHubError && error.statusCode === 429)
-        : !(error instanceof ControlUiGitHubError);
-      if (retryable) {
+      if (error instanceof ControlUiGitHubError && error.retryable) {
         // Retry failures may reuse only the exact verified email + immutable-account binding.
-        const cached = resolveCachedGitHubIdentity({
-          accountId: accessIdentity.accountId,
-          email: access.principal,
-        });
+        const cached = resolveCachedGitHubIdentity(identityBinding);
         if (cached) {
           return cached;
         }
@@ -258,9 +310,16 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         ? error
         : new ControlUiGitHubError(502, "GitHub request failed");
     }
-    const identity = parseGitHubUserIdentity(accessIdentity.accountId, payload);
+    if (!lookup.refreshed) {
+      // Re-read the exact current binding: unchanged metadata must not write profiles
+      // and broadcast roster changes on each authenticated HTTP request.
+      const cached = resolveCachedGitHubIdentity(identityBinding);
+      if (cached) {
+        return cached;
+      }
+    }
     const profile = syncGitHubIdentity({
-      identity,
+      identity: lookup.identity,
       authenticationAlias: { kind: "email", email: access.principal },
       initialDisplayName: accessIdentity.initialDisplayName,
     });

@@ -125,24 +125,25 @@ that Gateway's OpenClaw state (see [Storage](#storage)).
 
 ## Starting work from a card
 
-Unlinked cards can start work directly:
+Unlinked cards without an active or unresolved task association can start work directly:
 
-- **Run Codex** / **Run Claude** starts a task-tracked agent run with an
-  explicit engine, sends the card prompt, and marks the card `running`. Codex
-  runs use `openai/gpt-5.6-sol`; Claude runs use `anthropic/claude-sonnet-4-6`.
-- **Open Codex** / **Open Claude** creates a linked dashboard session without
-  sending the card prompt or moving the card, for manual work that stays
-  attached to the board.
+- **Run Claude** / **Run OpenAI** starts a task-tracked agent run with an
+  explicit engine, sends the card prompt, and marks the card `running`. Claude
+  runs use `anthropic/claude-sonnet-4-6`; OpenAI runs use `openai/gpt-5.6-sol`.
+- **Open Claude** / **Open OpenAI** creates a linked dashboard session without
+  sending the card prompt, for manual work that stays attached to the board.
+  Opening it clears any schedule and moves a `scheduled` card to `todo`;
+  other cards keep their status.
 
 Autonomous starts use the Gateway's task-tracked agent run path (default agent
-and model unless Codex/Claude is chosen explicitly); Workboard then links the
+and model unless Claude/OpenAI is chosen explicitly); Workboard then links the
 resulting task, run id, and session key back onto the card. Each linked
 execution also records an attempt summary (engine, mode, model, run id,
 timestamps, status, rolling failure count) so repeated failures stay visible.
 
 The dashboard refreshes task status from the Gateway task ledger for its
-lifecycle display, matching tasks to cards by task id, run id, or linked
-session key. Card status changes are persisted by the Gateway-side Workboard
+lifecycle display, matching tasks to cards by task id, run id, or an exact
+linked session. Card status changes are persisted by the Gateway-side Workboard
 plugin using the linked run and session lifecycle (see
 [Session lifecycle sync](#session-lifecycle-sync)).
 
@@ -312,15 +313,37 @@ still follows the same workspace boundary described above.
 
 Cards can link to an existing dashboard session, or one created when you
 start work from the card. Linked cards show the session lifecycle inline:
-running, stale, linked idle, done, failed, or missing. You can also capture an
-existing session from the Sessions tab with **Add to Workboard**; the card
+running, stale, linked idle, done, or failed. You can also capture an
+existing session from its header or the Sessions tab with **Add to Workboard**; the card
 links to that session, uses the session label or recent user prompt as title,
 and seeds notes from the recent user prompt plus the latest assistant response
 when available.
 
-If the linked session goes missing, the card stays linked for context and
-still offers start controls to restart into a fresh session. If an active
-linked session stops reporting recent activity, Workboard marks the card
+Capture keeps the destination board selected when you start the action. It
+reloads an inactive board's cards before reusing one, restores an archived
+exact match, and never infers session ownership from a provisional link.
+
+Captured sessions show **Open Workboard card** and a linked-card chip. Both use
+the same card state, including after a browser reload. Opening a card outside
+the current agent filter switches the board to **All agents** without changing
+the selected chat agent.
+
+Opening a card loads its linked session details independently of the sidebar's
+agent filter and pagination. While details are loading or unavailable, the
+card keeps its link and shows **Session state unknown** or **Session
+unavailable**. An ambiguous provisional link shows **Session link ambiguous**;
+edit the card to select an exact session. Use **Refresh** to retry. To continue
+an existing session, select its exact link in **Edit card** and choose **Open
+session**. To start fresh, clear the link in **Edit card**. Clearing the link
+retains its task association, so **Start** remains unavailable while that task
+is active or unresolved. Changing a card's assignee does not change the owner
+of its existing session.
+
+Bare `global` and `unknown` links do not identify a session owner. They show
+**Session link ambiguous** when opened; use **Edit card** to select an explicit
+session. Workboard does not offer these bare links for new captures or links.
+
+If an active linked session stops reporting recent activity, Workboard marks the card
 `stale` and stores that as metadata until the lifecycle clears it.
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
@@ -360,7 +383,7 @@ the template id is stored as card metadata.
 3. Drag the card between columns, or focus its compact status control and use
    the menu or ArrowLeft/ArrowRight. During a drag, the source card dims and
    available drop columns gain an outline.
-4. Start work from the card to create or reuse a dashboard session.
+4. Start an unlinked card when it has no active or unresolved task association.
 5. Open the linked session from the card while the agent works.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually
    move the card to `done` when accepted.

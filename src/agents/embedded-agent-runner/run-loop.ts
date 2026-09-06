@@ -25,11 +25,9 @@ import {
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
-import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { createAttemptCarryover } from "./run/attempt-result.js";
-import { advanceCodeModeRecovery } from "./run/code-mode-reconciliation.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -51,6 +49,7 @@ import {
   recordRunRetry,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
+import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 import { settleEmbeddedRun } from "./run/run-settlement.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
@@ -252,7 +251,7 @@ export async function runPreparedEmbeddedLoop(
     !(params.sessionManager && !params.sessionManager.getSessionTarget());
   const permissionChanges = createEmbeddedRunPermissionChanges(params);
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: params,
+    runParams: { ...params, abortSignal: input.laneController.abortSignal },
     provider,
     modelId,
     globalLane,
@@ -273,6 +272,7 @@ export async function runPreparedEmbeddedLoop(
       "context-engine",
       () =>
         createContextEngineLogicalTurnLease({
+          identity: params,
           config: params.config,
           agentDir,
           workspaceDir: resolvedWorkspace,
@@ -357,6 +357,7 @@ export async function runPreparedEmbeddedLoop(
           livenessState: "blocked",
         });
       }
+      params.assistantErrorTranscript?.clear();
       beginRunAttempt(runRetryBudget);
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
@@ -527,16 +528,10 @@ export async function runPreparedEmbeddedLoop(
         authProfileStore: attemptAuthProfileStore,
         runtimeAuthRetry,
         maybeRefreshRuntimeAuthForAuthError,
-        resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,
         emptyErrorRetries,
         overloadProfileRotations,
-        overloadProfileRotationLimit: failoverRetryController.overloadProfileRotationLimit,
         previousRetryFailoverReason: lastRetryFailoverReason,
-        maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-        maybeRetryTransient: failoverRetryController.maybeRetryTransient,
-        getTransientRetryCount: () => failoverRetryController.transientRetryCount,
-        advanceAuthProfile: failoverRetryController.advanceAuthProfile,
-        advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
+        failover: failoverRetryController,
         traceAttempts,
         suspendForFailure,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
@@ -550,16 +545,6 @@ export async function runPreparedEmbeddedLoop(
       overloadProfileRotations = assistantFailureOutcome.overloadProfileRotations;
       lastRetryFailoverReason = assistantFailureOutcome.lastRetryFailoverReason;
       if (assistantFailureOutcome.action === "retry") {
-        continue;
-      }
-      if (
-        advanceCodeModeRecovery({
-          attempt,
-          hostOwnsToolSurface: !pluginHarnessOwnsTransport,
-          retryState: terminalRetryState,
-          activateInternalPrompt: sessionPromptState.activateInternalPrompt,
-        })
-      ) {
         continue;
       }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
@@ -668,6 +653,8 @@ export async function runPreparedEmbeddedLoop(
         replayState: accumulatedReplayState,
         activePromptPersisted: sessionPromptState.activePrompt.persisted,
         activateInternalPrompt: sessionPromptState.activateInternalPrompt,
+        activateCompactionContinuation: sessionPromptState.activateCompactionContinuation,
+        clearCompactionContinuation: sessionPromptState.clearCompactionContinuation,
         setSuppressNextUserMessagePersistence: (value) => {
           sessionPromptState.suppressNextUserMessagePersistence = value;
         },

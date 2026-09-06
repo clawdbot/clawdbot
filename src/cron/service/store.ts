@@ -17,10 +17,7 @@ import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
 } from "../store/run-receipt-store.js";
-import {
-  type CronStoreTransactionHooks,
-  saveCronJobsStoreWithTransactionHooks,
-} from "../store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
@@ -334,17 +331,11 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
       : undefined;
   const stateOnly = !quarantine && opts?.stateOnly === true;
   try {
-    const saveOptions = quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined;
-    if (opts?.transactionHooks) {
-      await saveCronJobsStoreWithTransactionHooks(
-        state.deps.storePath,
-        store,
-        saveOptions,
-        opts.transactionHooks,
-      );
-    } else {
-      await saveCronJobsStore(state.deps.storePath, store, saveOptions);
-    }
+    await saveCronJobsStore(state.deps.storePath, store, {
+      quarantine,
+      stateOnly,
+      transactionHooks: opts?.transactionHooks,
+    });
   } catch (error) {
     if (
       !quarantine ||

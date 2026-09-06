@@ -10,7 +10,7 @@ type TelegramUpdateProcessingFrame = {
   result?: TelegramMessageProcessingResult;
 };
 
-type TelegramSpooledReplayLifecycle = {
+export type TelegramSpooledReplayLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
@@ -28,6 +28,7 @@ type TelegramSpooledReplayFrame = {
 export type TelegramSpooledReplayDeferredParticipant = {
   key: string;
   abortSignal: AbortSignal;
+  ingressLifecycle?: TelegramSpooledReplayLifecycle;
   task: Promise<TelegramMessageProcessingResult>;
   isSettled: () => boolean;
   wasOwnerAbortedWhilePending: () => boolean;
@@ -94,7 +95,8 @@ export function createTelegramSpooledReplayParticipant(
   key: string,
 ): TelegramSpooledReplayDeferredParticipant {
   const abortController = new AbortController();
-  const ownerAbortSignal = telegramSpooledReplayFrames.getStore()?.lifecycle?.abortSignal;
+  const ingressLifecycle = telegramSpooledReplayFrames.getStore()?.lifecycle;
+  const ownerAbortSignal = ingressLifecycle?.abortSignal;
   const abortSignal = ownerAbortSignal
     ? AbortSignal.any([abortController.signal, ownerAbortSignal])
     : abortController.signal;
@@ -128,6 +130,7 @@ export function createTelegramSpooledReplayParticipant(
     // Buffered work outlives the ALS frame, so its signal must retain the
     // claim owner's pre-adoption cancellation boundary.
     abortSignal,
+    ingressLifecycle,
     task,
     isSettled: () => settled,
     wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,
@@ -138,7 +141,7 @@ export function createTelegramSpooledReplayParticipant(
       settlementHeld = true;
       // Timeout settlement must wait for durable adoption finalization: pause
       // the drain stall watchdog while the hold is active.
-      telegramSpooledReplayFrames.getStore()?.lifecycle?.onAdoptionFinalizing?.();
+      ingressLifecycle?.onAdoptionFinalizing?.();
       let released = false;
       return {
         release: (mode) => {

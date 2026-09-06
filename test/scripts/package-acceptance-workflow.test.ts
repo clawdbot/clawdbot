@@ -150,10 +150,6 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
   },
 ] as const;
 const REPO_ROOT = process.env.GITHUB_WORKSPACE ?? process.cwd();
-const RELEASE_MAINTAINER_SKILL = resolve(
-  REPO_ROOT,
-  ".agents/skills/release-openclaw-maintainer/SKILL.md",
-);
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
@@ -6052,9 +6048,6 @@ describe("package artifact reuse", () => {
     );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
     expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
-    expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
-    expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
-    expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
     expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
@@ -6062,16 +6055,24 @@ describe("package artifact reuse", () => {
       "--base-url http://127.0.0.1:18789/api/nodes/watch",
     );
     expect(publishedUpgradeSurvivor).toContain(
-      "assert_legacy_plugin_dependency_debris_before_doctor",
+      "source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh",
     );
+    expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
+    const preDoctorCleanupIndex = publishedUpgradeSurvivor.indexOf(
+      "run_plugin_fixture_phase assert-package-local-dependency-cleanup assert_legacy_plugin_dependency_debris_cleaned",
+    );
+    const doctorIndex = publishedUpgradeSurvivor.indexOf("phase doctor run_doctor");
+    const postDoctorCleanupIndex = publishedUpgradeSurvivor.indexOf(
+      "run_plugin_fixture_phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned",
+    );
+    expect(preDoctorCleanupIndex).toBeGreaterThan(-1);
+    expect(doctorIndex).toBeGreaterThan(preDoctorCleanupIndex);
+    expect(postDoctorCleanupIndex).toBeGreaterThan(doctorIndex);
     expect(publishedUpgradeSurvivor.indexOf("phase seed-source-only-plugin-shadow")).toBeLessThan(
       publishedUpgradeSurvivor.indexOf("phase assert-baseline"),
     );
     expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
     expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
-    expect(publishedUpgradeSurvivor).toContain(
-      "Legacy plugin dependency debris was already removed before doctor",
-    );
     expect(
       publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
     ).toBeLessThan(
@@ -7183,9 +7184,6 @@ describe("package artifact reuse", () => {
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       '"live ACP bind setup"',
-    );
-    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      'run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"',
     );
     const acpBindScript = readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8");
     expect(acpBindScript).toContain(
@@ -11292,7 +11290,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@0f6803b4611fc47547d2322dd8903e7b02f5e126",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@d5a3688fb21a283460f362e57028601801961c85",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
@@ -12000,13 +11998,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("pins every documented raw Full Release Validation caller to one exact SHA", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
-    const releaseCiNotes = readFileSync(
-      ".agents/skills/release-openclaw-ci/references/release-ci-notes.md",
-      "utf8",
-    );
-    const testing = readFileSync(".agents/skills/openclaw-testing/SKILL.md", "utf8");
-    const parallels = readFileSync(".agents/skills/openclaw-parallels-smoke/SKILL.md", "utf8");
-    const maintainer = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
     const ciDocs = readFileSync("docs/ci.md", "utf8");
     const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
@@ -12028,10 +12019,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "--target-ref release/YYYY.M.PATCH",
       '--workflow-sha "$TOOLING_SHA"',
     ]);
-    for (const text of [releaseCi, releaseCiNotes, testing, parallels, ciDocs, maintainer]) {
-      expect(text).toContain("Validation SHA + Tooling SHA");
-    }
-    expect(releaseCi).toContain("release lifecycle ledger: Code SHA, Release SHA, and Tooling SHA");
   });
 
   it("executes shared release candidate identity validation with its JSON input", () => {

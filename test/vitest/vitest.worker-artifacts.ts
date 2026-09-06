@@ -26,7 +26,7 @@ export function compiledSubprocessesPlugin(): Plugin {
   return {
     name: "openclaw:compiled-subprocesses",
     enforce: "pre",
-    configureVitest({ vitest, experimental_defineCacheKeyGenerator }) {
+    configureVitest({ vitest, defineCacheKeyGenerator }) {
       const supplied = getVitestWorkerDescriptor();
       // Only the repository runner can join all borrowers before deleting code.
       // Standalone Vitest, watch and metadata collection retain live source.
@@ -41,7 +41,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (!instance[ownerKey]) {
         // Source and compiled imports differ, but generations within this mode
         // share parent transforms. Keep Vitest's source/config hashing intact.
-        experimental_defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
+        defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
         const directory = supplied.directory;
         let preparation: Promise<string> | undefined;
         let failure: unknown;

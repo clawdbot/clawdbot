@@ -110,6 +110,8 @@ The built-in OpenClaw runtime starts compaction with the active session model. S
 
 Bare configured aliases resolve to their canonical provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
+If Gateway configuration reloads while compaction is waiting to start, compaction uses the newly loaded context engine and model settings together. Its requested workspace and transcript stay the same.
+
 This works with local models too, for example a second Ollama model dedicated to summarization:
 
 ```json
@@ -194,6 +196,8 @@ Before compaction, OpenClaw can run a **silent memory flush** turn to store dura
 ```
 
 Memory flush is optional maintenance: a failure, including exhausted retries, does not reset the session or discard conversation history. If compaction is unnecessary or succeeds, OpenClaw continues the reply; with `notifyUser` enabled, exhausted flush retries also produce a degraded notice. If required compaction fails, OpenClaw reports that failure and keeps the conversation intact instead of starting over automatically.
+
+For durable channel messages, bounded memory flush and preflight compaction take over timeout protection from the ingress watchdog. Their configured processing deadlines cover preparation, cleanup, and admission of the user turn. The message keeps its original claim until adoption or terminal failure, so a shorter ingress timeout cannot replay healthy maintenance. Handlers that never start bounded processing retain the ingress watchdog and retry policy.
 
 The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
 

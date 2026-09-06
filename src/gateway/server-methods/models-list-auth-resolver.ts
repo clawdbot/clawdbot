@@ -7,7 +7,6 @@ import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runt
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import {
-  applyCliRuntimeModelAuthAvailability,
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
@@ -55,6 +54,7 @@ function createModelsListAuthResolver(params: {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   return createModelAuthAvailabilityResolver({
     cfg: params.cfg,
+    agentId: params.agentId,
     authStore: params.preparedAuthStore,
     agentDir,
     workspaceDir: params.workspaceDir,
@@ -75,14 +75,11 @@ function createModelsListAuthResolver(params: {
 }
 
 function createModelsListEntryEvaluator(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
   authResolver: ModelAuthAvailabilityResolver;
-  metadataSnapshot: PluginMetadataSnapshot;
   providerOutcomes?: readonly ProviderCatalogOutcome[];
   preferredProfileId?: string;
   preferredProfilesByProvider?: ReadonlyMap<string, string>;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
 }): (
   entry: ModelCatalogEntry,
   routeVariants?: readonly ModelCatalogEntry[],
@@ -96,31 +93,23 @@ function createModelsListEntryEvaluator(params: {
       return cached;
     }
     const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
-      const preferredProfileId =
-        params.preferredProfileId ??
-        params.preferredProfilesByProvider?.get(normalizeProviderId(entry.provider));
-      const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
+      const defaultProfileId = params.preferredProfilesByProvider?.get(
+        normalizeProviderId(entry.provider),
+      );
+      const preferredProfileId = params.preferredProfileId ?? defaultProfileId;
+      // New sessions capture personal defaults with the same strength as explicit account pins.
+      const pinnedProfileId = params.pinnedProfileId ?? defaultProfileId;
+      const resolved = params.authResolver.evaluateRuntimeModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         ...(normalizeProviderId(entry.provider) === "openai"
           ? {}
           : { api: entry.api, baseUrl: entry.baseUrl }),
         ...(preferredProfileId ? { preferredProfileId } : {}),
-        ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
+        ...(pinnedProfileId ? { pinnedProfileId } : {}),
         observedRoutes: routeVariants.map((variant) => ({
           api: variant.api,
           baseUrl: variant.baseUrl,
         })),
-      });
-      const resolved = applyCliRuntimeModelAuthAvailability({
-        authResolver: params.authResolver,
-        evaluation,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        metadataSnapshot: params.metadataSnapshot,
-        provider: entry.provider,
-        modelId: entry.id,
-        preferredProfileId,
-        lockedProfileId: params.lockedProfileId,
       });
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
@@ -160,7 +149,7 @@ export type ModelsListAuthProjectionParams = {
   pluginRegistry?: PluginRegistry;
   observationConfig?: OpenClawConfig;
   preferredProfileId?: string;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   isCurrent?: () => boolean;
 };
@@ -227,7 +216,7 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
     workspaceDir,
     preferredProfileId: params.preferredProfileId,
-    lockedProfileId: params.lockedProfileId,
+    pinnedProfileId: params.pinnedProfileId,
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
     observationConfig: params.observationConfig,
@@ -251,14 +240,11 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     routeResolverFactory: params.routeResolverFactory,
   });
   const evaluateStoredEntry = createModelsListEntryEvaluator({
-    cfg: params.cfg,
-    agentId: params.agentId,
     authResolver,
-    metadataSnapshot,
     providerOutcomes: params.snapshot.providerOutcomes,
     preferredProfilesByProvider,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
+    ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
   });
   const missingPersonalPin = Boolean(
     params.preferredProfileId &&

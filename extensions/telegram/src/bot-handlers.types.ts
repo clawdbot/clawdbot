@@ -17,6 +17,7 @@ import type {
 import type {
   TelegramMessageProcessingResult,
   TelegramSpooledReplayDeferredParticipant,
+  TelegramSpooledReplayLifecycle,
 } from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
@@ -30,6 +31,7 @@ export type TelegramMessageProcessorTurnContext = {
   onDispatchStart?: () => Promise<void> | void;
   spooledReplayAbortSignal?: AbortSignal;
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
+  spooledReplayIngressLifecycle?: TelegramSpooledReplayLifecycle;
   finalizeSpooledReplayResult?: (
     result: TelegramMessageProcessingResult,
     phase: "adopted" | "terminal",

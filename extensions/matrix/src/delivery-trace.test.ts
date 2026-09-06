@@ -11,6 +11,7 @@
 // are mentions-inert until a final either edits in place or gets redacted and
 // re-sent as a fresh mention-bearing event.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
+import { MatrixEvent, type IEvent } from "matrix-js-sdk/lib/matrix.js";
 import {
   deliveryTraceScenarios,
   expectDeliveryTraceMatchesGolden,
@@ -77,7 +78,7 @@ function createRecordingMatrixClient(recorder: WireRecorder): Partial<MatrixClie
   // (the normalizer seam from the trace spec, applied at the mock boundary):
   // every event on the wire consumes one id, so goldens show edits minting new
   // ids while their m.relates_to target stays the original event.
-  const eventContentById = new Map<string, Record<string, unknown>>();
+  const eventsById = new Map<string, IEvent>();
   let eventCount = 0;
   const mintEventId = () => {
     eventCount += 1;
@@ -91,7 +92,14 @@ function createRecordingMatrixClient(recorder: WireRecorder): Partial<MatrixClie
       // Snapshot before recording: edit flows reuse content structures, and the
       // recorder serializes at compare time.
       const payload = structuredClone(content);
-      eventContentById.set(eventId, payload);
+      eventsById.set(eventId, {
+        event_id: eventId,
+        sender: BOT_USER_ID,
+        type: "m.room.message",
+        origin_server_ts: Date.now(),
+        content: payload,
+        unsigned: {},
+      });
       recorder.recordWireCall({
         method: "sendMessage",
         target: roomId,
@@ -100,16 +108,38 @@ function createRecordingMatrixClient(recorder: WireRecorder): Partial<MatrixClie
       });
       return eventId;
     },
-    // editMessageMatrix fetches the prior event before every edit (mention
-    // diffing / thread guard) — an extra RTT per edit that the trace captures
-    // even for mentions-inert previews where the result goes unused.
+    // Mention diffing and requested thread validation read the prior event;
+    // quiet previews without a thread skip this otherwise unused round trip.
     getEvent: async (_roomId: string, eventId: string) => {
       recorder.recordWireCall({
         method: "getEvent",
         target: eventId,
-        result: { found: eventContentById.has(eventId) },
+        result: { found: eventsById.has(eventId) },
       });
-      return { event_id: eventId, content: eventContentById.get(eventId) ?? {} };
+      const event = eventsById.get(eventId);
+      if (!event) {
+        throw new Error(`Unknown recorded Matrix event: ${eventId}`);
+      }
+      return { ...structuredClone(event) };
+    },
+    getRelations: async (_roomId, eventId, relationType, eventType, opts) => {
+      const originalEvent = eventsById.get(eventId);
+      const events = [...eventsById.values()].filter((event) => {
+        const relation = new MatrixEvent(event).getRelation();
+        return (
+          relation?.event_id === eventId &&
+          relation.rel_type === relationType &&
+          (!eventType || event.type === eventType) &&
+          (relationType !== "m.replace" || event.sender === originalEvent?.sender)
+        );
+      });
+      recorder.recordWireCall({
+        method: "getRelations",
+        target: eventId,
+        payload: { relationType, eventType: eventType ?? null, limit: opts?.limit },
+        result: { count: events.length },
+      });
+      return { originalEvent: originalEvent ?? null, events, nextBatch: null, prevBatch: null };
     },
     redactEvent: async (_roomId: string, eventId: string) => {
       // Redactions are events too: abandoning a draft consumes an event id.

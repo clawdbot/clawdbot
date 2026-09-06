@@ -17,11 +17,16 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
+import {
+  createRetiredModelRefRepairResolver,
+  repairRetiredConfigModelRefs,
+} from "./retired-model-ref-repair.js";
 
 type StaleAgentModelRefRepair = {
   config: OpenClawConfig;
   changes: string[];
   warnings: string[];
+  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
 };
 
 type RepairOptions = {
@@ -205,6 +210,7 @@ function filterFallbacks(params: {
   if (!Array.isArray(params.model.fallbacks)) {
     return;
   }
+  // An empty array disables inherited fallbacks, including after stale refs are removed.
   params.model.fallbacks = params.model.fallbacks.filter((ref) => {
     if (typeof ref !== "string") {
       return true;
@@ -218,9 +224,6 @@ function filterFallbacks(params: {
     );
     return false;
   });
-  if (params.model.fallbacks.length === 0) {
-    delete params.model.fallbacks;
-  }
 }
 
 function firstExplicitModelRef(cfg: OpenClawConfig): string | undefined {
@@ -587,5 +590,23 @@ export function repairStaleAgentModelRefs(
     });
   }
 
-  return { config: changes.length > 0 ? config : cfg, changes, warnings };
+  const retired = repairRetiredConfigModelRefs(
+    config,
+    createRetiredModelRefRepairResolver({
+      cfg: config,
+      env,
+      metadataSnapshot: options.pluginMetadataSnapshot,
+      warnings,
+    }),
+    warnings,
+  );
+  changes.push(...retired.changes);
+  return {
+    config: changes.length > 0 ? retired.config : cfg,
+    changes,
+    warnings,
+    ...(retired.changes.length > 0
+      ? { retiredModelRefConfig: { agents: config.agents, models: config.models } }
+      : {}),
+  };
 }

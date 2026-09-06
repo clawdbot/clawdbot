@@ -640,7 +640,7 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<Prepare
     assertArchiveSymbolicLinkTarget({
       ...link,
       archiveRoot: manifest.archiveRoot,
-      assetArchivePaths: manifest.assets.map((asset) => asset.archivePath),
+      assets: manifest.assets,
     });
   }
   await verifySqliteSnapshots({ archivePath, entries, manifest });

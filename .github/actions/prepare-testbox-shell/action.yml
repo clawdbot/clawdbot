@@ -74,3 +74,27 @@ runs:
         for tool in go gofmt; do
           sudo ln -sf "$go_root/bin/$tool" "/usr/local/bin/$tool"
         done
+
+    - name: Isolate Testbox sync workspace
+      shell: bash
+      run: |
+        set -euo pipefail
+        state=/tmp/.testbox/working_directory
+        if [ ! -f "$state" ]; then
+          exit 0
+        fi
+
+        workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+        sync_root="$(mktemp -d "$RUNNER_TEMP/openclaw-testbox-sync.XXXXXX")"
+        sync_root="$(cd "$sync_root" && pwd -P)"
+        case "$sync_root/" in
+          "$workspace/"*) echo "Testbox sync must stay outside the execution workspace" >&2; exit 1 ;;
+        esac
+        # Native preparation resets/cleans its checkout before rsync. Keep hydrated
+        # runtime at its original paths; only the verified source receiver updates it.
+        # Do not share Git objects: the receiver replaces execution-side Git metadata.
+        git clone --quiet --local --no-hardlinks "$workspace" "$sync_root"
+        git -C "$sync_root" remote set-url origin "$(git -C "$workspace" remote get-url origin)"
+        ln -s "$workspace" "$sync_root/.git/crabbox-artifact-root"
+        # run-testbox publishes this documented handoff field in its ready registration.
+        printf '%s\n' "$sync_root" > "$state"

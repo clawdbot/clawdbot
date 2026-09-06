@@ -2,6 +2,7 @@
  * Wraps compaction calls with a safety timeout and abort cleanup.
  */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { captureIngressProcessingDeadline } from "../../channels/message/ingress-processing-handoff.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isRuntimeCompactionDelegate } from "../../context-engine/delegate.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
@@ -61,6 +62,7 @@ export async function compactWithSafetyTimeout<T>(
     onCancel?: () => void;
   },
 ): Promise<T> {
+  const processingDeadline = captureIngressProcessingDeadline("compaction");
   let canceled = false;
   const cancel = () => {
     if (canceled) {
@@ -75,37 +77,46 @@ export async function compactWithSafetyTimeout<T>(
     }
   };
 
-  return await runAbortableTimeout(
-    async (timeoutSignal, resetTimeout) => {
-      let timeoutListener: (() => void) | undefined;
-      const abortSignal = opts?.abortSignal;
-      const composedAbortSignal =
-        timeoutSignal && abortSignal
-          ? AbortSignal.any([timeoutSignal, abortSignal])
-          : (timeoutSignal ?? abortSignal);
-
-      if (timeoutSignal) {
-        timeoutListener = () => {
-          cancel();
+  try {
+    return await runAbortableTimeout(
+      async (timeoutSignal, resetTimeout) => {
+        processingDeadline?.reset();
+        const resetCompactionTimeout = () => {
+          resetTimeout();
+          processingDeadline?.reset();
         };
-        timeoutSignal.addEventListener("abort", timeoutListener, { once: true });
-      }
+        let timeoutListener: (() => void) | undefined;
+        const abortSignal = opts?.abortSignal;
+        const composedAbortSignal =
+          timeoutSignal && abortSignal
+            ? AbortSignal.any([timeoutSignal, abortSignal])
+            : (timeoutSignal ?? abortSignal);
 
-      try {
-        return await raceCompactionWithAbortSignal(
-          () => compact(composedAbortSignal, resetTimeout),
-          abortSignal,
-          cancel,
-        );
-      } finally {
-        if (timeoutListener) {
-          timeoutSignal?.removeEventListener("abort", timeoutListener);
+        if (timeoutSignal) {
+          timeoutListener = () => {
+            cancel();
+          };
+          timeoutSignal.addEventListener("abort", timeoutListener, { once: true });
         }
-      }
-    },
-    timeoutMs,
-    "Compaction",
-  );
+
+        try {
+          return await raceCompactionWithAbortSignal(
+            () => compact(composedAbortSignal, resetCompactionTimeout),
+            abortSignal,
+            cancel,
+          );
+        } finally {
+          if (timeoutListener) {
+            timeoutSignal?.removeEventListener("abort", timeoutListener);
+          }
+        }
+      },
+      timeoutMs,
+      "Compaction",
+    );
+  } finally {
+    processingDeadline?.close();
+  }
 }
 
 /** Parameters for a single {@link ContextEngine.compact} invocation. */

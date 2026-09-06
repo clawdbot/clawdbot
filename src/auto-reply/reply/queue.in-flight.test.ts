@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -35,6 +36,158 @@ describe("followup queue in-flight ownership", () => {
     cap: 1,
     dropPolicy,
   });
+
+  it("releases an aborted reservation before its callback resumes and fences late admission", async () => {
+    const key = createKey("watchdog-retry");
+    const settings = createSettings("old");
+    const controller = new AbortController();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const onAdopted = vi.fn();
+    const onAbandoned = vi.fn();
+    const onSettled = vi.fn();
+    const first: FollowupRun = {
+      ...createRun({
+        prompt: "original attempt",
+        messageId: "watchdog-retry",
+        originatingChannel: "telegram",
+        originatingTo: "chat:retry",
+      }),
+      abortSignal: controller.signal,
+      turnAdoptionLifecycle: { admission: "exclusive", onAdopted, onAbandoned, onSettled },
+    };
+    const delivered: string[] = [];
+    const admissionErrors: unknown[] = [];
+    const runFollowup = vi.fn(async (run: FollowupRun) => {
+      if (run === first) {
+        entered.resolve();
+        await release.promise;
+      }
+      try {
+        await admitFollowupRunLifecycle(run);
+        delivered.push(run.prompt);
+      } catch (error) {
+        admissionErrors.push(error);
+      } finally {
+        completeFollowupRunLifecycle(run);
+      }
+    });
+    const retry: FollowupRun = {
+      ...createRun({
+        prompt: "replacement attempt",
+        messageId: "watchdog-retry",
+        originatingChannel: "telegram",
+        originatingTo: "chat:retry",
+      }),
+      turnAdoptionLifecycle: { admission: "exclusive", onAdopted: () => {} },
+    };
+
+    try {
+      expect(enqueueFollowupRun(key, first, settings, "message-id", runFollowup)).toBe(true);
+      await entered.promise;
+
+      controller.abort(new Error("ingress watchdog released claim"));
+
+      expect(onAbandoned).toHaveBeenCalledOnce();
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(runFollowup).toHaveBeenCalledOnce();
+      expect(enqueueFollowupRun(key, retry, settings, "message-id", runFollowup)).toBe(true);
+      expect(delivered).toEqual([]);
+    } finally {
+      release.resolve();
+    }
+
+    await expect.poll(() => getExistingFollowupQueue(key)).toBeUndefined();
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(onAbandoned).toHaveBeenCalledOnce();
+    expect(onSettled).toHaveBeenCalledOnce();
+    expect(admissionErrors).toEqual([
+      new Error("followup run lifecycle completed before admission"),
+    ]);
+    expect(delivered).toEqual(["replacement attempt"]);
+    expect(runFollowup).toHaveBeenCalledTimes(2);
+    expect(
+      enqueueFollowupRun(
+        key,
+        { ...retry, turnAdoptionLifecycle: { onAdopted: () => {} } },
+        settings,
+        "message-id",
+        runFollowup,
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["admitting", "admitted"] as const)(
+    "retains an aborted %s callback until its owner settles",
+    async (phase) => {
+      const key = createKey(`abort-${phase}`);
+      const settings = createSettings("old");
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const active: FollowupRun = {
+        ...createRun({
+          prompt: "owned attempt",
+          messageId: "active-admission",
+          originatingChannel: "telegram",
+          originatingTo: "chat:admission",
+        }),
+        abortSignal: controller.signal,
+        turnAdoptionLifecycle: {
+          admission: "exclusive",
+          onAdopted: async () => {
+            if (phase === "admitting") {
+              entered.resolve();
+              await release.promise;
+            }
+          },
+          onAbandoned,
+          onSettled,
+        },
+      };
+      const runFollowup = vi.fn(async (run: FollowupRun) => {
+        await admitFollowupRunLifecycle(run);
+        if (phase === "admitted") {
+          entered.resolve();
+          await release.promise;
+        }
+        completeFollowupRunLifecycle(run);
+      });
+
+      try {
+        expect(enqueueFollowupRun(key, active, settings, "message-id", runFollowup)).toBe(true);
+        await entered.promise;
+
+        controller.abort(new Error("source cancelled"));
+
+        expect(onAbandoned).not.toHaveBeenCalled();
+        expect(onSettled).not.toHaveBeenCalled();
+        expect(runFollowup).toHaveBeenCalledOnce();
+        expect(
+          enqueueFollowupRun(
+            key,
+            {
+              ...active,
+              abortSignal: new AbortController().signal,
+              turnAdoptionLifecycle: { onAdopted: () => {} },
+            },
+            settings,
+            "message-id",
+            runFollowup,
+          ),
+        ).toBe(false);
+      } finally {
+        release.resolve();
+      }
+
+      await expect.poll(() => getExistingFollowupQueue(key)).toBeUndefined();
+      expect(onAbandoned).not.toHaveBeenCalled();
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(runFollowup).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["old", "summarize"] as const)(
     "keeps an active single delivery out of %s overflow victims",

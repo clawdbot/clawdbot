@@ -1,16 +1,26 @@
-import type { FollowupRun } from "./queue/types.js";
+import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
 type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
   | { status: "accepted"; mode: "steer" | "followup" }
   | {
       status: "skipped";
-      reason: "active-run" | "aborted" | "lifecycle-invalidated" | "queue-cap";
+      reason:
+        | "active-run"
+        | "aborted"
+        | "lifecycle-invalidated"
+        | "queue-cap"
+        | "question-response-indeterminate"
+        | "question-response-refused";
     };
 
 export type ReplyOperationRunState = {
   admission?: ReplyOperationAdmissionSnapshot;
   messageInjectionAborted?: true;
+  agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
+  agentTurnOwner?: ReplyOperation;
 };
 
 // Carries this invocation's admission decision through reply option spreads so
@@ -27,15 +37,19 @@ export function resolveReplyOperationRunState(
   return (options as ReplyOptionsWithOperationRunState | undefined)?.[REPLY_OPERATION_RUN_STATE];
 }
 
-export function bindQueueDispositionToRunState(
-  run: FollowupRun,
-  state: ReplyOperationRunState | undefined,
+export function recordReplyOperationAgentTurn(
+  states: readonly ReplyOperationRunState[] | undefined,
+  owner: ReplyOperation | undefined,
+  outcome?: Parameters<typeof resolveAgentTurnExecutionStatus>[0],
 ): void {
-  const observe = run.onQueueDisposition;
-  run.onQueueDisposition = (disposition) => {
-    observe?.(disposition);
-    if (state && disposition !== "queue-cap-old") {
-      state.admission = { status: "skipped", reason: "queue-cap" };
-    }
-  };
+  for (const state of states ?? []) {
+    state.agentTurn = resolveAgentTurnExecutionStatus(
+      outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
+    );
+    state.agentTurnOwner = owner;
+  }
+}
+
+export function resolveReplyOperationAgentTurn(state: ReplyOperationRunState | undefined) {
+  return isReplyOperationSuperseded(state?.agentTurnOwner) ? "superseded" : state?.agentTurn;
 }

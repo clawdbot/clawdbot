@@ -135,7 +135,7 @@ describe("msteams doctor state migration", () => {
       expect.stringContaining("Archived Microsoft Teams conversation legacy source"),
     ]);
     await expect(fs.access(filePath)).rejects.toThrow();
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
     const store = context.openPluginStateKeyedStore<StoredConversationReference>({
       namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
       maxEntries: 2000,
@@ -221,7 +221,7 @@ describe("msteams doctor state migration", () => {
     ).resolves.toMatchObject({
       votes: { "user-new": ["1"] },
     });
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
     const source = await fs.readFile(`${filePath}.migrated`, "utf8");
     const beforeRerun = await voteBucketStore.entries();
     await fs.writeFile(filePath, source);
@@ -279,7 +279,7 @@ describe("msteams doctor state migration", () => {
     ).resolves.toEqual(token);
     expect(result.changes.join("\n")).not.toContain(token.token);
     expect(result.warnings.join("\n")).not.toContain(token.token);
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it.each([
@@ -419,7 +419,7 @@ describe("msteams doctor state migration", () => {
       overflowPolicy: "reject-new",
     });
     await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it("does not register a doctor migration for pending-upload cache files", () => {
@@ -498,8 +498,8 @@ describe("msteams doctor state migration", () => {
     expect(result.warnings).toEqual([]);
     await expect(fs.access(encodedSourcePath)).rejects.toThrow();
     await expect(fs.access(sanitizedSourcePath)).rejects.toThrow();
-    await expect(fs.access(`${encodedSourcePath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${sanitizedSourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${encodedSourcePath}.migrated`);
+    await fs.access(`${sanitizedSourcePath}.migrated`);
 
     const store = context.openPluginStateKeyedStore({
       namespace: "feedback-learnings",

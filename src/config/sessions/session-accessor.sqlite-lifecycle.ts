@@ -67,12 +67,16 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  appendTranscriptEventsInTransaction,
+  ensureTranscriptHeader,
+} from "./session-accessor.sqlite-transcript-store.js";
 import {
   collectAdmissionProtectedSessionIds,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { resolveResetBoundaryHeaderCwd } from "./transcript-header.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: cleanup, reset, guarded delete, and trusted rollback.
@@ -160,7 +164,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
             materializedPlans,
           });
           const reclaimed = await runSqliteSessionReclamation({
-            beforeInProcessMutation: assertCurrent,
+            assertCommitAllowed: assertCurrent,
             forceInProcess: hasPreparedNativeSessionDeletion(),
             plan,
           });
@@ -169,7 +173,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
               `SQLite session reclamation returned ${reclaimed.kind} for ${plan.kind}`,
             );
           }
-          emitCommittedSessionEntryRemovals(cleanupPlan.entries);
+          emitCommittedSessionEntryRemovals(resolved.agentId, cleanupPlan.entries);
           return reclaimed.value;
         });
       }),
@@ -223,21 +227,27 @@ export async function resetSessionEntryLifecycle(
           params.commitGuard?.();
           assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
           if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
+            const boundaryScope = {
+              ...resolved,
+              sessionId: current.entry.sessionId,
+              sessionKey: current.sessionKey,
+            };
+            // Reset can be the first append. Write the header in this guarded
+            // transaction, or the next turn rejects the new transcript as legacy.
+            ensureTranscriptHeader(
+              transactionDb,
+              boundaryScope,
+              resolveResetBoundaryHeaderCwd(current.entry, params.resetBoundary.cwd),
+            );
             const event = buildSessionResetBoundaryEvent({
               events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId, {
                 projection: "reset-boundary",
               }),
               ...params.resetBoundary,
             });
-            const appended = appendTranscriptEventsInTransaction(
-              transactionDb,
-              {
-                ...resolved,
-                sessionId: current.entry.sessionId,
-                sessionKey: current.sessionKey,
-              },
-              [event],
-            );
+            const appended = appendTranscriptEventsInTransaction(transactionDb, boundaryScope, [
+              event,
+            ]);
             if (appended !== 1) {
               throw new Error(`Failed to append reset boundary for ${current.sessionKey}`);
             }
@@ -251,6 +261,7 @@ export async function resetSessionEntryLifecycle(
         }, toDatabaseOptions(resolved));
         if (current) {
           emitSessionIdentityMutation({
+            agentId: resolved.agentId,
             kind: "reset",
             previous: {
               ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
@@ -263,6 +274,7 @@ export async function resetSessionEntryLifecycle(
           });
         } else {
           emitSessionIdentityMutation({
+            agentId: resolved.agentId,
             kind: "create",
             previous: { sessionKeys: [] },
             current: {
@@ -475,7 +487,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               sessionId,
             });
             const reclaimed = await runSqliteSessionReclamation({
-              beforeInProcessMutation: () => {
+              assertCommitAllowed: () => {
                 params.commitGuard?.();
                 assertCurrent();
               },
@@ -525,7 +537,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             preparedTargetSnapshot: prepared.targetSnapshot,
           });
           const reclaimed = await runSqliteSessionReclamation({
-            beforeInProcessMutation: () => {
+            assertCommitAllowed: () => {
               params.commitGuard?.();
               assertCurrent();
             },
@@ -547,6 +559,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       if (result.deleted) {
         // The deletion is committed; observers must invalidate even if receipt cleanup fails.
         emitSessionIdentityMutation({
+          agentId: resolved.agentId,
           kind: "delete",
           previous: {
             ...(prepared.current.entry.sessionId

@@ -881,9 +881,26 @@ private final class WatchMessageSendGate {
     private(set) var commandIDs: [String] = []
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
+    private let firstSend = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(1))
+
+    func waitForFirstSend() async throws -> String? {
+        if let commandID = self.commandIDs.first { return commandID }
+        let stream = self.firstSend.stream
+        return try await AsyncTimeout.withTimeout(
+            seconds: 2,
+            onTimeout: { URLError(.timedOut) })
+        {
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+    }
 
     func holdFirstSend(commandID: String) async -> Int {
         self.commandIDs.append(commandID)
+        if self.commandIDs.count == 1 {
+            self.firstSend.continuation.yield(commandID)
+            self.firstSend.continuation.finish()
+        }
         let attempt = self.commandIDs.count { $0 == commandID }
         if self.commandIDs.count == 1, !self.released {
             await withCheckedContinuation { self.continuation = $0 }
@@ -6417,7 +6434,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     })
             }
             await fixture.coordinator.resume(gatewayStableID: nil)
-            try #require(await waitForMainActorWork { oldTransfer.commandIDs == [command.commandId] })
+            // Await transport entry without repeatedly rescheduling the main actor.
+            try #require(try await oldTransfer.waitForFirstSend() == command.commandId)
+            try #require(oldTransfer.commandIDs == [command.commandId])
             if suspension == "activation" {
                 try #require(activation.beginActivation())
                 activation.complete(activated: true, errorDescription: nil)
@@ -6429,7 +6448,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             // The new wake must survive the occupied task; no further event rescues it after release.
             await fixture.coordinator.resume(gatewayStableID: nil)
             oldTransfer.release()
-            try #require(await waitForMainActorWork { successfulTransfers.commandIDs == [command.commandId] })
+            try #require(try await successfulTransfers.waitForFirstSend() == command.commandId)
+            try #require(successfulTransfers.commandIDs == [command.commandId])
             #expect(fixture.messaging.sentChatReceipts == [receipt, receipt])
             #expect(try await fixture.journal.pendingReceipts().first?.receipt == receipt)
             let terminal = try #require(receipt.terminal)
@@ -6447,12 +6467,34 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         try await withWatchDeliveryFixture { fixture in
             let gate = WatchMessageSendGate()
             var storageWarnings: [String] = []
+            let warningEvents = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let terminalReceipts = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(2))
+            defer {
+                warningEvents.continuation.finish()
+                terminalReceipts.continuation.finish()
+            }
+            let sendResult = fixture.messaging.nextSendResult
+            fixture.messaging.sendChatDeliveryReceiptHandler = { receipt in
+                if receipt.terminal != nil { terminalReceipts.continuation.yield(receipt.commandId) }
+                return sendResult
+            }
+            func waitForTerminalReceipt(_ commandID: String) async throws -> Bool {
+                try await AsyncTimeout.withTimeout(seconds: 2, onTimeout: { URLError(.timedOut) }) {
+                    for await receivedID in terminalReceipts.stream where receivedID == commandID {
+                        return true
+                    }
+                    return false
+                }
+            }
             let coordinator = WatchReplyCoordinator(
                 journal: fixture.journal,
                 gateway: fixture.gateway,
                 messaging: fixture.messaging,
                 reportStorageWarning: { message in
-                    if let message { storageWarnings.append(message) }
+                    if let message {
+                        storageWarnings.append(message)
+                        warningEvents.continuation.yield(message)
+                    }
                 })
             @MainActor func stopCoordinator() async {
                 gate.release()
@@ -6515,7 +6557,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     default:
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: response)))
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: response)))
                 }, receiveHook: { socket, index in
                     if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                     return .data(GatewayWebSocketTestSupport.connectOkData(
@@ -6538,14 +6580,24 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 let first = fixture.command(id: "first-watch-send", body: body)
                 let second = fixture.command(id: "second-watch-send", body: body)
                 try await coordinator.admit(first)
-                try #require(await waitForMainActorWork { gate.commandIDs == [first.commandId] })
+                // Admission starts transport work asynchronously; observe entry before inspecting its held claim.
+                try #require(try await gate.waitForFirstSend() == first.commandId)
+                #expect(gate.commandIDs == [first.commandId])
                 let firstClaim = try #require(try await fixture.journal.entries().first {
                     $0.commandId == first.commandId
                 })
                 try await coordinator.admit(second)
                 if failure == "acceptance-write" {
-                    let reportedStorageFailure = await waitForMainActorWork { !storageWarnings.isEmpty }
-                    try #require(reportedStorageFailure)
+                    // Wait on the owner callback so this test does not compete for its MainActor turn.
+                    let reportedStorageFailure = try await AsyncTimeout.withTimeout(
+                        seconds: 2,
+                        onTimeout: { URLError(.timedOut) })
+                    {
+                        var iterator = warningEvents.stream.makeAsyncIterator()
+                        return await iterator.next()
+                    }
+                    try #require(reportedStorageFailure != nil)
+                    #expect(!storageWarnings.isEmpty)
                     let failed = try #require(try await fixture.journal.entries().first {
                         $0.commandId == second.commandId
                     })
@@ -6556,12 +6608,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     }
                     // Retry only local settlement on the same owners, while the sibling's real send is still held.
                     await coordinator.resume(gatewayStableID: fixture.context.gatewayStableID)
-                    let settled = await waitForMainActorWork {
-                        fixture.messaging.sentChatReceipts.contains {
-                            $0.commandId == second.commandId && $0.terminal != nil
-                        }
-                    }
-                    #expect(settled)
+                    #expect(try await waitForTerminalReceipt(second.commandId))
                     let completed = try #require(try await fixture.journal.entries().first {
                         $0.commandId == second.commandId
                     })
@@ -6572,11 +6619,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     #expect(completed.receipt?.terminal?.runId == second.commandId)
                 } else {
                     try await coordinator.admit(first)
-                    try #require(await waitForMainActorWork {
-                        fixture.messaging.sentChatReceipts.contains {
-                            $0.commandId == second.commandId && $0.terminal != nil
-                        }
-                    })
+                    try #require(try await waitForTerminalReceipt(second.commandId))
                     let secondRow = try #require(try await fixture.journal.entries().first {
                         $0.commandId == second.commandId
                     })
@@ -6597,11 +6640,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 #expect(held.acceptedRunID == nil)
                 #expect(held.receipt?.terminal == nil)
                 gate.release()
-                try #require(await waitForMainActorWork {
-                    fixture.messaging.sentChatReceipts.contains {
-                        $0.commandId == first.commandId && $0.terminal != nil
-                    }
-                })
+                try #require(try await waitForTerminalReceipt(first.commandId))
                 let firstRow = try #require(try await fixture.journal.entries().first {
                     $0.commandId == first.commandId
                 })
@@ -6620,6 +6659,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     func `Watch route lease cannot send an expired command as its replacement`() async throws {
         try await withWatchDeliveryFixture { fixture in
             let leaseGate = WatchMessageSendGate()
+            let receipts = AsyncStream<OpenClawWatchChatDeliveryReceipt>
+                .makeStream(bufferingPolicy: .bufferingNewest(8))
+            let sendResult = fixture.messaging.nextSendResult
+            fixture.messaging.sendChatDeliveryReceiptHandler = { receipt in
+                receipts.continuation.yield(receipt)
+                return sendResult
+            }
+            defer {
+                fixture.messaging.sendChatDeliveryReceiptHandler = nil
+                receipts.continuation.finish()
+            }
             var sentCommandIDs: [String] = []
             var sentTexts: [String] = []
             let recordSend: @MainActor @Sendable (String, String) -> Void = { commandID, text in
@@ -6655,7 +6705,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     default:
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: [
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                         "type": "res", "id": requestID, "ok": true, "payload": payload,
                     ])))
                 }, receiveHook: { socket, index in
@@ -6687,8 +6737,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     submittedAtMs: now,
                     body: .quickReply(promptId: "new-prompt", actionId: "new-action", actionLabel: nil, note: nil))
                 try await fixture.coordinator.admit(original)
-                let leaseHeld = await waitForMainActorWork { leaseGate.commandIDs.count == 1 }
-                try #require(leaseHeld)
+                _ = try #require(try await leaseGate.waitForFirstSend())
+                #expect(leaseGate.commandIDs.count == 1)
                 // Advance the journal's existing maintenance clock, not the Gateway or a test-only scheduler.
                 #expect(try await fixture.journal.pruneExpired(nowMs: original.expiresAtMs) == 1)
                 let admitted = try await fixture.coordinator.admit(replacement)
@@ -6697,10 +6747,16 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 #expect(admitted.acceptedRunID == nil)
                 #expect(sentTexts.isEmpty)
                 leaseGate.release()
-                let completed = await waitForMainActorWork {
-                    fixture.messaging.sentChatReceipts.contains {
-                        $0.commandId == replacement.commandId && $0.terminal?.outcome == .forwarded
+                let completed = try await AsyncTimeout.withTimeout(
+                    seconds: 2,
+                    onTimeout: { URLError(.timedOut) })
+                {
+                    for await receipt in receipts.stream
+                        where receipt.commandId == replacement.commandId && receipt.terminal?.outcome == .forwarded
+                    {
+                        return true
                     }
+                    return false
                 }
                 #expect(completed)
                 await stopCoordinator()
@@ -6723,6 +6779,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         retiredDuringRemoval: Bool) async throws
     {
         try await withWatchDeliveryFixture { fixture in
+            let receipts = AsyncStream<OpenClawWatchChatDeliveryReceipt>
+                .makeStream(bufferingPolicy: .bufferingNewest(8))
+            let sendResult = fixture.messaging.nextSendResult
+            fixture.messaging.sendChatDeliveryReceiptHandler = { receipt in
+                receipts.continuation.yield(receipt)
+                return sendResult
+            }
+            defer {
+                fixture.messaging.sendChatDeliveryReceiptHandler = nil
+                receipts.continuation.finish()
+            }
             let command = fixture.command()
             let owner = OpenClawWatchMessageOwner(context: command.context)
             _ = try await fixture.journal.admit(command, nowMs: WatchMessagingPayloadCodec.nowMs())
@@ -6765,7 +6832,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                         Issue.record("Accepted recovery unexpectedly requested \(method)")
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: [
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                         "type": "res", "id": #require(frame["id"] as? String), "ok": true, "payload": payload,
                     ])))
                 }, receiveHook: { socket, index in
@@ -6793,7 +6860,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             try await connect(socket(holdingHistory: true))
             let previousRoute = try #require(await fixture.gateway.currentRoute())
             await fixture.coordinator.resume(gatewayStableID: owner.gatewayStableID)
-            try #require(await waitForMainActorWork { historyGate.commandIDs == [command.commandId] })
+            try #require(try await historyGate.waitForFirstSend() == command.commandId)
+            #expect(historyGate.commandIDs == [command.commandId])
             await fixture.gateway.disconnect()
             if retiredDuringRemoval {
                 try fixture.databases.stageGatewayRemoval(gatewayID: owner.gatewayStableID)
@@ -6805,12 +6873,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             // Reconnect requests recovery while the previous socket callback is still held.
             await fixture.coordinator.resume(gatewayStableID: owner.gatewayStableID)
             historyGate.release()
-            #expect(await waitForMainActorWork {
-                fixture.messaging.sentChatReceipts.contains {
-                    $0.commandId == command.commandId && $0.terminal?
-                        .outcome == .reply(text: "Recovered after reconnect")
+            let recovered = try await AsyncTimeout.withTimeout(
+                seconds: 2,
+                onTimeout: { URLError(.timedOut) })
+            {
+                for await receipt in receipts.stream
+                    where receipt.commandId == command.commandId && receipt.terminal?
+                    .outcome == .reply(text: "Recovered after reconnect")
+                {
+                    return true
                 }
-            })
+                return false
+            }
+            #expect(recovered)
             #expect(!requests.commandIDs.contains("chat.send"))
             let stored = try #require(try await fixture.journal.entries(owner: owner).first)
             #expect(stored.receipt?.terminal?.outcome == .reply(text: "Recovered after reconnect"))
@@ -7357,7 +7432,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
     }
 
-    @Test @MainActor func `operator gateway resolved event waits for canonical readback`() async throws {
+    @Test @MainActor func `resolved operator event after disconnect preserves approval state`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let notificationCenter = MockBootstrapNotificationCenter()
@@ -7371,6 +7446,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 ],
             ])]
         let appModel = NodeAppModel(notificationCenter: notificationCenter)
+        let gatewayStableID = "test-gateway"
+        appModel.connectedGatewayID = gatewayStableID
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
             "approval-event-resolved",
             gatewayDeviceId: "gateway-device-a")
@@ -7378,16 +7455,45 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-event-resolved",
+                    gatewayStableID: gatewayStableID,
                     commandText: "echo clear",
                     agentId: nil,
                     expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
-        await appModel.handleOperatorGatewayServerEvent(EventFrame(
-            type: "event",
-            event: ExecApprovalNotificationBridge.resolvedKind,
-            payload: AnyCodable(["id": "approval-event-resolved"]),
-            seq: nil,
-            stateversion: nil))
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        options.deviceAuthGatewayID = gatewayStableID
+        let operatorSession = appModel.operatorSession
+        let eventRoute: GatewayNodeSessionRoute
+        do {
+            try await operatorSession.connect(
+                url: #require(URL(string: "ws://approval-event-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession()),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            eventRoute = try #require(await operatorSession.currentRoute())
+            await operatorSession.disconnect()
+        } catch {
+            await operatorSession.disconnect()
+            throw error
+        }
+        #expect(await operatorSession.currentRoute() == nil)
+        #expect(!appModel.isOperatorGatewayConnected)
+        #expect(appModel.pendingExecApprovalResolvedPushes.isEmpty)
+
+        // The event subscriber captures its route before delivery; a late event
+        // must retain approval state after that route disconnects, without reconnecting.
+        await appModel.handleOperatorGatewayServerEvent(
+            EventFrame(
+                type: "event",
+                event: ExecApprovalNotificationBridge.resolvedKind,
+                payload: AnyCodable(["id": "approval-event-resolved"]),
+                seq: nil,
+                stateversion: nil),
+            expectedOperatorRoute: eventRoute)
 
         #expect(appModel.pendingExecApprovalPrompt?.id == "approval-event-resolved")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-event-resolved"])
@@ -7405,6 +7511,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = "gateway-a"
+        appModel._test_setExecApprovalPromptFetchFailure("gateway unavailable")
         let gatewayA = ExecApprovalNotificationPrompt(
             approvalId: "shared-approval-id",
             gatewayDeviceId: "gateway-device-a")
@@ -8658,6 +8765,28 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await #expect(throws: Error.self) {
             try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")
         }
+    }
+
+    @Test
+    func `cancellation retires queued and late one shot frames`() async {
+        let socket = GatewayTestWebSocketTask()
+        socket.resume()
+        socket.emitReceiveSuccess(.string("queued-before-cancellation"))
+        socket.cancel(with: .normalClosure, reason: nil)
+        let (events, continuation) = AsyncStream<Result<URLSessionWebSocketTask.Message, Error>>.makeStream()
+        socket.receive { continuation.yield($0) }
+        socket.emitReceiveSuccess(.string("late-after-cancellation"))
+        continuation.finish()
+        var errors: [URLError.Code] = []
+        for await result in events {
+            switch result {
+            case .success:
+                Issue.record("Canceled sockets must not deliver queued or late frames")
+            case let .failure(error):
+                errors.append((error as? URLError)?.code ?? .unknown)
+            }
+        }
+        #expect(errors == [.cancelled])
     }
 
     private static func nodeAppModelSourceURL() -> URL {

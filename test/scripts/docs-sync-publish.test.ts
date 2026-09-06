@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import {
   composeDocsConfig,
@@ -10,6 +10,50 @@ import {
   reportOrphanLocaleDocs,
   writePublishedDocsMap,
 } from "../../scripts/docs-sync-publish.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const slugifyPackage = "@sindresorhus/slugify";
+const sourceSlugifyVersion = JSON.parse(
+  fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+).devDependencies[slugifyPackage] as string;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function publisherDependencies(version: string) {
+  const devDependencies = { [slugifyPackage]: version, "markdown-it": "15.0.0" };
+  return {
+    packageJson: { name: "docs-test", private: true, devDependencies },
+    packageLock: {
+      name: "docs-test",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "docs-test", devDependencies: { ...devDependencies } },
+        [`node_modules/${slugifyPackage}`]: { version },
+        "node_modules/markdown-it": { version: "15.0.0" },
+      },
+    },
+  };
+}
+
+function writePublisherDependencies(
+  publishRoot: string,
+  dependencies: ReturnType<typeof publisherDependencies>,
+) {
+  fs.writeFileSync(
+    path.join(publishRoot, "package.json"),
+    JSON.stringify(dependencies.packageJson),
+  );
+  fs.writeFileSync(
+    path.join(publishRoot, "package-lock.json"),
+    JSON.stringify(dependencies.packageLock),
+  );
+}
+
+function readPublisherDependencies(publishRoot: string): ReturnType<typeof publisherDependencies> {
+  return {
+    packageJson: JSON.parse(fs.readFileSync(path.join(publishRoot, "package.json"), "utf8")),
+    packageLock: JSON.parse(fs.readFileSync(path.join(publishRoot, "package-lock.json"), "utf8")),
+  };
+}
 
 function collectPages(entry: unknown, pages: string[] = []): string[] {
   if (typeof entry === "string") {
@@ -44,7 +88,7 @@ describe("docs-sync-publish", () => {
 
     fs.mkdirSync(publishRoot, { recursive: true });
     fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
-    fs.writeFileSync(path.join(publishRoot, "package.json"), "{}\n");
+    writePublisherDependencies(publishRoot, publisherDependencies(sourceSlugifyVersion));
     fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
     fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
     fs.symlinkSync(
@@ -107,6 +151,108 @@ describe("docs-sync-publish", () => {
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { fault: "none", error: undefined },
+    { fault: "exit", error: "npm lock failure" },
+    { fault: "unrelated", error: "changed unrelated publisher dependencies" },
+    { fault: "stale", error: "publisher manifest and lock must both pin" },
+  ])("syncs an independent publisher lock with $fault outcome", async ({ fault, error }) => {
+    const fixture = tempDirs.make("openclaw-docs-sync-dependencies-");
+    const publishRoot = path.join(fixture, "publish");
+    const clawhubRoot = path.join(fixture, "clawhub");
+    const bin = path.join(fixture, "bin");
+    fs.mkdirSync(publishRoot);
+    fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
+    fs.mkdirSync(bin);
+    const baseline = publisherDependencies("2.2.0");
+    writePublisherDependencies(publishRoot, baseline);
+    // npm's graph resolution has separate real-install proof. This CLI fixture
+    // injects lock-generation failures without network or root dependency leakage.
+    fs.writeFileSync(
+      path.join(bin, "npm"),
+      `#!${process.execPath}\n` +
+        String.raw`
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const fault = ${JSON.stringify(fault)};
+const args = process.argv.slice(2);
+assert.deepEqual(args.slice(0, -1), ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', '--save-dev', '--save-exact']);
+if (fault === 'exit') { console.error('npm lock failure'); process.exit(17); }
+fs.appendFileSync('npm-calls', 'called\n');
+const name = '@sindresorhus/slugify';
+const version = args.at(-1).slice(name.length + 1);
+const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+manifest.devDependencies[name] = version;
+lock.packages[''].devDependencies[name] = version;
+if (fault !== 'stale') lock.packages['node_modules/' + name].version = version;
+if (fault === 'unrelated') lock.packages['node_modules/markdown-it'].version = '15.0.1';
+fs.writeFileSync('package.json', JSON.stringify(manifest));
+fs.writeFileSync('package-lock.json', JSON.stringify(lock));
+`,
+      { mode: 0o755 },
+    );
+    const sync = () =>
+      execFileSync(
+        process.execPath,
+        [
+          "scripts/docs-sync-publish.mjs",
+          "--target",
+          publishRoot,
+          "--clawhub-repo",
+          clawhubRoot,
+          "--source-sha",
+          "fixture-source",
+        ],
+        {
+          stdio: "pipe",
+          env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+        },
+      );
+    if (error) {
+      expect(sync).toThrow(error);
+      expect(fs.existsSync(path.join(publishRoot, ".openclaw-sync", "source.json"))).toBe(false);
+      return;
+    }
+    sync();
+    expect(readPublisherDependencies(publishRoot)).toEqual(
+      publisherDependencies(sourceSlugifyVersion),
+    );
+    expect(fs.existsSync(path.join(publishRoot, "node_modules"))).toBe(false);
+    const { validateDocsSyncDependencies } = await import("../../scripts/docs-sync-publish.mjs");
+    validateDocsSyncDependencies(publishRoot, baseline);
+    sync();
+    expect(fs.readFileSync(path.join(publishRoot, "npm-calls"), "utf8")).toBe("called\n");
+
+    // Post-rebase validation compares with fresh publisher main, not the clone's
+    // old dependency snapshot. Losing an unrelated maintainer update must fail.
+    const freshMain = structuredClone(baseline);
+    freshMain.packageJson.devDependencies["markdown-it"] = "15.0.1";
+    freshMain.packageLock.packages[""].devDependencies["markdown-it"] = "15.0.1";
+    freshMain.packageLock.packages["node_modules/markdown-it"].version = "15.0.1";
+    expect(() => validateDocsSyncDependencies(publishRoot, freshMain)).toThrow(
+      "changed unrelated publisher dependencies",
+    );
+    const rebased = structuredClone(freshMain);
+    rebased.packageJson.devDependencies[slugifyPackage] = sourceSlugifyVersion;
+    rebased.packageLock.packages[""].devDependencies[slugifyPackage] = sourceSlugifyVersion;
+    rebased.packageLock.packages[`node_modules/${slugifyPackage}`].version = sourceSlugifyVersion;
+    writePublisherDependencies(publishRoot, rebased);
+    const reordered = Object.fromEntries(Object.entries(rebased.packageLock).toReversed());
+    fs.writeFileSync(
+      path.join(publishRoot, "package-lock.json"),
+      JSON.stringify(reordered, null, 4),
+    );
+    expect(() => validateDocsSyncDependencies(publishRoot, freshMain)).not.toThrow();
+    fs.appendFileSync(
+      path.join(publishRoot, ".openclaw-sync", "lib", "docs-markdown.mjs"),
+      "\n// drift\n",
+    );
+    expect(() => validateDocsSyncDependencies(publishRoot, freshMain)).toThrow(
+      "support file differs from source",
+    );
   });
 
   it("materializes the public docs map only in the publish tree", () => {

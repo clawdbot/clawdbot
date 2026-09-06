@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -77,10 +79,10 @@ suite.define(() => {
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "anthropic-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "anthropic-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [opus, sonnet]),
+        );
       }
 
       const nvidia = main.locator(
@@ -90,10 +92,10 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "preserved-nvidia-model-alias.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "preserved-nvidia-model-alias.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [nvidia]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -160,10 +162,10 @@ suite.define(() => {
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "agents-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "agents-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [select]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

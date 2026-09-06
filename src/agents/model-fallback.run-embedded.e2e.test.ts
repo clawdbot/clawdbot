@@ -111,6 +111,7 @@ beforeEach(() => {
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
+const LONG_RATE_LIMIT_ERROR_MESSAGE = "429 Too Many Requests: subscription usage limit reached";
 const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
 const NO_ERROR_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 
@@ -270,7 +271,8 @@ function mockPrimaryFailureThenFallbackSuccess(
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as EmbeddedAttemptParams;
     if (attemptParams.provider === primaryProvider) {
-      return await makePrimaryAttempt(attemptParams);
+      // Keep route/receipt scenarios bounded with a provider-reported retry cap.
+      return { ...(await makePrimaryAttempt(attemptParams)), providerRetryMaxRetries: 3 };
     }
     if (attemptParams.provider === "groq") {
       return makeFallbackSuccessAttempt();
@@ -363,6 +365,7 @@ function mockAllProvidersOverloaded() {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai" || attemptParams.provider === "groq") {
       return makeEmbeddedRunnerAttempt({
+        providerRetryMaxRetries: 3,
         assistantTexts: [],
         lastAssistant: buildEmbeddedRunnerAssistant({
           provider: attemptParams.provider,
@@ -506,9 +509,12 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       });
       expect(decisionWork).toHaveLength(5);
       expect(decisionWork.map((work) => work.receipt)).toMatchObject([
-        ...Array.from({ length: 4 }, () => ({
+        ...Array.from({ length: 4 }, (_, attempt) => ({
           action: { summary: "Requested openai/mock-1; selected openai/mock-1." },
-          decision: { reasonCode: "model_route_selected" },
+          decision: {
+            reasonCode:
+              attempt === 0 ? "model_route_selected" : "model_route_selected_after_fallback",
+          },
         })),
         {
           action: { summary: "Requested openai/mock-1; selected groq/mock-2." },
@@ -555,9 +561,9 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           reason: work.receipt.decision.reasonCode,
         })),
       ).toEqual(
-        Array.from({ length: 4 }, () => ({
+        Array.from({ length: 4 }, (_, attempt) => ({
           target: JSON.stringify(["openai", "mock-1"]),
-          reason: "model_route_selected",
+          reason: attempt === 0 ? "model_route_selected" : "model_route_selected_after_fallback",
         })),
       );
     });
@@ -625,7 +631,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       message:
         "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
       reason: "rate_limit",
-      primaryAttempts: 4,
+      primaryAttempts: 1,
       runName: "bare-402-cross-provider",
     },
   ])("$name", async ({ message, reason, primaryAttempts, runName }) => {
@@ -967,11 +973,11 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("caps rate-limit profile rotations and escalates to cross-provider fallback (#58572)", async () => {
+  it("caps long-window rate-limit profile rotations and escalates to fallback (#58572)", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeFallbackMultiProfileAuthStore(agentDir);
 
-      mockPrimaryErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+      mockPrimaryErrorThenFallbackSuccess(LONG_RATE_LIMIT_ERROR_MESSAGE);
 
       const result = await runEmbeddedFallback({
         agentDir,
@@ -1012,11 +1018,11 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("caps prompt-side rate-limit profile rotations before cross-provider fallback", async () => {
+  it("caps prompt-side long-window rate-limit rotations before cross-provider fallback", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeFallbackMultiProfileAuthStore(agentDir);
 
-      mockPrimaryPromptErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+      mockPrimaryPromptErrorThenFallbackSuccess(LONG_RATE_LIMIT_ERROR_MESSAGE);
 
       const result = await runEmbeddedFallback({
         agentDir,

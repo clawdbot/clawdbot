@@ -10,7 +10,6 @@ const { supervisorMock } = vi.hoisted(() => ({
     spawn: vi.fn(),
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   },
 }));
 
@@ -82,7 +81,6 @@ describe("process tool supervisor cancellation", () => {
     supervisorMock.spawn.mockClear();
     supervisorMock.cancel.mockClear();
     supervisorMock.cancelScope.mockClear();
-    supervisorMock.getRecord.mockClear();
     killProcessTreeMock.mockClear();
   });
 
@@ -91,11 +89,8 @@ describe("process tool supervisor cancellation", () => {
   });
 
   it("routes kill through supervisor when run is managed", async () => {
-    supervisorMock.getRecord.mockReturnValue({
-      runId: "sess",
-      state: "running",
-    });
-    createBackgroundSession("sess");
+    const session = createBackgroundSession("sess");
+    session.processActivity = { resultSettled: false, lastOutputAtMs: session.startedAt };
     const processTool = createProcessTool();
 
     const result = await processTool.execute("toolcall", {
@@ -110,11 +105,8 @@ describe("process tool supervisor cancellation", () => {
   });
 
   it("remove drops running session immediately when cancellation is requested", async () => {
-    supervisorMock.getRecord.mockReturnValue({
-      runId: "sess",
-      state: "running",
-    });
     const session = createBackgroundSession("sess");
+    session.processActivity = { resultSettled: false, lastOutputAtMs: session.startedAt };
     const processTool = createProcessTool();
 
     const result = await processTool.execute("toolcall", {
@@ -144,8 +136,7 @@ describe("process tool supervisor cancellation", () => {
       expected:
         "Unable to remove session sess-unmanaged: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.",
     },
-  ])("refuses $action without a live supervisor record", async ({ action, expected }) => {
-    supervisorMock.getRecord.mockReturnValue(undefined);
+  ])("refuses $action without a producer activity view", async ({ action, expected }) => {
     createBackgroundSession("sess-unmanaged", 4242);
     const processTool = createProcessTool();
 
@@ -165,8 +156,8 @@ describe("process tool supervisor cancellation", () => {
   it.each(["kill", "remove"] as const)(
     "refuses %s while sandbox finalization owns the terminal transition",
     async (action) => {
-      supervisorMock.getRecord.mockReturnValue({ runId: "sess-finalizing", state: "exited" });
       const session = createBackgroundSession("sess-finalizing", 4242);
+      session.processActivity = { resultSettled: true, lastOutputAtMs: session.startedAt };
       session.finalizing = true;
       const processTool = createProcessTool();
 

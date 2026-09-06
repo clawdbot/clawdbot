@@ -31,10 +31,7 @@ import {
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
-import {
-  bindIngressBoundedProcessingStarted,
-  runWithIngressBoundedProcessingStarted,
-} from "./ingress-processing-handoff.js";
+import { bindIngressProcessingClaim } from "./ingress-processing-handoff.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -144,6 +141,16 @@ export function createChannelIngressDrain<
     }
   };
 
+  const retireStallWatchdog = (state: ActiveHandlerState<TPayload, TMetadata>) => {
+    state.stallWatchdogRetired = true;
+    clearStallTimer(state);
+  };
+
+  const retireClaimProcessing = (state: ActiveHandlerState<TPayload, TMetadata>) => {
+    retireStallWatchdog(state);
+    state.closeProcessingClaim();
+  };
+
   const clearClaimRefresh = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     if (state.claimRefreshTimer) {
       clearInterval(state.claimRefreshTimer);
@@ -161,7 +168,7 @@ export function createChannelIngressDrain<
     for (const state of activeByClaim.values()) {
       if (state.phase === "dispatching" || state.phase === "deferred") {
         // Retire stall detection without blocking a late terminal claim write.
-        clearStallTimer(state);
+        retireClaimProcessing(state);
         state.abortController.abort(reason);
       }
     }
@@ -173,7 +180,7 @@ export function createChannelIngressDrain<
   }
 
   const removeActive = (state: ActiveHandlerState<TPayload, TMetadata>) => {
-    clearStallTimer(state);
+    retireClaimProcessing(state);
     clearClaimRefresh(state);
     activeByClaim.delete(activeClaimKey(state.claim));
     if (laneOwnerByKey.get(state.laneKey) === state) {
@@ -189,7 +196,7 @@ export function createChannelIngressDrain<
       return;
     }
     state.guillotined = true;
-    clearStallTimer(state);
+    retireClaimProcessing(state);
     clearClaimRefresh(state);
     try {
       state.abortController.abort(new Error("ingress claim lease reclaimed"));
@@ -273,6 +280,9 @@ export function createChannelIngressDrain<
 
   const armStallWatchdog = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     clearStallTimer(state);
+    if (state.stallWatchdogRetired || state.abortController.signal.aborted) {
+      return;
+    }
     state.stallTimer = setTimeout(() => {
       // Pre-adoption only (dispatching OR deferred). Timer is not cleared by deferral.
       if (state.phase !== "dispatching" && state.phase !== "deferred") {
@@ -284,7 +294,7 @@ export function createChannelIngressDrain<
       const timeoutError = new Error(message);
       // Closed guillotine flag — catch must not string-sniff errors.
       state.guillotined = true;
-      clearStallTimer(state);
+      retireClaimProcessing(state);
       log(message);
       try {
         state.abortController.abort(timeoutError);
@@ -316,7 +326,7 @@ export function createChannelIngressDrain<
     if (state.guillotined || state.superseded) {
       return;
     }
-    clearStallTimer(state);
+    retireClaimProcessing(state);
     await state
       .settleOnce(async () => {
         await releaseClaim(state.claim, releaseOptions);
@@ -343,7 +353,7 @@ export function createChannelIngressDrain<
         }
         // Complete at adoption, not settle — frees the lane for later events.
         state.phase = "adopted";
-        clearStallTimer(state);
+        retireClaimProcessing(state);
         await state.settleOnce(async () => {
           await completeClaimWithRetry(state.claim);
         });
@@ -363,11 +373,7 @@ export function createChannelIngressDrain<
       },
       onDeferredHeartbeat: () => {
         // Abort also covers disposal; retired callbacks cannot restart the watchdog.
-        if (
-          state.phase === "deferred" &&
-          !state.processingStarted &&
-          !state.abortController.signal.aborted
-        ) {
+        if (state.phase === "deferred" && !state.abortController.signal.aborted) {
           armStallWatchdog(state);
         }
       },
@@ -380,7 +386,7 @@ export function createChannelIngressDrain<
         }
         // Adoption finalization (settlement hold) owns the claim; do not let a
         // stall watchdog race and dead-letter an about-to-complete event.
-        clearStallTimer(state);
+        retireClaimProcessing(state);
       },
       onFailed: async (error) => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
@@ -415,7 +421,7 @@ export function createChannelIngressDrain<
       activeByClaim,
       laneOwnerByKey,
       shouldSupersedePending: options.shouldSupersedePending,
-      clearStallTimer,
+      clearStallTimer: retireClaimProcessing,
       completeClaim: completeClaimWithRetry,
       formatError,
       log,
@@ -426,35 +432,42 @@ export function createChannelIngressDrain<
     laneKey: string,
   ): ActiveHandlerState<TPayload, TMetadata> => {
     const abortController = new AbortController();
-    const state = {
+    const state: ActiveHandlerState<TPayload, TMetadata> = {
       eventId: claim.id,
       laneKey,
       claim,
       abortController,
       startedAt: now(),
-      phase: "dispatching" as const,
+      phase: "dispatching",
       occupiesLane: true,
       guillotined: false,
       superseded: false,
-      processingStarted: false,
+      stallWatchdogRetired: false,
+      closeProcessingClaim: bindIngressProcessingClaim(abortController.signal, {
+        start: () => {
+          if (
+            disposed ||
+            options.abortSignal?.aborted ||
+            abortController.signal.aborted ||
+            (state.phase !== "dispatching" && state.phase !== "deferred") ||
+            state.guillotined ||
+            state.superseded ||
+            activeByClaim.get(activeClaimKey(claim)) !== state ||
+            (state.occupiesLane && laneOwnerByKey.get(laneKey) !== state)
+          ) {
+            return false;
+          }
+          retireStallWatchdog(state);
+          return true;
+        },
+      }),
       task: Promise.resolve(),
       settleOnce: async () => {},
-    } as ActiveHandlerState<TPayload, TMetadata>;
-    state.settleOnce = createIngressSettleOwner(state, removeActive);
-    const startBoundedProcessing = () => {
-      if (
-        (state.phase !== "dispatching" && state.phase !== "deferred") ||
-        state.guillotined ||
-        state.superseded
-      ) {
-        return;
-      }
-      // The bounded reply runtime now owns timeout and failure settlement.
-      state.processingStarted = true;
-      clearStallTimer(state);
     };
-    bindIngressBoundedProcessingStarted(abortController.signal, startBoundedProcessing);
+    state.settleOnce = createIngressSettleOwner(state, removeActive);
     const lifecycle = createLifecycle(state);
+    activeByClaim.set(activeClaimKey(claim), state);
+    laneOwnerByKey.set(laneKey, state);
     armStallWatchdog(state);
     armClaimRefresh(state);
 
@@ -465,10 +478,7 @@ export function createChannelIngressDrain<
     // so the dead lease cannot make session admission refuse the turn as
     // draining. A real restart drain still refuses both paths at admission.
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
-    const dispatchClaimed = () =>
-      runWithIngressBoundedProcessingStarted(startBoundedProcessing, () =>
-        options.dispatchClaimedEvent(claim, lifecycle),
-      );
+    const dispatchClaimed = () => options.dispatchClaimedEvent(claim, lifecycle);
     state.task = (async () => {
       try {
         const result = await (releaseRootWork
@@ -498,7 +508,7 @@ export function createChannelIngressDrain<
           return;
         }
         if (result?.kind === "failed-retryable") {
-          clearStallTimer(state);
+          retireClaimProcessing(state);
           await state.settleOnce(async () => {
             await applyFailureDisposition(claim, result.error);
           });
@@ -510,7 +520,7 @@ export function createChannelIngressDrain<
         // a claim whose dispatch side effects already ran (replay risk).
         if (state.phase === "dispatching") {
           state.phase = "adopted";
-          clearStallTimer(state);
+          retireClaimProcessing(state);
           await state.settleOnce(async () => {
             await completeClaimWithRetry(claim);
           });
@@ -531,7 +541,7 @@ export function createChannelIngressDrain<
           );
           return;
         }
-        clearStallTimer(state);
+        retireClaimProcessing(state);
         await state.settleOnce(async () => {
           await applyFailureDisposition(claim, err);
         });
@@ -540,8 +550,6 @@ export function createChannelIngressDrain<
       }
     })();
 
-    activeByClaim.set(activeClaimKey(claim), state);
-    laneOwnerByKey.set(laneKey, state);
     return state;
   };
 

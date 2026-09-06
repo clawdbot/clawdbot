@@ -66,6 +66,10 @@ describe("openclaw-board-view", () => {
 
   it("bounds the wait for a sandbox proxy that never becomes ready", async () => {
     vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<!doctype html><p>Ready document</p>")),
+    );
     const frameLoadFailed = vi.fn(async () => undefined);
     const view = await mount({
       context: gatewayContext(null),

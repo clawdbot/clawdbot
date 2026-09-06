@@ -13,6 +13,7 @@ import {
 } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   hasUnjoinedWork,
+  inspectManagedProcessGroup,
   runManagedCommand,
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
@@ -326,19 +327,27 @@ async function waitForGatewayReady(
   );
 }
 
-function hasGatewayProcessClosed(child: OpenClawTestProcess): boolean {
-  return hasChildExited(child) && child.stdout.closed && child.stderr.closed;
+function hasGatewayProcessClosed(child: OpenClawTestProcess, platform: NodeJS.Platform): boolean {
+  // Descendants need not inherit stdio. Release the owner only after its group
+  // is positively dead; closed pipes or an indeterminate census are insufficient.
+  return (
+    hasChildExited(child) &&
+    child.stdout.closed &&
+    child.stderr.closed &&
+    inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform }) === "dead"
+  );
 }
 
 async function waitForGatewayClose(
   child: OpenClawTestProcess,
   timeoutMs: number,
+  platform: NodeJS.Platform,
 ): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
-  while (!hasGatewayProcessClosed(child) && Date.now() < deadline) {
+  while (!hasGatewayProcessClosed(child, platform) && Date.now() < deadline) {
     await sleep(Math.min(10, deadline - Date.now()));
   }
-  return hasGatewayProcessClosed(child);
+  return hasGatewayProcessClosed(child, platform);
 }
 
 async function stopGatewayProcess(
@@ -356,6 +365,7 @@ async function stopGatewayProcess(
         stopTimeoutMs,
         Math.max(0, Math.floor((deadline - Date.now()) / Math.max(1, remainingSteps))),
       ),
+      platform,
     );
   const terminate = (signal: NodeJS.Signals) =>
     terminateManagedChild(
@@ -368,7 +378,7 @@ async function stopGatewayProcess(
           },
     );
 
-  if (hasGatewayProcessClosed(child)) {
+  if (hasGatewayProcessClosed(child, platform)) {
     return true;
   }
   if (platform === "win32") {
@@ -443,7 +453,9 @@ async function stopGatewayProcess(
       if (termination?.processTreeState !== "terminated") {
         return failed("termination-indeterminate");
       }
-      return (await waitForGatewayClose(child, stopTimeoutMs)) || failed("close-incomplete");
+      return (
+        (await waitForGatewayClose(child, stopTimeoutMs, platform)) || failed("close-incomplete")
+      );
     } catch (error) {
       return failed("exception", error);
     }
@@ -455,7 +467,7 @@ async function stopGatewayProcess(
     return true;
   }
   for (const [index, signal] of signals.entries()) {
-    if (hasGatewayProcessClosed(child)) {
+    if (hasGatewayProcessClosed(child, platform)) {
       return true;
     }
     if (Date.now() >= deadline) {
@@ -470,7 +482,7 @@ async function stopGatewayProcess(
       return true;
     }
   }
-  return hasGatewayProcessClosed(child);
+  return hasGatewayProcessClosed(child, platform);
 }
 
 function shutdownErrorCode(error: unknown): string | undefined {

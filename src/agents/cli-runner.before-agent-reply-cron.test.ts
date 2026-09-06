@@ -1,6 +1,5 @@
-/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -14,6 +13,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -841,7 +841,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     const { getActiveMcpLoopbackRuntime } = await vi.importActual<
       typeof import("../gateway/mcp-http.loopback-runtime.js")
     >("../gateway/mcp-http.loopback-runtime.js");
-    const server = await mcpHttp.ensureMcpLoopbackServer();
+    await mcpHttp.ensureMcpLoopbackServer();
     const runtime = getActiveMcpLoopbackRuntime();
     if (!runtime) {
       throw new Error("expected an active MCP loopback runtime");
@@ -855,7 +855,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     const openStreams = async (sessionKeys: readonly string[]) => {
       const responses = await Promise.all(
         sessionKeys.map((sessionKey) =>
-          fetch(`http://127.0.0.1:${server.port}/mcp`, {
+          fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
             method: "GET",
             headers: {
               authorization: `Bearer ${runtime.ownerToken}`,
@@ -881,7 +881,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     try {
       await openStreams(["agent:main:concurrent-one", "agent:main:concurrent-two"]);
 
-      const unauthorized = await fetch(`http://127.0.0.1:${server.port}/mcp`);
+      const unauthorized = await fetch(`http://127.0.0.1:${runtime.port}/mcp`);
       expect(unauthorized.status).toBe(401);
       await unauthorized.body?.cancel();
 
@@ -891,7 +891,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       if (!survivingRuntime) {
         throw new Error("helper cleanup incorrectly closed the active MCP loopback server");
       }
-      expect(survivingRuntime.port).toBe(server.port);
+      expect(survivingRuntime.port).toBe(runtime.port);
       expect(survivingRuntime.ownerToken === runtime.ownerToken).toBe(true);
       const originalStreamStates = await Promise.all(
         readers.map(async (reader) => {
@@ -922,7 +922,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       for (const result of await Promise.all(readers.map((reader) => reader.read()))) {
         expect(result.done).toBe(true);
       }
-      await expect(fetch(`http://127.0.0.1:${server.port}/mcp`)).rejects.toThrow();
+      await expect(fetch(`http://127.0.0.1:${runtime.port}/mcp`)).rejects.toThrow();
     } finally {
       await mcpHttp.closeMcpLoopbackServer();
       await Promise.allSettled(readers.map((reader) => reader.cancel()));
@@ -965,11 +965,11 @@ describe("runCliAgent before_agent_reply seam", () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
     try {
-      await mcpTools.getOrCreateSessionMcpRuntime({
+      await getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: originalSessionId,
       });
-      const successorRuntime = await mcpTools.getOrCreateSessionMcpRuntime({
+      const successorRuntime = await getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: successorSessionId,
       });

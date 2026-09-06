@@ -1,5 +1,6 @@
 // Doctor cron storage repair mechanics for legacy stores, run logs, payloads, and Codex refs.
 import type { DatabaseSync } from "node:sqlite";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -14,17 +15,21 @@ import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   loadCronQuarantinedJobs,
   resolveCronJobsStorePath,
+  saveCronJobsStore,
   saveCronJobsStoreWithMetadata,
   saveCronQuarantinedJobs,
   type CronQuarantinedJob,
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../../../cron/store/transaction-hooks.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
+import {
+  createRetiredModelRefRepairResolver,
+  repairRetiredModelSlots,
+} from "../shared/retired-model-ref-repair.js";
 import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import {
@@ -206,9 +211,11 @@ export async function loadLegacyCronRepairState(params: {
 
 export async function applyLegacyCronStoreRepair(params: {
   cfg: OpenClawConfig;
+  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   state: LegacyCronRepairState;
   normalized?: ReturnType<typeof normalizeStoredCronJobs>;
   migrateCodexModelRefs?: boolean;
+  repairRetiredModelRefs?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   recoverQuarantinedScheduleJobs?: boolean;
 }): Promise<LegacyCronRepairResult> {
@@ -216,6 +223,16 @@ export async function applyLegacyCronStoreRepair(params: {
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
+  // Earlier legacy migrations do not authorize retiring current model choices.
+  const resolveRetired =
+    params.repairRetiredModelRefs === true
+      ? createRetiredModelRefRepairResolver({
+          cfg: params.cfg,
+          checkModelPolicy: true,
+          retiredModelRefConfig: params.retiredModelRefConfig,
+          warnings,
+        })
+      : undefined;
   const quarantineEntriesToRevalidate =
     params.recoverQuarantinedScheduleJobs === true
       ? [...state.persistedQuarantine, ...(state.legacyQuarantine?.jobs ?? [])]
@@ -240,6 +257,7 @@ export async function applyLegacyCronStoreRepair(params: {
           cfg: params.cfg,
           targets: collectStoredCronCodexRuntimePolicyTargets(state.rawJobs),
           blockedModelIdentities: params.blockedModelIdentities,
+          resolveFinalModelRef: resolveRetired,
         })
       : undefined;
   warnings.push(...(runtimePolicyPlan?.warnings ?? []));
@@ -269,8 +287,45 @@ export async function applyLegacyCronStoreRepair(params: {
   });
   const dreamingMigration = migrateLegacyDreamingPayloadShape(state.rawJobs);
   warnings.push(...notifyMigration.warnings);
+  const retirementChanges: string[] = [];
+  if (resolveRetired) {
+    for (const job of state.rawJobs) {
+      const payload = asOptionalRecord(job.payload);
+      const jobId = normalizeOptionalStringifiedId(job.id);
+      if (!payload || !jobId) {
+        continue;
+      }
+      const projectedOwner = state.projectedOwnersByJobId.get(jobId);
+      const agentId =
+        normalizeOptionalString(job.agentId) ??
+        (projectedOwner && projectedOwner.kind !== "unresolved"
+          ? projectedOwner.agentId
+          : tryResolveAmbientOwnerAgentId(params.cfg));
+      if (!agentId) {
+        warnings.push(
+          `Skipped retired model repair for cron job "${jobId}": select its owning agent, then rerun openclaw doctor --fix.`,
+        );
+        continue;
+      }
+      const beforeChanges = retirementChanges.length;
+      repairRetiredModelSlots({
+        owner: payload,
+        path: `cron.${jobId}.payload`,
+        agentId,
+        resolve: resolveRetired,
+        changes: retirementChanges,
+      });
+      if (retirementChanges.length > beforeChanges && asOptionalRecord(job.state)?.autoDisabled) {
+        const jobName = normalizeOptionalString(job.name) ?? jobId;
+        retirementChanges.push(
+          `Automation "${jobName}" remains auto-disabled. Run openclaw automations enable ${jobId} to resume it after this repair.`,
+        );
+      }
+    }
+  }
 
   const storeChanged =
+    retirementChanges.length > 0 ||
     (state.legacyStoreDetected && !state.legacyMigrationAlreadyImported) ||
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
@@ -313,7 +368,7 @@ export async function applyLegacyCronStoreRepair(params: {
           jobs: state.rawJobs as unknown as CronJob[],
         } as const;
         const migrationSource = state.legacyMigrationSource;
-        const assertSnapshotCurrent = (db: DatabaseSync) => {
+        const assertSnapshotCurrent = (db: DatabaseSync): undefined => {
           if (state.jobsFingerprint !== undefined) {
             assertCronJobsStoreUnchanged(db, state.storePath, state.jobsFingerprint);
           }
@@ -334,16 +389,12 @@ export async function applyLegacyCronStoreRepair(params: {
             },
           );
         } else {
-          await saveCronJobsStoreWithTransactionHooks(
-            state.storePath,
-            store,
-            {
-              ...(quarantine ? { quarantine } : {}),
-              ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
-              preserveRuntimeState: true,
-            },
-            { beforeWrite: assertSnapshotCurrent },
-          );
+          await saveCronJobsStore(state.storePath, store, {
+            ...(quarantine ? { quarantine } : {}),
+            ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
+            preserveRuntimeState: true,
+            transactionHooks: { beforeWrite: assertSnapshotCurrent },
+          });
         }
       } else if (quarantine) {
         saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
@@ -358,6 +409,7 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
+  changes.push(...retirementChanges);
   if (quarantineRecovery.recoveredJobs.length > 0) {
     changes.push(
       `Recovered ${pluralize(quarantineRecovery.recoveredJobs.length, "quarantined automation")} after current schedule validation passed.`,
@@ -499,7 +551,9 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
 /** Commit Codex cron refs only after their model-scoped config policy is durable. */
 export async function repairCronCodexModelRefsAfterConfigWrite(params: {
   cfg: OpenClawConfig;
+  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+  repairRetiredModelRefs?: boolean;
 }): Promise<LegacyCronRepairResult> {
   const storePath = resolveCronJobsStorePath(
     normalizeOptionalString(readLegacyCronStorePath(params.cfg)),
@@ -509,8 +563,10 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
     return state
       ? await applyLegacyCronStoreRepair({
           cfg: params.cfg,
+          retiredModelRefConfig: params.retiredModelRefConfig,
           state,
           migrateCodexModelRefs: true,
+          repairRetiredModelRefs: params.repairRetiredModelRefs,
           blockedModelIdentities: params.blockedModelIdentities,
         })
       : { changes: [], warnings: [] };

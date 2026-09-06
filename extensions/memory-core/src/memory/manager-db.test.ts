@@ -7,7 +7,8 @@ import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -176,6 +177,7 @@ describe("memory manager database publication", () => {
       await publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
+        sourceHasVectors: false,
         metaKey: "meta",
         expectedRevision: 0,
       });
@@ -210,6 +212,7 @@ describe("memory manager database publication", () => {
       await publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
+        sourceHasVectors: false,
         metaKey: "memory_index_meta",
         expectedRevision: readMemoryDatabaseRevision(targetDb),
       });
@@ -261,6 +264,7 @@ describe("memory manager database publication", () => {
       await publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
+        sourceHasVectors: false,
         metaKey: "meta",
         expectedRevision,
       });
@@ -333,6 +337,7 @@ describe("memory manager database publication", () => {
       await publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
+        sourceHasVectors: false,
         metaKey: "meta",
         expectedRevision,
       });
@@ -389,13 +394,32 @@ describe("memory manager database publication", () => {
         .run("vector", JSON.stringify([0, 1, 0]));
       sourceDb.close();
 
-      await publishMemoryDatabaseTables({
-        targetDb,
-        sourcePath,
-        metaKey: "memory_index_meta",
-        expectedRevision: readMemoryDatabaseRevision(targetDb),
-        vectorExtensionPath: sourceVector.extensionPath,
-      });
+      const originalLoad = storage.loadSqliteVecExtension;
+      const load = vi
+        .spyOn(storage, "loadSqliteVecExtension")
+        .mockImplementationOnce(async (params) => {
+          // Provider/import preparation can yield; the shared target must still be
+          // usable by unrelated agent writes with no attached shadow in that window.
+          await Promise.resolve();
+          expect(targetDb.prepare("PRAGMA database_list").all()).not.toContainEqual(
+            expect.objectContaining({ name: "memory_reindex" }),
+          );
+          targetDb.exec("BEGIN IMMEDIATE; COMMIT;");
+          return originalLoad(params);
+        });
+      try {
+        await publishMemoryDatabaseTables({
+          targetDb,
+          sourcePath,
+          sourceHasVectors: true,
+          metaKey: "memory_index_meta",
+          expectedRevision: readMemoryDatabaseRevision(targetDb),
+          vectorExtensionPath: sourceVector.extensionPath,
+        });
+        expect(load).toHaveBeenCalledOnce();
+      } finally {
+        load.mockRestore();
+      }
 
       expect(targetDb.prepare("SELECT id FROM memory_index_chunks_vec").all()).toEqual([
         { id: "vector" },
@@ -440,6 +464,7 @@ describe("memory manager database publication", () => {
       const publication = publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
+        sourceHasVectors: false,
         metaKey: "memory_index_meta",
         expectedRevision,
       });
@@ -481,6 +506,7 @@ describe("memory manager database publication", () => {
       await publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
+        sourceHasVectors: false,
         metaKey: "memory_index_meta",
         expectedRevision: readMemoryDatabaseRevision(targetDb),
       });
@@ -520,6 +546,6 @@ describe("memory manager database publication", () => {
     await expectPathMissing(oldShadow);
     await expectPathMissing(`${oldShadow}-wal`);
     await expectPathMissing(`${oldShadow}-journal`);
-    await expect(fs.access(youngShadow)).resolves.toBeUndefined();
+    await fs.access(youngShadow);
   });
 });

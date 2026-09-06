@@ -26,7 +26,6 @@ import {
   createTelegramSpooledReplayParticipant,
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
-  getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
@@ -272,6 +271,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       await turnContext.onDispatchStart?.();
     }
     const runTelegramDispatch = async (params: {
+      abortSignal?: AbortSignal;
       turnAdoptionLifecycle?: {
         admission?: "exclusive" | "cancel-only";
         onAdopted: () => void | Promise<void>;
@@ -296,6 +296,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
           turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+          abortSignal: params.abortSignal,
         });
         if (dispatchResult?.kind === "failed-retryable") {
           const result: TelegramMessageProcessingResult = {
@@ -400,7 +401,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         }
       };
       const run = async () => {
-        const drainLifecycle = getTelegramSpooledReplayLifecycle();
+        const drainLifecycle =
+          turnContext.spooledReplayIngressLifecycle ?? participant.ingressLifecycle;
         // Participant always owns an AbortSignal on the spooled-replay path;
         // merge optional drain/context signals without widening to undefined.
         const turnAbortSignal: AbortSignal = (() => {
@@ -413,9 +415,10 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           return AbortSignal.any([participant.abortSignal, ...extras]);
         })();
         const result = await runTelegramDispatch({
+          abortSignal: turnAbortSignal,
           turnAdoptionLifecycle: {
             admission: "exclusive",
-            abortSignal: turnAbortSignal,
+            abortSignal: drainLifecycle?.abortSignal ?? turnAbortSignal,
             onAdopted: async () => {
               if (adopted) {
                 return;

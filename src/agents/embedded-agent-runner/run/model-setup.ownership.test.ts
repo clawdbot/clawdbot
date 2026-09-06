@@ -3,6 +3,8 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import { persistSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
 import {
@@ -17,6 +19,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { registerAgentHarness } from "../../harness/registry.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../session-runtime-compat.js";
 import { resolveExtraParams } from "../extra-params.js";
@@ -25,6 +28,12 @@ import {
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "../model.generation-scope.test-support.js";
+import {
+  clearActiveEmbeddedRun,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  setActiveEmbeddedRun,
+} from "../runs.js";
+import { createEmbeddedRunHandle } from "../runs.test-support.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
@@ -127,7 +136,10 @@ async function createFixture(
     });
   const withRuntime = async (
     overrides: Partial<RunEmbeddedAgentParams>,
-    use: (runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>) => void | Promise<void>,
+    use: (
+      runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>,
+      admission: ReturnType<typeof prepareSystemAgentRunAdmission>,
+    ) => void | Promise<void>,
   ) => {
     const actualParams = { ...runParams, ...overrides };
     const admission = prepareSystemAgentRunAdmission(
@@ -153,7 +165,7 @@ async function createFixture(
         fallbackConfigured: false,
         preparedModelRuntime: generation.preparedModelRuntime,
       });
-      await use(runtime);
+      await use(runtime, admission);
     } finally {
       runtime?.stopRuntimeAuthRefreshTimer();
       admission.close();
@@ -311,6 +323,149 @@ describe("model chat and native model ownership", () => {
     },
   );
 
+  it("keeps guarded reply input aligned with a host-auth native model", async () => {
+    const fixture = await createFixture({}, () => ({
+      model: "native",
+      auth: "host",
+      modelRef: { provider: "openai", model: "bound-native-model" },
+    }));
+    const profile = { authProfileId: "openai:fixture", authProfileIdSource: "user" as const };
+    await fixture.state.writeAuthProfiles({
+      version: 1,
+      profiles: { "openai:fixture": { type: "api_key", provider: "openai", key: "fixture-key" } },
+    });
+    const execution = {
+      ...fixture.runParams,
+      ...profile,
+      sessionKey: fixture.target.sessionKey,
+      sessionFile: `${fixture.state.workspaceDir}/native-ownership-transcript`,
+      senderIsOwner: true,
+      messageProvider: "webchat",
+    };
+    const caller = {
+      senderIsOwner: true,
+      disableTools: false,
+      traceAuthorized: true,
+      messageProvider: "webchat",
+      clientCaps: ["task_suggestions"],
+      approvalReviewerDeviceId: "review-device",
+    };
+    const authority = prepareReplyToolAuthority({
+      run: {
+        config: execution.config,
+        agentId: execution.agentId,
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+        sessionFile: execution.sessionFile,
+        workspaceDir: execution.workspaceDir,
+        authProfileId: execution.authProfileId,
+        senderIsOwner: execution.senderIsOwner,
+        messageProvider: execution.messageProvider,
+        traceAuthorized: caller.traceAuthorized,
+        clientCaps: caller.clientCaps,
+        approvalReviewerDeviceId: caller.approvalReviewerDeviceId,
+        provider: fixture.generation.provider,
+        model: fixture.generation.modelId,
+      },
+    });
+    await fixture.withRuntime(profile, async (runtime, admission) => {
+      expect(runtime.nativeSessionRuntime?.auth).toBe("host");
+      expect(runtime.modelId).toBe("bound-native-model");
+      const operation = createReplyOperation({
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+        resetTriggered: false,
+      });
+      operation.bindToolAuthoritySnapshot(authority);
+      try {
+        await withPreparedEmbeddedRunToolAuthority(
+          {
+            admittedRunContext: await admission.admit("embedded", "ownership-test"),
+            replyOperation: operation,
+          },
+          {
+            ...execution,
+            provider: runtime.provider,
+            modelId: runtime.modelId,
+            toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+          },
+          undefined,
+          async (prepared) => {
+            const queueMessage = vi.fn(async () => {});
+            const handle = {
+              ...createEmbeddedRunHandle({
+                runId: execution.runId,
+                toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                queueMessage,
+              }),
+              kind: "embedded" as const,
+              cancel: () => {},
+            };
+            setActiveEmbeddedRun(
+              execution.sessionId,
+              handle,
+              execution.sessionKey,
+              execution.sessionFile,
+            );
+            operation.attachBackend(handle);
+            operation.setPhase("running");
+            try {
+              await expect(
+                queueEmbeddedAgentMessageWithOutcomeAsync(
+                  execution.sessionId,
+                  "Keep the current task",
+                  {
+                    isInboundUserMessage: true,
+                    toolAuthorityOverlay: caller,
+                  },
+                ),
+              ).resolves.toMatchObject({ queued: true });
+              await expect(
+                queueEmbeddedAgentMessageWithOutcomeAsync(
+                  execution.sessionId,
+                  "Use different permissions",
+                  {
+                    isInboundUserMessage: true,
+                    toolAuthorityOverlay: { ...caller, clientCaps: [] },
+                    toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                  },
+                ),
+              ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+              expect(queueMessage).toHaveBeenCalledOnce();
+              expect(prepared.toolAuthorityFingerprint).not.toBe(authority.fingerprint());
+            } finally {
+              clearActiveEmbeddedRun(execution.sessionId, handle, execution.sessionKey);
+            }
+          },
+        );
+      } finally {
+        operation.complete();
+      }
+    });
+  });
+
+  it("reads latest native lineage from the admitted store after a session rollover", async () => {
+    const fixture = await createFixture({}, ({ readPreviousSessionId }) =>
+      readPreviousSessionId?.() === "model-chat" ? { model: "native", auth: "native" } : undefined,
+    );
+    const target = {
+      ...fixture.target,
+      storePath: `${fixture.state.workspaceDir}/alternate/sessions.json`,
+    };
+    await replaceSessionEntry(target, fixture.entry);
+    await patchSessionEntryCore(target, () => ({ sessionId: "successor" }));
+    fixture.runParams.sessionId = "successor";
+    fixture.runParams.sessionTarget = { ...target, sessionId: "successor" };
+
+    const setup = await fixture.resolve();
+    expect(setup.nativeModelOwned).toBe(true);
+    await expect(setup.nativeSessionRuntime?.assertCurrent()).resolves.toBeUndefined();
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+
+    await patchSessionEntryCore(target, () => ({ previousSessionId: "different-predecessor" }));
+    await expect(setup.nativeSessionRuntime?.assertCurrent()).rejects.toThrow("ownership changed");
+  });
+
   it("does not replace a pinned session whose native ownership is unavailable", async () => {
     const fixture = await createFixture({}, () => undefined);
     await expect(fixture.resolve()).rejects.toMatchObject({
@@ -328,10 +483,12 @@ describe("model chat and native model ownership", () => {
     expect(fixture.runParams.streamParams).toEqual({ temperature: 0.5 });
   });
 
-  it("closes the host assertion after the ownership callback returns", async () => {
+  it("closes host assertions and lineage reads after the ownership callback returns", async () => {
     let retained: (() => void) | undefined;
-    const fixture = await createFixture({}, ({ assertCurrent }) => {
+    let retainedRead: (() => string | undefined) | undefined;
+    const fixture = await createFixture({}, ({ assertCurrent, readPreviousSessionId }) => {
       retained = assertCurrent;
+      retainedRead = readPreviousSessionId;
       return {
         model: "native",
         auth: "host",
@@ -341,6 +498,8 @@ describe("model chat and native model ownership", () => {
     await fixture.resolve();
     expect(retained).toBeTypeOf("function");
     expect(() => retained?.()).toThrow("ownership changed");
+    expect(retainedRead).toBeTypeOf("function");
+    expect(() => retainedRead?.()).toThrow("ownership changed");
   });
 
   it("uses the native owner fact and rejects a lost binding before dispatch", async () => {

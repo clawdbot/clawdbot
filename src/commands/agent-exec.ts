@@ -4,8 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
+import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
+import {
+  recordAgentCleanupFailure,
+  createAgentCleanupScope,
+} from "../agents/run-cleanup-timeout.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   EmbeddedStateLockHandle,
   EmbeddedStateSignalProcess,
@@ -34,9 +40,19 @@ const AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS = 600;
 type AgentExecCommandResult = {
   envelope: AgentExecEnvelope;
   exitCode: 0 | 1 | 2;
+  toolCalls: number;
 };
 
 type AgentExecCommandDeps = {
+  /** In-process callers already resolved this snapshot without serializing credentials. */
+  baseConfig?: OpenClawConfig;
+  agentId?: string;
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
+  maxToolCalls?: number;
+  /** Unlike the CLI collector's default [], an explicit [] disables configured fallbacks. */
+  modelFallbacksOverride?: string[];
+  isCurrent?: () => boolean;
   stdin?: AsyncIterable<unknown>;
   process?: EmbeddedStateSignalProcess;
   gatewayLockOptions?: GatewayLockOptions;
@@ -198,7 +214,21 @@ export async function agentExecCommand(
   deps: AgentExecCommandDeps = {},
 ): Promise<AgentExecCommandResult> {
   const sessionId = randomUUID();
+  const abortController = new AbortController();
+  const signal = deps.abortSignal
+    ? AbortSignal.any([abortController.signal, deps.abortSignal])
+    : abortController.signal;
+  const toolBudget = createAgentToolExecutionBudget({
+    maxToolCalls: deps.maxToolCalls,
+    signal,
+    abort: (reason) => abortController.abort(reason),
+    isCurrent: deps.isCurrent,
+  });
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let processScopeKey: string | undefined;
+  let cleanupProcessScope: (() => Promise<void>) | undefined;
   let commandResult: AgentExecCommandResult;
+  const runtimeCleanup = createAgentCleanupScope();
   let temporaryStateDir: string | undefined;
   let restoreEnvironment: (() => void) | undefined;
   let restoreConfigEnvironment: (() => void) | undefined;
@@ -213,6 +243,26 @@ export async function agentExecCommand(
       >
     | undefined;
   try {
+    signal.throwIfAborted();
+    if (
+      deps.maxToolCalls !== undefined &&
+      (!Number.isSafeInteger(deps.maxToolCalls) || deps.maxToolCalls < 0)
+    ) {
+      throw new Error("maxToolCalls must be a non-negative safe integer");
+    }
+    if (deps.timeoutMs !== undefined) {
+      if (!Number.isSafeInteger(deps.timeoutMs) || deps.timeoutMs <= 0) {
+        throw new Error("timeoutMs must be a positive safe integer");
+      }
+      timeoutTimer = setTimeout(
+        () =>
+          abortController.abort(
+            new DOMException("Agent execution deadline elapsed", "TimeoutError"),
+          ),
+        deps.timeoutMs,
+      );
+      timeoutTimer.unref();
+    }
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
     const prompt = await resolveAgentExecPrompt(
       positionalMessage,
@@ -248,7 +298,7 @@ export async function agentExecCommand(
     // restores them from its own catch.
     const { restoreEnvChangesIfUnchanged, snapshotEnv } = configIo;
     const envBeforeConfigLoad = snapshotEnv(process.env);
-    const baseConfig = await resolveExecBaseConfig(opts);
+    const baseConfig = deps.baseConfig ?? (await resolveExecBaseConfig(opts));
     const envAfterConfigLoad = snapshotEnv(process.env);
     restoreConfigEnvironment = () =>
       restoreEnvChangesIfUnchanged({
@@ -265,8 +315,10 @@ export async function agentExecCommand(
       ? await import("../plugins/install-root-context.js")
       : undefined;
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
-    const timeout = normalizeTimeoutSeconds(opts.timeout);
-    const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
+    const timeout = normalizeTimeoutSeconds(
+      deps.timeoutMs === undefined ? opts.timeout : String(Math.ceil(deps.timeoutMs / 1000)),
+    );
+    const fallbacks = normalizeFallbacks(opts.model, deps.modelFallbacksOverride ?? opts.fallback);
     const { resolveAgentDir, resolveAmbientOwnerAgentId } =
       await import("../agents/agent-scope-config.js");
     // Resolve from the inherited config, not `{}`: the default agent may declare
@@ -276,7 +328,7 @@ export async function agentExecCommand(
     // credential ownership must still follow the operator's configuration.
     // Computed before the environment repoints the state dir so the unconfigured
     // case still resolves against the real one.
-    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
+    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, deps.agentId, {
       surface: "agent exec",
       hint: "Set agents.defaults.systemAgent.agentId.",
     });
@@ -301,6 +353,17 @@ export async function agentExecCommand(
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
     runtimePaths = await import("../config/paths.js");
     const storedAuthStateDir = runtimePaths.resolveStateDir();
+    // Capture cleanup before a child can finish or lose its native owner.
+    processScopeKey =
+      deps.timeoutMs !== undefined || deps.maxToolCalls !== undefined
+        ? `agent:${execAgentId}:agent-exec:${sessionId}`
+        : undefined;
+    if (processScopeKey) {
+      const { getProcessSupervisor } = await import("../process/supervisor/index.js");
+      cleanupProcessScope = getProcessSupervisor().acquireScopeCleanup(processScopeKey, {
+        processTree: "required-all",
+      });
+    }
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths.pinRuntimePaths();
     if (opts.stateDir) {
@@ -349,11 +412,16 @@ export async function agentExecCommand(
       error: (...args) => runtime.error(...args),
       exit: (code, exitOpts) => runtime.exit(code, exitOpts),
     };
-    const invoke = async () =>
-      await runAgent(
+    const invoke = async () => {
+      signal.throwIfAborted();
+      if (deps.isCurrent?.() === false) {
+        throw new Error("Agent execution scope is no longer active");
+      }
+      return await runAgent(
         {
           message: prompt,
           sessionId,
+          ...(processScopeKey ? { sessionKey: processScopeKey } : {}),
           agentId: execAgentId,
           workspaceDir: cwd,
           cwd,
@@ -361,11 +429,14 @@ export async function agentExecCommand(
           codeModeOverride,
           thinking: opts.thinking,
           timeout,
-          modelFallbacksOverride: fallbacks.length > 0 ? fallbacks : undefined,
+          modelFallbacksOverride:
+            fallbacks.length > 0 || deps.modelFallbacksOverride !== undefined
+              ? fallbacks
+              : undefined,
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
-          abortSignal: signalBridge?.signal,
+          abortSignal: signalBridge ? AbortSignal.any([signal, signalBridge.signal]) : signal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;
           },
@@ -375,6 +446,7 @@ export async function agentExecCommand(
         },
         silentRuntime,
       );
+    };
     // Stored credentials are the default so a folder-scoped run reaches the
     // same logins as the rest of the CLI; `--auth-env-only` opts back into an
     // environment-only scope for automation.
@@ -390,10 +462,15 @@ export async function agentExecCommand(
             storedAuthStateDir,
             runWithPluginInstallRoots,
           );
-    const result = await withHostExecInheritedEnvOmitted(
-      listKnownProviderAuthEnvVarNames({ env: process.env }),
-      runWithAuthScope,
+    const result = await runtimeCleanup.run(() =>
+      toolBudget.run(() =>
+        withHostExecInheritedEnvOmitted(
+          listKnownProviderAuthEnvVarNames({ env: process.env }),
+          runWithAuthScope,
+        ),
+      ),
     );
+    signal.throwIfAborted();
     if (!result) {
       throw new Error("Agent run returned no result");
     }
@@ -401,17 +478,41 @@ export async function agentExecCommand(
     if (!envelope.sessionId) {
       envelope.sessionId = sessionId;
     }
-    commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+    commandResult = {
+      envelope,
+      exitCode: exitCodeForEnvelope(envelope),
+      toolCalls: toolBudget.toolCalls,
+    };
   } catch (error) {
     const envelope = errorEnvelope(error, sessionId);
-    commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+    commandResult = {
+      envelope,
+      exitCode: exitCodeForEnvelope(envelope),
+      toolCalls: toolBudget.toolCalls,
+    };
   }
 
-  let cleanupError: unknown;
+  let cleanupError: unknown =
+    runtimeCleanup.outcome === "uncertain"
+      ? new Error(
+          "Agent runtime cleanup did not settle; state ownership retained until this process exits",
+        )
+      : undefined;
+  clearTimeout(timeoutTimer);
+  if (cleanupProcessScope) {
+    abortController.abort(new Error("Agent execution completed"));
+    try {
+      await cleanupProcessScope();
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
   await stopLocalAuditWriter?.().catch(() => undefined);
-  await stateLock?.release().catch((error: unknown) => {
-    cleanupError ??= error;
-  });
+  if (!cleanupError) {
+    await stateLock?.release().catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
   const runCleanupStep = (step: () => void) => {
     try {
       step();
@@ -428,7 +529,7 @@ export async function agentExecCommand(
       : configIo?.clearRuntimeConfigSnapshot(),
   );
   runCleanupStep(() => runtimePaths?.pinRuntimePaths());
-  if (temporaryStateDir) {
+  if (temporaryStateDir && !cleanupError) {
     try {
       await fs.rm(temporaryStateDir, { recursive: true, force: true });
     } catch (error) {
@@ -436,12 +537,17 @@ export async function agentExecCommand(
     }
   }
   if (cleanupError) {
+    recordAgentCleanupFailure();
     const cleanupFailure = new Error(
       `Agent exec cleanup failed: ${formatErrorMessage(cleanupError)}`,
     );
     if (commandResult.envelope.ok) {
       const envelope = errorEnvelope(cleanupFailure, sessionId);
-      commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+      commandResult = {
+        envelope,
+        exitCode: exitCodeForEnvelope(envelope),
+        toolCalls: toolBudget.toolCalls,
+      };
     } else {
       runtime.error(cleanupFailure.message);
     }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { captureIngressProcessingCommitFence } from "../../channels/message/ingress-processing-handoff.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoverySourceClaim,
@@ -11,11 +12,17 @@ import {
   patchSessionEntryCore,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
+import {
+  buildRestartRecoveryExpectedState,
+  sessionMatchesExpectedTranscriptTurn,
+} from "../../config/sessions/session-transcript-turn-state.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptWriterFence,
+  runWithOwnedSessionTranscriptWrite,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
@@ -90,27 +97,6 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
   return didRetire ? (retired ?? undefined) : undefined;
 }
 
-function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
-  return {
-    abortedLastRun: entry.abortedLastRun,
-    mainRestartRecoveryCycleId: entry.mainRestartRecovery?.cycleId,
-    mainRestartRecoveryRevision: entry.mainRestartRecovery?.revision,
-    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
-    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
-    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
-    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
-    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
-    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-    status: entry.status,
-  };
-}
-
 export function createReplyRestartRecoveryClaimController(params: {
   admissionRunId?: unknown;
   lifecycleGeneration: string | undefined;
@@ -137,6 +123,39 @@ export function createReplyRestartRecoveryClaimController(params: {
   let recoverySourceRunId: string | undefined;
   let tracked = false;
 
+  const persistApprovedUserTurn = async (
+    recorder: UserTurnTranscriptRecorder,
+    target: UserTurnTranscriptTarget | undefined,
+    options: Omit<
+      NonNullable<Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0]>,
+      "target"
+    > = {},
+  ) => {
+    const persist = () => recorder.persistApproved({ ...options, target });
+    const assertProcessingCurrent = captureIngressProcessingCommitFence();
+    if (!assertProcessingCurrent || !target) {
+      return await persist();
+    }
+    const assertPreviousOwner = captureOwnedTranscriptWriteAssertion(target);
+    const sessionTarget = {
+      ...target,
+      ...getOwnedSessionTranscriptWriterFence({ sessionTarget: target }),
+    };
+    return await runWithOwnedSessionTranscriptWrite({ sessionTarget: target }, () =>
+      withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget,
+          assertCommitAllowed: () => {
+            assertPreviousOwner();
+            assertProcessingCurrent();
+          },
+          withTranscriptWrite: async (run) => await run(),
+        },
+        persist,
+      ),
+    );
+  };
+
   const persistAdmissionPatch = async (options: {
     entry: SessionEntry;
     patch: SessionTranscriptTurnLifecyclePatch;
@@ -145,19 +164,23 @@ export function createReplyRestartRecoveryClaimController(params: {
     sessionKey: string;
     storePath: string;
   }): Promise<SessionEntry> => {
-    const expectedSessionState = buildExpectedSessionState(options.entry);
-    if (options.recorder && !options.recorder.hasPersisted()) {
-      const result = await options.recorder.persistApproved({
-        target: params.resolveUserTurnTarget?.({
-          entry: options.entry,
-          sessionId: options.sessionId,
-          sessionKey: options.sessionKey,
-          storePath: options.storePath,
-        }),
+    const assertProcessingCurrent = captureIngressProcessingCommitFence();
+    assertProcessingCurrent?.();
+    const expectedSessionState = buildRestartRecoveryExpectedState(options.entry);
+    const recorder = options.recorder;
+    if (recorder && !recorder.hasPersisted()) {
+      const target = params.resolveUserTurnTarget?.({
+        entry: options.entry,
+        sessionId: options.sessionId,
+        sessionKey: options.sessionKey,
+        storePath: options.storePath,
+      });
+      const result = await persistApprovedUserTurn(recorder, target, {
         expectedSessionId: options.sessionId,
         expectedSessionState,
         sessionLifecyclePatch: options.patch,
       });
+      assertProcessingCurrent?.();
       if (!result?.sessionEntry) {
         throw new Error("session changed before durable user-turn admission");
       }
@@ -165,14 +188,17 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
     const persisted = await updateSessionEntry(
       { storePath: options.storePath, sessionKey: options.sessionKey },
-      (current) =>
-        sessionMatchesExpectedTranscriptTurn(
+      (current) => {
+        assertProcessingCurrent?.();
+        return sessionMatchesExpectedTranscriptTurn(
           { entry: current },
           { expectedSessionId: options.sessionId, expectedSessionState },
         )
           ? options.patch
-          : null,
+          : null;
+      },
     );
+    assertProcessingCurrent?.();
     if (!persisted) {
       throw new Error("restart recovery claim changed before agent adoption");
     }
@@ -196,7 +222,9 @@ export function createReplyRestartRecoveryClaimController(params: {
             storePath: params.storePath,
           })
         : undefined;
-    const result = await recorder.persistApproved({ target, expectedSessionId: sessionId });
+    const result = await persistApprovedUserTurn(recorder, target, {
+      expectedSessionId: sessionId,
+    });
     if (!result) {
       throw new Error("session changed before durable user-turn admission");
     }
@@ -206,6 +234,8 @@ export function createReplyRestartRecoveryClaimController(params: {
   };
 
   const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (recorder) => {
+    const assertProcessingCurrent = captureIngressProcessingCommitFence();
+    assertProcessingCurrent?.();
     if (!params.sessionKey || !params.storePath) {
       await recorder?.persistApproved();
       return "admitted";
@@ -282,6 +312,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       deliveryContext && sourceTurnId ? deliveryContext : undefined;
     if (recoverableDeliveryContext) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
+      assertProcessingCurrent?.();
       const persistedSourceTurnId = normalizeOptionalString(
         (sourceMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
       );

@@ -830,6 +830,26 @@ describe("config schema", () => {
     ).toBe("string");
   });
 
+  it("refreshes sensitive hints when only a plugin's SecretInput paths change", () => {
+    const plugin = {
+      id: "secret-path-cache",
+      configSchema: { type: "object", additionalProperties: true },
+    };
+    const build = (path: string) =>
+      buildConfigSchemaCore({ plugins: [{ ...plugin, configSecretInputPaths: [path] }] });
+    const first = build("routes.*.credential");
+    const second = build("routes.*.replacement");
+    expect(
+      first.uiHints["plugins.entries.secret-path-cache.config.routes.*.credential"]?.sensitive,
+    ).toBe(true);
+    expect(
+      second.uiHints["plugins.entries.secret-path-cache.config.routes.*.replacement"]?.sensitive,
+    ).toBe(true);
+    expect(
+      second.uiHints["plugins.entries.secret-path-cache.config.routes.*.credential"],
+    ).toBeUndefined();
+  });
+
   it("derives tags for security, network, storage, tools, and performance paths", () => {
     const tagged = applyDerivedTags({
       "gateway.auth.token": {},
@@ -1031,33 +1051,42 @@ describe("config schema", () => {
     expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
   });
 
-  it("rejects mixed normalized and legacy exec policy config", () => {
-    expect(
-      ToolsSchema.safeParse({
-        exec: {
-          mode: "auto",
-          ask: "always",
-        },
-      }).success,
-    ).toBe(false);
-
-    expect(
-      OpenClawSchema.safeParse({
-        agents: {
-          list: [
-            {
-              id: "main",
-              tools: {
-                exec: {
-                  mode: "full",
-                  security: "deny",
-                },
-              },
-            },
-          ],
-        },
-      }).success,
-    ).toBe(false);
+  it.each([
+    { policy: { security: "full", ask: "off" }, hint: 'Replace security/ask with mode="full"' },
+    {
+      policy: { security: "allowlist", ask: "on-miss" },
+      hint: 'Replace security/ask with mode="ask"',
+    },
+    { policy: { security: "full", ask: "on-miss" }, hint: "no exact mode equivalent" },
+    { policy: { security: "allowlist", ask: "always" }, hint: "no exact mode equivalent" },
+    { policy: { security: "deny" }, hint: "legacy policy is incomplete" },
+    { policy: { ask: "off" }, hint: "legacy policy is incomplete" },
+  ])("rejects mixed exec policy with accurate repair guidance: $policy", ({ policy, hint }) => {
+    for (const scope of ["root", "agent"]) {
+      const exec = { mode: "auto", ...policy };
+      const result = OpenClawSchema.safeParse(
+        scope === "root"
+          ? { tools: { exec } }
+          : { agents: { entries: { worker: { tools: { exec } } } } },
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toEqual([
+        expect.objectContaining({
+          path:
+            scope === "root"
+              ? ["tools", "exec", "mode"]
+              : ["agents", "entries", "worker", "tools", "exec", "mode"],
+          message: expect.stringContaining(hint),
+        }),
+      ]);
+      const message = result.error?.issues[0]?.message;
+      expect(message).toContain("same exec object");
+      expect(message).toContain("deploy script, template, or patch at this scope");
+      expect(message).toContain('run "openclaw doctor --fix"');
+      if (!hint.startsWith("Replace")) {
+        expect(message).not.toContain("the equivalent of");
+      }
+    }
   });
 
   it("accepts the update_plan tool switch in the runtime zod schema", () => {
@@ -1180,6 +1209,13 @@ describe("config schema", () => {
     expect(ToolsSchema.safeParse({ codeMode: "on" }).success).toBe(false);
     expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
   });
+
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves authored Swarm config %j without materializing defaults",
+    (swarm) => {
+      expect(ToolsSchema.parse(swarm === undefined ? {} : { swarm })?.swarm).toEqual(swarm);
+    },
+  );
 
   it("accepts strict Swarm config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);

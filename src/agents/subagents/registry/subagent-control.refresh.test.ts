@@ -280,9 +280,11 @@ it.each([
       admissionA.release();
       if (phase === "later sibling drain") {
         await healthyEntered.promise;
-        expect(a.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-        expect(d.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-        expect(findTaskByRunId("g")?.status).toBe("cancelled");
+        await vi.waitFor(() => {
+          expect(a.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+          expect(d.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+          expect(findTaskByRunId("g")?.status).toBe("cancelled");
+        });
         expect(startG).not.toHaveBeenCalled();
         armed = true;
         admissionHealthy.release();

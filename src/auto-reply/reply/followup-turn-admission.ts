@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { markIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
+import { withIngressProcessingScope } from "../../channels/message/ingress-processing-handoff.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -42,6 +43,7 @@ import {
 import type { TypingController } from "./typing.js";
 
 export type FollowupRunnerParams = {
+  resolveGatewayContext?: GatewayContextResolver;
   opts?: InternalGetReplyOptions;
   typing: TypingController;
   typingMode: TypingMode;
@@ -119,6 +121,14 @@ export async function admitFollowupTurn(params: {
   defaults: FollowupRunnerParams;
   onCompactionNoticePayload?: (payload: ReplyPayload, turn: AdmittedFollowupTurn) => Promise<void>;
 }): Promise<FollowupAdmissionResult> {
+  return await withIngressProcessingScope(params.queued.turnAdoptionLifecycle?.abortSignal, () =>
+    admitFollowupTurnWithIngress(params),
+  );
+}
+
+async function admitFollowupTurnWithIngress(
+  params: Parameters<typeof admitFollowupTurn>[0],
+): Promise<FollowupAdmissionResult> {
   const resolvedConfig = await resolveQueuedReplyExecutionConfig(params.queued.run.config, {
     originatingChannel: params.queued.originatingChannel,
     messageProvider: params.queued.run.messageProvider,
@@ -142,6 +152,7 @@ export async function admitFollowupTurn(params: {
       storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
+    resolveGatewayContext: params.defaults.resolveGatewayContext,
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
     expectedSessionId: initialEntry?.sessionId,
@@ -377,7 +388,6 @@ export async function admitFollowupTurn(params: {
         : undefined;
     const preflightEntry = session.current();
     try {
-      markIngressBoundedProcessingStarted(turn.queued.turnAdoptionLifecycle?.abortSignal);
       activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
@@ -447,7 +457,10 @@ export async function admitFollowupTurn(params: {
         throw error;
       }
       operation.fail("run_failed", error);
-      const admittedVerboseLevel = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
+      const admittedVerboseLevel =
+        turn.queued.run.verboseLevelOverride ??
+        session.current()?.verboseLevel ??
+        turn.queued.run.verboseLevel;
       const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
         includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
       });

@@ -118,17 +118,9 @@ describe("system-presence", () => {
 
     expect(update.key).toBe("mixed-case-node");
     expect(update.changedKeys).toEqual(["host", "ip", "version", "mode", "reason"]);
-    expect(update).toEqual({
+    expect({ key: update.key, changedKeys: update.changedKeys, next: update.next }).toEqual({
       key: "mixed-case-node",
-      previous: undefined,
       changedKeys: ["host", "ip", "version", "mode", "reason"],
-      changes: {
-        host: "Relay-Host",
-        ip: "10.0.0.9",
-        version: "2.1.0",
-        mode: "ui",
-        reason: "beacon",
-      },
       next: {
         instanceId: "  Mixed-Case-Node  ",
         lastInputSeconds: 7,
@@ -141,6 +133,24 @@ describe("system-presence", () => {
         reason: "beacon",
       },
     });
+
+    const refreshed = updateSystemPresence({
+      text: update.next.text,
+      instanceId: "mixed-case-node",
+      lastInputSeconds: 11,
+    });
+    expect(refreshed.changedKeys).toEqual([]);
+    expect(refreshed.next.lastInputSeconds).toBe(11);
+    expect(update.next.lastInputSeconds).toBe(7);
+
+    const moved = updateSystemPresence({
+      text: update.next.text,
+      instanceId: "mixed-case-node",
+      ip: "10.0.0.10",
+    });
+    expect(moved.changedKeys).toEqual(["ip"]);
+    expect(moved.next.ip).toBe("10.0.0.10");
+    expect(refreshed.next.ip).toBe("10.0.0.9");
   });
 
   it("drops blank role and scope entries while keeping fallback text", () => {

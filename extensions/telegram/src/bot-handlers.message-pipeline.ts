@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -413,6 +414,16 @@ export function createTelegramMessagePipeline({
       ...explicitParticipants,
       ...(frameParticipant ? [frameParticipant] : []),
     ];
+    const ingressLifecycle = fanInChannelIngressLifecycles(
+      ingressSpooledReplayParticipants.map(({ ingressLifecycle: lifecycle }) =>
+        lifecycle
+          ? {
+              ...lifecycle,
+              onAdoptionFinalizing: () => lifecycle.onAdoptionFinalizing?.(),
+            }
+          : undefined,
+      ),
+    ).lifecycle;
     const processingParticipant =
       explicitParticipants.length > 0
         ? createTelegramSpooledReplayParticipant(
@@ -593,6 +604,7 @@ export function createTelegramMessagePipeline({
           },
           spooledReplayAbortSignal: params.spooledReplayAbortSignal,
           spooledReplayParticipant: processingParticipant,
+          spooledReplayIngressLifecycle: ingressLifecycle,
           finalizeSpooledReplayResult: async (processingResult) =>
             await finalizeSpooledReplayResult(processingResult),
           completeSpooledReplayAfterIrrevocableAdoption: async () => {

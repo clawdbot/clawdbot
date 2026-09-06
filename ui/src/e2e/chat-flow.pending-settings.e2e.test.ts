@@ -10,16 +10,14 @@ import {
   requireRecord,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
   it("keeps send pending until reasoning and speed patches finish", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -80,12 +78,12 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      const sessionListCount = (await gateway.getRequests("sessions.list")).length;
+      const sessionListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.resolveDeferred("sessions.patch", {});
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params).fastMode).toBe(true);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListCount);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -99,9 +97,7 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
-});
 
-suite.define(() => {
   it("dispatches after its settings refresh while a later roster refresh is still pending", async () => {
     const context = await suite.newBrowserContext({
       ...(captureUiProofEnabled
@@ -120,20 +116,20 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
-      const listsBefore = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
-      await gateway.deferNext("sessions.list");
+      const listsBefore = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
+      await gateway.deferNext("sessions.list", rosterMatch);
       await main.locator('[data-chat-speed-toggle="on"]').click();
       await gateway.waitForRequest("sessions.patch");
-      await waitForRequests(gateway, "sessions.list", listsBefore + 1);
+      await waitForRequests(gateway, "sessions.list", listsBefore + 1, rosterMatch);
       await page.keyboard.press("Escape");
       await page.locator(".agent-chat__composer-combobox textarea").fill("send after my settings");
       await page.getByRole("button", { name: "Send message" }).click();
       await page.locator(".chat-queue").getByText("Applying chat settings").waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await gateway.resolveDeferred("sessions.list");
-      await waitForRequests(gateway, "sessions.list", listsBefore + 2);
-      await gateway.deferNext("sessions.list");
+      await waitForRequests(gateway, "sessions.list", listsBefore + 2, rosterMatch);
+      await gateway.deferNext("sessions.list", rosterMatch);
       await page.evaluate(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime: {
@@ -147,7 +143,7 @@ suite.define(() => {
         void app.runtime.context.sessions.refresh({ force: true, backgroundHydrate: true });
       });
       await gateway.resolveDeferred("sessions.list");
-      await waitForRequests(gateway, "sessions.list", listsBefore + 3);
+      await waitForRequests(gateway, "sessions.list", listsBefore + 3, rosterMatch);
       const request = await gateway.waitForRequest("chat.send");
       expect(requireRecord(request.params).message).toBe("send after my settings");
       await gateway.emitChatFinal({

@@ -1,11 +1,16 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
-import { markIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
+import {
+  awaitIngressProcessing,
+  finishIngressProcessing,
+  withIngressProcessingScope,
+} from "../../channels/message/ingress-processing-handoff.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -32,8 +37,7 @@ import {
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
-import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
@@ -114,6 +118,14 @@ function markPostCompactionFailureResult(
 export async function executePreparedReplyAgentRun(
   context: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  return await withIngressProcessingScope(context.turnAdoptionLifecycle?.abortSignal, () =>
+    executePreparedReplyAgentRunWithIngress(context),
+  );
+}
+
+async function executePreparedReplyAgentRunWithIngress(
+  context: ExecutePreparedReplyAgentRunInput,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     activeSessionStore,
     admitUserTurn: admitUserTurnWithRecovery,
@@ -187,7 +199,6 @@ export async function executePreparedReplyAgentRun(
   };
 
   await typingSignals.signalRunStart();
-  markIngressBoundedProcessingStarted(turnAdoptionLifecycle?.abortSignal);
 
   // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
   // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
@@ -251,6 +262,7 @@ export async function executePreparedReplyAgentRun(
   }
 
   const runFollowupTurn = createFollowupRunner({
+    resolveGatewayContext: getGatewayContextResolver(replyOperation),
     opts,
     typing,
     typingMode,
@@ -265,14 +277,17 @@ export async function executePreparedReplyAgentRun(
 
   replyOperation.setPhase("running");
   const runStartedAt = Date.now();
-  const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+  const userTurnAdmission = await awaitIngressProcessing(() =>
+    admitUserTurn(followupRun.userTurnTranscriptRecorder),
+  );
   if (userTurnAdmission === "duplicate-source") {
     return returnWithQueuedFollowupDrain(undefined);
   }
   // Adoption marks run start and must never be spool-replayed (would re-run tools).
   // Suppressed delivery persists only the user transcript; crashed suppressed runs die
   // silently. Deliverable turns atomically persist transcript plus recovery ownership.
-  await turnAdoptionLifecycle?.onAdopted();
+  await awaitIngressProcessing(async () => await turnAdoptionLifecycle?.onAdopted());
+  finishIngressProcessing();
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {
@@ -384,15 +399,9 @@ export async function executePreparedReplyAgentRun(
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(
-    resolveReplyOperationRunState(opts),
-    operationSuperseded
-      ? "superseded"
-      : runOutcome.outcome.kind === "rejected"
-        ? "failed"
-        : runOutcome.outcome.kind === "aborted"
-          ? "cancelled"
-          : runOutcome.outcome.status,
+    followupRun.replyOperationRunStates,
     replyOperation,
+    runOutcome.outcome,
   );
   activeSessionEntry = getActiveSessionEntry();
   const activeIsNewSession = getActiveIsNewSession();

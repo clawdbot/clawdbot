@@ -11,11 +11,56 @@ const modifiedAt = new Date("2024-01-01T00:00:00.000Z");
 const lastModified = modifiedAt.toUTCString();
 const laterModifiedSince = new Date("2024-01-02T00:00:00.000Z").toUTCString();
 const earlierModifiedSince = new Date("2023-12-31T00:00:00.000Z").toUTCString();
+const beforeLeapSecondAsset = {
+  filename: "leap-before.js",
+  modifiedAt: new Date("2016-12-31T23:59:59.000Z"),
+  body: Buffer.from('console.log("before leap second");\n'),
+};
+const afterLeapSecondAsset = {
+  filename: "leap-after.js",
+  modifiedAt: new Date("2017-01-01T00:00:00.000Z"),
+  body: Buffer.from('console.log("after leap second");\n'),
+};
+const leapSecondDates = [
+  { name: "IMF-fixdate", value: "Sat, 31 Dec 2016 23:59:60 GMT" },
+  { name: "RFC 850", value: "Saturday, 31-Dec-16 23:59:60 GMT" },
+  { name: "asctime", value: "Sat Dec 31 23:59:60 2016" },
+];
 const conditionalCases: {
   name: string;
-  headers: Record<string, string>;
+  headers: Record<string, string | string[]>;
   status: 200 | 304;
 }[] = [
+  {
+    name: "HTTP-date RFC850 matching instant",
+    headers: { "If-Modified-Since": "Monday, 01-Jan-24 00:00:00 GMT" },
+    status: 304,
+  },
+  {
+    name: "HTTP-date asctime older UTC instant",
+    headers: { "If-Modified-Since": "Sun Dec 31 20:00:00 2023" },
+    status: 200,
+  },
+  {
+    name: "HTTP-date asctime matching UTC instant",
+    headers: { "If-Modified-Since": "Mon Jan  1 00:00:00 2024" },
+    status: 304,
+  },
+  {
+    name: "HTTP-date rejects ISO timestamp",
+    headers: { "If-Modified-Since": "2024-01-02T00:00:00.000Z" },
+    status: 200,
+  },
+  {
+    name: "HTTP-date rejects duplicate fields with later date first",
+    headers: { "If-Modified-Since": [laterModifiedSince, earlierModifiedSince] },
+    status: 200,
+  },
+  {
+    name: "HTTP-date rejects duplicate fields with earlier date first",
+    headers: { "If-Modified-Since": [earlierModifiedSince, laterModifiedSince] },
+    status: 200,
+  },
   { name: "unconditional request", headers: {}, status: 200 },
   {
     name: "equal If-Modified-Since",
@@ -69,7 +114,7 @@ const conditionalCases: {
 function requestAsset(
   url: string,
   method: "GET" | "HEAD",
-  headers: Record<string, string>,
+  headers: Record<string, string | string[]>,
 ): Promise<{ response: IncomingMessage; body: Buffer }> {
   // Node HTTP preserves an explicitly empty If-None-Match on the wire.
   return new Promise((resolve, reject) => {
@@ -101,6 +146,11 @@ describe.each([
     await fs.writeFile(assetPath, assetBody);
     await fs.writeFile(`${assetPath}.gz`, gzipSync(assetBody));
     await fs.utimes(assetPath, modifiedAt, modifiedAt);
+    for (const asset of [beforeLeapSecondAsset, afterLeapSecondAsset]) {
+      const target = path.join(root, "assets", asset.filename);
+      await fs.writeFile(target, asset.body);
+      await fs.utimes(target, asset.modifiedAt, asset.modifiedAt);
+    }
     for (const publicAsset of [
       "themes/absolutely.css",
       "fonts/test.css",
@@ -123,6 +173,10 @@ describe.each([
       `<html data-openclaw-control-ui-build-id="source-build"><head><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
     );
     server = createServer((req, res) => {
+      res.setHeader(
+        "X-Test-If-Modified-Since-Count",
+        String(req.headersDistinct["if-modified-since"]?.length ?? 0),
+      );
       void handleControlUiHttpRequest(req, res, {
         basePath,
         config: {},
@@ -223,7 +277,10 @@ describe.each([
     it.each(conditionalCases)("$name", async ({ headers, status }) => {
       const { response, body } = await requestAsset(assetUrl, method, headers);
 
-      expect(response.statusCode).toBe(status);
+      if (Array.isArray(headers["If-Modified-Since"])) {
+        expect(response.headers["x-test-if-modified-since-count"]).toBe("2");
+      }
+      expect(response.statusCode, `TZ=${process.env.TZ ?? "system"}`).toBe(status);
       expect(response.headers["last-modified"]).toBe(lastModified);
       expect(response.headers["cache-control"]).toBe(cacheControl);
       expect(response.headers.vary).toBe("Accept-Encoding");
@@ -232,6 +289,36 @@ describe.each([
         status === 304 ? undefined : String(assetBody.length),
       );
       expect(body).toEqual(status === 200 && method === "GET" ? assetBody : Buffer.alloc(0));
+    });
+
+    it.each([
+      ...leapSecondDates.flatMap(({ name, value }) => [
+        { name: `${name} before midnight`, value, asset: afterLeapSecondAsset, status: 200 },
+        {
+          name: `${name} after the prior second`,
+          value,
+          asset: beforeLeapSecondAsset,
+          status: 304,
+        },
+      ]),
+      {
+        name: "the following midnight equality",
+        value: "Sun, 01 Jan 2017 00:00:00 GMT",
+        asset: afterLeapSecondAsset,
+        status: 304,
+      },
+    ])("preserves leap second ordering for $name", async ({ value, asset, status }) => {
+      const { response, body } = await requestAsset(`${baseUrl}/assets/${asset.filename}`, method, {
+        "If-Modified-Since": value,
+      });
+
+      expect(response.statusCode).toBe(status);
+      expect(response.headers["last-modified"]).toBe(asset.modifiedAt.toUTCString());
+      expect(response.headers["cache-control"]).toBe(cacheControl);
+      expect(response.headers["content-length"]).toBe(
+        status === 304 ? undefined : String(asset.body.length),
+      );
+      expect(body).toEqual(status === 200 && method === "GET" ? asset.body : Buffer.alloc(0));
     });
 
     it.each<Record<string, string>>([

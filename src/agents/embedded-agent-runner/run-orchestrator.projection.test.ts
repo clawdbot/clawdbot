@@ -241,7 +241,9 @@ describe("embedded retry transcript ownership", () => {
         .mockImplementationOnce(async (attempt) => {
           secondAttempt.resolve();
           expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
-          expect(attempt.prompt).toContain("Continue from the current transcript");
+          expect(attempt.prompt).toContain(
+            "Continue the current task from the existing transcript",
+          );
           expect(attempt.suppressNextUserMessagePersistence).toBe(true);
           expect(attempt.skipPreparedUserTurnMessage).toBe(true);
           if (callerOwned) {

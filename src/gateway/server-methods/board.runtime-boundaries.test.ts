@@ -33,6 +33,7 @@ import {
 } from "../methods/registry.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createBoardHarness as createHarness } from "./board.test-support.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -133,7 +134,7 @@ describe("board gateway runtime boundaries", () => {
     );
     const events: string[] = [];
     const connected = createDeferred();
-    const gatewayClients = new Set<GatewayWsClient>();
+    const gatewayClients = new GatewayClientRegistry();
     const { broadcast } = createGatewayBroadcaster({ clients: gatewayClients });
     const gatewayContext = {
       broadcast,

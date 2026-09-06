@@ -1,6 +1,7 @@
 /** Writes, restores, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   createPluginInstallRecordMap,
   inspectPluginInstallRecordMap,
@@ -10,6 +11,8 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../infra/home-dir.js";
+import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -25,15 +28,13 @@ import {
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 import { findForeignManagedNpmInstallRecordPluginIds } from "./installed-plugin-index-record-reader.js";
+import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "./installed-plugin-index-row.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
-  INSTALLED_PLUGIN_INDEX_STATE_KEY,
-  parseInstalledPluginIndexSqliteRow,
-  readInstalledPluginIndexRow,
+  parseInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
-  type PersistedInstalledPluginIndexValue,
 } from "./installed-plugin-index-store.js";
 import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
@@ -58,6 +59,39 @@ export type InstalledPluginIndexWriteReceipt = {
   previous: InstalledPluginIndex | null;
   revision: number;
 };
+
+type InstalledPluginIndexDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
+type PersistedInstalledPluginIndexValue = { revision: number; index: unknown };
+
+function readInstalledPluginIndexRow(
+  database: DatabaseSync,
+): PersistedInstalledPluginIndexValue | undefined {
+  const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+    getNodeSqliteKysely<InstalledPluginIndexDatabase>(database)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+  );
+  // sqlite-allow-raw: Compiled SQL keeps the transaction's native point-read errors.
+  // SAFETY: The compiled query selects the canonical STRICT table's TEXT column.
+  const row = database.prepare(compiled.sql).get(...bind()) as
+    | Pick<InstalledPluginIndexDatabase["config_machine_state"], "value_json">
+    | undefined;
+  if (!row) {
+    return undefined;
+  }
+  const value = safeParseJson(row.value_json);
+  if (
+    !value ||
+    typeof value !== "object" ||
+    // SAFETY: shape-checked field probe; the full value is validated below.
+    typeof (value as PersistedInstalledPluginIndexValue).revision !== "number"
+  ) {
+    return undefined;
+  }
+  // SAFETY: revision checked above; index stays unknown until parseInstalledPluginIndex.
+  return value as PersistedInstalledPluginIndexValue;
+}
 
 function assertWritableInstalledPluginIndexStoreOptions(
   options: InstalledPluginIndexStoreOptions,
@@ -124,17 +158,23 @@ function writePersistedInstalledPluginIndexRow(
     revision,
     index: persistedIndex,
   } satisfies PersistedInstalledPluginIndexValue);
-  database
-    .prepare(
-      `
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES (?, ?, ?)
-        ON CONFLICT(state_key) DO UPDATE SET
-          value_json = excluded.value_json,
-          updated_at_ms = excluded.updated_at_ms
-      `,
-    )
-    .run(INSTALLED_PLUGIN_INDEX_STATE_KEY, valueJson, revision);
+  const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+    getNodeSqliteKysely<InstalledPluginIndexDatabase>(database)
+      .insertInto("config_machine_state")
+      .values({
+        state_key: INSTALLED_PLUGIN_INDEX_STATE_KEY,
+        value_json: valueJson,
+        updated_at_ms: revision,
+      })
+      .onConflict((conflict) =>
+        conflict.column("state_key").doUpdateSet((eb) => ({
+          value_json: eb.ref("excluded.value_json"),
+          updated_at_ms: eb.ref("excluded.updated_at_ms"),
+        })),
+      ),
+  );
+  // sqlite-allow-raw: Serialization precedes native prepare; the caller owns rollback.
+  database.prepare(compiled.sql).run(...bind());
 }
 
 function writePersistedInstalledPluginIndexToSqlite(
@@ -165,7 +205,7 @@ function writePersistedInstalledPluginIndexToSqlite(
     );
     writePersistedInstalledPluginIndexRow(db, persisted, revision);
     return {
-      previous: parseInstalledPluginIndexSqliteRow(previousRow),
+      previous: previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
       revision,
     };
   }, resolveInstalledPluginIndexStateDatabaseOptions(options));
@@ -213,9 +253,13 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
         resolveNextInstalledPluginIndexRevision(currentRevision),
       );
     } else {
-      db.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run(
-        INSTALLED_PLUGIN_INDEX_STATE_KEY,
+      const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+        getNodeSqliteKysely<InstalledPluginIndexDatabase>(db)
+          .deleteFrom("config_machine_state")
+          .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
       );
+      // sqlite-allow-raw: Compiled SQL preserves native deletion in the leased transaction.
+      db.prepare(compiled.sql).run(...bind());
     }
     return true;
   }, resolveInstalledPluginIndexStateDatabaseOptions(storeOptions));
