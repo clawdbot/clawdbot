@@ -192,7 +192,7 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
-/** Compatibility chunks kept for live gateways loading old CLI exit modules. */
+/** Compatibility chunks for old updater and CLI exit modules after package replacement. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   // v2026.8.2, the exact d413210 build, and v2026.9.1 load these after replacing dist/.
   // Remove only after the source artifacts fall outside the supported upgrade window.
