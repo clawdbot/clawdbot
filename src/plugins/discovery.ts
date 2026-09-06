@@ -1281,12 +1281,16 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
   };
 }
 
-function discoveryPolicy(env: NodeJS.ProcessEnv, ownershipUid: number | null | undefined) {
+function discoveryPolicy(
+  env: NodeJS.ProcessEnv,
+  ownershipUid: number | null | undefined,
+  bundledRoot?: string,
+) {
   return {
     ownershipUid: currentUid(ownershipUid),
     compatibilityHostVersion: resolveCompatibilityHostVersion(env),
     // Configured-path classification depends on the host's bundled tree.
-    bundledRoot: resolveBundledPluginsDir(env) ?? "",
+    bundledRoot: bundledRoot ?? resolveBundledPluginsDir(env) ?? "",
     nix: resolveIsNixMode(env),
     sourceOverlaysDisabled: env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS ?? "",
     home: env.OPENCLAW_HOME ?? "",
@@ -1331,11 +1335,15 @@ export function discoverOpenClawPlugins(params: {
   ownershipUid?: number | null;
   env?: NodeJS.ProcessEnv;
   rootScope?: PluginDiscoveryRootScope;
+  bundledRoot?: string;
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
-  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const defaultRoots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const roots = params.bundledRoot
+    ? { ...defaultRoots, stock: path.resolve(params.bundledRoot) }
+    : defaultRoots;
   const cache = getPluginCache().metadata.discovery;
   const key = hashStableJson({
     phase: "all",
@@ -1345,7 +1353,7 @@ export function discoverOpenClawPlugins(params: {
     // Install order determines which physical alias is retained during discovery.
     installRecords: Object.entries(params.installRecords ?? {}),
     rootScope: params.rootScope ?? "all",
-    policy: discoveryPolicy(env, params.ownershipUid),
+    policy: discoveryPolicy(env, params.ownershipUid, roots.stock),
   });
   const cached = cache.get(key);
   if (cached) {

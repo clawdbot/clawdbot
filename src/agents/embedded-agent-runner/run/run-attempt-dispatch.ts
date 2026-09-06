@@ -630,12 +630,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     beforeAgentFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+    assistantErrorTranscript: params.assistantErrorTranscript,
     onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: () => {
       sessionPromptState.activePrompt.persisted = false;
     },
-    onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({

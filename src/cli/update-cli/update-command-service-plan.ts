@@ -141,7 +141,7 @@ async function tryRealpathOrResolve(value: string): Promise<string> {
   return await fs.realpath(path.resolve(value)).catch(() => path.resolve(value));
 }
 
-function resolveManagedServiceNodeRunner(
+export function resolveManagedServiceNodeRunner(
   command: GatewayServiceCommandConfig | null,
 ): string | undefined {
   const args = command?.programArguments ?? [];

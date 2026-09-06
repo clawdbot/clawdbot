@@ -44,6 +44,7 @@ import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   createManagedRun,
+  createSuccessfulProcessExit,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
@@ -261,16 +262,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     await executePreparedCliRun(context);
@@ -508,16 +500,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(raw);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.params.prompt = "/compact";
@@ -549,16 +532,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(raw);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.params.prompt = "/compact";
@@ -593,16 +567,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         firstSpawnEntered.resolve();
         await releaseFirstSpawn.promise;
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const first = executePreparedCliRun(
@@ -672,16 +637,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     await executePreparedCliRun(context);
@@ -1249,16 +1205,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -1309,16 +1256,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const persistCliSessionForkSuccessor = vi.fn().mockResolvedValue(undefined);
     const context = buildPreparedCliRunContext({
@@ -1445,16 +1383,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.params.sessionKey = "agent:coder:main";
@@ -1557,16 +1486,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1641,16 +1561,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1729,16 +1640,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1843,16 +1745,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1936,16 +1829,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         });
         markMcpLoopbackToolCallFinished(captureHandle);
       }, 10);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -2231,16 +2115,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
@@ -2291,16 +2166,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(
@@ -2347,16 +2213,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(
@@ -2538,16 +2395,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2568,16 +2416,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       );
       markMcpLoopbackRequestFinished(captureHandle);
       input.onStdout?.("yield acknowledged");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2604,16 +2443,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2643,16 +2473,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2685,16 +2506,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         outcome: "unknown",
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2729,16 +2541,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2773,16 +2576,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2829,16 +2623,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2873,16 +2658,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2915,16 +2691,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -3069,16 +2836,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -3164,16 +2922,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -3199,16 +2948,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -3284,16 +3024,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.(`${JSON.stringify({ item: { type: "message", text: "done" } })}\n`);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const first = await executePreparedCliRun(context);

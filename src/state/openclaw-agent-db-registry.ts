@@ -19,6 +19,7 @@ import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
 
 export {
+  inspectOpenClawRegisteredAgentDatabases,
   listOpenClawRegisteredAgentDatabases,
   readOpenClawAgentDatabaseRegistryToken,
 } from "./openclaw-agent-db-registry-listing.js";

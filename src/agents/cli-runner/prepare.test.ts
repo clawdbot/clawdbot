@@ -25,6 +25,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
   CliBackendExecute,
@@ -134,6 +135,8 @@ function installTestPluginRegistry() {
   setActivePluginRegistry(builder.registry);
   return builder;
 }
+
+type McpProjectionParams = Parameters<typeof resolveLoopbackTools>[0];
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
@@ -2946,7 +2949,7 @@ describe("prepareCliRunContext", () => {
       ownerToken: "loopback-owner-token",
       nonOwnerToken: "loopback-non-owner-token",
     }));
-    const resolveMcpLoopbackScopedTools = vi.fn((scope: { senderIsOwner?: boolean }) => ({
+    const resolveMcpLoopbackScopedTools = vi.fn((scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
         {
@@ -2956,7 +2959,7 @@ describe("prepareCliRunContext", () => {
           parameters: { type: "object", properties: {} },
           execute: vi.fn(),
         },
-        ...(scope.senderIsOwner === false
+        ...(scope.context.senderIsOwner === false
           ? []
           : [
               {
@@ -3026,17 +3029,21 @@ describe("prepareCliRunContext", () => {
     expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        senderIsOwner: true,
-        currentMessageId: "owner-message",
-        sourceReplyDeliveryMode: undefined,
+        context: expect.objectContaining({
+          senderIsOwner: true,
+          currentMessageId: "owner-message",
+          sourceReplyDeliveryMode: undefined,
+        }),
       }),
     );
     expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        senderIsOwner: false,
-        currentMessageId: "non-owner-message",
-        sourceReplyDeliveryMode: undefined,
+        context: expect.objectContaining({
+          senderIsOwner: false,
+          currentMessageId: "non-owner-message",
+          sourceReplyDeliveryMode: undefined,
+        }),
       }),
     );
     expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
@@ -3223,7 +3230,7 @@ describe("prepareCliRunContext", () => {
     const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    const resolveMcpLoopbackScopedTools = vi.fn((_scope: Record<string, unknown>) => ({
+    const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
         {
@@ -3299,14 +3306,14 @@ describe("prepareCliRunContext", () => {
       cfg: projectedConfig,
       authProfileStore,
       authProfileStoreAgentDir,
-      skillWorkshop,
-      ...projectedContext
-    } = projected ?? {};
+      skillLibraryAuthoring: projectedAuthoring,
+      context: projectedContext,
+    } = expectDefined(projected, "projected tool context");
     expect(projectedConfig).toEqual(expect.any(Object));
     expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
     expect(authProfileStoreAgentDir).toEqual(expect.any(String));
     expect(projectedContext).toEqual(grantContext);
-    expect(skillWorkshop).toEqual({ libraryAuthoring: skillLibraryAuthoring });
+    expect(projectedAuthoring).toBe(skillLibraryAuthoring);
     expect(mintMcpLoopbackClientGrant).toHaveBeenLastCalledWith(
       expect.objectContaining({ skillLibraryAuthoring }),
     );
@@ -3588,41 +3595,43 @@ describe("prepareCliRunContext", () => {
       expect(context.mcpDeliveryCapture).toBe(true);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
-          clientCaps: ["tool-events", "inline-widgets"],
-          pinnedWidgetAuthoring: true,
-          taskSuggestionDeliveryMode: "gateway",
-          requireExplicitMessageTarget: true,
-          senderIsOwner: false,
-          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-          runtimePolicyAgentId: "worker",
-          agentId: "main",
-          modelProvider: "anthropic",
-          modelId: "test-model",
-          execOverrides: {
-            host: "node",
-            security: "allowlist",
-            ask: "always",
-            node: "mac-b",
-          },
-          bashElevated: {
-            enabled: true,
-            allowed: true,
-            defaultLevel: "full",
-            fullAccessAvailable: false,
-            fullAccessBlockedReason: "runtime",
-          },
-          channelContext: {
-            sender: { id: "canonical-sender" },
-            chat: { id: "chat-1" },
-          },
-          senderName: "Canonical Name",
-          senderUsername: "canonical-user",
-          senderE164: "+15551234567",
-          messageProvider: "telegram",
-          groupId: "chat123",
-          groupChannel: "ops",
-          groupSpace: "workspace-a",
-          spawnedBy: "agent:main:telegram:group:parent",
+          context: expect.objectContaining({
+            clientCaps: ["tool-events", "inline-widgets"],
+            pinnedWidgetAuthoring: true,
+            taskSuggestionDeliveryMode: "gateway",
+            requireExplicitMessageTarget: true,
+            senderIsOwner: false,
+            runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+            runtimePolicyAgentId: "worker",
+            agentId: "main",
+            modelProvider: "anthropic",
+            modelId: "test-model",
+            execOverrides: {
+              host: "node",
+              security: "allowlist",
+              ask: "always",
+              node: "mac-b",
+            },
+            bashElevated: {
+              enabled: true,
+              allowed: true,
+              defaultLevel: "full",
+              fullAccessAvailable: false,
+              fullAccessBlockedReason: "runtime",
+            },
+            channelContext: {
+              sender: { id: "canonical-sender" },
+              chat: { id: "chat-1" },
+            },
+            senderName: "Canonical Name",
+            senderUsername: "canonical-user",
+            senderE164: "+15551234567",
+            messageProvider: "telegram",
+            groupId: "chat123",
+            groupChannel: "ops",
+            groupSpace: "workspace-a",
+            spawnedBy: "agent:main:telegram:group:parent",
+          }),
         }),
       );
       expect(context.systemPrompt).toContain(
@@ -3859,7 +3868,7 @@ describe("prepareCliRunContext", () => {
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,
     ]);
-    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: Record<string, unknown>) => ({
+    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: ["write", "apply_patch"].map((name) => ({ name })),
     }));
@@ -3917,7 +3926,7 @@ describe("prepareCliRunContext", () => {
       openClaw: ["write", "apply_patch"],
     });
     expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
-      expect.objectContaining({ toolsAllow: ["write"] }),
+      expect.objectContaining({ context: expect.objectContaining({ toolsAllow: ["write"] }) }),
     );
   });
 
@@ -4471,9 +4480,7 @@ describe("prepareCliRunContext", () => {
       if (workshopEnabled) {
         expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
           expect.objectContaining({
-            skillWorkshop: {
-              libraryAuthoring: { ...skillLibraryAuthoring, defaultTarget: "personal" },
-            },
+            skillLibraryAuthoring: { ...skillLibraryAuthoring, defaultTarget: "personal" },
           }),
         );
         expect(context.nodeSkillWorkshop?.name).toBe("skill_workshop");
@@ -4643,7 +4650,7 @@ describe("prepareCliRunContext", () => {
       ...context.baseArgs,
     ]);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: Record<string, unknown>) => ({
+    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: ["write", "apply_patch"].map((name) => ({ name })),
     }));
@@ -4708,24 +4715,24 @@ describe("prepareCliRunContext", () => {
       });
       expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
         expect.objectContaining({
-          toolsAllow: ["write"],
-          scheduledToolPolicy: {
-            version: 1,
-            mode: "account",
-            ownerSessionKey: "agent:main:discord:group:ops",
-            ownerAccountId: "default",
-          },
+          context: expect.objectContaining({
+            toolsAllow: ["write"],
+            scheduledToolPolicy: {
+              version: 1,
+              mode: "account",
+              ownerSessionKey: "agent:main:discord:group:ops",
+              ownerAccountId: "default",
+            },
+          }),
         }),
       );
       const projected = resolveMcpLoopbackPolicyTools.mock.calls[0]?.[0];
       const grantContext = mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context;
       const {
-        cfg: _projectedConfig,
-        toolsAllow: projectedPolicy,
+        context: { toolsAllow: projectedPolicy, ...projectedTrustedContext },
         authProfileStore,
         authProfileStoreAgentDir,
-        ...projectedTrustedContext
-      } = projected ?? {};
+      } = expectDefined(projected, "projected tool context");
       const { toolsAllow: grantedTools, ...grantTrustedContext } = grantContext ?? {};
       expect(projectedPolicy).toEqual(["write"]);
       expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });

@@ -250,12 +250,6 @@ export type CronState = {
   cronBusy: boolean;
 };
 
-export type CronModelSuggestionsState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  cronModelSuggestions: string[];
-};
-
 export function createInitialCronState(
   snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
 ): CronState {
@@ -465,39 +459,6 @@ export async function loadCronStatus(
       activeCronStatusRequests.delete(state);
     }
     request.queued?.resolve(reload ? loadCronStatus(state, opts) : undefined);
-  }
-}
-
-export async function loadCronModelSuggestions(
-  state: CronModelSuggestionsState,
-  agentId: string | null,
-) {
-  if (!state.client || !state.connected || !agentId) {
-    return;
-  }
-  try {
-    const res = await state.client.request("models.list", {
-      agentId,
-      view: "configured",
-      preparedOnly: true,
-    });
-    const models = (res as { models?: unknown[] } | null)?.models;
-    if (!Array.isArray(models)) {
-      state.cronModelSuggestions = [];
-      return;
-    }
-    const ids = models
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") {
-          return "";
-        }
-        const id = (entry as { id?: unknown }).id;
-        return typeof id === "string" ? id.trim() : "";
-      })
-      .filter(Boolean);
-    state.cronModelSuggestions = sortUniqueStrings(ids);
-  } catch {
-    state.cronModelSuggestions = [];
   }
 }
 
