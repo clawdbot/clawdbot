@@ -246,30 +246,30 @@ explicit runtime config.
 
 ## OpenClaw feature coverage
 
-| OpenAI capability         | OpenClaw surface                                                                              | Status                                                          |
-| ------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Chat / Responses          | `openai/<model>` model provider                                                               | Yes                                                             |
-| Codex subscription models | `openai/<model>` with OpenAI OAuth                                                            | Yes                                                             |
-| Legacy Codex model refs   | old Codex model refs, `codex-cli/<model>`                                                     | Repaired by doctor to `openai/<model>`                          |
-| Codex app-server harness  | Codex-compatible HTTPS route with runtime unset/`auto`, or explicit `agentRuntime.id: codex`  | Yes                                                             |
-| Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no other provider is pinned |
-| Images                    | `image_generate`                                                                              | Yes                                                             |
-| Videos                    | `video_generate`                                                                              | Yes                                                             |
-| Text-to-speech            | `tts.provider: "openai"` / `tts`                                                              | Yes                                                             |
-| Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                             |
-| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                             |
-| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (Platform API key; ChatGPT OAuth for GA browser Talk)       |
-| Embeddings                | memory embedding provider                                                                     | Yes                                                             |
+| OpenAI capability         | OpenClaw surface                                                                              | Status                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Chat / Responses          | `openai/<model>` model provider                                                               | Yes                                                                                                            |
+| Codex subscription models | `openai/<model>` with OpenAI OAuth                                                            | Yes                                                                                                            |
+| Legacy Codex model refs   | old Codex model refs, `codex-cli/<model>`                                                     | Repaired by doctor to `openai/<model>`                                                                         |
+| Codex app-server harness  | Codex-compatible HTTPS route with runtime unset/`auto`, or explicit `agentRuntime.id: codex`  | Yes                                                                                                            |
+| Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no other provider is pinned                                                |
+| Images                    | `image_generate`                                                                              | Yes                                                                                                            |
+| Videos                    | `video_generate`                                                                              | Yes                                                                                                            |
+| Text-to-speech            | `tts.provider: "openai"` / `tts`                                                              | Yes                                                                                                            |
+| Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                                                                            |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                                                                            |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (Platform API key; OAuth-first with Platform fallback for the released browser/Gateway-owned WebRTC route) |
+| Embeddings                | memory embedding provider                                                                     | Yes                                                                                                            |
 
 <Note>
-GA OpenAI Realtime backend voice bridges require a Platform API key. GA browser
-Talk can also use an OpenClaw ChatGPT OAuth profile when no Platform credential
-is configured. GPT-Live browser, Gateway-relay, and backend voice bridges
-require Platform API-key auth.
+The released browser/Gateway-owned WebRTC route tries an OpenClaw ChatGPT OAuth
+profile first and falls back to Platform API-key auth. Direct backend sockets
+and unlisted or private realtime routes require Platform API-key auth.
 
 Platform auth is resolved in this order: configured realtime API key, `openai`
 API-key profile, then `OPENAI_API_KEY`. Voice Call, Discord realtime voice,
-GA Gateway relay, and realtime transcription still require Platform auth.
+direct backend sockets, unlisted or private realtime routes, and realtime
+transcription still require Platform auth.
 
 If API-key auth reports missing billing, top up Platform credits at
 [platform.openai.com/account/billing](https://platform.openai.com/account/billing)
