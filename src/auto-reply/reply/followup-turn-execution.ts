@@ -16,6 +16,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -322,6 +323,12 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      // Bind the tool-authority snapshot before execution so the CLI/embedded
+      // candidate's bindToolAuthorityRoute call does not throw "Reply operation
+      // has no active tool authority snapshot" and drop the queued message
+      // (#139847). The foreground runner binds this at agent-runner-run.ts:543,
+      // but the queued followup path bypasses that call.
+      turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
       const execute = () =>
         executeAgentTurn({
           commandBody: turn.queued.prompt,
