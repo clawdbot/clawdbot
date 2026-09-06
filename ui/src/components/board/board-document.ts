@@ -12,11 +12,11 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
-  hasLoadedBoardSnapshot,
   type BoardProvider,
   type BoardProviderLease,
 } from "../../lib/board/provider.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
+import { isPassiveBoardWidget } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   isGatewayCapabilityAdvertised,
@@ -227,7 +227,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     if (this.provider !== provider) {
       return;
     }
-    if (hasLoadedBoardSnapshot(provider)) {
+    if (provider.hasLoadedSnapshot) {
       this.snapshot = provider.snapshot$.value;
       this.selectAvailableTab();
       this.documentState = "ready";
@@ -305,10 +305,15 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
           }
         : {}),
     } satisfies BoardViewCallbacks;
-    // A gallery thumbnail may render saved HTML, but it must not bootstrap
-    // executable plugin surfaces or MCP App leases merely by entering view.
+    // Only saved HTML and declared pure core widgets may render in a preview;
+    // arbitrary plugins and MCP apps can acquire active runtime resources.
     const renderSnapshot = this.passive
-      ? { ...snapshot, widgets: snapshot.widgets.filter((widget) => widget.contentKind === "html") }
+      ? {
+          ...snapshot,
+          widgets: snapshot.widgets.filter((widget) =>
+            isPassiveBoardWidget(widget, this.gatewaySnapshot?.hello?.controlUiWidgetKinds ?? []),
+          ),
+        }
       : snapshot;
     return html`<openclaw-board-view
       .active=${true}

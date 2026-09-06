@@ -177,7 +177,7 @@ export function createHttp1EnvHttpProxyAgent(
           const proxy = uri && proxies.get(uri);
           const bypassEnv =
             options?.noProxy === undefined ? process.env : { no_proxy: options.noProxy };
-          return proxy && origin && !matchesNoProxy(origin.href, bypassEnv)
+          return proxy && origin && !matchesNoProxy(origin, bypassEnv)
             ? proxy.dispatch(request, handler)
             : target.dispatch(request, handler);
         };

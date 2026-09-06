@@ -6,55 +6,16 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import {
+  admittedRecovery,
+  MOVE_REQUEST,
+  preparedReclaim,
+  REQUEST,
+} from "./placement-dispatch-coordinator.test-support.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type {
-  WorkerPlacementDispatchRequest,
-  WorkerPlacementMoveRequest,
-} from "./service-contract.js";
+import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 type DispatchService = WorkerPlacementDispatchService;
-
-function admittedRecovery(
-  run: (
-    placement: Parameters<DispatchService["resumeProvisioning"]>[0],
-    core: Parameters<DispatchService["resumeProvisioning"]>[1],
-  ) => Promise<void>,
-): DispatchService["resumeProvisioning"] {
-  return async (placement, core, _onTransition, admit) => {
-    if (!admit) {
-      throw new Error("Recovery fixture requires the coordinator admission owner");
-    }
-    return await admit(async (signal) => {
-      await run(placement, async () => await core(signal));
-      return undefined;
-    });
-  };
-}
-
-function preparedReclaim(run: () => Promise<unknown>) {
-  return async (
-    _request: unknown,
-    _authorize: unknown,
-    _beforeDrain: unknown,
-    serialize: (operation: () => Promise<unknown>) => Promise<unknown>,
-  ) => await serialize(run);
-}
-
-const REQUEST: WorkerPlacementDispatchRequest = {
-  sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  agentId: "main",
-  profileId: "test",
-  executionMode: "worker-turn",
-};
-
-const MOVE_REQUEST: WorkerPlacementMoveRequest = {
-  sessionId: REQUEST.sessionId,
-  sessionKey: REQUEST.sessionKey,
-  agentId: REQUEST.agentId,
-  source: { generation: 4, environmentId: "worker-source", ownerEpoch: 7 },
-  target: { kind: "gateway" },
-};
 
 describe("worker placement dispatch coordinator", () => {
   it.each([

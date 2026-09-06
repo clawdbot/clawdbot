@@ -165,12 +165,20 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun overflowingLoadedHistoryKeepsJumpOutsideMessagesAndReachesLatest() {
+  fun overflowingLoadedHistoryStartsAtLatestAndManualReadingOffersJump() {
     withReaderHistory(assistantCount = 24) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      val initialRange = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("The overflowing transcript must start at the latest reply", 0f, initialRange.value(), 0f)
+      assertTrue("The sibling remains overflowing at the latest edge", initialRange.maxValue() > 0f)
+      assertReaderMessageVisible("OpenClaw", "Reader answer 24")
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
       assertTrue(
-        "The overflowing transcript must start above the latest reply",
+        "Manual reading must move above the latest reply",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
       )
       assertReaderHeaderControl("Jump to latest")
@@ -200,10 +208,6 @@ class ChatComposerLayoutTest {
         "Fixture precondition: the transcript viewport must be fully visible: $viewport within $root",
         viewport.left >= root.left && viewport.right <= root.right && viewport.top >= root.top && viewport.bottom <= root.bottom,
       )
-      assertReaderHeaderControl("Jump to latest")
-      readerHeaderControl("Jump to latest").performClick()
-      composeRule.waitForIdle()
-
       val replyNode = composeRule.onNode(hasContentDescription(nativeString("OpenClaw")) and hasText(tail))
       val atLatest = replyNode.getUnclippedBoundsInRoot()
       assertTrue(
@@ -254,6 +258,8 @@ class ChatComposerLayoutTest {
     withReaderHistory(assistantCount = assistantCount, viewportHeight = { viewportHeight.value }) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
       assertTrue(
         "The smaller viewport must hide newer replies",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
@@ -287,6 +293,12 @@ class ChatComposerLayoutTest {
     ) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
+      assertTrue(
+        "Manual reading must move above the latest reply",
+        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
+      )
       val controls = listOf("Show Sidebar", "Jump to latest", "Chat actions").map(::assertReaderHeaderControl)
       val sidebar = controls.first()
       controls.drop(1).forEach { bounds ->

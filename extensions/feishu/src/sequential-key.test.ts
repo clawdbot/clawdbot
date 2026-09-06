@@ -41,6 +41,19 @@ describe("getFeishuSequentialKey", () => {
     ).toBe(expected);
   });
 
+  it("classifies the prepared batch body instead of only its last event", () => {
+    const event = createTextEvent({ text: "@_bot/stop" });
+    event.message.mentions = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot",
+        preparedContent: "first message\n@_bot/stop",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+  });
+
   it("keeps /btw on a stable per-chat lane across different message ids", () => {
     const first = createTextEvent({ text: "/btw one", messageId: "om_message_1" });
     const second = createTextEvent({ text: "/btw two", messageId: "om_message_2" });

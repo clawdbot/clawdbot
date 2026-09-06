@@ -14,59 +14,42 @@ const loadPendingSkillProposalResolver = createLazyRuntimeNamedExport(
   "resolvePendingSkillProposal",
 );
 
-const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set([
-  "apply",
-  "reject",
-  "quarantine",
-  "restore_collection",
-]);
+const SKILL_WORKSHOP_LIFECYCLE_APPROVALS = {
+  apply: {
+    title: "Apply Skill Workshop proposal",
+    description: "Apply a pending proposal inside your agent's Workshop directory.",
+    severity: "warning",
+  },
+  reject: {
+    title: "Reject Skill Workshop proposal",
+    description: "Reject a pending Skill Workshop proposal.",
+    severity: "info",
+  },
+  quarantine: {
+    title: "Quarantine Skill Workshop proposal",
+    description: "Quarantine a pending Skill Workshop proposal.",
+    severity: "info",
+  },
+  restore_collection: {
+    title: "Restore previous skill collection",
+    description:
+      "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
+    severity: "warning",
+  },
+} as const;
 // Codex dynamic tools have a 90s watchdog. Approval RPCs reserve another 10s
 // for Gateway cleanup, leaving 10s for proposal lookup and tool-call overhead.
 const SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS = 70_000;
 
-type SkillWorkshopLifecycleAction = "apply" | "reject" | "quarantine" | "restore_collection";
+type SkillWorkshopLifecycleAction = keyof typeof SKILL_WORKSHOP_LIFECYCLE_APPROVALS;
 
 // Lifecycle actions mutate proposals or live skills and therefore require approval checks.
 function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
   const action = asNullableRecord(params)?.action;
-  if (typeof action !== "string" || !SKILL_WORKSHOP_LIFECYCLE_ACTIONS.has(action)) {
+  if (typeof action !== "string" || !Object.hasOwn(SKILL_WORKSHOP_LIFECYCLE_APPROVALS, action)) {
     return undefined;
   }
   return action as SkillWorkshopLifecycleAction;
-}
-
-function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
-  title: string;
-  description: string;
-  severity: "info" | "warning";
-} {
-  if (action === "apply") {
-    return {
-      title: "Apply Skill Workshop proposal",
-      description: "Apply a pending proposal inside your agent's Workshop directory.",
-      severity: "warning",
-    };
-  }
-  if (action === "reject") {
-    return {
-      title: "Reject Skill Workshop proposal",
-      description: "Reject a pending Skill Workshop proposal.",
-      severity: "info",
-    };
-  }
-  if (action === "restore_collection") {
-    return {
-      title: "Restore previous skill collection",
-      description:
-        "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
-      severity: "warning",
-    };
-  }
-  return {
-    title: "Quarantine Skill Workshop proposal",
-    description: "Quarantine a pending Skill Workshop proposal.",
-    severity: "info",
-  };
 }
 
 function formatBodySizeKb(content: string): string {
@@ -193,7 +176,7 @@ export async function resolveSkillWorkshopToolApproval(params: {
   if (config.approvalPolicy === "auto") {
     return undefined;
   }
-  const text = lifecycleApprovalText(action);
+  const text = SKILL_WORKSHOP_LIFECYCLE_APPROVALS[action];
   const approvalDescription =
     action === "restore_collection"
       ? { description: text.description }
@@ -206,6 +189,7 @@ export async function resolveSkillWorkshopToolApproval(params: {
         });
   return {
     requireApproval: {
+      pluginId: "workspace-skills",
       ...text,
       description: approvalDescription.description,
       timeoutMs: SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS,

@@ -1,5 +1,6 @@
 // Release Check tests cover release check script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   mkdtempSync,
@@ -58,6 +59,7 @@ describe("release-check", () => {
         copyFileSync(relativePath, destination);
       }
       symlinkSync(resolve("node_modules"), join(toolingRoot, "node_modules"), "junction");
+      mkdirSync(join(root, "scripts", "lib"), { recursive: true });
       mkdirSync(join(root, "extensions"));
       const packageJson = JSON.stringify({
         name: "openclaw",
@@ -115,8 +117,56 @@ describe("release-check", () => {
         writeFileSync(destination, source);
       }
       const tarball = join(root, "target.tgz");
-      create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
-      for (const declaresLauncher of [false, true]) {
+      const cases = [
+        {
+          declaresLauncher: false,
+          declaresLocator: false,
+          includesLocator: false,
+          expected: "release-check: packed dist/plugin-sdk directory not found.",
+        },
+        {
+          declaresLauncher: true,
+          declaresLocator: false,
+          includesLocator: false,
+          expected: "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.",
+        },
+        {
+          declaresLauncher: false,
+          declaresLocator: true,
+          includesLocator: false,
+          expected: "could not read gateway run chunk metadata",
+        },
+        {
+          declaresLauncher: false,
+          declaresLocator: true,
+          includesLocator: true,
+          expected: "release-check: packed dist/plugin-sdk directory not found.",
+        },
+      ];
+      for (const { declaresLauncher, declaresLocator, includesLocator, expected } of cases) {
+        const locatorSource = join(root, "scripts/lib/gateway-run-chunk-metadata.mts");
+        if (declaresLocator) {
+          writeFileSync(locatorSource, "export const GATEWAY_RUN_CHUNK_METADATA_VERSION = 1;");
+        } else {
+          rmSync(locatorSource, { force: true });
+        }
+        if (includesLocator) {
+          writeFileSync(
+            join(packedRoot, "dist/cli/gateway-run-chunk.json"),
+            JSON.stringify({
+              version: 1,
+              chunks: [
+                {
+                  fileName: "run-gateway.js",
+                  sha256: createHash("sha256")
+                    .update(packedFiles["dist/run-gateway.js"])
+                    .digest("hex"),
+                },
+              ],
+            }),
+          );
+        }
+        create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
         writeFileSync(
           join(root, "src/shared/worker-bundle-hash.ts"),
           'export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";\n' +
@@ -141,12 +191,8 @@ describe("release-check", () => {
           },
         );
         expect(result.status).toBe(1);
-        // The two-artifact target reaches the next check; the fixture omits SDK output.
-        expect(result.stderr).toContain(
-          declaresLauncher
-            ? "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing."
-            : "release-check: packed dist/plugin-sdk directory not found.",
-        );
+        // Valid target-specific artifacts reach the SDK check; this fixture omits SDK output.
+        expect(result.stderr).toContain(expected);
       }
 
       writeFileSync(

@@ -72,6 +72,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (
       action.kind === "copy-session-id" ||
       action.kind === "copy-session-link" ||
+      action.kind === "copy-session-preview-link" ||
       action.kind === "copy-markdown" ||
       action.kind === "open-new-tab" ||
       action.kind === "open-new-window" ||

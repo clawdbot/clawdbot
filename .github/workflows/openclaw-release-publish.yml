@@ -1212,7 +1212,6 @@ jobs:
         run: |
           set -euo pipefail
           install_args=(
-            --dir .release-harness
             install
             --frozen-lockfile
             --prefer-offline
@@ -1220,7 +1219,8 @@ jobs:
             --config.enable-pre-post-scripts=true
             --config.side-effects-cache=true
           )
-          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          # Corepack selects packageManager before pnpm processes its arguments.
+          (cd .release-harness && { pnpm "${install_args[@]}" || pnpm "${install_args[@]}"; })
           # Node resolves --import tsx from the process cwd. Point that root at
           # the trusted harness install instead of the frozen target checkout.
           ln -s .release-harness/node_modules node_modules

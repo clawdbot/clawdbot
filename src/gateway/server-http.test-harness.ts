@@ -229,7 +229,13 @@ export function createHooksHandler(
     } as unknown as ReturnType<typeof createSubsystemLogger>,
     getClientIpConfig: options.getClientIpConfig,
     dispatchWakeHook: options.dispatchWakeHook ?? (() => ({ eventOutcome: "queued" })),
-    dispatchAgentHook: options.dispatchAgentHook ?? (() => ({ ok: true, runId: "run-1" })),
+    dispatchAgentHook:
+      options.dispatchAgentHook ??
+      (() => ({
+        ok: true,
+        runId: "run-1",
+        completion: Promise.resolve({ status: "ok", replyDisposition: "empty" }),
+      })),
   });
 }
 

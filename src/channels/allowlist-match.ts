@@ -48,11 +48,7 @@ export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowl
 }
 
 function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): CompiledAllowlist {
-  return compileAllowlist(
-    entries
-      .map((entry) => normalizeOptionalLowercaseString(String(entry)))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
+  return compileAllowlist(entries.map((entry) => normalizeLowercaseStringOrEmpty(String(entry))));
 }
 
 export function resolveAllowlistCandidates<TSource extends string>(params: {

@@ -330,9 +330,7 @@ export async function settleEmbeddedAttemptStream(input: {
     }
     messagesSnapshot = snapshotSelection.messagesSnapshot;
     sessionIdUsed = snapshotSelection.sessionIdUsed;
-    lastAssistant = messagesSnapshot
-      .toReversed()
-      .find((message): message is AssistantMessage => message.role === "assistant");
+    lastAssistant = messagesSnapshot.findLast((message) => message.role === "assistant");
     currentAttemptAssistant = findCurrentAttemptAssistantMessage({
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
@@ -492,6 +490,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       cfg: attempt.config,
       provider: attempt.provider,
       modelId: attempt.modelId,
+      providerRuntimeHandle: input.getProviderRuntimeHandle(),
       extraParamsOverride: streamExtraParamsOverride,
       thinkingLevel: input.providerThinkingLevel,
       agentId: input.sessionAgentId,

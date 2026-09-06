@@ -1,5 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -11,10 +13,16 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  disposeOpenClawAgentDatabaseByPath,
+  isOpenClawAgentDatabaseOpen,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { isReplyPayloadTerminalContent } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type {
@@ -43,6 +51,20 @@ vi.mock("../../agents/live-model-switch.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
+let suiteRoot: string;
+let storePath: string;
+let fixtureSequence = 0;
+beforeAll(() => {
+  suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-accounting-suite-"));
+  storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
+  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+});
+afterAll(async () => {
+  await drainSessionStoreWriterQueuesForTest();
+  disposeOpenClawAgentDatabaseByPath(storePath);
+  expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
+  fs.rmSync(suiteRoot, { recursive: true, force: true });
+});
 afterEach(() => {
   for (const operation of operations.splice(0)) {
     operation.complete();
@@ -70,12 +92,14 @@ const diagnostic = {
 
 async function createFixture() {
   const root = tempDirs.make("openclaw-context-pressure-");
-  const storePath = path.join(root, "sessions.json");
-  const sessionKey = "agent:main:main";
+  const fixtureId = ++fixtureSequence;
+  const sessionKey = `agent:main:accounting-${fixtureId}`;
+  const sessionId = `accounting-session-${fixtureId}`;
+  const runId = `context-pressure-run-${fixtureId}`;
   const entry: InternalSessionEntry = {
-    sessionId: "session",
+    sessionId,
     lifecycleRevision: "generation-1",
-    activeWriterRunId: "context-pressure-run",
+    activeWriterRunId: runId,
     updatedAt: 1,
     modelProvider: diagnostic.provider,
     model: diagnostic.model,
@@ -163,7 +187,7 @@ async function createFixture() {
       autoCompactionCount: 0,
       didLogHeartbeatStrip: false,
     },
-    runId: "context-pressure-run",
+    runId,
     runStartedAt: Date.now(),
     sessionCtx: {},
     sessionKey,
@@ -236,6 +260,7 @@ async function createFixture() {
     return compaction;
   };
   return {
+    sessionId,
     context,
     turn,
     deliverQueued: async () => {
@@ -417,7 +442,7 @@ it.each([
     const original = fixture.context.activeSessionEntry!;
     const replacement = {
       ...original,
-      [field]: "replacement",
+      [field]: field === "sessionId" ? `${fixture.sessionId}-replacement` : "replacement",
       updatedAt: Date.now(),
       traceLevel: "on" as const,
       pluginDebugEntries: [{ pluginId: "replacement", lines: ["🔎 REPLACEMENT_DIAGNOSTIC"] }],
@@ -490,7 +515,7 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   fixture.recordCompaction({ currentContextTokens: 40 });
   fixture.context.execution.result.payloads = [];
   fixture.context.execution.result.meta.agentMeta = {
-    sessionId: "session",
+    sessionId: fixture.sessionId,
     provider: diagnostic.provider,
     model: diagnostic.model,
     compactionCount: 1,
@@ -500,7 +525,7 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(await finalizeReplyAgentRun(fixture.context)).toBeUndefined();
 
   expect(fixture.read()).toMatchObject({
-    sessionId: "session",
+    sessionId: fixture.sessionId,
     compactionCount: 1,
     totalTokens: 40,
     totalTokensFresh: true,
@@ -565,7 +590,7 @@ describe("cancelled followup compaction accounting", () => {
       expect(await fixture.accountAborted(reason)).toBeUndefined();
 
       expect(fixture.read()).toMatchObject({
-        sessionId: "session",
+        sessionId: fixture.sessionId,
         lifecycleRevision: "generation-1",
         compactionCount: 4,
         totalTokens: 40,
@@ -581,7 +606,7 @@ describe("cancelled followup compaction accounting", () => {
 
   it("accounts cancellation against the committed successor despite a predecessor cache", async () => {
     const fixture = await createFixture();
-    const sessionId = "accepted-successor";
+    const sessionId = `${fixture.sessionId}-accepted-successor`;
     await fixture.replace({
       ...fixture.context.activeSessionEntry!,
       sessionId,
@@ -589,7 +614,7 @@ describe("cancelled followup compaction accounting", () => {
     });
     fixture.recordCompaction({ sessionId, currentContextTokens: 40 });
     fixture.context.replyOperation.updateSessionId(sessionId);
-    expect(fixture.context.activeSessionEntry?.sessionId).toBe("session");
+    expect(fixture.context.activeSessionEntry?.sessionId).toBe(fixture.sessionId);
 
     await fixture.accountAborted("user");
 
@@ -611,7 +636,7 @@ describe("cancelled followup compaction accounting", () => {
     fixture.recordCompaction({ currentContextTokens: 40 });
     fixture.context.replyOperation.complete();
     const replacement = createReplyOperation({
-      sessionId: "session",
+      sessionId: fixture.sessionId,
       sessionKey: fixture.context.sessionKey!,
       resetTriggered: false,
     });
@@ -627,11 +652,11 @@ describe("cancelled followup compaction accounting", () => {
     { name: "session", replacement: { sessionId: "replacement-session" } },
     { name: "lifecycle", replacement: { lifecycleRevision: "generation-2" } },
     { name: "writer", replacement: { activeWriterRunId: "newer-writer" } },
-  ])("does not apply cancelled facts to a replacement $name", async ({ replacement }) => {
+  ])("does not apply cancelled facts to a replacement $name", async ({ name, replacement }) => {
     const fixture = await createFixture();
     await fixture.replace({
       ...fixture.context.activeSessionEntry!,
-      ...replacement,
+      ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
       compactionCount: 9,
       totalTokens: 666,
     });
@@ -697,7 +722,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     fixture.context.execution.compaction = { count: 2, durable: [] };
 
     await fixture.account(lane, {
-      sessionId: "unverified-successor",
+      sessionId: `${fixture.sessionId}-unverified-successor`,
       compactionCount: 2,
       compactionTokensAfter: 40,
       usage: { input: 120, output: 8 },
@@ -705,7 +730,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       promptTokens: 120,
     });
 
-    expect(fixture.read()?.sessionId).toBe("session");
+    expect(fixture.read()?.sessionId).toBe(fixture.sessionId);
     expect(fixture.read()?.compactionCount).toBeUndefined();
     expect(fixture.read()?.totalTokens).toBeUndefined();
     expect(fixture.read()).toMatchObject({
@@ -838,8 +863,12 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
 
   it.each(["session", "context-pressure-successor"])(
     "accounts current-generation compaction into accepted %s",
-    async (sessionId) => {
+    async (target) => {
       const fixture = await createFixture();
+      const sessionId =
+        target === "session"
+          ? fixture.sessionId
+          : `${fixture.sessionId}-context-pressure-successor`;
       fixture.recordCompaction({ sessionId, currentContextTokens: 120 });
       await fixture.replace({ ...fixture.context.activeSessionEntry!, sessionId });
       fixture.context.replyOperation.updateSessionId(sessionId);
@@ -867,7 +896,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     { name: "writer", replacement: { activeWriterRunId: "newer-writer" } },
   ])(
     "does not compact replacement $name telemetry after the old owner resumes",
-    async ({ replacement }) => {
+    async ({ name, replacement }) => {
       const fixture = await createFixture();
       fixture.recordCompaction();
       const pendingTool = createDeferred();
@@ -882,7 +911,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       // owner's write fence after replacement, not a claim that reset bypasses it.
       const next: SessionEntry = {
         ...fixture.context.activeSessionEntry!,
-        ...replacement,
+        ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
         updatedAt: 30,
         contextBudgetStatus: {
           ...diagnostic,
@@ -917,11 +946,11 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: false },
   ])(
     "does not write an old result into a replacement $name with usage=$withUsage",
-    async ({ replacement, withUsage }) => {
+    async ({ name, replacement, withUsage }) => {
       const fixture = await createFixture();
       const next = {
         ...fixture.context.activeSessionEntry!,
-        ...replacement,
+        ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
         contextBudgetStatus: undefined,
       };
       await fixture.replace(next);

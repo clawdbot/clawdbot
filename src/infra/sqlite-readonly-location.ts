@@ -348,7 +348,7 @@ function recoverPrivateRollbackCopy(snapshotPath: string): void {
 
 function createStableReadOnlyCopyInTempDirectory(
   pathname: string,
-  journalMode: Exclude<SourceJournalMode, "unknown">,
+  journalMode: SourceJournalMode,
   existingTempDir?: string,
   stagingRoot = existingTempDir
     ? path.dirname(existingTempDir)
@@ -577,13 +577,9 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
       lastChange = error;
       continue;
     }
-    if (journalMode === "unknown") {
-      lastChange = new SqliteSourceChangedError(
-        `SQLite journal mode is unavailable while copying: ${canonicalPath}`,
-      );
-      continue;
-    }
     try {
+      // Stable malformed bytes still belong to SQLite's diagnostic path. The
+      // private copy checks bytes, sidecars, and mode before a reader opens it.
       return createStableReadOnlyCopyInTempDirectory(
         canonicalPath,
         journalMode,

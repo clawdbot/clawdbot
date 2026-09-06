@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenClaw",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Securely relay eligible signed-in Chrome tabs to the local OpenClaw browser automation service.",
   "icons": {
     "16": "icons/icon16.png",

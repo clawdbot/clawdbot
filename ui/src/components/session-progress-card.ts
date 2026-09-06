@@ -184,6 +184,7 @@ export function progressCardHeadsUp(
   card: ProgressCard | null | undefined,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
+  hasActiveRun = true,
 ): ProgressCardHeadsUp | null {
   const staleForRun = card ? isProgressCardStaleForRun(card, startedAt) : false;
   if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && !staleForRun) {
@@ -197,7 +198,8 @@ export function progressCardHeadsUp(
   if (!step) {
     return null;
   }
-  const status = step.status === "in_progress" && staleForRun ? "paused" : step.status;
+  const status =
+    step.status === "in_progress" && (staleForRun || !hasActiveRun) ? "paused" : step.status;
   return { ...counts, status, step: step.step };
 }
 
