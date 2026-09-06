@@ -108,11 +108,20 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   // wake) targets a session that may own a paused sessions_yield run.
   // Returning "none" here skips registerPluginSubagentRunFromGateway, so
   // the paused run is never adopted and the original requester is left
-  // waiting for a completion that never arrives. When a paused
-  // sessions_yield run exists, fall through to the plugin_subagent branch
-  // so admission calls adoptPausedSubagentRunForFollowUp before the turn
-  // starts.
-  if (params.inputProvenance?.kind === "inter_session") {
+  // waiting for a completion that never arrives. When a settlement
+  // continuation wake (sourceTool: "subagent_announce") targets a session
+  // with a paused sessions_yield run, fall through to the plugin_subagent
+  // branch so admission calls adoptPausedSubagentRunForFollowUp before the
+  // turn starts.
+  //
+  // Restricted to sourceTool === "subagent_announce" so ordinary
+  // inter_session messages (e.g. sessions_send) do not adopt and replace a
+  // paused run — those follow-ups must remain untracked per
+  // docs/tools/subagents.md.
+  if (
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance?.sourceTool === "subagent_announce"
+  ) {
     const pausedYieldRun = getLatestLiveSubagentRunByChildSessionKey(
       params.sessionKey.trim(),
       (entry) => entry.pauseReason === "sessions_yield",
@@ -126,6 +135,9 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
       // and the original requester never receives its completion.
       return "plugin_subagent";
     }
+    return "none";
+  }
+  if (params.inputProvenance?.kind === "inter_session") {
     return "none";
   }
   const runTaskOwner = params.client?.internal?.agentRunTracking;

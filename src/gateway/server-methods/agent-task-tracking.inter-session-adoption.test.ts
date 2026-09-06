@@ -8,7 +8,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 
 const mockGetLatestLiveSubagentRunByChildSessionKey = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../agents/subagents/registry/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: mockGetLatestLiveSubagentRunByChildSessionKey,
 }));
 
@@ -26,7 +26,7 @@ function makeClient(
 
 const interSessionProvenance: InputProvenance = {
   kind: "inter_session",
-  sourceTool: "sessions_yield",
+  sourceTool: "subagent_announce",
 };
 
 describe("resolveGatewayAgentTaskTrackingMode — inter_session paused-run adoption", () => {
@@ -102,6 +102,29 @@ describe("resolveGatewayAgentTaskTrackingMode — inter_session paused-run adopt
     });
 
     expect(mode).toBe("plugin_subagent");
+  });
+
+  it("does not adopt for ordinary sessions_send inter_session messages even with a paused run", () => {
+    // Ordinary inter_session messages (e.g. sessions_send) must not adopt and
+    // replace a paused run — those follow-ups remain untracked per
+    // docs/tools/subagents.md.
+    mockGetLatestLiveSubagentRunByChildSessionKey.mockReturnValue({
+      runId: "paused-middle-run",
+      childSessionKey: SESSION_KEY,
+      pauseReason: "sessions_yield",
+    });
+
+    const mode = resolveGatewayAgentTaskTrackingMode({
+      client: makeClient(),
+      sessionKey: SESSION_KEY,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      },
+    });
+
+    expect(mode).toBe("none");
+    expect(mockGetLatestLiveSubagentRunByChildSessionKey).not.toHaveBeenCalled();
   });
 
   it("does not check for paused runs when provenance is not inter_session", () => {
