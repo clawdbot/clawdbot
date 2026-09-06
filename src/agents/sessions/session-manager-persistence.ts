@@ -391,9 +391,11 @@ export class SessionManagerPersistence extends SessionManagerCore {
       let committedMutationAt: number | null | undefined;
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, header, {
-          ...(this.transcriptMutationAt !== undefined
-            ? { expectedMutationAt: this.transcriptMutationAt }
-            : {}),
+          ...(options?.expectedMutationAt !== undefined
+            ? { expectedMutationAt: options.expectedMutationAt }
+            : this.transcriptMutationAt !== undefined
+              ? { expectedMutationAt: this.transcriptMutationAt }
+              : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
           },
@@ -408,9 +410,11 @@ export class SessionManagerPersistence extends SessionManagerCore {
       let committedMutationAt: number | null | undefined;
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, entry, {
-          ...(this.transcriptMutationAt !== undefined
-            ? { expectedMutationAt: this.transcriptMutationAt }
-            : {}),
+          ...(options?.expectedMutationAt !== undefined
+            ? { expectedMutationAt: options.expectedMutationAt }
+            : this.transcriptMutationAt !== undefined
+              ? { expectedMutationAt: this.transcriptMutationAt }
+              : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
           },
