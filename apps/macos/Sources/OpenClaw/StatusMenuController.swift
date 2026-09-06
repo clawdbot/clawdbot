@@ -249,7 +249,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = self.nodes.lastError
             _ = self.nodes.localNodeIdentityState
             _ = self.cron.jobs
-            _ = self.cron.schedulerNextWakeAtMs
             _ = self.dashboard.gatewayEntries
             _ = self.sessions.rows
             _ = self.sessions.errorText
@@ -389,7 +388,6 @@ private struct StatusMenuIconView: View {
             animationsEnabled: self.state.iconAnimationsEnabled && !sleeping,
             iconState: self.effectiveIconState,
             voiceWakeMeterActive: self.state.voiceWakeMeterActive)
-            .background(SettingsWindowOpenRegistrar())
     }
 
     private var effectiveIconState: IconState {

@@ -102,7 +102,11 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
     if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
     }
-    if (this.watcher || this.nativeMemoryWatchPairs.length > 0) {
+    if (
+      this.memoryWatchCapacityDegraded ||
+      this.watcher ||
+      this.nativeMemoryWatchPairs.length > 0
+    ) {
       return;
     }
     // Core paths preserve original symlink-follow behavior (chokidar/fs.watch
@@ -635,6 +639,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
     paths: string | string[],
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
   ): void {
+    if (this.closed || this.memoryWatchCapacityDegraded) {
+      return;
+    }
     // Linux subtree startup can create the fallback before ensureWatcher
     // attaches file paths. Reuse that watcher rather than replacing it.
     if (this.watcher) {

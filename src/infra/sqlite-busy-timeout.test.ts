@@ -2,7 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteBusyTimeout, shouldReportSqliteLockFailure } from "./sqlite-busy-timeout.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,6 +30,23 @@ describe("runWithSqliteBusyTimeout", () => {
       }),
     ).toThrow("operation failed");
     expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
+  });
+
+  it("restores timeout and lock reporting before the admitted operation finishes", () => {
+    database = new DatabaseSync(":memory:");
+    database.exec("PRAGMA busy_timeout = 5000");
+    runWithSqliteBusyTimeout(
+      database,
+      25,
+      (restore) => {
+        expect(shouldReportSqliteLockFailure(database!)).toBe(false);
+        restore();
+        expect(database!.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
+        expect(shouldReportSqliteLockFailure(database!)).toBe(true);
+      },
+      { lockFailureReporting: "suppress" },
+    );
+    expect(shouldReportSqliteLockFailure(database)).toBe(true);
   });
 
   it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(

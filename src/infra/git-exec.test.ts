@@ -123,6 +123,12 @@ describe.each([
 
   it.each([
     {
+      termination: "exit",
+      code: 128,
+      stdoutTruncatedBytes: 1,
+      expected: "exit code 128",
+    },
+    {
       termination: "timeout",
       signal: "SIGKILL",
       code: 124,
@@ -166,26 +172,69 @@ describe.each([
   );
 });
 
-describe("successful Git output", () => {
+describe("required Git output", () => {
+  async function withGitBlob(
+    input: string | Buffer,
+    run: (root: string, args: string[]) => Promise<void>,
+  ) {
+    await withTestDir({ prefix: "openclaw-git-output-" }, async (root) => {
+      await requireGitCommand(root, ["init"]);
+      const oid = await requireGitCommand(root, ["hash-object", "-w", "--stdin"], { input });
+      await run(root, ["cat-file", "blob", oid]);
+    });
+  }
+
   it("keeps raw text byte-for-byte and preserves the trimmed text contract", async () => {
     const stdout = " \u001b[31mname\u001b[0m\rredraw\0\r\n ";
-    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
-      ...failure,
-      code: 0,
-      stdout,
+    await withGitBlob(stdout, async (root, args) => {
+      await expect(requireGitCommandRaw(root, args)).resolves.toBe(stdout);
+      await expect(requireGitCommand(root, args)).resolves.toBe(stdout.trim());
     });
-    await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe(stdout);
-    await expect(requireGitCommand("/repo", ["status"])).resolves.toBe(stdout.trim());
   });
 
   it("keeps binary output including invalid UTF-8 and terminal control bytes", async () => {
     const stdout = Buffer.from([0, 255, 13, 10, 27, 91, 51, 49, 109, 32]);
-    vi.spyOn(processExec, "runCommandBuffered").mockResolvedValue({
+    await withGitBlob(stdout, async (root, args) => {
+      await expect(requireGitCommandBuffer(root, args)).resolves.toEqual(stdout);
+    });
+  });
+
+  it.each([
+    ["text", requireGitCommand],
+    ["raw", requireGitCommandRaw],
+    ["buffered", requireGitCommandBuffer],
+  ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
+    const sentinel = "complete-git-output-leading-sentinel\0";
+    const blob = Buffer.alloc(17 * 1024 * 1024, "x");
+    blob.write(sentinel);
+    await withGitBlob(blob, async (root, args) => {
+      const outcome = await requireGit(root, args).then(
+        (stdout) => ({
+          kind: "returned",
+          bytes: Buffer.byteLength(stdout),
+          hasSentinel: stdout.includes(sentinel),
+        }),
+        (error: unknown) => ({
+          kind: "error",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      expect(outcome).toEqual({
+        kind: "error",
+        message: expect.stringContaining("output limit exceeded"),
+      });
+    });
+  });
+
+  it("accepts complete text when only diagnostic stderr was truncated", async () => {
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
       ...failure,
       code: 0,
-      stdout,
-      stderr: Buffer.alloc(0),
+      stdout: "complete\n",
+      stderr: "progress tail",
+      stderrTruncatedBytes: 1,
     });
-    await expect(requireGitCommandBuffer("/repo", ["show"])).resolves.toEqual(stdout);
+    await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe("complete\n");
+    await expect(requireGitCommand("/repo", ["status"])).resolves.toBe("complete");
   });
 });

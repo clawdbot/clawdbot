@@ -32,9 +32,12 @@ import {
   pullRequestLinksIn,
   refreshPullRequestsForStreamedLinks,
 } from "./chat-pull-request-refresh.ts";
-import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
+import { clearPendingQueueItemsForRun, readDeliveredQueuedChatSendForRun } from "./chat-queue.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
+import {
+  requiresChatInputConsumption,
+  retireDeliveredQueuedUserTurn,
+} from "./chat-send-support.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -633,8 +636,13 @@ export function handlePageGatewayEvent(
         : terminalPayload.agentId,
     );
     const connectionEpoch = state.connectionEpoch;
+    const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope)?.item;
     const ownerIsCurrent = captureOutboxPayloadOwner(state);
-    const retirement = retireDeliveredQueuedUserTurn(state, terminalPayload.runId, scope);
+    // Keep the complete user display pinned before applying the terminal, but
+    // ordinary input retains its durable retry bytes until consumption is proven.
+    const retirement = retireDeliveredQueuedUserTurn(state, terminalPayload.runId, scope, {
+      retainUntilConsumed: Boolean(queued && requiresChatInputConsumption(queued)),
+    });
     const finish = (outcome: Awaited<typeof retirement>) => {
       if (outcome !== "stale" && state.connectionEpoch === connectionEpoch && ownerIsCurrent()) {
         apply();

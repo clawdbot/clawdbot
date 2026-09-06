@@ -31,7 +31,7 @@ import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./bt
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
-import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
@@ -417,6 +417,8 @@ async function materializeBtwRuntimeModel(
       provider: params.provider,
       modelId: params.modelId,
       config: cfg,
+      workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
       model: params.model,
       ...(params.forceResolve !== undefined ? { forceResolve: params.forceResolve } : {}),
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
@@ -496,15 +498,18 @@ async function resolveRuntimeModel(params: {
   const agentDir = preparedModelRuntime.agentDir;
   const workspaceDir = preparedModelRuntime.workspaceDir;
   const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
-  let model = resolveModelWithRegistry({
-    provider: params.provider,
-    modelId: params.model,
+  const resolution = await resolveModelAsync(params.provider, params.model, agentDir, cfg, {
+    authStorage,
     modelRegistry,
-    cfg,
+    preparedModelRuntime,
     workspaceDir,
+    skipAgentDiscovery: true,
+    allowBundledStaticCatalogFallback: true,
+    preferBundledStaticCatalogTransport: true,
   });
+  let model = resolution.model;
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
+    throw new Error(resolution.error ?? `Unknown model: ${params.provider}/${params.model}`);
   }
   const runtimeProvider = model.provider;
   const runtimeModelId = model.id;
@@ -1269,6 +1274,7 @@ export async function runBtwSideQuestion(
       agentDir: params.agentDir,
       workspaceDir,
       env: process.env,
+      wrapProviderStream: true,
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
     const { streamFn } = resolveEmbeddedAgentStream({

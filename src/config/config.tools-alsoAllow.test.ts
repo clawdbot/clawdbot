@@ -1,6 +1,6 @@
 // Covers tools alsoAllow config parsing and validation.
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject } from "./validation-core.js";
 
 // NOTE: These tests ensure allow + alsoAllow cannot be set in the same scope.
 

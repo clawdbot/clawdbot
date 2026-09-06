@@ -101,6 +101,10 @@ Esc or Ctrl+C closes a picker. In the session picker, the first press clears a n
 
 ## Slash commands
 
+Multiline input follows the normal chat path instead of the TUI's local command
+dispatcher. Pasting `/exit` with a trailing newline keeps the TUI open. Shared
+chat commands such as `/stop` and `/btw` retain their normal meaning.
+
 Core:
 
 - `/help`

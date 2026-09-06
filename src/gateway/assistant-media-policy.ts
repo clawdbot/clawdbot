@@ -1,3 +1,4 @@
+import { isCloudWorkerPlacementState } from "../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
@@ -14,6 +15,7 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 export type AssistantMediaSession = {
@@ -125,9 +127,15 @@ export function resolveAssistantMediaPolicy(params: {
   if (sessionRoot && !localRoots.includes(sessionRoot)) {
     localRoots.push(sessionRoot);
   }
+  // Cloud placement owns its filesystem independently of the session exec-node setting.
+  const placement = session
+    ? resolveSessionWorkerPlacementContext()
+        .workerSessionPlacementService?.getMany([session.sessionId])
+        .get(session.sessionId)
+    : undefined;
   return {
     session,
-    remote: Boolean(entry?.execNode),
+    remote: Boolean(entry?.execNode) || isCloudWorkerPlacementState(placement?.state),
     localRoots,
     workspaceOnly,
     reader,

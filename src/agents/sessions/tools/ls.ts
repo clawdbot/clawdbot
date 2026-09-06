@@ -3,29 +3,32 @@
  *
  * Lists directory entries through local or injected operations with bounded output rendering.
  */
-import { existsSync, readdirSync, statSync } from "node:fs";
-import nodePath from "node:path";
+import { readdir } from "node:fs/promises";
 import { Type } from "typebox";
+import type { DirectoryEntry } from "../../../infra/directory-entries.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AgentTool } from "../../runtime/index.js";
-import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { toolResultFitsBudget, type ToolResultBudget } from "../../tool-result-limits.js";
+import type { ToolDefinition } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
-  appendSessionToolTruncationWarning,
   formatSessionToolOutput,
   invalidArgText,
   reuseTextComponent,
   shortenPath,
   str,
 } from "./render-utils.js";
-import type { LsToolDetails } from "./tool-contracts.js";
+import type { LsToolDetails, LsToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES } from "./truncate.js";
 
 const lsSchema = Type.Object({
   path: Type.Optional(Type.String({ description: "Directory; default cwd." })),
   limit: Type.Optional(Type.Number({ description: "Max entries; default 500." })),
+  after: Type.Optional(
+    Type.String({ description: "Filename cursor returned by the previous page." }),
+  ),
 });
 const DEFAULT_LIMIT = 500;
 
@@ -34,29 +37,28 @@ const DEFAULT_LIMIT = 500;
  * Override these to delegate directory listing to remote systems (for example SSH).
  */
 export interface LsOperations {
-  /** Check if path exists */
-  exists: (absolutePath: string) => Promise<boolean> | boolean;
-  /** Get file or directory stats. Throws if not found. */
-  stat: (
+  readDirectory: (
     absolutePath: string,
-  ) => Promise<{ isDirectory: () => boolean }> | { isDirectory: () => boolean };
-  /** Read directory entries */
-  readdir: (absolutePath: string) => Promise<string[]> | string[];
+    signal?: AbortSignal,
+  ) => Promise<DirectoryEntry[]> | DirectoryEntry[];
 }
 
 const defaultLsOperations: LsOperations = {
-  exists: existsSync,
-  stat: statSync,
-  readdir: readdirSync,
+  readDirectory: async (absolutePath) =>
+    (await readdir(absolutePath, { withFileTypes: true })).map((entry) => ({
+      name: entry.name,
+      isDirectory: entry.isDirectory(),
+    })),
 };
 
 export interface LsToolOptions {
   /** Custom operations for directory listing. Default: local filesystem */
   operations?: LsOperations;
+  modelBudget?: ToolResultBudget;
 }
 
 function formatLsCall(
-  args: { path?: string; limit?: number } | undefined,
+  args: LsToolInput | undefined,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string {
   const rawPath = str(args?.path);
@@ -67,44 +69,32 @@ function formatLsCall(
   if (limit !== undefined) {
     text += theme.fg("toolOutput", ` (limit ${limit})`);
   }
+  if (args?.after !== undefined) {
+    text += theme.fg("toolOutput", ` (after ${JSON.stringify(args.after)})`);
+  }
   return text;
 }
 
-function formatLsResult(
-  result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-    details?: LsToolDetails;
-  },
-  options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
-  showImages: boolean,
-): string {
-  const entryLimit = result.details?.entryLimitReached;
-  return appendSessionToolTruncationWarning(
-    formatSessionToolOutput(result, options, theme, showImages, 20),
-    theme,
-    {
-      limit: entryLimit ? { count: entryLimit, noun: "entries" } : undefined,
-      truncation: result.details?.truncation,
-    },
-  );
+function formatLsContinuation(after: string): string {
+  return `\n\n[More entries. Continue with the same path and after=${JSON.stringify(after)}.]`;
 }
 
 export function createLsToolDefinition(
   cwd: string,
   options?: LsToolOptions,
-): ToolDefinition<typeof lsSchema, LsToolDetails | undefined> {
+): ToolDefinition<typeof lsSchema, LsToolDetails> {
   const ops = options?.operations ?? defaultLsOperations;
   const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "ls",
     label: "ls",
-    description: `List dir alphabetically; / marks dirs; includes dotfiles. Caps ${DEFAULT_LIMIT} entries/${DEFAULT_MAX_BYTES / 1024}KB.`,
+    description:
+      "List directory entries in binary filename order, including dotfiles and links. Names are JSON-quoted; / marks actual directories. Pass the returned after cursor with the same path to continue.",
     promptSnippet: "List directory contents",
     parameters: lsSchema,
     async execute(
       toolCallId,
-      { path, limit }: { path?: string; limit?: number },
+      { path, limit, after }: LsToolInput,
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -120,84 +110,53 @@ export function createLsToolDefinition(
         try {
           const dirPath = resolvePath(path || ".", cwd);
           const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
-
-          // Check if path exists.
-          if (!(await ops.exists(dirPath))) {
-            throw new Error(`Path not found: ${dirPath}`);
+          const directoryEntries = await ops.readDirectory(dirPath, signal);
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
           }
-
-          // Check if path is a directory.
-          const stat = await ops.stat(dirPath);
-          if (!stat.isDirectory()) {
-            throw new Error(`Not a directory: ${dirPath}`);
-          }
-
-          // Read directory entries.
-          let entries: string[];
-          try {
-            entries = await ops.readdir(dirPath);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            throw new Error(`Cannot read directory: ${message}`, { cause: error });
-          }
-
-          // Sort alphabetically, case-insensitive.
-          entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-
-          // Format entries with directory indicators.
-          const results: string[] = [];
-          let entryLimitReached = false;
-          for (const entry of entries) {
-            if (results.length >= effectiveLimit) {
-              entryLimitReached = true;
-              break;
-            }
-
-            const fullPath = nodePath.join(dirPath, entry);
-            let suffix = "";
-            try {
-              const entryStat = await ops.stat(fullPath);
-              if (entryStat.isDirectory()) {
-                suffix = "/";
-              }
-            } catch {
-              // Directory metadata is optional; keep names even when a symlink target is missing.
-            }
-            results.push(entry + suffix);
-          }
-
-          if (results.length === 0) {
+          const entries = directoryEntries
+            .filter((entry) => after === undefined || entry.name > after)
+            .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+          if (entries.length === 0) {
             return {
               content: [{ type: "text" as const, text: "(empty directory)" }],
-              details: undefined,
+              details: { content: "(empty directory)" },
             };
           }
-
-          const rawOutput = results.join("\n");
-          // Apply byte truncation. There is no separate line limit because entry count is already capped.
-          const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-          let output = truncation.content;
-          const details: LsToolDetails = {};
-          // Build actionable notices for truncation and entry limits.
-          const notices: string[] = [];
-          if (entryLimitReached) {
-            notices.push(
-              `${effectiveLimit} entries limit reached. Use limit=${effectiveLimit * 2} for more`,
-            );
-            details.entryLimitReached = effectiveLimit;
+          const fitsPage = (text: string) =>
+            Buffer.byteLength(text) <= DEFAULT_MAX_BYTES &&
+            toolResultFitsBudget(text, options?.modelBudget);
+          const lines: string[] = [];
+          let content = "";
+          for (const entry of entries) {
+            if (lines.length >= effectiveLimit) {
+              break;
+            }
+            const line = JSON.stringify(entry.name + (entry.isDirectory ? "/" : ""));
+            const candidate = content ? `${content}\n${line}` : line;
+            if (!fitsPage(candidate)) {
+              break;
+            }
+            lines.push(line);
+            content = candidate;
           }
-          if (truncation.truncated) {
-            notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-            details.truncation = truncation;
+          // Complete final pages need no footer. Reserve continuation only after
+          // selection, and advance past only the entries that remain visible.
+          while (lines.length > 0) {
+            const nextAfter =
+              lines.length < entries.length ? entries[lines.length - 1]!.name : undefined;
+            const output =
+              content + (nextAfter === undefined ? "" : formatLsContinuation(nextAfter));
+            if (fitsPage(output)) {
+              return {
+                content: [{ type: "text" as const, text: output }],
+                details: { content: output, ...(nextAfter === undefined ? {} : { nextAfter }) },
+              };
+            }
+            lines.pop();
+            content = lines.join("\n");
           }
-          if (notices.length > 0) {
-            output += `\n\n[${notices.join(". ")}]`;
-          }
-
-          return {
-            content: [{ type: "text" as const, text: output }],
-            details: Object.keys(details).length > 0 ? details : undefined,
-          };
+          throw new Error("A directory entry cannot fit within the listing output budget.");
         } catch (e: unknown) {
           throw toErrorObject(e, "Non-Error rejection");
         }
@@ -228,12 +187,15 @@ export function createLsToolDefinition(
       return reuseTextComponent(context.lastComponent, formatLsCall(args, theme));
     },
     renderResult(result, optionsLocal, theme, context) {
-      const content = formatLsResult(result, optionsLocal, theme, context.showImages);
+      const content = formatSessionToolOutput(result, optionsLocal, theme, context.showImages, 20);
       return reuseTextComponent(context.lastComponent, content);
     },
   };
 }
 
-export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<typeof lsSchema> {
+export function createLsTool(
+  cwd: string,
+  options?: LsToolOptions,
+): AgentTool<typeof lsSchema, LsToolDetails> {
   return wrapToolDefinition(createLsToolDefinition(cwd, options));
 }

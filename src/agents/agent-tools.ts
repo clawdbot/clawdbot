@@ -26,6 +26,7 @@ import type {
 } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -119,6 +120,7 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
+  type ToolSearchToolContext,
 } from "./tool-search.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
@@ -193,6 +195,8 @@ type OpenClawCodingToolsOptions = {
   questionPrompt?: QuestionPromptDelivery;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Host-admitted dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
@@ -243,6 +247,8 @@ type OpenClawCodingToolsOptions = {
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
+  /** Additional containment for a trusted scheduled workspace; never weakens configured policy. */
+  requireWorkspaceOnly?: true;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   /**
    * Workspace directory that spawned subagents should inherit.
@@ -370,6 +376,8 @@ type OpenClawCodingToolsOptions = {
   toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
   /** Runtime-local Tool Search catalog ref shared with attempt compaction. */
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  /** Already-admitted skill locations for mistaken tool-id recovery. */
+  codeModeSkills?: ToolSearchToolContext["codeModeSkills"];
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
   /** Ring-zero OpenClaw tool; set only by the OpenClaw agent runner. */
@@ -532,6 +540,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionId: options?.sessionId,
     agentId,
   });
+  if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
+    const supervisor = getProcessSupervisor();
+    // Register before launch: root completion can precede final cleanup,
+    // which must retain the tree and any earlier extinction failure.
+    options.registerRunCleanup(
+      supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true }),
+    );
+  }
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const execRuntimeConfig = options?.exec?.config ?? options?.config;
@@ -589,18 +605,19 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly =
-    isMemoryFlushRun || (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
+    options?.requireWorkspaceOnly === true ||
+    isMemoryFlushRun ||
+    (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
   const fsPolicy = {
     workspaceOnly,
     ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
   };
   const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
   const applyPatchConfig = execConfig.applyPatch;
-  // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
-  // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
+  // Required file roots still constrain patches after a full-mode change; shell policy is separate.
   const applyPatchWorkspaceOnly =
-    sessionCoreToolPolicy?.applyPatchWorkspaceOnly ??
-    (workspaceOnly || applyPatchConfig?.workspaceOnly !== false);
+    workspaceOnly ||
+    (sessionCoreToolPolicy?.applyPatchWorkspaceOnly ?? applyPatchConfig?.workspaceOnly !== false);
   const applyPatchEnabled =
     !readOnly &&
     applyPatchConfig?.enabled !== false &&
@@ -812,6 +829,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           sessionId: options?.sessionId,
           runId: options?.runId,
           catalogRef: options?.toolSearchCatalogRef,
+          codeModeSkills: options?.codeModeSkills,
           abortSignal: options?.abortSignal,
           executeTool: options?.toolSearchCatalogExecutor,
         })
@@ -890,6 +908,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
+            pinnedWidgetAuthoring: options?.pinnedWidgetAuthoring,
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,

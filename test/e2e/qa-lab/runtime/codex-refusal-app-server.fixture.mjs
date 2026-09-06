@@ -1,4 +1,5 @@
-// Deterministic Codex app-server fixture: refuse the first turn, complete the next.
+// Deterministic native failures followed by an ordinary successful turn.
+import { randomUUID } from "node:crypto";
 import {
   createFakeInitializeResponse,
   createFakeThreadStartResponse,
@@ -7,20 +8,31 @@ import {
 
 const requestLog = process.env.OPENCLAW_QA_CODEX_REFUSAL_APP_SERVER_LOG;
 const appServerVersion = process.env.OPENCLAW_QA_CODEX_APP_SERVER_VERSION;
-if (!requestLog || !appServerVersion) {
+const failureKind = process.env.OPENCLAW_QA_CODEX_FAILURE_KIND;
+const failures = {
+  bio: {
+    message: "This content was flagged for possible biological risk. Synthetic detail.",
+    codexErrorInfo: "other",
+  },
+  cyber: {
+    message: "Synthetic provider cyber policy decision.",
+    codexErrorInfo: "cyberPolicy",
+  },
+  misalignment: {
+    message: "Synthetic misalignment policy decision: internal server error.",
+    codexErrorInfo: "misalignmentPolicyViolation",
+  },
+  retryable: {
+    message: "An error occurred while processing your request. Synthetic detail.",
+    codexErrorInfo: "internalServerError",
+  },
+};
+if (!requestLog || !appServerVersion || !Object.hasOwn(failures, failureKind)) {
   throw new Error("missing Codex refusal fixture environment");
 }
 
-const threadId = "thread-qa-codex-refusal";
+const threads = new Map();
 let turnCount = 0;
-let loaded = false;
-const threadResponse = (params) =>
-  createFakeThreadStartResponse({
-    params,
-    threadId,
-    sessionId: "session-qa-codex-refusal",
-    version: appServerVersion,
-  });
 
 runFakeCodexAppServer({
   requestLog,
@@ -59,83 +71,78 @@ runFakeCodexAppServer({
     "config/read": ({ sendResult }) => sendResult({ config: {}, origins: {}, layers: [] }),
     "configRequirements/read": ({ sendResult }) => sendResult({ requirements: null }),
     "thread/start": ({ params, sendResult }) => {
-      loaded = true;
-      sendResult(threadResponse(params));
+      const threadId = randomUUID();
+      const response = createFakeThreadStartResponse({
+        params,
+        threadId,
+        sessionId: randomUUID(),
+        version: appServerVersion,
+      });
+      threads.set(threadId, response);
+      sendResult(response);
     },
     "thread/resume": ({ params, sendResult }) => {
-      loaded = true;
-      sendResult(threadResponse(params));
+      sendResult(threads.get(params.threadId));
     },
-    "thread/read": ({ sendResult }) => {
-      const thread = threadResponse({}).thread;
-      sendResult({ thread: { ...thread, status: { type: loaded ? "idle" : "notLoaded" } } });
+    "thread/read": ({ params, sendResult }) => {
+      sendResult({ thread: threads.get(params.threadId).thread });
     },
-    "thread/unsubscribe": ({ notify, params, sendResult }) => {
-      loaded = false;
-      notify("thread/status/changed", {
-        threadId: params?.threadId ?? threadId,
-        status: { type: "notLoaded" },
-      });
+    "thread/unsubscribe": ({ sendResult }) => {
+      // Native unsubscribe removes the listener; its loaded thread survives the
+      // 30-minute idle-unload delay, including a completed systemError state.
       sendResult({ status: "unsubscribed" });
     },
-    "turn/start": ({ notify, sendResult }) => {
+    "turn/start": ({ notify, params, sendResult }) => {
       turnCount += 1;
-      const turnId = `turn-qa-codex-refusal-${turnCount}`;
-      sendResult({
-        turn: {
-          id: turnId,
-          items: [],
-          itemsView: "notLoaded",
-          status: "inProgress",
-          error: null,
-          startedAt: null,
-          completedAt: null,
-          durationMs: null,
-        },
-      });
+      const attemptNumber = turnCount;
+      const threadId = params.threadId;
+      const thread = threads.get(threadId).thread;
+      const turnId = randomUUID();
+      const turn = {
+        id: turnId,
+        items: [],
+        itemsView: "full",
+        status: "inProgress",
+        error: null,
+        startedAt: Math.floor(Date.now() / 1000),
+        completedAt: null,
+        durationMs: null,
+      };
+      thread.turns.push(turn);
+      thread.status = { type: "active", activeFlags: [] };
+      sendResult({ turn });
       setImmediate(() => {
+        notify("thread/status/changed", { threadId, status: thread.status });
+        notify("turn/started", { threadId, turn });
         const completedAt = Math.floor(Date.now() / 1000);
-        if (turnCount === 1) {
+        if (attemptNumber === 1) {
           const error = {
-            message: "This content was flagged for possible biological risk. Synthetic detail.",
-            codexErrorInfo: "other",
+            ...failures[failureKind],
             additionalDetails: null,
+            misalignment: null,
           };
+          Object.assign(turn, { status: "failed", error, completedAt, durationMs: 0 });
+          thread.status = { type: "systemError" };
+          notify("thread/status/changed", { threadId, status: thread.status });
           notify("error", { threadId, turnId, error, willRetry: false });
-          notify("turn/completed", {
-            threadId,
-            turn: {
-              id: turnId,
-              items: [],
-              itemsView: "full",
-              status: "failed",
-              error,
-              startedAt: completedAt,
-              completedAt,
-              durationMs: 0,
-            },
-          });
+          notify("turn/completed", { threadId, turn });
           return;
         }
         const message = {
           type: "agentMessage",
-          id: `message-qa-codex-refusal-${turnCount}`,
+          id: randomUUID(),
           text: "QA_CODEX_LATER_TURN_OK",
         };
         notify("item/completed", { item: message, threadId, turnId, completedAtMs: Date.now() });
-        notify("turn/completed", {
-          threadId,
-          turn: {
-            id: turnId,
-            items: [message],
-            itemsView: "full",
-            status: "completed",
-            error: null,
-            startedAt: completedAt,
-            completedAt,
-            durationMs: 0,
-          },
+        Object.assign(turn, {
+          items: [message],
+          status: "completed",
+          completedAt,
+          durationMs: 0,
         });
+        thread.status = { type: "idle" };
+        notify("thread/status/changed", { threadId, status: thread.status });
+        notify("turn/completed", { threadId, turn });
       });
     },
   },

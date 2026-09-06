@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { Context, Message, Model } from "../../llm/types.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { parseSessionEntries, SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -63,14 +64,7 @@ async function writeSessionWithToolResultContent(
         model: "claude-sonnet-4-6",
         stopReason: "toolUse",
         timestamp: 2,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
       },
     },
@@ -123,14 +117,7 @@ async function writeSessionWithAssistantContent(
         model: "claude-sonnet-4-6",
         stopReason: "stop",
         timestamp: 2,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         content,
       },
     },

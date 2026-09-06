@@ -177,6 +177,7 @@ export function buildCliMcpGrantContext(params: {
     modelHasVision: params.run.modelHasVision,
     messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
+    ...(params.run.pinnedWidgetAuthoring === true ? { pinnedWidgetAuthoring: true } : {}),
     currentChannelId,
     currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
     currentMessageId:

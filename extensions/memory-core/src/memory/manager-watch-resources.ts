@@ -1,9 +1,9 @@
 // Memory Core owns memory watcher resources and their degraded lifecycle.
 import fsSync from "node:fs";
+import { getFileWatchCapacityCode } from "openclaw/plugin-sdk/file-access-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
-import { getMemoryWatchCapacityCode } from "./watch-capacity.js";
 import {
   countChokidarWatchedEntries,
   type MemoryWatchPressureUnit,
@@ -124,7 +124,7 @@ export abstract class MemoryManagerWatchResources extends MemoryManagerSyncBase 
     err: unknown,
     markDirty: () => void,
   ): boolean {
-    const code = getMemoryWatchCapacityCode(err);
+    const code = getFileWatchCapacityCode(err);
     if (!code) {
       return false;
     }
@@ -134,9 +134,12 @@ export abstract class MemoryManagerWatchResources extends MemoryManagerSyncBase 
     this.memoryWatchCapacityDegraded = true;
     this.closeNativeMemoryWatchPairs();
     const watcher = this.watcher;
-    this.watcher = null;
     if (watcher) {
-      void watcher.close().catch(() => {});
+      void watcher.close().catch((error: unknown) => {
+        log.warn(`memory watcher close failed: ${String(error)}`);
+      });
+      // Chokidar removes error listeners before pending filesystem operations settle.
+      watcher.on("error", () => {});
     }
     markDirty();
     log.warn(

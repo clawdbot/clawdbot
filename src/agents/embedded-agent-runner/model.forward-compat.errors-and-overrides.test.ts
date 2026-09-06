@@ -51,8 +51,8 @@ vi.mock("./model.static-catalog.js", () => ({
   }),
 }));
 
-vi.mock("../model-suppression.js", () => ({
-  shouldSuppressBuiltInModelCore: ({
+vi.mock("../model-suppression.js", () => {
+  function suppressionError({
     provider,
     id,
     baseUrl,
@@ -60,32 +60,25 @@ vi.mock("../model-suppression.js", () => ({
     provider?: string;
     id?: string;
     baseUrl?: string;
-  }) => {
+  }) {
     if (
       (provider !== "openai" && provider !== "azure-openai-responses") ||
-      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
-    ) {
-      return false;
-    }
-    if (provider === "azure-openai-responses") {
-      return true;
-    }
-    if (!baseUrl) {
-      return true;
-    }
-    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
-  },
-  shouldUnconditionallySuppress: () => false,
-  buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
-    if (
-      (provider !== "openai" && provider !== "azure-openai-responses") ||
-      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
+      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark" ||
+      (provider === "openai" &&
+        baseUrl &&
+        new URL(baseUrl).hostname.toLowerCase() !== "api.openai.com")
     ) {
       return undefined;
     }
     return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
-  },
-}));
+  }
+  return {
+    shouldSuppressBuiltInModelCore: (input: Parameters<typeof suppressionError>[0]) =>
+      Boolean(suppressionError(input)),
+    shouldUnconditionallySuppress: () => false,
+    buildSuppressedBuiltInModelError: suppressionError,
+  };
+});
 
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");

@@ -203,6 +203,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   };
 
   private readonly handleSessionUpdate = () => {
+    this.sessionLinkTitler.refresh();
     if (this.open && this.hovercard.held) {
       this.showCurrent();
     }
@@ -414,10 +415,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       )?.findSidebarHovercardRowByKey(sessionKey);
     const pullRequests = this.pullRequests?.get(artifactKey);
     const currentProgressCard = this.progressCards?.get(session);
-    const progressCardError =
-      this.progressCards?.getError(session) === "unsupported-owner"
-        ? t("sessionProgressCard.ownerUnsupported")
-        : undefined;
     if (currentProgressCard !== undefined) {
       this.lastProgressCard = currentProgressCard;
     }
@@ -439,7 +436,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     };
     const revision = JSON.stringify({
       progress: this.lastProgressCard?.revision ?? null,
-      progressCardError,
       pullRequests: pullRequests
         ? { branch: pullRequests.branch, pullRequests: pullRequests.pullRequests }
         : null,
@@ -448,6 +444,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             label: sidebarRow.label,
             boardFace: sidebarRow.boardFace,
             hasAutomation: sidebarRow.hasAutomation,
+            hasActiveRun: sidebarRow.hasActiveRun,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
@@ -501,7 +498,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         personActivity: this.personActivity(),
         pullRequests,
         progressCard: this.lastProgressCard,
-        progressCardError,
       }),
       card,
     );

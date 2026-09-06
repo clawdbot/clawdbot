@@ -93,6 +93,8 @@ export const SessionObserverPlanProgressSchema = closedObject({
 export const SessionObserverDigestSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  sessionId: Type.Optional(NonEmptyString),
+  lifecycleRevision: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   revision: Type.Integer({ minimum: 1 }),
   updatedAt: Type.Integer({ minimum: 0 }),
@@ -446,6 +448,7 @@ export const SessionsPreviewParamsSchema = closedObject({
 /** Describes one session and optional derived title/last-message previews. */
 export const SessionsDescribeParamsSchema = closedObject({
   key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });

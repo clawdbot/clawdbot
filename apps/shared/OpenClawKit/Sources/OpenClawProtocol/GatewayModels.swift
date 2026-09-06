@@ -6105,21 +6105,25 @@ public struct SessionsPreviewParams: Codable, Sendable {
 
 public struct SessionsDescribeParams: Codable, Sendable {
     public let key: String
+    public let agentid: String?
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
 
     public init(
         key: String,
+        agentid: String? = nil,
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil)
     {
         self.key = key
+        self.agentid = agentid
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
     }
 
     private enum CodingKeys: String, CodingKey {
         case key
+        case agentid = "agentId"
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
     }
@@ -6501,6 +6505,8 @@ public struct SessionObserverPlanProgress: Codable, Sendable {
 public struct SessionObserverDigest: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let sessionid: String?
+    public let lifecyclerevision: String?
     public let runid: String?
     public let revision: Int
     public let updatedat: Int
@@ -6512,6 +6518,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     public init(
         sessionkey: String,
         agentid: String? = nil,
+        sessionid: String? = nil,
+        lifecyclerevision: String? = nil,
         runid: String? = nil,
         revision: Int,
         updatedat: Int,
@@ -6522,6 +6530,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.sessionid = sessionid
+        self.lifecyclerevision = lifecyclerevision
         self.runid = runid
         self.revision = revision
         self.updatedat = updatedat
@@ -6534,6 +6544,8 @@ public struct SessionObserverDigest: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case sessionid = "sessionId"
+        case lifecyclerevision = "lifecycleRevision"
         case runid = "runId"
         case revision
         case updatedat = "updatedAt"
@@ -6607,6 +6619,7 @@ public struct SessionRow: Codable, Sendable {
     public let subagentrole: AnyCodable?
     public let subagentcontrolscope: AnyCodable?
     public let swarmgroupid: String?
+    public let swarm: [String: AnyCodable]?
     public let worktree: [String: AnyCodable]?
     public let execnode: String?
     public let execcwd: String?
@@ -6686,6 +6699,7 @@ public struct SessionRow: Codable, Sendable {
         subagentrole: AnyCodable? = nil,
         subagentcontrolscope: AnyCodable? = nil,
         swarmgroupid: String? = nil,
+        swarm: [String: AnyCodable]? = nil,
         worktree: [String: AnyCodable]? = nil,
         execnode: String? = nil,
         execcwd: String? = nil,
@@ -6764,6 +6778,7 @@ public struct SessionRow: Codable, Sendable {
         self.subagentrole = subagentrole
         self.subagentcontrolscope = subagentcontrolscope
         self.swarmgroupid = swarmgroupid
+        self.swarm = swarm
         self.worktree = worktree
         self.execnode = execnode
         self.execcwd = execcwd
@@ -6844,6 +6859,7 @@ public struct SessionRow: Codable, Sendable {
         case subagentrole = "subagentRole"
         case subagentcontrolscope = "subagentControlScope"
         case swarmgroupid = "swarmGroupId"
+        case swarm
         case worktree
         case execnode = "execNode"
         case execcwd = "execCwd"
@@ -23161,6 +23177,7 @@ public struct ChatStatusEvent: Codable, Sendable {
     public let seq: Int
     public let state: String
     public let phase: ChatRunStartupPhase
+    public let retry: [String: AnyCodable]?
 
     public init(
         runid: String,
@@ -23169,7 +23186,8 @@ public struct ChatStatusEvent: Codable, Sendable {
         spawnedby: String? = nil,
         seq: Int,
         state: String,
-        phase: ChatRunStartupPhase)
+        phase: ChatRunStartupPhase,
+        retry: [String: AnyCodable]? = nil)
     {
         self.runid = runid
         self.sessionkey = sessionkey
@@ -23178,6 +23196,7 @@ public struct ChatStatusEvent: Codable, Sendable {
         self.seq = seq
         self.state = state
         self.phase = phase
+        self.retry = retry
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -23188,6 +23207,7 @@ public struct ChatStatusEvent: Codable, Sendable {
         case seq
         case state
         case phase
+        case retry
     }
 }
 

@@ -44,6 +44,9 @@ setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => {
     const activeRuns = new Map<string, Awaited<ReturnType<SupervisorSpawnFn>>>();
     return {
+      acquireScopeCleanup: vi.fn(() => {
+        throw new Error("CLI execution fixture does not own a cleanup scope");
+      }),
       spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
         let stdoutDelivered = false;
         let stderrDelivered = false;
@@ -147,5 +150,18 @@ export function createManagedRun(
     stdin: undefined,
     wait: vi.fn().mockResolvedValue(exit),
     cancel: vi.fn(),
+  };
+}
+
+export function createSuccessfulProcessExit(): MockRunExit {
+  return {
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 50,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
   };
 }

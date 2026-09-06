@@ -233,6 +233,8 @@ Security note: URL allowlists are enforced before fetch and on redirect hops. Al
 
 ## Streaming (SSE)
 
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream emits `response.failed` rather than completing with inconsistent content.
+
 Set `stream: true` to receive Server-Sent Events:
 
 - `Content-Type: text/event-stream`
@@ -242,6 +244,8 @@ Set `stream: true` to receive Server-Sent Events:
 Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.failed` (on error).
 
 Failed agent runs, including whole-agent timeouts, return a failed response. Streaming failures emit `response.failed` followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
 
 ## Usage
 

@@ -176,15 +176,27 @@ async function withActiveMediaTurn(
   harness: StartedHarness,
   exercise: (controller: AbortController) => Promise<void>,
 ) {
+  // Drive media/closure ordering without charging filesystem setup to the run budget.
+  vi.useFakeTimers();
   const controller = new AbortController();
-  const run = runCodexAppServerAttempt({ ...fixture.params, abortSignal: controller.signal });
+  const started = createDeferred<void>();
+  const run = runCodexAppServerAttempt({
+    ...fixture.params,
+    abortSignal: controller.signal,
+    onAgentEvent: (event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        started.resolve();
+      }
+      return fixture.params.onAgentEvent?.(event);
+    },
+  });
   try {
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => {
-      expect(resolveActiveEmbeddedRunSessionId(fixture.params.sessionKey!)).toBe(
-        fixture.params.sessionId,
-      );
-    }, fastWait);
+    // Polling waitFor advances fake time while cold runtime preparation is still loading.
+    await started.promise;
+    expect(harness.requests.some((entry) => entry.method === "turn/start")).toBe(true);
+    expect(resolveActiveEmbeddedRunSessionId(fixture.params.sessionKey!)).toBe(
+      fixture.params.sessionId,
+    );
     await exercise(controller);
   } finally {
     // Assertions may fail while a steer awaits consumption; always retire its owner.
@@ -207,6 +219,8 @@ async function notifyConsumed(harness: StartedHarness, clientId: string, turnId 
 describe("Codex active-run steering media", () => {
   it("keeps consumed question answers accepted when their host closes during the response", async () => {
     const fixture = await createMediaFixture("offloaded");
+    const onAttemptTimeout = vi.fn();
+    fixture.params.onAttemptTimeout = onAttemptTimeout;
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
     const harness = createStartedThreadHarness();
     await withActiveMediaTurn(fixture, harness, async (controller) => {
@@ -239,6 +253,7 @@ describe("Codex active-run steering media", () => {
       });
       try {
         await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce(), fastWait);
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
         const accepted = vi.fn();
         expect(
           queueAgentHarnessMessage(fixture.params.sessionId, "yes", {
@@ -250,6 +265,7 @@ describe("Codex active-run steering media", () => {
         ).toBe(true);
         await expect(question).resolves.toEqual(result);
         await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
         expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
       } finally {
         closeHost();
@@ -379,7 +395,8 @@ describe("Codex active-run steering media", () => {
         expect(steer.input).toEqual([
           { type: "text", text: fixture.message.content, text_elements: [] },
         ]);
-        expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+        expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+        expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
         await notifyConsumed(harness, steer.clientUserMessageId);
         expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
       });
@@ -425,7 +442,7 @@ describe("Codex active-run steering media", () => {
           [{ type: "text", text: "first image", text_elements: [] }, ...fixture.expectedImages],
           [{ type: "text", text: "later text", text_elements: [] }],
         ]);
-        expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+        expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
         for (const steer of steers) {
           await notifyConsumed(harness, steer.clientUserMessageId);
         }
@@ -441,7 +458,7 @@ describe("Codex active-run steering media", () => {
     { scenario: "mixed", name: "mixed offloaded/inline ingress order" },
     { scenario: "message", name: "recorder.message facts and layout over ingress hints" },
     { scenario: "resolved", name: "recorder.resolveMessage facts and layout over stale metadata" },
-  ] as const)("delivers $name without treating ACK as consumption", async ({ scenario }) => {
+  ] as const)("persists source custody before delivering $name", async ({ scenario }) => {
     const fixture = await createMediaFixture(scenario);
     const harness = createStartedThreadHarness();
     await withActiveMediaTurn(fixture, harness, async () => {
@@ -461,12 +478,13 @@ describe("Codex active-run steering media", () => {
         clientUserMessageId: expect.any(String),
       });
       const clientId = steer.clientUserMessageId;
-      expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-      expect(await fixture.readSteeredMessages()).toEqual([]);
+      const expectedMessages = fixture.options.userTurnTranscriptRecorder ? [fixture.message] : [];
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledTimes(expectedMessages.length);
+      expect(await fixture.readSteeredMessages()).toEqual(expectedMessages);
       await notifyConsumed(harness, "unrelated-client");
       await notifyConsumed(harness, clientId, "other-turn");
-      expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-      expect(await fixture.readSteeredMessages()).toEqual([]);
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledTimes(expectedMessages.length);
+      expect(await fixture.readSteeredMessages()).toEqual(expectedMessages);
       await notifyConsumed(harness, clientId);
       await notifyConsumed(harness, clientId);
       if (fixture.options.userTurnTranscriptRecorder) {
@@ -544,8 +562,8 @@ describe("Codex active-run steering media", () => {
       const steer = harness.requests.find((entry) => entry.method === "turn/steer")
         ?.params as SteerRequest;
       await notifyConsumed(harness, steer.clientUserMessageId);
-      expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-      expect(await fixture.readSteeredMessages()).toEqual([]);
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+      expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
       await result?.recorder?.persistApproved();
       expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
     });

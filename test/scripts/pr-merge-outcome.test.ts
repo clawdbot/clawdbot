@@ -1426,7 +1426,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const run = f.run();
     expect(run.status, run.output).toBe(0);
     expect(f.record().phase).toBe("complete");
-    expect(f.state().reads).toBe(5);
+    expect(f.state().observationReads).toBe(5);
     expect(f.state().settlementSleeps).toEqual([]);
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);

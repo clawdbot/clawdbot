@@ -47,6 +47,7 @@ export interface FindToolInput {
 }
 
 export interface FindToolDetails {
+  content: string;
   truncation?: TruncationResult;
   resultLimitReached?: number;
 }
@@ -62,6 +63,7 @@ export interface GrepToolInput {
 }
 
 export interface GrepToolDetails {
+  content: string;
   truncation?: TruncationResult;
   matchLimitReached?: number;
   linesTruncated?: boolean;
@@ -70,11 +72,12 @@ export interface GrepToolDetails {
 export interface LsToolInput {
   path?: string;
   limit?: number;
+  after?: string;
 }
 
 export interface LsToolDetails {
-  truncation?: TruncationResult;
-  entryLimitReached?: number;
+  content: string;
+  nextAfter?: string;
 }
 
 export interface ReadToolInput {

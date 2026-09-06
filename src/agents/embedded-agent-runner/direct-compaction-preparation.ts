@@ -46,11 +46,14 @@ import {
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
+import type { TranscriptByteCompactionPersistence } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionRuntimeParams & {
   sessionFile: string;
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
+  transcriptBytePreflightAuthority?: true;
+  transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
 };
 
 export async function prepareDirectCompactionAttempt(
@@ -207,6 +210,8 @@ export async function prepareDirectCompactionAttempt(
       provider,
       modelId,
       config: params.config,
+      workspaceDir: resolvedWorkspace,
+      metadataSnapshot: preparedModelRuntime.metadataSnapshot,
       model: materializeParams.model,
       forceResolve: materializeParams.forceResolve,
       resolveModel: resolvePreparedModel,
@@ -325,6 +330,9 @@ export async function prepareDirectCompactionAttempt(
           workspaceDir: resolvedWorkspace,
         })
       : placementParams.sandbox;
+  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+    throw new Error("sandbox workspace is not read-write; collection review skipped");
+  }
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace

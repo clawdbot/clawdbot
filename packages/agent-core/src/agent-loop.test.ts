@@ -2666,6 +2666,73 @@ describe("agentLoop tool termination", () => {
     },
   );
 
+  it.each(["execute", "prepare", "immediate", "after-call", "after-outcome"] as const)(
+    "preserves only operation-owned error provenance at %s",
+    async (phase) => {
+      const provenance = { source: "operation-effect-proof" };
+      const failure = attachInternalToolResultProvenance(
+        new Error("operation rejected"),
+        provenance,
+      );
+      const tool: AgentTool = {
+        ...makeTool("operation", []),
+        execute: async () => {
+          if (phase === "execute") {
+            throw failure;
+          }
+          return { content: [{ type: "text", text: "completed" }], details: {} };
+        },
+      };
+      if (phase === "prepare" || phase === "immediate") {
+        attachInternalToolExecutionPreparer(tool, async () => {
+          if (phase === "prepare") {
+            throw failure;
+          }
+          return { kind: "immediate", outcome: { kind: "error", error: failure }, dispose() {} };
+        });
+      }
+      const stream = agentLoop(
+        [{ role: "user", content: "perform operation", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          ...(phase === "after-call"
+            ? {
+                afterToolCall: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+          ...(phase === "after-outcome"
+            ? {
+                afterToolOutcome: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+        },
+        undefined,
+        createTurnSequenceStream([
+          [{ type: "toolCall", id: "operation-call", name: tool.name, arguments: {} }],
+          [{ type: "text", text: "recovered" }],
+        ]),
+      );
+      const events = await collectEvents(stream);
+      const end = events.find((event) => event.type === "tool_execution_end");
+      if (
+        end?.type !== "tool_execution_end" ||
+        typeof end.result !== "object" ||
+        end.result === null
+      ) {
+        throw new Error("Expected the operation's terminal result");
+      }
+      expect(end.isError).toBe(true);
+      expect(getInternalToolResultProvenance(end.result)).toBe(
+        phase === "after-call" || phase === "after-outcome" ? undefined : provenance,
+      );
+    },
+  );
+
   it.each([
     { name: "attached", failAttachment: false, expectedAcknowledgements: 1 },
     { name: "dropped", failAttachment: true, expectedAcknowledgements: 0 },

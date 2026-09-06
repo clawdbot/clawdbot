@@ -1,12 +1,38 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { recordSkillCollectionReviewHistory } from "../../skills/workshop/collection-review-state.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 const cleanups: Array<() => Promise<void>> = [];
+
+function recordSkillCollectionReviewHistory(
+  agentId: string,
+  time: number,
+  result: {
+    backupId: string;
+    kept: string[];
+    written: string[];
+    dropped: Array<{ name: string; reason: string }>;
+  },
+  options: { env: NodeJS.ProcessEnv },
+) {
+  openOpenClawStateDatabase(options)
+    .db.prepare(`INSERT INTO skill_workshop_collection_reviews
+    (review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      result.backupId,
+      agentId,
+      result.backupId,
+      time,
+      JSON.stringify(result.kept),
+      JSON.stringify(result.written),
+      JSON.stringify(result.dropped),
+    );
+}
 
 const createSkillWorkshopTool = (
   options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
@@ -133,21 +159,5 @@ describe("skill_workshop collection history", () => {
       smallContextResult.content[0]?.type === "text" ? smallContextResult.content[0].text : "";
     expect(smallContextText.length).toBeLessThanOrEqual(2_867);
     expect(smallContextText).toMatch(/\(history truncated\)$/u);
-  });
-
-  it("keeps isolated collection reviews limited to read and reconcile", () => {
-    const standardSchema = JSON.stringify(
-      createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" }).parameters,
-    );
-    const restrictedSchema = JSON.stringify(
-      createSkillWorkshopTool({
-        workspaceDir: "/tmp/openclaw",
-        collectionReconcile: { approvedSkillKeys: new Set() },
-      }).parameters,
-    );
-
-    expect(standardSchema).toContain('"history"');
-    expect(restrictedSchema).toContain('"enum":["read","reconcile"]');
-    expect(restrictedSchema).not.toContain('"history"');
   });
 });

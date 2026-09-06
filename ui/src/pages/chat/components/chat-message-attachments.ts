@@ -321,13 +321,7 @@ function resolveAttachmentSource(
 ) {
   const { resourceBasePath, authToken, onRequestUpdate, resolveArtifactDownload, connectionEpoch } =
     options;
-  const assistantAvailability = resolveAssistantAttachmentAvailability(
-    attachment.url,
-    resourceBasePath,
-    authToken,
-    onRequestUpdate,
-    options,
-  );
+  const assistantAvailability = resolveAssistantAttachmentAvailability(attachment.url, options);
   if (assistantAvailability.status !== "available") {
     return {
       status: assistantAvailability.status,
@@ -335,26 +329,11 @@ function resolveAttachmentSource(
         assistantAvailability.status === "unavailable" ? assistantAvailability.reason : undefined,
       onAllow:
         assistantAvailability.status === "unavailable" && assistantAvailability.canAllow
-          ? () =>
-              retryAssistantAttachmentAvailability(
-                attachment.url,
-                resourceBasePath,
-                authToken,
-                onRequestUpdate,
-                options,
-                true,
-              )
+          ? () => retryAssistantAttachmentAvailability(attachment.url, options, true)
           : undefined,
       onRetry:
         assistantAvailability.status === "unavailable" && assistantAvailability.recoverable
-          ? () =>
-              retryAssistantAttachmentAvailability(
-                attachment.url,
-                resourceBasePath,
-                authToken,
-                onRequestUpdate,
-                options,
-              )
+          ? () => retryAssistantAttachmentAvailability(attachment.url, options)
           : undefined,
     };
   }

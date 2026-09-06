@@ -241,6 +241,9 @@ export function resolveSubagentSpawnRequest(
         resolveAdmission,
       });
   const admission = admissionReservation ?? resolveAdmission();
+  if (admissionReservation?.ok) {
+    ctx.onSpawnEffectsStart?.();
+  }
   if (!admission.ok) {
     return rejectSubagentSpawnRequest(
       "forbidden",
@@ -269,13 +272,18 @@ export function resolveSubagentSpawnRequest(
   let reservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
     const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId);
+    // Swarm reservation can reconcile existing lane state even when it rejects a duplicate.
+    ctx.onSpawnEffectsStart?.();
     if (
       !reserveSwarmRun({
         groupId: swarmSchedulerGroupKey,
         runId: childIdem,
         maxConcurrent: swarmConfig.maxConcurrent,
         activeRunIds: groupRuns
-          .filter((entry) => entry.execution.status === "running")
+          .filter(
+            (entry) =>
+              entry.execution.status === "running" || entry.execution.status === "interrupted",
+          )
           .map((entry) => entry.schedulerSlotId ?? entry.runId),
       })
     ) {

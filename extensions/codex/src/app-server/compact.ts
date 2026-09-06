@@ -615,7 +615,7 @@ async function compactCodexNativeThread(
               forceKillDelayMs: 250,
             });
             if (appServer.start.transport === "stdio") {
-              if (transportStopped) {
+              if (transportStopped.exited) {
                 return;
               }
               // A local thread remains runnable with its stdio process. Keep

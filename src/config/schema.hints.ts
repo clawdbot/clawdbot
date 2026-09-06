@@ -3,13 +3,14 @@ import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
-import { z } from "zod";
+import type { z } from "zod";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyConfigTierHints } from "./schema.tiers.js";
+import { walkConfigSchema } from "./schema.walk.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -205,82 +206,9 @@ export function applySensitiveUrlHints(
   return next;
 }
 
-/** Walk a Zod schema and collect concrete/wildcard paths accepted by `matchesPath`. */
-export function collectMatchingSchemaPaths(
-  schema: z.ZodType,
-  path: string,
-  matchesPath: (path: string) => boolean,
-  paths: Set<string> = new Set(),
-): Set<string> {
-  let currentSchema = schema;
-
-  while (isUnwrappable(currentSchema)) {
-    currentSchema = currentSchema.unwrap();
-  }
-
-  if (path && matchesPath(path)) {
-    paths.add(path);
-  }
-
-  if (currentSchema instanceof z.ZodPipe) {
-    collectMatchingSchemaPaths(currentSchema.out as unknown as z.ZodType, path, matchesPath, paths);
-  } else if (currentSchema instanceof z.ZodObject) {
-    const shape = currentSchema.shape;
-    for (const key in shape) {
-      const nextPath = path ? `${path}.${key}` : key;
-      collectMatchingSchemaPaths(shape[key], nextPath, matchesPath, paths);
-    }
-    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
-    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
-      const nextPath = path ? `${path}.*` : "*";
-      collectMatchingSchemaPaths(catchallSchema, nextPath, matchesPath, paths);
-    }
-  } else if (currentSchema instanceof z.ZodArray) {
-    const nextPath = path ? `${path}[]` : "[]";
-    collectMatchingSchemaPaths(currentSchema.element as z.ZodType, nextPath, matchesPath, paths);
-  } else if (currentSchema instanceof z.ZodRecord) {
-    const nextPath = path ? `${path}.*` : "*";
-    collectMatchingSchemaPaths(
-      currentSchema["_def"].valueType as z.ZodType,
-      nextPath,
-      matchesPath,
-      paths,
-    );
-  } else if (
-    currentSchema instanceof z.ZodUnion ||
-    currentSchema instanceof z.ZodDiscriminatedUnion
-  ) {
-    for (const option of currentSchema.options) {
-      collectMatchingSchemaPaths(option as z.ZodType, path, matchesPath, paths);
-    }
-  } else if (currentSchema instanceof z.ZodIntersection) {
-    collectMatchingSchemaPaths(currentSchema["_def"].left as z.ZodType, path, matchesPath, paths);
-    collectMatchingSchemaPaths(currentSchema["_def"].right as z.ZodType, path, matchesPath, paths);
-  }
-
-  return paths;
-}
-
-// Seems to be the only way tsgo accepts us to check if we have a ZodClass
-// with an unwrap() method. And it's overly complex because oxlint and
-// tsgo are each forbidding what the other allows.
-interface ZodDummy {
-  unwrap: () => z.ZodType;
-}
-function isUnwrappable(object: unknown): object is ZodDummy {
-  if (!object || typeof object !== "object") {
-    return false;
-  }
-  return (
-    "unwrap" in object &&
-    typeof (object as Record<string, unknown>).unwrap === "function" &&
-    !(object instanceof z.ZodArray)
-  );
-}
-
 /**
  * Traverses the Zod schema tree and returns a copy of `hints` with every
- * sensitive path marked.
+ * sensitive path marked and credential-bearing URL paths tagged.
  */
 export function mapSensitivePaths(
   schema: z.ZodType,
@@ -288,53 +216,16 @@ export function mapSensitivePaths(
   hints: ConfigUiHints,
 ): ConfigUiHints {
   const next = { ...hints };
-  mapSensitivePathsMut(schema, path, next);
-  return next;
-}
-
-function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHints): void {
-  let currentSchema = schema;
-  let isSensitive = sensitive.has(currentSchema);
-
-  while (isUnwrappable(currentSchema)) {
-    currentSchema = currentSchema.unwrap();
-    isSensitive ||= sensitive.has(currentSchema);
-  }
-
-  if (isSensitive) {
-    hints[path] = { ...hints[path], sensitive: true };
-  }
-
-  if (currentSchema instanceof z.ZodPipe) {
-    mapSensitivePathsMut(currentSchema.out as unknown as z.ZodType, path, hints);
-  } else if (currentSchema instanceof z.ZodObject) {
-    const shape = currentSchema.shape;
-    for (const key in shape) {
-      const nextPath = path ? `${path}.${key}` : key;
-      mapSensitivePathsMut(shape[key], nextPath, hints);
+  const urlPaths = new Set<string>();
+  walkConfigSchema(schema, path, (fieldSchema, fieldPath) => {
+    if (sensitive.has(fieldSchema)) {
+      next[fieldPath] = { ...next[fieldPath], sensitive: true };
     }
-    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
-    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
-      const nextPath = path ? `${path}.*` : "*";
-      mapSensitivePathsMut(catchallSchema, nextPath, hints);
+    if (fieldPath && isSensitiveUrlConfigPath(fieldPath)) {
+      urlPaths.add(fieldPath);
     }
-  } else if (currentSchema instanceof z.ZodArray) {
-    const nextPath = path ? `${path}[]` : "[]";
-    mapSensitivePathsMut(currentSchema.element as z.ZodType, nextPath, hints);
-  } else if (currentSchema instanceof z.ZodRecord) {
-    const nextPath = path ? `${path}.*` : "*";
-    mapSensitivePathsMut(currentSchema["_def"].valueType as z.ZodType, nextPath, hints);
-  } else if (
-    currentSchema instanceof z.ZodUnion ||
-    currentSchema instanceof z.ZodDiscriminatedUnion
-  ) {
-    for (const option of currentSchema.options) {
-      mapSensitivePathsMut(option as z.ZodType, path, hints);
-    }
-  } else if (currentSchema instanceof z.ZodIntersection) {
-    mapSensitivePathsMut(currentSchema["_def"].left as z.ZodType, path, hints);
-    mapSensitivePathsMut(currentSchema["_def"].right as z.ZodType, path, hints);
-  }
+  });
+  return applySensitiveUrlHints(next, urlPaths);
 }
 
 /** @internal */
