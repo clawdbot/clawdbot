@@ -38,5 +38,9 @@
   {
     "source": "iMessage",
     "target": "iMessage"
+  },
+  {
+    "source": "Toggle tasks panel",
+    "target": "切換任務面板"
   }
 ]
