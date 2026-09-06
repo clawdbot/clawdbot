@@ -506,6 +506,8 @@ export async function createGatewaySession(params: {
     const durableEntryExists = listSessionEntriesReadOnly({
       agentId,
       storePath: durableStorePath,
+      projection: "list",
+      clone: false,
     }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
     if (durableEntryExists || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
       return {
