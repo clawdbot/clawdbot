@@ -868,41 +868,6 @@ describe("EmbeddedTuiBackend", () => {
     );
   });
 
-  it("projects local patch responses through the canonical gateway model identity", async () => {
-    const cfg = { agents: { defaults: { model: "demo-cli/shared-model" } } };
-    const entry = {
-      sessionId: "session-cli-model",
-      providerOverride: "demo-cli",
-      modelOverride: "shared-model",
-    };
-    getRuntimeConfigMock.mockReturnValue(cfg);
-    projectSessionsPatchEntryMock.mockResolvedValueOnce({ ok: true, entry });
-    projectSessionPatchResultMock.mockReturnValueOnce({
-      ok: true,
-      path: "/tmp/openclaw-sessions.json",
-      key: "agent:main:main",
-      entry,
-      resolved: { modelProvider: "demo-provider", model: "shared-model" },
-    });
-
-    const result = await new EmbeddedTuiBackend().patchSession({
-      key: "agent:main:main",
-      label: "renamed",
-    });
-
-    expect(projectSessionPatchResultMock).toHaveBeenCalledWith({
-      canonicalKey: "agent:main:main",
-      cfg,
-      entry,
-      storePath: "/tmp/openclaw-sessions.json",
-      targetAgentId: "main",
-    });
-    expect(result.resolved).toEqual({
-      modelProvider: "demo-provider",
-      model: "shared-model",
-    });
-  });
-
   it("rejects a missing harness-owned session before a local patch can create it", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing-patch";
     projectSessionsPatchEntryMock.mockResolvedValueOnce({

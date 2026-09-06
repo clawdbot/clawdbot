@@ -71,6 +71,7 @@ import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
+import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
@@ -83,7 +84,6 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
-import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";

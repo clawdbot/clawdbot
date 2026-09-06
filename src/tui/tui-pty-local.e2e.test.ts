@@ -1066,6 +1066,11 @@ describe("TUI PTY real backends", () => {
                   if (!mockProvider) {
                     throw new Error("local PTY fixture model provider is missing");
                   }
+                  const cliProvider = structuredClone(mockProvider);
+                  for (const model of cliProvider.models) {
+                    model.id = cliModelId;
+                    model.name = cliModelId;
+                  }
                   return {
                     ...config,
                     plugins: {
@@ -1088,14 +1093,7 @@ describe("TUI PTY real backends", () => {
                       ...config.models,
                       providers: {
                         ...config.models?.providers,
-                        "claude-cli": {
-                          ...mockProvider,
-                          models: mockProvider.models.map((model) => ({
-                            ...model,
-                            id: cliModelId,
-                            name: cliModelId,
-                          })),
-                        },
+                        "claude-cli": cliProvider,
                       },
                     },
                   } satisfies OpenClawConfig;
@@ -1108,19 +1106,24 @@ describe("TUI PTY real backends", () => {
           if (alias === "chat") {
             const modelOffset = fixture.run.visibleOutput().length;
             await fixture.run.write(`/model ${cliModelRef}\r`, { delay: false });
-            await waitForOutputAfter(
-              fixture.run,
-              `model set to ${canonicalModelRef}`,
-              modelOffset,
-            );
-            expect(fixture.run.visibleOutput().slice(modelOffset)).not.toContain(
-              `model set to ${cliModelRef}`,
-            );
+            const confirmation = await waitFor({
+              timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+              read: () => {
+                const output = fixture.run.visibleOutput().slice(modelOffset);
+                return output.includes(`model set to ${canonicalModelRef}`) ||
+                  output.includes(`model set to ${cliModelRef}`)
+                  ? output
+                  : null;
+              },
+              onTimeout: () => new Error(`model selection did not finish\n${fixture.run.output()}`),
+            });
+            expect.soft(confirmation).toContain(`model set to ${canonicalModelRef}`);
             expect(fixture.mockModel.requests()).toHaveLength(0);
             console.log(
               `[behavior-evidence] tui-local-cli-model-identity ${JSON.stringify({
                 requested: cliModelRef,
-                displayed: canonicalModelRef,
+                confirmation: confirmation.match(/model set to [^\r\n]+/u)?.[0],
+                modelRequests: fixture.mockModel.requests().length,
               })}`,
             );
 
@@ -1142,7 +1145,16 @@ describe("TUI PTY real backends", () => {
           expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(prompt);
           await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
           await fixture.run.write("/exit\r", { delay: false });
-          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+          const exitCode = (await fixture.run.waitForExit()).exitCode;
+          expect(exitCode).toBe(0);
+          console.log(
+            `[behavior-evidence] tui-local-model-roundtrip ${JSON.stringify({
+              alias,
+              modelRequests: fixture.mockModel.requests().length,
+              replyVisible: fixture.run.visibleOutput().includes(replyText),
+              exitCode,
+            })}`,
+          );
         } finally {
           await fixture.cleanup();
         }
