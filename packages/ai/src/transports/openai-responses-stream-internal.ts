@@ -477,7 +477,10 @@ export async function processResponsesStream<TApi extends Api>(
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
-          toolCall.argumentsStreamed = true;
+          // A keepalive delta contributes no bytes, so it leaves the buffer as
+          // the opening snapshot, which must stay a fallback rather than a
+          // streamed encoding that can conflict with the completion snapshot.
+          toolCall.argumentsStreamed ||= event.delta.length > 0;
           toolCall.block.partialJson += event.delta;
           // Preview refresh is geometric; the done event and terminal finalize
           // re-parse the full buffer authoritatively either way.

@@ -282,6 +282,32 @@ describe("Responses terminal tool completion", () => {
     ).toEqual([{ slot: 0 }]);
   });
 
+  it.each([
+    ["an item-done", true],
+    ["a terminal", false],
+  ])(
+    "lets %s snapshot replace an opening snapshot a keepalive delta never changed",
+    async (_name, hasItemDone) => {
+      const result = await runFixture([
+        added(0, { arguments: JSON.stringify({ slot: 9 }) }),
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_0",
+          delta: "",
+        },
+        ...(hasItemDone
+          ? [{ type: "response.output_item.done", output_index: 0, item: tool(0) }]
+          : []),
+        completed("resp_empty_delta_opening_snapshot", [tool(0)]),
+      ]);
+      expect(result.error).toBeNull();
+      expect(
+        result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+      ).toEqual([{ slot: 0 }]);
+    },
+  );
+
   it("never completes active tools from an incomplete response", async () => {
     const result = await runFixture([
       added(0),
