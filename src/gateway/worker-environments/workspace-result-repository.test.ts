@@ -231,7 +231,7 @@ describe("repository workspace result ownership", () => {
       workspaceOperations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim(await resolveWorkspace(), begin()),
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       reportWorkspaceResultConflict: async () => {},
     });
     return {
