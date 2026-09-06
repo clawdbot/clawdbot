@@ -3816,15 +3816,37 @@
     min-width: 64px;
   }
 
+  .chat-thread {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+  }
+
+  .chat-thread-inner,
   .agent-chat__composer-shell {
-    width: calc(
-      100% - max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px)) -
-        max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px))
+    --chat-frame-inset-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
+    --chat-frame-inset-right: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
+    width: calc(100% - var(--chat-frame-inset-left) - var(--chat-frame-inset-right));
+    /* Center the capped frame inside the safe area, including asymmetric notches. */
+    margin-right: max(
+      var(--chat-frame-inset-right),
+      calc(
+        (100% - var(--chat-thread-max-width, 48rem) - var(--chat-frame-inset-left) +
+            var(--chat-frame-inset-right)) /
+          2
+      )
     );
-    margin: var(--chat-composer-top-margin, 0px)
-      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px))
-      calc(14px + var(--safe-area-bottom, 0px));
-    margin-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
+    margin-left: max(
+      var(--chat-frame-inset-left),
+      calc(
+        (100% - var(--chat-thread-max-width, 48rem) + var(--chat-frame-inset-left) -
+            var(--chat-frame-inset-right)) /
+          2
+      )
+    );
+  }
+
+  .agent-chat__composer-shell {
+    margin-block: var(--chat-composer-top-margin, 0px) calc(14px + var(--safe-area-bottom, 0px));
     gap: 6px;
   }
 
@@ -3836,11 +3858,14 @@
 
 @media (display-mode: standalone) and (max-width: 768px),
   (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-thread-inner,
   .agent-chat__composer-shell {
-    width: calc(100% - 2 * var(--chat-mobile-edge-inset, 4px));
-    margin-right: var(--chat-mobile-edge-inset, 4px);
+    --chat-frame-inset-left: var(--chat-mobile-edge-inset, 4px);
+    --chat-frame-inset-right: var(--chat-mobile-edge-inset, 4px);
+  }
+
+  .agent-chat__composer-shell {
     margin-bottom: 14px;
-    margin-left: var(--chat-mobile-edge-inset, 4px);
   }
 }
 
