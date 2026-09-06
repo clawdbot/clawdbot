@@ -1089,8 +1089,12 @@ export async function dropAbortedFollowups(
   queue: FollowupQueueSummaryState & Pick<FollowupQueueState, "items">,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): Promise<number> {
+  // Only the injection owner may retire a parked steer before its outcome settles.
   const canDrop = (run: FollowupRun) =>
-    isFollowupRunAborted(run) && !queue.inFlight.has(run) && !queue.activeSummarySources.has(run);
+    !run.steerPending &&
+    isFollowupRunAborted(run) &&
+    !queue.inFlight.has(run) &&
+    !queue.activeSummarySources.has(run);
   const pending = queue.items.filter(canDrop);
   const summaries = [
     ...queue.summarySources,
