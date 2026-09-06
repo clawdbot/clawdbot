@@ -986,6 +986,13 @@ declare namespace MCP.github {
 }
 ```
 
+Dictionary inputs retain their value types. Nullable enums and fields marked
+`nullable: true` include `null`, unless an explicit enum excludes it.
+Top-level fields with defaults may be omitted from calls.
+These declarations approximate JSON Schema; for constraints that TypeScript
+cannot express, inspect the original schema with
+`MCP.<server>.$api("<tool>", { schema: true })`.
+
 MCP tool calls return their original JSON-safe content blocks, including block
 annotations and block-level `_meta`, plus top-level `structuredContent` and
 `isError` when provided. Top-level MCP `_meta` and private app metadata never
