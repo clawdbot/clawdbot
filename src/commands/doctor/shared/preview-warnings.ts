@@ -31,20 +31,8 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
   () => import("./channel-doctor.js"),
 );
 
-function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
-  return channelDoctorModuleLoader.load();
-}
-
-function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
+function listAgentRecords(cfg: OpenClawConfig) {
   return listAgentEntries(cfg).filter(hasRecord);
-}
-
-function hasChannels(cfg: OpenClawConfig): boolean {
-  return hasRecord(cfg.channels);
-}
-
-function hasPlugins(cfg: OpenClawConfig): boolean {
-  return hasRecord(cfg.plugins);
 }
 
 function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
@@ -98,7 +86,6 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
   });
 }
 
-type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
 function resolveMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -148,69 +135,37 @@ function resolveMessageToolAvailability(params: {
 
 const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
 
-function resolveSourceReplyMessageToolAvailability(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  globalTools?: ToolsConfig;
-  agentTools?: AgentToolsConfig;
-}): boolean {
-  return resolveMessageToolAvailability({
-    ...params,
-    runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
-  });
-}
-
-function sourceReplyRuntimeMayAllowMessageTool(cfg: OpenClawConfig): boolean {
-  const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
-  if (groupPolicy.value === "message_tool") {
-    return true;
-  }
-  if (cfg.messages?.visibleReplies === "message_tool") {
-    return true;
-  }
-  return false;
-}
-
-function collectMessageToolUnavailableTargets(
-  cfg: OpenClawConfig,
-  options: { sourceReplyRuntimeGrant?: boolean } = {},
-): string[] {
+function collectUnavailableSourceReplyTargets(cfg: OpenClawConfig): string[] {
   const agents = listAgentRecords(cfg);
   if (agents.length === 0) {
-    const available = options.sourceReplyRuntimeGrant
-      ? resolveSourceReplyMessageToolAvailability({ cfg, globalTools: cfg.tools })
-      : resolveMessageToolAvailability({ cfg, globalTools: cfg.tools });
+    const available = resolveMessageToolAvailability({
+      cfg,
+      globalTools: cfg.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
     return available ? [] : ["default tool policy"];
   }
   return agents.flatMap((agent) => {
     const agentId = typeof agent.id === "string" ? agent.id : "unknown";
-    const available = options.sourceReplyRuntimeGrant
-      ? resolveSourceReplyMessageToolAvailability({
-          cfg,
-          agentId,
-          globalTools: cfg.tools,
-          agentTools: agent.tools as AgentToolsConfig | undefined,
-        })
-      : resolveMessageToolAvailability({
-          cfg,
-          agentId,
-          globalTools: cfg.tools,
-          agentTools: agent.tools as AgentToolsConfig | undefined,
-        });
+    const available = resolveMessageToolAvailability({
+      cfg,
+      agentId,
+      globalTools: cfg.tools,
+      agentTools: agent.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
     return available ? [] : [`agent "${agentId}"`];
   });
 }
 
-function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
+function resolveGroupVisibleReplyPolicy(cfg: OpenClawConfig): {
   path: "messages.groupChat.visibleReplies" | "messages.visibleReplies";
-  provenance: VisibleReplyPolicyProvenance;
   value: "automatic" | "message_tool";
 } {
   const groupVisibleReplies = cfg.messages?.groupChat?.visibleReplies;
   if (groupVisibleReplies) {
     return {
       path: "messages.groupChat.visibleReplies",
-      provenance: "group-explicit",
       value: groupVisibleReplies,
     };
   }
@@ -218,13 +173,11 @@ function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
   if (globalVisibleReplies) {
     return {
       path: "messages.visibleReplies",
-      provenance: "global-explicit",
       value: globalVisibleReplies,
     };
   }
   return {
     path: "messages.groupChat.visibleReplies",
-    provenance: "default",
     value: "automatic",
   };
 }
@@ -238,10 +191,10 @@ function formatTargets(targets: string[]): string {
 
 /** Warn when visible-reply policy selects message_tool but message is unavailable. */
 function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
-  const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
+  const groupPolicy = resolveGroupVisibleReplyPolicy(cfg);
   const warnings: string[] = [];
   if (groupPolicy.value === "message_tool") {
-    const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
+    const targets = collectUnavailableSourceReplyTargets(cfg);
     if (targets.length === 0) {
       return warnings;
     }
@@ -254,7 +207,7 @@ function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
 
   const globalVisibleReplies = cfg.messages?.visibleReplies;
   if (globalVisibleReplies === "message_tool" && groupPolicy.path !== "messages.visibleReplies") {
-    const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
+    const targets = collectUnavailableSourceReplyTargets(cfg);
     if (targets.length === 0) {
       return warnings;
     }
@@ -281,20 +234,16 @@ function formatChannelList(channels: string[]): string {
 function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectChannelRouteTargets(cfg).flatMap((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
-    const runtimeMayAllowMessage = sourceReplyRuntimeMayAllowMessageTool(cfg);
-    const messageToolAvailable = runtimeMayAllowMessage
-      ? resolveSourceReplyMessageToolAvailability({
-          cfg,
-          agentId: target.agentId,
-          globalTools: cfg.tools,
-          agentTools,
-        })
-      : resolveMessageToolAvailability({
-          cfg,
-          agentId: target.agentId,
-          globalTools: cfg.tools,
-          agentTools,
-        });
+    const runtimeMayAllowMessage =
+      cfg.messages?.groupChat?.visibleReplies === "message_tool" ||
+      cfg.messages?.visibleReplies === "message_tool";
+    const messageToolAvailable = resolveMessageToolAvailability({
+      cfg,
+      agentId: target.agentId,
+      globalTools: cfg.tools,
+      agentTools,
+      runtimeAlsoAllow: runtimeMayAllowMessage ? SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW : undefined,
+    });
     if (messageToolAvailable) {
       return [];
     }
@@ -510,15 +459,6 @@ function resolveInheritedProviderPolicyForPreview(
   return policy && hasRecord(policy) ? policy : undefined;
 }
 
-function resolveProviderPolicyEntryForPreview(params: {
-  byProvider?: Record<string, unknown>;
-  modelProvider?: string;
-  modelId?: string;
-}): { key: string; policy: Record<string, unknown> } | undefined {
-  const entry = resolveProviderToolPolicyEntry(params);
-  return entry ? { key: entry.key, policy: entry.policy } : undefined;
-}
-
 function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   inheritedTools?: Record<string, unknown> | null;
   inheritedPathLabel: string;
@@ -537,7 +477,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   const overridingByProvider = hasRecord(params.overridingTools?.byProvider)
     ? params.overridingTools.byProvider
     : undefined;
-  const inheritedEntryForModel = resolveProviderPolicyEntryForPreview({
+  const inheritedEntryForModel = resolveProviderToolPolicyEntry({
     byProvider: inheritedByProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
@@ -556,7 +496,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       return [];
     }
     const overridingEntry =
-      resolveProviderPolicyEntryForPreview({
+      resolveProviderToolPolicyEntry({
         byProvider: overridingByProvider,
         modelProvider: params.modelProvider,
         modelId: params.modelId,
@@ -716,8 +656,8 @@ export async function collectDoctorPreviewNotes(params: {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
-  const hasChannelConfig = hasChannels(params.cfg);
-  const hasPluginConfig = hasPlugins(params.cfg);
+  const hasChannelConfig = hasRecord(params.cfg.channels);
+  const hasPluginConfig = hasRecord(params.cfg.plugins);
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
@@ -755,7 +695,7 @@ export async function collectDoctorPreviewNotes(params: {
       allowExec: params.allowExec,
     });
     warnings.push(...channelPreviewConfig.diagnostics);
-    const { collectChannelDoctorPreviewWarnings } = await loadChannelDoctorModule();
+    const { collectChannelDoctorPreviewWarnings } = await channelDoctorModuleLoader.load();
     const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
       cfg: channelPreviewConfig.cfg,
       doctorFixCommand: params.doctorFixCommand,
@@ -849,7 +789,7 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   if (hasChannelConfig) {
-    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await loadChannelDoctorModule();
+    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await channelDoctorModuleLoader.load();
     const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
     const emptyAllowlistHooks = createChannelDoctorEmptyAllowlistPolicyHooks({
       cfg: params.cfg,
