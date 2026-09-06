@@ -1025,6 +1025,12 @@ the bridge as JSON-compatible values with explicit size caps.
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
 
+Await async values before emitting them or returning arrays or plain objects that
+contain them. Unawaited Promises appear as a diagnostic string with `await` and
+`Promise.all` guidance. For example, use
+`return await Promise.all(handles.map((tool) => tool.describe()));` to return tool
+descriptions. Output serialization does not await nested Promises for you.
+
 Output order matches guest calls. Each nested tool result is bounded separately
 by `maxOutputBytes`. Cumulative guest output and the final value or failure
 diagnostic share one `maxOutputBytes` serialized UTF-8 budget across all waits. Oversized errors retain their leading cause and end
