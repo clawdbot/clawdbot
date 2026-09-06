@@ -43,19 +43,6 @@ export function cloneDiagnosticContentValue(value: unknown): unknown {
   }
 }
 
-function withDerivedFields(
-  policy: Omit<DiagnosticModelContentCapturePolicy, "anyModelContent">,
-): DiagnosticModelContentCapturePolicy {
-  return {
-    ...policy,
-    anyModelContent:
-      policy.inputMessages ||
-      policy.outputMessages ||
-      policy.systemPrompt ||
-      policy.toolDefinitions,
-  };
-}
-
 /** Resolves model-content diagnostic capture from config, defaulting to no content capture. */
 export function resolveDiagnosticModelContentCapturePolicy(
   config: unknown,
@@ -74,14 +61,15 @@ export function resolveDiagnosticModelContentCapturePolicy(
 
   const captureContent = otel.captureContent;
   if (captureContent === true) {
-    return withDerivedFields({
+    return {
       inputMessages: true,
       outputMessages: true,
       toolInputs: true,
       toolOutputs: true,
       systemPrompt: false,
       toolDefinitions: true,
-    });
+      anyModelContent: true,
+    };
   }
   return NO_MODEL_CONTENT_CAPTURE;
 }

@@ -454,17 +454,21 @@ async function screenshotWithLabelsOnPage(
 
   const refKeys = Object.keys(opts.refs ?? {});
   const inputs: RawAnnotationInput[] = [];
-  let bboxFailures = 0;
+  let skippedRefs = 0;
   for (const ref of refKeys) {
     const refInfo = opts.refs[ref];
     if (refInfo === undefined) {
       continue;
     }
-    const box = await refLocator(page, ref)
-      .boundingBox()
-      .catch(() => null);
+    const target = refLocator(page, ref);
+    // Full-page tail refs cannot contribute annotations after the label budget fills.
+    if (space === "fullpage" && inputs.length >= maxLabels) {
+      skippedRefs += 1;
+      continue;
+    }
+    const box = await target.boundingBox().catch(() => null);
     if (!box) {
-      bboxFailures += 1;
+      skippedRefs += 1;
       continue;
     }
     inputs.push({
@@ -502,7 +506,7 @@ async function screenshotWithLabelsOnPage(
       // `annotations` but not drawn, and are reflected in `skipped`.
       buffer,
       labels: plan.overlayItems.length,
-      skipped: plan.skipped + bboxFailures,
+      skipped: plan.skipped + skippedRefs,
       annotations: plan.annotations,
     };
   } finally {

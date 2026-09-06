@@ -51,6 +51,7 @@ type SessionPrefetchSnapshot = {
   listRevision: number;
   openSessionKeys: readonly string[];
   intentSessionKey: string | null;
+  automaticPrefetchAllowed: boolean;
   /** False while a presented pane is still fetching its transcript. */
   presentedTranscriptsReady: boolean;
   rows: readonly GatewaySessionRow[] | null;
@@ -59,11 +60,26 @@ type SessionPrefetchSnapshot = {
 
 type SessionPrefetchCandidate = {
   activityAt: number;
+  sessionKey: string;
   snapshotKey: string;
   sessionId: GatewaySessionRow["sessionId"];
   activeLeafEntryId: GatewaySessionRow["activeLeafEntryId"];
   updatedAt: GatewaySessionRow["updatedAt"];
 };
+
+// Dashboard-only pages warm explicit navigation intent; automatic warming belongs to visible conversations.
+function mayPrefetchHistory(
+  snapshot: SessionPrefetchSnapshot | null,
+  sessionKey?: string,
+): boolean {
+  return (
+    snapshot?.presentedTranscriptsReady === true &&
+    (snapshot.automaticPrefetchAllowed ||
+      Boolean(
+        snapshot.intentSessionKey && (!sessionKey || snapshot.intentSessionKey === sessionKey),
+      ))
+  );
+}
 
 function sessionActivityAt(row: GatewaySessionRow): number {
   return row.lastActivityAt ?? row.updatedAt ?? 0;
@@ -120,6 +136,7 @@ class SessionPrefetcher {
       previous.client !== snapshot.client ||
       previous.listRevision !== snapshot.listRevision ||
       previous.intentSessionKey !== snapshot.intentSessionKey ||
+      previous.automaticPrefetchAllowed !== snapshot.automaticPrefetchAllowed ||
       previous.presentedTranscriptsReady !== snapshot.presentedTranscriptsReady ||
       !sameKeys(previous.openSessionKeys, snapshot.openSessionKeys)
     ) {
@@ -204,7 +221,7 @@ class SessionPrefetcher {
     if (
       !snapshot?.client ||
       !snapshot.rows ||
-      !snapshot.presentedTranscriptsReady ||
+      !mayPrefetchHistory(snapshot) ||
       document.visibilityState === "hidden" ||
       !this.connected
     ) {
@@ -234,7 +251,7 @@ class SessionPrefetcher {
     // histories would starve the user's next click on the same socket. A pane
     // that starts loading mid-cycle wins too; its loading-changed event resumes the rest.
     for (const candidate of selection.candidates) {
-      if (!this.snapshot?.presentedTranscriptsReady) {
+      if (!mayPrefetchHistory(this.snapshot, candidate.sessionKey)) {
         return;
       }
       await this.prefetchCandidate(snapshot, client, candidate);
@@ -252,7 +269,7 @@ class SessionPrefetcher {
     const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache();
     // Every network request re-reads readiness: a presented pane can start
     // loading during the persisted snapshot read or between history pages.
-    const mayRequest = () => isCurrent() && this.snapshot?.presentedTranscriptsReady === true;
+    const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
     if (!mayRequest() || this.isOpen(candidate.snapshotKey, this.snapshot)) {
       return;
     }
@@ -380,7 +397,7 @@ class SessionPrefetcher {
     for (const row of rows) {
       // The presented pane owns transient run adoption and replay. Background
       // prefetch only warms durable history, so it must not consume active state.
-      if (isSessionRunActive(row)) {
+      if (!mayPrefetchHistory(snapshot, row.key) || isSessionRunActive(row)) {
         continue;
       }
       const snapshotKey = resolveChatSnapshotKey(snapshot.snapshotHost, {
@@ -408,6 +425,7 @@ class SessionPrefetcher {
       }
       candidates.push({
         activityAt,
+        sessionKey: row.key,
         snapshotKey,
         sessionId: row.sessionId,
         activeLeafEntryId: row.activeLeafEntryId,
@@ -582,6 +600,9 @@ class SessionPrefetchController implements ReactiveController {
       listRevision: context.sessions.canonicalListRevision,
       openSessionKeys,
       intentSessionKey: this.intentSessionKey,
+      automaticPrefetchAllowed: panes.some(
+        (pane) => this.host.contains(pane) && pane.conversationPresented === true,
+      ),
       presentedTranscriptsReady: !panes.some(
         (pane) => pane.presented !== false && pane.transcriptLoading === true,
       ),

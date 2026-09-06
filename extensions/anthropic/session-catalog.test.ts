@@ -1684,6 +1684,16 @@ describe("Claude session catalog", () => {
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
         "cli-session": [
           {
+            ...message(
+              "cli-session",
+              "user",
+              "<local-command-caveat>CLI metadata</local-command-caveat>",
+              1,
+            ),
+            entrypoint: "cli",
+            isMeta: true,
+          },
+          {
             ...message("cli-session", "user", "Interactive CLI prompt", 1),
             entrypoint: "cli",
             cwd: "/work/cli",

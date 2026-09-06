@@ -269,21 +269,20 @@ function createRoleNameTracker() {
 
 type RoleNameTracker = ReturnType<typeof createRoleNameTracker>;
 
-function compactTree(tree: string) {
-  const lines = tree.split("\n");
+function compactTree(lines: readonly string[]) {
   const entries: Array<{ line: string; keep: boolean; hasRef: boolean; indent: number }> = [];
-  const stack: Array<{ entry: (typeof entries)[number]; indent: number }> = [];
+  const stack: (typeof entries)[number][] = [];
 
   const finishEntry = () => {
     const current = stack.pop();
     if (!current) {
       return;
     }
-    current.entry.keep ||= current.entry.hasRef;
-    if (current.entry.hasRef && stack.length > 0) {
+    current.keep ||= current.hasRef;
+    if (current.hasRef && stack.length > 0) {
       const parent = stack.at(-1);
       if (parent !== undefined) {
-        parent.entry.hasRef = true;
+        parent.hasRef = true;
       }
     }
   };
@@ -305,7 +304,7 @@ function compactTree(tree: string) {
       indent,
     };
     entries.push(entry);
-    stack.push({ entry, indent });
+    stack.push(entry);
   }
   while (stack.length > 0) {
     finishEntry();
@@ -473,9 +472,8 @@ export function buildRoleSnapshotFromAriaSnapshot(
     }
   }
 
-  const tree = result.join("\n") || "(empty)";
   return {
-    snapshot: options.compact ? compactTree(tree) : tree,
+    snapshot: options.compact ? compactTree(result) : result.join("\n") || "(empty)",
     refs,
   };
 }
@@ -544,9 +542,8 @@ export function buildRoleSnapshotFromAiSnapshot(
     out.push(line);
   }
 
-  const tree = out.join("\n") || "(empty)";
   return {
-    snapshot: options.compact ? compactTree(tree) : tree,
+    snapshot: options.compact ? compactTree(out) : out.join("\n") || "(empty)",
     refs,
   };
 }

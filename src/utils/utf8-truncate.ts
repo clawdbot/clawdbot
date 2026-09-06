@@ -32,8 +32,8 @@ export function truncateUtf8Suffix(value: string, maxBytes: number): string {
   if (value.length <= maxBytes && Buffer.byteLength(value) <= maxBytes) {
     return value;
   }
-  // Full length matters: fractional subtraction rounds before index conversion.
-  const bytes = Buffer.from(value);
+  // Extra UTF-16 unit shields split surrogates; fractional limits need the original byte length.
+  const bytes = Buffer.from(Number.isInteger(maxBytes) ? value.slice(-maxBytes - 1) : value);
   let start = bytes.byteLength - maxBytes;
   while (start < bytes.byteLength && isContinuationByte(bytes[start])) {
     start += 1;

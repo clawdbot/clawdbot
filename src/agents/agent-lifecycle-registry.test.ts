@@ -86,7 +86,6 @@ describe("agent lifecycle registry", () => {
     const before = readAgentProvenance("main", options);
     const binding = captureAgentLifecycleBinding(config, "main", options);
     const first = beginAgentDeletion(createEntry("main"), options);
-    first.commit();
 
     expect(readAgentProvenance("main", options)).toEqual(before);
     expect(isAgentDeletionBlocked("main", options)).toBe(true);
@@ -108,12 +107,11 @@ describe("agent lifecycle registry", () => {
     expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
   });
 
-  it("keeps a committed deletion fenced until recreation claims cleanup", () => {
+  it("keeps a completed deletion fenced until recreation claims cleanup", () => {
     const options = createOptions();
     const deletion = beginAgentDeletion(createEntry("Recreated-Agent"), options);
 
     expect(isAgentDeletionBlocked("recreated-agent", options)).toBe(true);
-    deletion.commit();
     expect(readAgentDeletionJournal("RECREATED-AGENT", options)).toMatchObject({
       agentId: "recreated-agent",
       agentDir: "/agents/Recreated-Agent",
@@ -210,10 +208,9 @@ describe("agent lifecycle registry", () => {
     expect(isAgentDeletionBlocked("rollback-claimed-agent", options)).toBe(false);
   });
 
-  it("clears stale process state after another process claims the tombstone", () => {
+  it("observes a tombstone claimed outside the lifecycle wrapper", () => {
     const options = createOptions();
     const deletion = beginAgentDeletion(createEntry("cross-process-agent"), options);
-    deletion.commit();
     deletion.finish();
 
     expect(

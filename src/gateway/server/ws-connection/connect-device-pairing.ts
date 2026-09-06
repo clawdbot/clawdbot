@@ -342,7 +342,7 @@ export async function authorizeGatewayConnectDevice(
           }
           if (trustedProxyApprovalScopes !== null && plan.trustedProxyUser) {
             logGateway.warn(
-              `security audit: trusted-proxy browser device auto-approved user=${formatForLog(plan.trustedProxyUser)} device=${formatForLog(approved.device.deviceId.slice(0, 12))} scopes=${formatAuditList(scopes)}`,
+              `security audit: trusted-proxy operator device auto-approved user=${formatForLog(plan.trustedProxyUser)} device=${formatForLog(approved.device.deviceId.slice(0, 12))} scopes=${formatAuditList(scopes)}`,
             );
           } else {
             logGateway.info(

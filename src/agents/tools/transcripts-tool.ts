@@ -8,6 +8,26 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { Type } from "typebox";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createTranscriptsStore,
+  exportTranscriptSummary,
+  stopTranscriptCapture,
+} from "../../transcripts/capture-operations.js";
+import {
+  activeSessions,
+  authorizeTranscriptSource,
+  createTranscriptSessionId,
+  isTranscriptSelectionCurrent,
+  persistTranscriptSummary,
+  readTranscriptStringParam,
+  readTranscriptSummary,
+  resolveTranscriptSourceOwnership,
+  resolveSourceProvider,
+  sourceFromParams,
+  startTranscripts,
+  type TranscriptsLogger,
+  type TranscriptsRuntimeContext,
+} from "../../transcripts/capture.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
@@ -21,34 +41,22 @@ import {
   TranscriptsSummaryChangedError,
   type TranscriptsStore,
 } from "../../transcripts/store.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 import { listPastTranscripts, showPastTranscript } from "./transcripts-tool-read.js";
 import {
-  activeSessions,
-  authorizeTranscriptSource,
-  createTranscriptSessionId,
-  createTranscriptsStore,
-  persistTranscriptSummary,
-  readTranscriptStringParam,
-  readTranscriptSummary,
-  resolveTranscriptSourceOwnership,
-  resolveSourceProvider,
-  sourceFromParams,
-  startTranscripts,
   toolText,
-  type TranscriptsLogger,
-  type TranscriptsRuntimeContext,
-} from "./transcripts-tool-runtime.js";
+  transcriptStartToolResult,
+  transcriptStopToolResult,
+} from "./transcripts-tool-result.js";
 import {
   canAccessTranscriptSession,
-  isTranscriptSelectionCurrent,
   resolveTranscriptToolSession,
   transcriptSelectionNoLongerActive,
 } from "./transcripts-tool-selection.js";
-import { exportTranscriptSummary, stopTranscripts } from "./transcripts-tool-stop.js";
-export { createTranscriptsAutoStartService } from "./transcripts-auto-start.js";
-
 const STATUS_SELECTOR_LIMIT = 3;
+const STATUS_ACTIVE_MAX_ENTRIES = 5;
+const STATUS_ACTIVE_MAX_CHARS = 2_000;
 
 const TranscriptsSchema = Type.Object(
   {
@@ -246,19 +254,56 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
     }));
   // Three complete canonical selectors keep this model-facing section under 1 KiB.
   // Recovery handles take priority; structured details retain the full authorized list.
+  const displayActive = active.toSorted((left, right) =>
+    left.selector.localeCompare(right.selector),
+  );
   const selectorGroups = [
-    { state: "pending", entries: pendingFinalization },
-    { state: "active", entries: active },
+    {
+      state: "pending",
+      entries: pendingFinalization.toSorted((left, right) =>
+        left.selector.localeCompare(right.selector),
+      ),
+    },
+    { state: "active", entries: displayActive },
   ];
   const selectorLines = selectorGroups
     .flatMap(({ state, entries }) =>
-      entries
-        .toSorted((left, right) => left.selector.localeCompare(right.selector))
-        .slice(0, STATUS_SELECTOR_LIMIT)
-        .map(({ selector }) => `${state}: ${selector}`),
+      entries.slice(0, STATUS_SELECTOR_LIMIT).map(({ selector }) => `${state}: ${selector}`),
     )
     .slice(0, STATUS_SELECTOR_LIMIT);
   const omitted = visibleEntries.length - selectorLines.length;
+  const selectorText = [
+    ...(selectorLines.length ? ["Selectors:", ...selectorLines] : []),
+    ...(omitted ? [`${omitted} more; ask a local operator to run openclaw transcripts list.`] : []),
+  ];
+  const omittedNotice = "Additional active sessions omitted (display limit).";
+  const activeLines: string[] = [];
+  let remainingChars =
+    STATUS_ACTIVE_MAX_CHARS - selectorText.join("\n").length - omittedNotice.length - 2;
+  for (const entry of displayActive) {
+    if (activeLines.length === STATUS_ACTIVE_MAX_ENTRIES) {
+      break;
+    }
+    const line = JSON.stringify({
+      selector: entry.selector,
+      providerId: entry.providerId,
+      accountId: entry.source.accountId,
+      guildId: entry.source.guildId,
+      channelId: entry.source.channelId,
+      meetingUrl: entry.source.meetingUrl,
+      title: entry.title ? truncateUtf16Safe(entry.title, 120) : undefined,
+      ...(entry.cleanupPending ? { cleanupPending: true } : {}),
+    });
+    // Keep complete handles and source context within the shared display budget.
+    if (line.length + 1 > remainingChars) {
+      continue;
+    }
+    activeLines.push(line);
+    remainingChars -= line.length + 1;
+  }
+  if (activeLines.length < active.length) {
+    activeLines.push(omittedNotice);
+  }
   return toolText(
     [
       `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
@@ -268,10 +313,8 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
             `Ended captures awaiting persistence: ${pendingFinalization.length}; use transcripts stop to retry.`,
           ]
         : []),
-      ...(selectorLines.length ? ["Selectors:", ...selectorLines] : []),
-      ...(omitted
-        ? [`${omitted} more; ask a local operator to run openclaw transcripts list.`]
-        : []),
+      ...activeLines,
+      ...selectorText,
     ].join("\n"),
     { providers: uniqueProviders, active, pendingFinalization },
   );
@@ -326,9 +369,19 @@ export function createTranscriptsTool(options?: {
         case "show":
           return await showPastTranscript({ ctx, store, rawParams: params });
         case "start":
-          return await startTranscripts({ ctx, store, rawParams: params, abortSignal: signal });
-        case "stop":
-          return await stopTranscripts({ ctx, store, rawParams: params });
+          return transcriptStartToolResult(
+            await startTranscripts({ ctx, store, rawParams: params, abortSignal: signal }),
+          );
+        case "stop": {
+          const selection = await resolveTranscriptToolSession({
+            ctx,
+            store,
+            rawParams: params,
+            action: "stop",
+          });
+          ctx.assertCallerActive?.();
+          return transcriptStopToolResult(await stopTranscriptCapture({ ctx, store, selection }));
+        }
         case "import":
           return await importTranscripts({ ctx, store, rawParams: params });
         case "summarize":

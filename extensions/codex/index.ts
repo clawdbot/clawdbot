@@ -3,7 +3,6 @@
  * migration provider, CLI-session commands, and binding hooks.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -17,7 +16,9 @@ import {
   createCodexAppServerNativeCompaction,
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { readCodexPluginConfig } from "./src/app-server/config.js";
+import { createCodexAuthProfileSelection } from "./src/app-server/auth-profile-selection.js";
+import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
+import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
 import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import { createCodexDesktopGenerationService } from "./src/app-server/desktop-generation.js";
 import { setManagedCodexPluginRoot } from "./src/app-server/managed-binary.js";
@@ -32,11 +33,14 @@ import {
   createLazyCodexAppServerBindingStore,
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding-store.js";
-import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client.js";
+import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client-lifecycle.js";
 import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
 import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
 import { createCodexCommand } from "./src/commands.js";
-import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
+import {
+  handleCodexConversationBindingResolved,
+  handleCodexConversationInboundClaim,
+} from "./src/conversation-binding-hooks.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
@@ -168,7 +172,11 @@ export default definePluginEntry({
       lazyManagedThreadStateStore,
     );
     registerCodexCliMetadata(api);
+    const { resolveCodexSupervisionAppServerRuntimeOptions } = createCodexAppServerConfig(
+      api.runtime.modelAuth,
+    );
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
       managedThreads: bindingStore.managedThreads,
       config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
@@ -179,6 +187,7 @@ export default definePluginEntry({
     if (sessionCatalogEnabled) {
       codexSessionCatalogRuntime.register({
         api,
+        resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         bindingStore,
         control: sessionCatalogControlFactory,
         getPluginConfig: resolveCurrentPluginConfig,
@@ -189,6 +198,7 @@ export default definePluginEntry({
         {
           getPluginConfig: resolveCurrentPluginConfig,
           getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
+          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         },
         bindingStore,
       )) {
@@ -199,6 +209,9 @@ export default definePluginEntry({
       api.registerNodeInvokePolicy(policy);
     }
     if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
+      const { resolveCodexAppServerAuthProfileIdForAgent } = createCodexAuthProfileSelection(
+        api.runtime.modelAuth,
+      );
       api.registerTool(
         (context) => {
           if (context.senderIsOwner !== true) {
@@ -212,6 +225,8 @@ export default definePluginEntry({
           return createCodexSupervisionTools({
             getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
             getRuntimeConfig: resolveToolRuntimeConfig,
+            resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+            resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
             senderIsOwner: context.senderIsOwner,
           });
         },
@@ -321,6 +336,7 @@ export default definePluginEntry({
               });
             },
             mutate: async (update) => {
+              const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
               await mutateConfigFile({
                 mutate: (draft) => {
                   // Create the nested plugin config path on demand so codex
@@ -346,7 +362,7 @@ export default definePluginEntry({
       }),
     );
     api.on("inbound_claim", (event, ctx) =>
-      codexConversationBindingRuntime.handleInboundClaim(event, ctx, {
+      handleCodexConversationInboundClaim(event, ctx, {
         bindingStore,
         pluginConfig: resolveCurrentPluginConfig(),
         config: resolveCurrentConfig(),
@@ -355,7 +371,7 @@ export default definePluginEntry({
       }),
     );
     api.onConversationBindingResolved?.((event) =>
-      codexConversationBindingRuntime.handleBindingResolved(event, { bindingStore }),
+      handleCodexConversationBindingResolved(event, { bindingStore }),
     );
     api.on("session_end", async (event, ctx) => {
       if (!event.reason || !ENDED_SESSION_REASONS.has(event.reason)) {

@@ -311,7 +311,6 @@ export async function agentsDeleteCommand(
       // Credential resolution fails before transport, so a live scheduler may still own the store.
       await commitRoster();
     }
-    deletion.commit();
   } catch (error) {
     if (!existingJournal) {
       deletion.rollback();

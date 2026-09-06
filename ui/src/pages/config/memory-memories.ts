@@ -191,6 +191,14 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
         ? t("memoryPage.memories.hybridSearch")
         : t("memoryPage.memories.keywordSearch");
     return html`
+      ${
+        ready.stale
+          ? html`<div class="callout warn" role="status">
+              ${ready.warning ? html`<p>${ready.warning}</p>` : nothing}
+              ${ready.action ? html`<p>${ready.action}</p>` : nothing}
+            </div>`
+          : nothing
+      }
       <div class="memory-memories__results-heading">
         <span>${t("memoryPage.memories.results", { count: String(ready.results.length) })}</span>
         <span class="memory-memories__mode">${mode}</span>

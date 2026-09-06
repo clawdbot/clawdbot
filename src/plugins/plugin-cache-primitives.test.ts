@@ -2,12 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  PluginLruCache,
-  createConfigScopedPromiseLoader,
-  resolveConfigScopedRuntimeCacheValue,
-  type ConfigScopedRuntimeCache,
-} from "./plugin-cache-primitives.js";
+import { PluginLruCache, createConfigScopedPromiseLoader } from "./plugin-cache-primitives.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 describe("PluginLruCache", () => {
@@ -33,45 +28,6 @@ describe("PluginLruCache", () => {
 
     expect(cache.get("missing")).toBeNull();
     expect(cache.get("unknown")).toBeUndefined();
-  });
-});
-
-describe("resolveConfigScopedRuntimeCacheValue", () => {
-  it("caches values by config object and key", () => {
-    const cache: ConfigScopedRuntimeCache<string[]> = new WeakMap();
-    const config = {} as OpenClawConfig;
-    const load = vi.fn(() => ["loaded"]);
-
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "demo", load })).toEqual([
-      "loaded",
-    ]);
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "demo", load })).toEqual([
-      "loaded",
-    ]);
-    expect(load).toHaveBeenCalledOnce();
-  });
-
-  it("does not cache values without a config owner", () => {
-    const cache: ConfigScopedRuntimeCache<string> = new WeakMap();
-    const load = vi.fn(() => "loaded");
-
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, key: "demo", load })).toBe("loaded");
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, key: "demo", load })).toBe("loaded");
-    expect(load).toHaveBeenCalledTimes(2);
-  });
-
-  it("caches undefined values by key", () => {
-    const cache: ConfigScopedRuntimeCache<string | undefined> = new WeakMap();
-    const config = {} as OpenClawConfig;
-    const load = vi.fn(() => undefined);
-
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "missing", load })).toBe(
-      undefined,
-    );
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "missing", load })).toBe(
-      undefined,
-    );
-    expect(load).toHaveBeenCalledOnce();
   });
 });
 

@@ -54,7 +54,7 @@ function requireRemoteWorkspaceDir(value: string, nodeCarrier: boolean): string 
 export async function createRemoteExecPlacementSandbox(params: {
   config?: OpenClawConfig;
   environments: PlacementSandboxEnvironmentService;
-  localWorkspaceDir: string;
+  workspaceDir: string;
   placement: ActiveRemoteExecPlacement;
 }): Promise<RemoteExecPlacementSandbox> {
   const { placement } = params;
@@ -108,8 +108,8 @@ export async function createRemoteExecPlacementSandbox(params: {
     enabled: true,
     placementExecutionMode: "remote-exec" as const,
     sessionKey: placement.sessionKey,
-    workspaceDir: params.localWorkspaceDir,
-    agentWorkspaceDir: params.localWorkspaceDir,
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.workspaceDir,
     workspaceAccess: "rw" as const,
     readOnlyResourceMounts: resolveSessionSkillResourceMounts(),
     runtimeId,
@@ -159,8 +159,8 @@ export async function createRemoteExecPlacementSandbox(params: {
     {
       sessionKey: placement.sessionKey,
       scopeKey: placement.sessionKey,
-      workspaceDir: params.localWorkspaceDir,
-      agentWorkspaceDir: params.localWorkspaceDir,
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.workspaceDir,
       cfg,
     },
     { runtimeId, remoteWorkspaceDir },

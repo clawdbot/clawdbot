@@ -26,6 +26,79 @@ describe("truncate utilities", () => {
     expect(result.outputBytes).toBe(4);
   });
 
+  it.each([
+    {
+      name: "CRLF",
+      content: "a\r\n\r\nb\r\n",
+      maxLines: 2,
+      maxBytes: 20,
+      head: "a\r\n\r",
+      tail: "\r\nb\r",
+      outputLines: 2,
+      truncatedBy: "lines",
+    },
+    {
+      name: "empty lines",
+      content: "\n\n\n",
+      maxLines: 2,
+      maxBytes: 20,
+      head: "\n",
+      tail: "\n",
+      outputLines: 2,
+      truncatedBy: "lines",
+    },
+    {
+      name: "byte limit first",
+      content: "aa\nbb\ncc",
+      maxLines: 2,
+      maxBytes: 4,
+      head: "aa",
+      tail: "cc",
+      outputLines: 1,
+      truncatedBy: "bytes",
+    },
+    {
+      name: "line limit first",
+      content: "a\nb\nc",
+      maxLines: 1,
+      maxBytes: 1,
+      head: "a",
+      tail: "c",
+      outputLines: 1,
+      truncatedBy: "lines",
+    },
+    {
+      name: "terminal newline bytes",
+      content: "\n\n\n",
+      maxLines: 3,
+      maxBytes: 2,
+      head: "\n\n",
+      tail: "\n\n",
+      outputLines: 3,
+      truncatedBy: "bytes",
+    },
+  ])(
+    "preserves selected lines and limit metadata: $name",
+    ({ content, maxLines, maxBytes, head, tail, outputLines, truncatedBy }) => {
+      for (const [truncate, expected] of [
+        [truncateHead, head],
+        [truncateTail, tail],
+      ] as const) {
+        expect(truncate(content, { maxLines, maxBytes })).toMatchObject({
+          content: expected,
+          totalLines: 3,
+          totalBytes: Buffer.byteLength(content),
+          outputLines,
+          outputBytes: Buffer.byteLength(expected),
+          truncated: true,
+          truncatedBy,
+          firstLineExceedsLimit: false,
+          lastLinePartial: false,
+        });
+      }
+    },
+  );
+
   describe("truncateLine", () => {
     it("returns text unchanged when within limit", () => {
       expect(truncateLine("short", 10)).toEqual({ text: "short", wasTruncated: false });

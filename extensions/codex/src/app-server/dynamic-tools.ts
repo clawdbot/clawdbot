@@ -1085,9 +1085,8 @@ function notifyAgentToolResult(
       isError,
     });
   } catch (error) {
-    embeddedAgentLog.warn(
-      `onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`,
-    );
+    const message = formatToolExecutionErrorMessage(error, "Unknown error");
+    embeddedAgentLog.warn(`onAgentToolResult handler failed: tool=${toolName} error=${message}`);
   }
 }
 

@@ -94,7 +94,7 @@ type RenderMessageGroupOptions = Omit<
     /** Routing for peer sender names; absent leaves them plain text. */
     personActivity?: PersonActivityRouting;
     userAvatar?: string | null;
-    showAvatarGutter?: boolean;
+    avatarPlacement?: "gutter" | "footer" | "none";
     showAssistantAvatar?: boolean;
     contextWindow?: number | null;
     onReply?: (target: MessageReplyTarget) => void;
@@ -353,27 +353,18 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const isWorkspaceConflict = group.messages.every((item) =>
-    Boolean(workspaceResultConflictFromTranscript(item.message)),
-  );
   const assistantName = opts.assistantName ?? "Assistant";
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
   const isForwarded = normalizedRole === "assistant" && hasForwardedSource(group);
   const sourceSessionKey = group.senderSession?.sessionKey;
   const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
-    normalizedRole === "user"
-      ? "user"
-      : normalizedRole === "assistant"
-        ? "assistant"
-        : normalizedRole === "tool"
-          ? "tool"
-          : isWorkspaceConflict
-            ? "workspace-conflict"
-            : "other";
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const assistantAvatarIdentity = { name: assistantName, avatar: opts.assistantAvatar ?? null };
-  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
+    normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "tool"
+      ? normalizedRole
+      : group.messages.every((item) => workspaceResultConflictFromTranscript(item.message))
+        ? "workspace-conflict"
+        : "other";
+  const avatarPlacement = opts.avatarPlacement ?? "gutter";
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
@@ -453,17 +444,14 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     >
       ${
         normalizedRole !== "tool" &&
-        showAvatarGutter &&
+        avatarPlacement === "gutter" &&
         (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
           ? isForwarded
             ? renderForwardedAvatar(group.senderSession?.agentId, opts)
             : renderChatAvatar(
                 group.role,
-                assistantAvatarIdentity,
-                {
-                  name: opts.userName ?? null,
-                  avatar: opts.userAvatar ?? null,
-                },
+                { name: assistantName, avatar: opts.assistantAvatar ?? null },
+                { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
                 opts.resourceBasePath,
                 group.sender,
               )
@@ -532,13 +520,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           ? nothing
           : html`<div
               class="chat-group-footer ${
-                persistUserIdentity ? "chat-group-footer--persistent-identity" : ""
+                normalizedRole === "user" && avatarPlacement !== "footer"
+                  ? "chat-group-footer--persistent-identity"
+                  : ""
               }${sendFailure ? " chat-group-footer--send-failure" : ""}"
             >
               <div class="chat-group-footer__meta">
                 ${isPeerGroup ? nothing : userFooterActions}
                 ${
-                  normalizedRole === "user" && !showAvatarGutter
+                  normalizedRole === "user" && avatarPlacement === "footer"
                     ? renderChatAuthorAvatar(group.sender)
                     : nothing
                 }

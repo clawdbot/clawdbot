@@ -9,6 +9,7 @@ import {
   buildOauthProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -173,18 +174,22 @@ export default definePluginEntry({
       catalog: {
         order: "profile",
         run: async (ctx) => {
-          const { apiKey, discoveryApiKey } = ctx.resolveProviderAuth(PROVIDER_ID, {
+          const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderAuth(PROVIDER_ID, {
             oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
           });
           if (!apiKey) {
             return null;
           }
-          return {
-            provider: {
-              ...(await buildChutesProvider(discoveryApiKey)),
-              apiKey,
-            },
-          };
+          return await runLiveProviderCatalog({
+            providerId: PROVIDER_ID,
+            profileId: discoveryApiKey ? profileId : undefined,
+            run: async () => ({
+              provider: {
+                ...(await buildChutesProvider(discoveryApiKey, { discoveryMode: "strict" })),
+                apiKey,
+              },
+            }),
+          });
         },
       },
       staticCatalog: {

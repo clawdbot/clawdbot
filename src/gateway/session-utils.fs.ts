@@ -23,9 +23,10 @@ import {
 } from "./session-transcript-files.fs.js";
 import {
   assertArchiveTranscriptSource,
+  readIndexedTranscriptEntries,
   readSessionTranscriptIndex,
   selectArchiveTranscriptEntries,
-  type IndexedTranscriptEntry,
+  type MaterializedTranscriptEntry,
   type SessionTranscriptIndex,
 } from "./session-transcript-index.fs.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
@@ -244,7 +245,16 @@ export class ArchivedTranscriptReader {
     }
     const index = await readSessionTranscriptIndex(artifact.path, this.scope.sessionId);
     return {
-      messages: index?.entries.flatMap(indexedTranscriptEntryToMessages) ?? [],
+      messages: index
+        ? (
+            await readIndexedTranscriptEntries(
+              artifact.path,
+              index,
+              index.entries,
+              this.scope.sessionId,
+            )
+          ).flatMap(indexedTranscriptEntryToMessages)
+        : [],
       transcriptPath: artifact.path,
     };
   }
@@ -257,8 +267,16 @@ export class ArchivedTranscriptReader {
     if (!artifact) {
       return { oversized: false, found: false };
     }
-    const entry = (await readSessionTranscriptIndex(artifact.path, this.scope.sessionId))?.byId.get(
-      messageId,
+    const index = await readSessionTranscriptIndex(artifact.path, this.scope.sessionId);
+    const selected = index?.byId.get(messageId);
+    if (!index || !selected) {
+      return { oversized: false, found: false };
+    }
+    const [entry] = await readIndexedTranscriptEntries(
+      artifact.path,
+      index,
+      [selected],
+      this.scope.sessionId,
     );
     if (!entry) {
       return { oversized: false, found: false };
@@ -288,15 +306,18 @@ export class ArchivedTranscriptReader {
       return [];
     }
     const index = await readSessionTranscriptIndex(artifact.path, this.scope.sessionId);
+    if (!index) {
+      return [];
+    }
     // Preserve duplicate/oversized full-reader entries and ID-less rows whose
     // projected metadata can supply the ID. The caller matches after projection.
-    return (
-      index?.entries.flatMap((entry) =>
-        typeof entry.record.id !== "string" || entry.record.id === messageId
-          ? indexedTranscriptEntryToMessages(entry)
-          : [],
-      ) ?? []
+    const entries = await readIndexedTranscriptEntries(
+      artifact.path,
+      index,
+      index.entries.filter((entry) => entry.rawId === undefined || entry.rawId === messageId),
+      this.scope.sessionId,
     );
+    return entries.flatMap(indexedTranscriptEntryToMessages);
   }
 
   async readRecentWithStats(
@@ -341,7 +362,12 @@ export class ArchivedTranscriptReader {
     const offset = Math.min(resolveNonNegativeIntegerOption(opts.offset, 0), totalMessages);
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - resolveNonNegativeIntegerOption(opts.maxMessages, 0));
-    const entries = index.entries.slice(start, endExclusive);
+    const entries = await readIndexedTranscriptEntries(
+      artifact.path,
+      index,
+      index.entries.slice(start, endExclusive),
+      this.scope.sessionId,
+    );
     return {
       displaySource: index.displaySource,
       messages: entries.flatMap(indexedTranscriptEntryToMessages),
@@ -411,13 +437,17 @@ export class ArchivedTranscriptReader {
       );
       const endExclusive = Math.min(index.entries.length, start + pageSize);
       const readStart = Math.max(0, start - 1);
+      const entries = await readIndexedTranscriptEntries(
+        artifact.path,
+        index,
+        index.entries.slice(readStart, endExclusive),
+        this.scope.sessionId,
+      );
       return {
         displaySource: index.displaySource,
         found: true,
         hasOverreadContext: readStart < start,
-        messages: index.entries
-          .slice(readStart, endExclusive)
-          .flatMap(indexedTranscriptEntryToMessages),
+        messages: entries.flatMap(indexedTranscriptEntryToMessages),
         offset: index.entries.length - endExclusive,
         totalMessages: index.entries.length,
         transcriptPath: artifact.path,
@@ -450,11 +480,11 @@ async function readRecentSessionSnapshotFromPathAsync(
   return parseRecentTranscriptTailSnapshot(lines, opts.maxMessages, index);
 }
 
-function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown {
+function indexedTranscriptEntryToMessage(entry: MaterializedTranscriptEntry): unknown {
   return projectTranscriptEntryMessage(entry.record, entry.seq, entry.transcriptPosition);
 }
 
-function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
+function indexedTranscriptEntryToMessages(entry: MaterializedTranscriptEntry): unknown[] {
   const message = indexedTranscriptEntryToMessage(entry);
   return message ? [message] : [];
 }

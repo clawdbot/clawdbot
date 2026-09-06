@@ -24,7 +24,6 @@ type PendingConversationTurn = {
   outboundMessageId?: string;
   correlationReady: Promise<void>;
   markCorrelationReady: () => void;
-  stopTimeout: () => void;
   claimed: boolean;
   settle: (reply: ConversationTurnReply | undefined) => void;
 };
@@ -150,7 +149,6 @@ export function registerPendingConversationTurn(params: {
     createdAt,
     correlationReady,
     markCorrelationReady,
-    stopTimeout,
     claimed: false,
     settle,
   };

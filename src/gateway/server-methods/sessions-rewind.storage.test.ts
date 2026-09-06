@@ -45,6 +45,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   resolveSessionMutationAuthorization,
@@ -493,62 +494,95 @@ describe("sessions.fork storage ownership", () => {
   it.each([
     { kind: "incognito", incognito: true },
     { kind: "ordinary", incognito: false },
-  ])("keeps the $kind child accessible in its source storage class", async ({ incognito }) => {
-    await withOpenClawTestState({ label: "message-fork-storage" }, async (testState) => {
-      await testState.writeConfig(cfg);
-      const sourceScope = await seedMessageCutSource(incognito);
-      const { sessionKey } = sourceScope;
-      const sourceEntry = loadSessionEntry(sourceScope);
-      const sourceEvents = await loadTranscriptEvents(sourceScope);
-      const { respond, error } = invokeMessageCut("sessions.fork", sourceScope, {
-        sessionMutationCommitGuard: () => {},
-        sessionMutationAuthorization: { assertCurrent: () => {}, assertTargetCurrent: () => {} },
+    { kind: "repository", incognito: false },
+  ])(
+    "keeps the $kind child accessible in its source storage class",
+    async ({ kind, incognito }) => {
+      await withOpenClawTestState({ label: "message-fork-storage" }, async (testState) => {
+        await testState.writeConfig(cfg);
+        const sourceScope = await seedMessageCutSource(incognito);
+        const { sessionKey } = sourceScope;
+        const repository =
+          kind === "repository"
+            ? getSessionRepositoryWorkspaceStore().create({
+                agentId: "main",
+                sessionKey,
+                url: "https://github.com/openclaw/fixture.git",
+                runSetupScript: false,
+                assertCurrent: () => {},
+              })
+            : undefined;
+        if (repository) {
+          await upsertSessionEntryCore(sourceScope, {
+            repositoryWorkspaceId: repository.workspaceId,
+          });
+        }
+        const sourceEntry = loadSessionEntry(sourceScope);
+        const sourceEvents = await loadTranscriptEvents(sourceScope);
+        const { respond, error } = invokeMessageCut("sessions.fork", sourceScope, {
+          sessionMutationCommitGuard: () => {},
+          sessionMutationAuthorization: { assertCurrent: () => {}, assertTargetCurrent: () => {} },
+        });
+        expect(await error).toBeUndefined();
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          { sessionKey: expect.any(String), editorText: "What did I say?" },
+          undefined,
+        );
+        const result = expectDefined(
+          respond.mock.calls[0]?.[1] as SessionsForkResult | undefined,
+          "fork response",
+        );
+        const childScope = { agentId: "main", sessionKey: result.sessionKey };
+        // Resolve exactly the returned key, without supplying the source's volatile store path.
+        const child = expectDefined(loadSessionEntry(childScope), "fork child at returned key");
+        expect(isIncognitoSessionKey(result.sessionKey)).toBe(incognito);
+        expect(child.incognito === true).toBe(incognito);
+        expect(child.sessionId).not.toBe(sourceScope.sessionId);
+        expect(child.parentSessionKey).toBe(sessionKey);
+        if (repository) {
+          expect(child.repositoryWorkspaceId).toBeDefined();
+          expect(child.repositoryWorkspaceId).not.toBe(repository.workspaceId);
+          expect(getSessionRepositoryWorkspaceStore().find(childScope)).toMatchObject({
+            workspaceId: child.repositoryWorkspaceId,
+            url: repository.url,
+            sessionKey: childScope.sessionKey,
+          });
+          expect(getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toEqual(
+            repository,
+          );
+          expect(child.worktree).toBeUndefined();
+          expect(child.spawnedCwd).toBeUndefined();
+        }
+        const childTranscriptScope = { ...childScope, sessionId: child.sessionId };
+        const childEvents = await loadTranscriptEvents(childTranscriptScope);
+        expect(childEvents).toEqual([
+          expect.objectContaining({ type: "session", id: child.sessionId }),
+          ...sourceEvents.slice(1, 3),
+        ]);
+        expect(loadSessionEntry(sourceScope)).toEqual(sourceEntry);
+        await expect(loadTranscriptEvents(sourceScope)).resolves.toEqual(sourceEvents);
+
+        // Omitting the incognito key deliberately inspects the durable agent store.
+        const durableRows = listSessionEntriesCore({ agentId: "main" });
+        expect(durableRows.some((row) => row.sessionKey === result.sessionKey)).toBe(!incognito);
+        await expect(
+          loadTranscriptEvents({ agentId: "main", sessionId: child.sessionId }),
+        ).resolves.toEqual(incognito ? [] : childEvents);
+
+        const databasePath = incognito
+          ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" })
+          : resolveOpenClawAgentSqlitePath({ agentId: "main" });
+        expect(fs.existsSync(databasePath)).toBe(!incognito);
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(loadSessionEntry(childScope)).toEqual(incognito ? undefined : child);
+        await expect(loadTranscriptEvents(childTranscriptScope)).resolves.toEqual(
+          incognito ? [] : childEvents,
+        );
       });
-      expect(await error).toBeUndefined();
-
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { sessionKey: expect.any(String), editorText: "What did I say?" },
-        undefined,
-      );
-      const result = expectDefined(
-        respond.mock.calls[0]?.[1] as SessionsForkResult | undefined,
-        "fork response",
-      );
-      const childScope = { agentId: "main", sessionKey: result.sessionKey };
-      // Resolve exactly the returned key, without supplying the source's volatile store path.
-      const child = expectDefined(loadSessionEntry(childScope), "fork child at returned key");
-      expect(isIncognitoSessionKey(result.sessionKey)).toBe(incognito);
-      expect(child.incognito === true).toBe(incognito);
-      expect(child.sessionId).not.toBe(sourceScope.sessionId);
-      expect(child.parentSessionKey).toBe(sessionKey);
-      const childTranscriptScope = { ...childScope, sessionId: child.sessionId };
-      const childEvents = await loadTranscriptEvents(childTranscriptScope);
-      expect(childEvents).toEqual([
-        expect.objectContaining({ type: "session", id: child.sessionId }),
-        ...sourceEvents.slice(1, 3),
-      ]);
-      expect(loadSessionEntry(sourceScope)).toEqual(sourceEntry);
-      await expect(loadTranscriptEvents(sourceScope)).resolves.toEqual(sourceEvents);
-
-      // Omitting the incognito key deliberately inspects the durable agent store.
-      const durableRows = listSessionEntriesCore({ agentId: "main" });
-      expect(durableRows.some((row) => row.sessionKey === result.sessionKey)).toBe(!incognito);
-      await expect(
-        loadTranscriptEvents({ agentId: "main", sessionId: child.sessionId }),
-      ).resolves.toEqual(incognito ? [] : childEvents);
-
-      const databasePath = incognito
-        ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" })
-        : resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      expect(fs.existsSync(databasePath)).toBe(!incognito);
-      expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
-      expect(loadSessionEntry(childScope)).toEqual(incognito ? undefined : child);
-      await expect(loadTranscriptEvents(childTranscriptScope)).resolves.toEqual(
-        incognito ? [] : childEvents,
-      );
-    });
-  });
+    },
+  );
 });
 
 describe.each(["sessionMutationCommitGuard", "sessionMutationAuthorization"] as const)(

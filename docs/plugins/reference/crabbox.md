@@ -2,10 +2,13 @@
 summary: "Cloud worker provider backed by the Crabbox CLI."
 read_when:
   - You are installing, configuring, or auditing the crabbox plugin
-title: "Crabbox plugin"
+title: "Crabbox plugin reference"
 ---
 
-# Crabbox plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Cloud worker provider backed by the Crabbox CLI.
 
@@ -16,7 +19,8 @@ Cloud worker provider backed by the Crabbox CLI.
 
 ## Surface
 
-CLI commands: `openclaw crabbox`; contracts: `workerProviders`
+- CLI commands: `openclaw crabbox`
+- Contracts: `workerProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

@@ -139,9 +139,11 @@ describe("Codex remote WebSocket connection health", () => {
 
     await service.start(ctx);
 
-    expect(ctx.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("configuration is invalid"),
-    );
+    await vi.waitFor(() => {
+      expect(ctx.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("configuration is invalid"),
+      );
+    });
     expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
 
     await service.stop?.(ctx);

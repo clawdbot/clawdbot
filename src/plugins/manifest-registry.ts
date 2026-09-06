@@ -28,6 +28,7 @@ import {
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type {
   BundledChannelConfigCollector,
@@ -304,30 +305,7 @@ function mergeManifestContracts(
     return manifestContracts;
   }
   const contracts: PluginManifestContracts = {};
-  for (const key of [
-    "embeddedExtensionFactories",
-    "agentToolResultMiddleware",
-    "trustedToolPolicies",
-    "externalAuthProviders",
-    "embeddingProviders",
-    "speechProviders",
-    "realtimeTranscriptionProviders",
-    "realtimeVoiceProviders",
-    "mediaUnderstandingProviders",
-    "transcriptSourceProviders",
-    "documentExtractors",
-    "imageGenerationProviders",
-    "videoGenerationProviders",
-    "musicGenerationProviders",
-    "webContentExtractors",
-    "webFetchProviders",
-    "webSearchProviders",
-    "workerProviders",
-    "usageProviders",
-    "migrationProviders",
-    "gatewayMethodDispatch",
-    "tools",
-  ] as const) {
+  for (const key of PLUGIN_MANIFEST_CONTRACT_KEYS) {
     const merged = mergeContractLists(manifestContracts?.[key], catalogContracts[key]);
     if (merged) {
       contracts[key] = merged;
@@ -544,6 +522,7 @@ function buildRecord(params: {
       params.manifest.contracts,
       officialCatalogManifest?.contracts,
     ),
+    transcriptSources: params.manifest.transcriptSources,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
@@ -1233,7 +1212,7 @@ export function loadPluginManifestRegistryCore(
 
 /** Load manifest metadata from the bundled/source plugin tree without consulting operator state. */
 export function loadBundledPluginManifestRegistry(
-  params: { env?: NodeJS.ProcessEnv } = {},
+  params: { env?: NodeJS.ProcessEnv; bundledRoot?: string } = {},
 ): PluginManifestRegistry {
   const env = params.env ?? process.env;
   const installRecords: Record<string, PluginInstallRecord> = {};
@@ -1244,6 +1223,7 @@ export function loadBundledPluginManifestRegistry(
       env,
       installRecords,
       rootScope: "bundled",
+      ...(params.bundledRoot ? { bundledRoot: params.bundledRoot } : {}),
     }),
   });
 }

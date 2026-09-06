@@ -284,6 +284,7 @@ describe("doctor invalid config process exit", () => {
     expect(output).toContain("Imported legacy exec approvals into shared SQLite state.");
     expect(output).toContain("Exec approvals updated: removed 1 older generated approval");
     expect(output).toContain("Doctor complete.");
+    expect(output).not.toContain(STARTUP_RECOVERY);
     expect(output).not.toContain("Building Control UI assets");
     expect(output).toContain("Merged agents.entries.jup.memorySearch");
 

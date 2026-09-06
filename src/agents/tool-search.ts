@@ -386,7 +386,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             signal,
             onUpdate,
           });
-          const wrappedResult = formatToolSearchControlResult(callResult, runtime, toolCallId);
+          const { id, name, source } = callResult.tool;
+          // Invocation results need identity, not another copy of the discovery metadata.
+          // Keep full metadata in details for callers and the unchanged target result on both surfaces.
+          const wrappedResult = {
+            ...formatToolSearchControlResult(
+              { tool: { id, name, source }, result: callResult.result },
+              runtime,
+              toolCallId,
+            ),
+            details: callResult,
+          };
           const failureKind = resolveToolResultFailureKind(callResult.result);
           if (!failureKind) {
             return wrappedResult;

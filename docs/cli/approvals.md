@@ -191,11 +191,11 @@ openclaw exec-policy preset yolo
 ## Allowlist helpers
 
 ```bash
-openclaw approvals allowlist add "~/Projects/**/bin/rg"
+openclaw approvals allowlist add "~/path/to/**/bin/rg"
 openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"
 openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
 
-openclaw approvals allowlist remove "~/Projects/**/bin/rg"
+openclaw approvals allowlist remove "~/path/to/**/bin/rg"
 ```
 
 Adding an existing pattern or removing a missing one succeeds without writing.

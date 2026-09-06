@@ -706,6 +706,9 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return (
+    // A definitive native rejection can return an already-committed source.
+    // Keep its original recorder/event; only unconsumed sources may regroup.
+    item.userTurnTranscriptRecorder?.hasPersisted() === true ||
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||
@@ -986,22 +989,6 @@ function releaseQueueSummaryDeliveryForRetry(
   }
 }
 
-function dropAbortedQueueSummarySources(queue: FollowupQueueSummaryState): number {
-  let dropped = 0;
-  for (let index = queue.summarySources.length - 1; index >= 0; index -= 1) {
-    const source = expectDefined(queue.summarySources[index], "summary sources entry at index");
-    if (!isFollowupRunAborted(source)) {
-      continue;
-    }
-    queue.summarySources.splice(index, 1);
-    queue.summaryLines.splice(index, 1);
-    queue.droppedCount = Math.max(0, queue.droppedCount - 1);
-    completeFollowupRunLifecycle(source);
-    dropped += 1;
-  }
-  return dropped;
-}
-
 async function runQueueSummaryDelivery(
   queue: FollowupQueueSummaryState,
   delivery: QueueSummaryDelivery,
@@ -1101,26 +1088,42 @@ async function runQueueSummaryDelivery(
   }
 }
 
-async function dropAbortedFollowups(
-  queue: Pick<FollowupQueueState, "inFlight" | "items">,
+export async function dropAbortedFollowups(
+  queue: FollowupQueueSummaryState & Pick<FollowupQueueState, "items">,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): Promise<number> {
-  let dropped = 0;
-  for (let index = queue.items.length - 1; index >= 0; index -= 1) {
-    const item = expectDefined(queue.items[index], "items entry at index");
-    if (isFollowupRunAborted(item)) {
-      queue.inFlight.add(item);
-      try {
-        await runFollowup(item);
-        completeFollowupRunLifecycle(item);
-        removeQueuedItemsByRef(queue.items, [item]);
-      } finally {
-        queue.inFlight.delete(item);
-      }
-      dropped += 1;
+  // Waiting reservations are cancellable; started injections retain custody until their outcome.
+  const canDrop = (run: FollowupRun) =>
+    run.steerPending?.phase !== "injecting" &&
+    isFollowupRunAborted(run) &&
+    !queue.inFlight.has(run) &&
+    !queue.activeSummarySources.has(run);
+  const pending = queue.items.filter(canDrop);
+  const summaries = [
+    ...queue.summarySources,
+    ...queue.summaryElisions.flatMap((entry) => entry.sources),
+  ].filter(canDrop);
+  // Detach identities and release both dedupe owners before ingress can retry.
+  removeQueuedItemsByRef(queue.items, pending);
+  consumeQueueSummaryDelivery(queue, { sources: summaries, droppedCount: summaries.length }, false);
+  for (const item of [...pending, ...summaries]) {
+    try {
+      completeFollowupRunLifecycle(item);
+    } catch (error) {
+      defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
     }
   }
-  return dropped;
+  await Promise.all(
+    pending.map(async (item) => {
+      try {
+        await runFollowup(item);
+      } catch (error) {
+        // Aborted work cannot run again; report failed presentation cleanup without restoring it.
+        defaultRuntime.error?.(`followup queue cancellation cleanup failed: ${String(error)}`);
+      }
+    }),
+  );
+  return pending.length + summaries.length;
 }
 
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
@@ -1343,21 +1346,6 @@ async function drainElidedOverflowSummary(params: {
           (source) => resolveFollowupDeliveryContextKey(source) === entry.contextKey,
         )
       : [];
-  for (let index = entry.sources.length - 1; index >= 0; index -= 1) {
-    const source = expectDefined(entry.sources[index], "sources entry at index");
-    if (!isFollowupRunAborted(source)) {
-      continue;
-    }
-    entry.sources.splice(index, 1);
-    entry.summaryLines.splice(index, 1);
-    entry.count = Math.max(0, entry.count - 1);
-    params.queue.droppedCount = Math.max(0, params.queue.droppedCount - 1);
-    completeFollowupRunLifecycle(source);
-  }
-  if (entry.sources.length === 0) {
-    params.queue.summaryElisions.shift();
-    return true;
-  }
   const source = retainedSources.at(-1) ?? entry.sources.at(-1);
   if (!source) {
     return false;
@@ -1418,10 +1406,13 @@ async function drainElidedOverflowSummary(params: {
 }
 
 async function drainOverflowSummaryGroup(params: {
-  queue: FollowupQueueSummaryState;
+  queue: FollowupQueueState;
   runFollowup: (run: FollowupRun) => Promise<void>;
 }): Promise<boolean> {
-  if (dropAbortedQueueSummarySources(params.queue) > 0 && params.queue.droppedCount === 0) {
+  if (
+    (await dropAbortedFollowups(params.queue, params.runFollowup)) > 0 &&
+    params.queue.droppedCount === 0
+  ) {
     return true;
   }
   if (params.queue.evictedSummaryCount > 0) {

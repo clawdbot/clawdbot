@@ -7,7 +7,7 @@ import {
   validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import {
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunHandleSessionId,
@@ -37,11 +37,14 @@ import type { ChatRunState } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { prepareSessionSharing, resolveSessionVisibility } from "../session-sharing.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
   loadGatewaySessionEntryReadOnly,
+  resolveCanonicalSessionStoreMatchFromStoreKeys,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -76,11 +79,12 @@ type ChatHistoryMethod = "chat.history" | "chat.startup";
 function respondChatHistoryUnavailable(
   method: ChatHistoryMethod,
   respond: GatewayRequestHandlerOptions["respond"],
+  message = "session history is rebuilding; retry shortly",
 ): void {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, "session history is rebuilding; retry shortly", {
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
       details: { method },
       retryable: true,
       retryAfterMs: 250,
@@ -184,7 +188,15 @@ async function handleChatHistoryRequest({
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
+  const {
+    cfg,
+    agentId: sessionAgentId,
+    storePath,
+    store,
+    storeKeys,
+    entry,
+    canonicalKey,
+  } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
       loadGatewaySessionEntryReadOnly(sessionKey, {
@@ -208,11 +220,6 @@ async function handleChatHistoryRequest({
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
     return;
   }
-  const sessionAgentId = resolveSessionAgentId({
-    sessionKey,
-    config: cfg,
-    agentId: selectedAgent.agentId,
-  });
   if (requestedSessionId) {
     const transcriptSessionKey = resolveTranscriptSessionKeyBySessionId({
       agentId: sessionAgentId,
@@ -402,6 +409,61 @@ async function handleChatHistoryRequest({
   const startupMetadata = method === "chat.startup" ? startupProjection?.metadata : undefined;
   const sessionModelCatalog = startupProjection?.sessionModelCatalog;
   const defaultModelCatalog = startupProjection?.defaultModelCatalog;
+  const initialStoreKey = entry
+    ? storeKeys.find((candidate) => store[candidate] === entry)
+    : undefined;
+  const currentSharingState = entry
+    ? loadGatewaySessionEntryReadOnly(sessionKey, {
+        agentId: sessionAgentId,
+        clone: false,
+        includeStoreChildEntries: true,
+        projection: "list",
+      })
+    : null;
+  const currentSharingMatch = currentSharingState
+    ? resolveCanonicalSessionStoreMatchFromStoreKeys(
+        currentSharingState.store,
+        currentSharingState.storeKeys,
+      )
+    : undefined;
+  const sharingTarget =
+    currentSharingState && currentSharingMatch
+      ? {
+          agentId: currentSharingState.agentId,
+          canonicalKey: currentSharingState.canonicalKey,
+          entry: currentSharingMatch.entry,
+          storeKey: currentSharingMatch.key,
+          storeKeys: currentSharingState.storeKeys,
+          storePath: currentSharingState.storePath,
+        }
+      : null;
+  // History rows replace roster rows in clients. Publish current caller facts,
+  // never roles from the pre-await snapshot or a replacement session instance.
+  if (
+    entry &&
+    (!initialStoreKey ||
+      !sharingTarget ||
+      sharingTarget.agentId !== sessionAgentId ||
+      sharingTarget.canonicalKey !== canonicalKey ||
+      sharingTarget.storeKey !== initialStoreKey ||
+      sharingTarget.entry.sessionId !== entry.sessionId ||
+      sharingTarget.storePath !== storePath)
+  ) {
+    respondChatHistoryUnavailable(
+      method,
+      respond,
+      "session changed while reading history; reload the conversation",
+    );
+    return;
+  }
+  const sharing = prepareSessionSharing({ client, cfg: currentSharingState?.cfg ?? cfg });
+  if (
+    sharingTarget &&
+    sharing.entryFilter?.(sharingTarget.storeKey, sharingTarget.entry) === false
+  ) {
+    respond(false, undefined, hiddenSessionNotFound(canonicalKey));
+    return;
+  }
   const sessionInfo = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_info`,
     () =>
@@ -411,7 +473,7 @@ async function handleChatHistoryRequest({
         store,
         key: canonicalKey,
         entry,
-        agentId: selectedAgent.agentId,
+        agentId: sessionAgentId,
         modelCatalog: sessionModelCatalog,
       }),
     {
@@ -422,7 +484,11 @@ async function handleChatHistoryRequest({
       },
     },
   );
-  const activeRunAgentId = selectedAgent.agentId;
+  if (sharingTarget) {
+    sessionInfo.visibility = resolveSessionVisibility(sharingTarget.entry);
+    sessionInfo.sharingRole = sharing.roleForTarget(sharingTarget);
+  }
+  const activeRunAgentId = sessionAgentId;
   const activeRunState = resolveVisibleActiveSessionRunState({
     context,
     requestedKey: sessionKey,
@@ -468,7 +534,6 @@ async function handleChatHistoryRequest({
             providerPolicySource: "active",
           }),
           modelSelectionTarget: resolveGatewayModelSelectionPolicy({
-            agentId: sessionAgentId,
             callerScopes: client?.connect?.scopes ?? [],
             cfg,
           }).target,

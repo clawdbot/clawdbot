@@ -104,6 +104,7 @@ describe("BoardWidgetSandboxHost", () => {
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
     vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
+    const onRendered = vi.fn();
     const host = new BoardWidgetSandboxHost({
       frame,
       widget: widget(),
@@ -118,6 +119,7 @@ describe("BoardWidgetSandboxHost", () => {
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded,
+      onRendered,
       onError: vi.fn(),
     });
 
@@ -135,10 +137,35 @@ describe("BoardWidgetSandboxHost", () => {
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "ui/notifications/sandbox-resource-ready",
-        params: { html: "<!doctype html><p>weather</p>" },
+        params: { html: "<!doctype html><p>weather</p>", renderId: expect.any(String) },
       }),
       "https://sandbox.example",
     );
+    expect(onRendered).not.toHaveBeenCalled();
+    const { renderId } = postMessage.mock.calls[0]![0].params as { renderId: string };
+    const rendered = (
+      id: string,
+      source = frame.contentWindow,
+      origin = "https://sandbox.example",
+    ) =>
+      host.handleMessage(
+        new MessageEvent("message", {
+          source,
+          origin,
+          data: { method: "ui/notifications/sandbox-resource-loaded", params: { renderId: id } },
+        }),
+      );
+    rendered("stale-document");
+    rendered(renderId, window);
+    rendered(renderId, frame.contentWindow, "https://other.example");
+    expect(onRendered).not.toHaveBeenCalled();
+    rendered(renderId);
+    rendered(renderId);
+    expect(onRendered).toHaveBeenCalledOnce();
+    host.reset();
+    rendered(renderId);
+    expect(onRendered).toHaveBeenCalledOnce();
+    host.dispose();
   });
 
   it("delivers passive preview HTML without accepting its capability bridge", async () => {

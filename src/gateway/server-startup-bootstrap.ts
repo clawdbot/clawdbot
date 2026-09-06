@@ -89,13 +89,17 @@ export async function prepareGatewayServerBootstrap(input: {
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
-  await startupTrace.measure("state.ownership", async () => {
+  const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,
+      signal,
     });
-  });
+  };
+  await startupTrace.measure("state.ownership", () =>
+    opts.startupOperation ? opts.startupOperation(inspectStateOwnership) : inspectStateOwnership(),
+  );
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -111,14 +115,19 @@ export async function prepareGatewayServerBootstrap(input: {
       import("../state/openclaw-state-db-contract.js"),
     ]),
   );
-  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+  const inspectDatabaseSchemas = (signal?: AbortSignal) =>
     preflightOpenClawDatabaseSchemas({
+      signal,
       env: process.env,
       supportedVersions: {
         state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
         agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
       },
-    }),
+    });
+  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+    opts.startupOperation
+      ? opts.startupOperation(inspectDatabaseSchemas)
+      : inspectDatabaseSchemas(),
   );
   if (databaseSchemas.incompatible.length > 0) {
     for (const database of databaseSchemas.incompatible) {
@@ -291,7 +300,7 @@ export async function prepareGatewayServerBootstrap(input: {
     trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
   ) {
     log.warn(
-      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new operator device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
     );
   }
   const resolvedStartupAuthOverride = startupAuthOverride

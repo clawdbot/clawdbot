@@ -10,6 +10,7 @@ import {
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
@@ -17,7 +18,6 @@ import {
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
@@ -272,12 +272,18 @@ export async function downloadVydraAsset(params: {
           : params.kind === "audio"
             ? "audio/mpeg"
             : "video/mp4");
-      const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
-        timeoutMs: resolveTimeoutMs,
-        onTimeout: () => createVydraTimeoutError(deadline),
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
-      });
+      const buffer = await readProviderBinaryResponse(
+        result.response,
+        deadline.label,
+        params.kind,
+        {
+          maxBytes: params.maxBytes,
+          chunkTimeoutMs: 0,
+          timeoutMs: resolveTimeoutMs,
+          onTimeout: () => createVydraTimeoutError(deadline),
+          onOverflow: ({ maxBytes }) => new Error(`${deadline.label} exceeds ${maxBytes} bytes`),
+        },
+      );
       const extension = resolveVydraFileExtension(params.kind, mimeType);
       const fileStem =
         params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
@@ -287,9 +293,8 @@ export async function downloadVydraAsset(params: {
         fileName: `${fileStem}-1.${extension}`,
       };
     } catch (error) {
-      // The guarded request signal remains active through body consumption and
-      // can win the same absolute-deadline race. Keep timeout precedence stable.
-      if (typeof deadline.deadlineAtMs === "number" && Date.now() >= deadline.deadlineAtMs) {
+      // The request timer can fire before wall-clock time reaches the operation deadline.
+      if (error instanceof Error && error.name === "TimeoutError") {
         throw createVydraTimeoutError(deadline);
       }
       throw error;

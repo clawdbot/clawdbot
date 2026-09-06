@@ -2,14 +2,48 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStreamContract,
+  ThinkingContent,
 } from "../types.js";
+
+// Only the mutation owner can prove an append: transport indices and mutable
+// partial snapshots alone do not establish that their previous prefix survived.
+const thinkingAppends = new WeakMap<
+  ThinkingContent,
+  { before: string; after: string; delta: string }
+>();
+
+/** Package-internal mutation fact for native reasoning projection. */
+export function appendAssistantThinking(block: ThinkingContent, delta: string): void {
+  const before = block.thinking;
+  block.thinking += delta;
+  thinkingAppends.set(block, { before, after: block.thinking, delta });
+}
+
+/** Returns only an append whose current and previously observed snapshots still match. */
+export function readAssistantThinkingAppend(
+  block: ThinkingContent,
+  previous: string,
+): string | undefined {
+  const append = thinkingAppends.get(block);
+  return append?.before === previous && append.after === block.thinking ? append.delta : undefined;
+}
+
+// Completion belongs to the producer, independently of queued-event consumption.
+// Keep it outside the mutable stream surface: result() decorators may repair
+// messages and release consumer-owned state when explicitly awaited.
+const eventStreamCompletions = new WeakMap<object, Promise<unknown>>();
+
+/** Observe native producer settlement without invoking consumer result decorators. */
+export function getEventStreamCompletion(stream: object): Promise<unknown> | undefined {
+  return eventStreamCompletions.get(stream);
+}
 
 /** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
   private queue: (T | undefined)[] = [];
   private queueHead = 0;
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
-  private done = false;
+  protected done = false;
   private resultSettled = false;
   private finalResultPromise: Promise<R>;
   // Promise invokes its executor before construction returns.
@@ -25,6 +59,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
       this.resolveFinalResult = resolve;
       this.rejectFinalResult = reject;
     });
+    eventStreamCompletions.set(this, this.finalResultPromise);
   }
 
   push(event: T): void {
@@ -110,6 +145,46 @@ export class AssistantMessageEventStream
   extends EventStream<AssistantMessageEvent, AssistantMessage>
   implements AssistantMessageEventStreamContract
 {
+  private activeThinkingBlocks?: Set<ThinkingContent>;
+
+  override push(event: AssistantMessageEvent): void {
+    if (event.type === "thinking_delta" || event.type === "thinking_end") {
+      const block = event.partial.content[event.contentIndex];
+      if (block?.type === "thinking") {
+        if (this.done || event.type === "thinking_end") {
+          thinkingAppends.delete(block);
+          this.activeThinkingBlocks?.delete(block);
+        } else if (thinkingAppends.has(block)) {
+          (this.activeThinkingBlocks ??= new Set()).add(block);
+        }
+      }
+    }
+    if (event.type === "done" || event.type === "error") {
+      this.clearThinkingAppends(event.type === "done" ? event.message : event.error);
+    }
+    super.push(event);
+  }
+
+  override end(result?: AssistantMessage): void {
+    this.clearThinkingAppends(result);
+    super.end(result);
+  }
+
+  private clearThinkingAppends(message?: AssistantMessage): void {
+    // Deferred transports can withhold all deltas until terminal classification.
+    for (const block of message?.content ?? []) {
+      if (block.type === "thinking") {
+        thinkingAppends.delete(block);
+      }
+    }
+    // Historical blocks survive in transcripts. Do not let their WeakMap keys
+    // retain a previous full reasoning string after the stream releases it.
+    for (const block of this.activeThinkingBlocks ?? []) {
+      thinkingAppends.delete(block);
+    }
+    this.activeThinkingBlocks = undefined;
+  }
+
   constructor() {
     super(
       (event) => event.type === "done" || event.type === "error",

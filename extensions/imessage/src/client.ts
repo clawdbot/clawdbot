@@ -203,9 +203,16 @@ export class IMessageRpcClient {
     // monitor can wait forever on an unusable child. #75438 covered stdin only.
     const failFromProcessError = (err: unknown) => this.failTransport(err, child);
     child.on("error", failFromProcessError);
-    child.stdin.on("error", failFromProcessError);
-    child.stdout.on("error", failFromProcessError);
-    child.stderr.on("error", failFromProcessError);
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream.on("error", failFromProcessError);
+      stream.once("close", () => {
+        // Bun can close an errored stdio stream without emitting its error event.
+        const error = stream.errored;
+        if (error) {
+          failFromProcessError(error);
+        }
+      });
+    }
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
