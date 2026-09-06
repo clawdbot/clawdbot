@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { config, json, message, roster, runtime, window } from "./fixtures.js";
+import { config, json, message, roster, runtime, window } from "./discord.fixtures.js";
 import { createDiscordSource } from "./index.js";
 
 afterEach(() => vi.useRealTimers());

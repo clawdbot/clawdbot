@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SourceRuntime } from "../../types.js";
+import { createGithubSource } from "./index.js";
 import {
   at,
   commit,
@@ -14,8 +15,7 @@ import {
   sinceMs,
   untilMs,
   window,
-} from "./fixtures/responses.js";
-import { createGithubSource } from "./index.js";
+} from "./responses.fixtures.js";
 
 function source(
   route: (url: URL, init?: RequestInit) => Response | Promise<Response>,
