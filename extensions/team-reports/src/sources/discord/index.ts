@@ -1,6 +1,207 @@
-// Discord activity source (stub; implemented by the sources lane).
-import type { DiscordSource, SourceRuntime } from "../../types.js";
+import { z } from "zod";
+import type { DiscordMessage, DiscordSource, SourceRuntime, SourceStatus } from "../../types.js";
+import { checkAbort, createClient } from "./client.js";
 
-export function createDiscordSource(_runtime: SourceRuntime): DiscordSource {
-  throw new Error("team-reports: Discord source is not implemented yet");
+const snowflake = z.string().regex(/^\d{1,20}$/);
+const channelSchema = z.object({
+  id: snowflake,
+  name: z.string().nullish(),
+  parent_id: snowflake.nullish(),
+  type: z.number().optional(),
+});
+const archiveSchema = channelSchema.extend({
+  thread_metadata: z.object({
+    archive_timestamp: z.string().refine((value) => Number.isFinite(Date.parse(value))),
+  }),
+});
+const messagesSchema = z.array(
+  z.object({
+    id: snowflake,
+    content: z.string(),
+    author: z.object({ id: snowflake, bot: z.boolean().optional() }),
+  }),
+);
+const activeSchema = z.object({ threads: z.array(channelSchema) });
+const archivesSchema = z.object({ threads: z.array(archiveSchema), has_more: z.boolean() });
+const epochMs = 1420070400000n;
+
+type Channel = z.infer<typeof channelSchema>;
+type Target = { id: string; parentId: string; name: string };
+
+function parse<T>(schema: z.ZodType<T>, data: unknown): T {
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) {
+    throw new Error("Discord returned an unexpected response shape.");
+  }
+  return parsed.data;
+}
+
+export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
+  return {
+    async collect(config, window) {
+      const status: SourceStatus = {
+        ok: true,
+        warnings: [],
+        stats: { apiCalls: 0, channelsScanned: 0, threadsScanned: 0 },
+      };
+      const collected = new Map<string, { message: DiscordMessage; url: string }>();
+      const warn = (scope: string, error: unknown) => {
+        checkAbort(runtime.signal);
+        const detail = error instanceof Error ? error.message : "Discord collection failed.";
+        const warning = `${scope}: ${detail}`;
+        status.warnings.push(
+          config.token ? warning.replaceAll(config.token, "[redacted]") : warning,
+        );
+        status.stale = true;
+      };
+      checkAbort(runtime.signal);
+      const client = createClient(config, runtime, status);
+      const channels = new Map<string, Channel>();
+      try {
+        for (const channel of parse(
+          z.array(channelSchema),
+          await client.get(`/guilds/${encodeURIComponent(config.guildId)}/channels`),
+        )) {
+          channels.set(channel.id, channel);
+        }
+      } catch (error) {
+        warn("Discord guild channels", error);
+        status.ok = false;
+      }
+
+      const configured = new Set(config.channels.map((channel) => channel.id));
+      const targets = new Map<string, Target>();
+      for (const id of configured) {
+        const channel = channels.get(id);
+        // Forum/media/category channels contain threads but have no message history of their own.
+        if (channel?.type !== 15 && channel?.type !== 16 && channel?.type !== 4) {
+          targets.set(id, { id, parentId: id, name: channel?.name || id });
+        }
+      }
+      const addThread = (thread: Channel) => {
+        if (thread.parent_id && configured.has(thread.parent_id)) {
+          const parentName = channels.get(thread.parent_id)?.name || thread.parent_id;
+          targets.set(thread.id, {
+            id: thread.id,
+            parentId: thread.parent_id,
+            name: `${parentName}/${thread.name || thread.id}`,
+          });
+        }
+      };
+      try {
+        const active = parse(
+          activeSchema,
+          await client.get(`/guilds/${encodeURIComponent(config.guildId)}/threads/active`),
+        );
+        active.threads.forEach(addThread);
+      } catch (error) {
+        warn("Discord active threads", error);
+      }
+
+      for (const id of configured) {
+        let before: string | undefined;
+        try {
+          while (true) {
+            checkAbort(runtime.signal);
+            const page = parse(
+              archivesSchema,
+              await client.get(`/channels/${encodeURIComponent(id)}/threads/archived/public`, {
+                limit: "100",
+                ...(before ? { before } : {}),
+              }),
+            );
+            let oldestMs = Infinity;
+            for (const thread of page.threads) {
+              const archivedMs = Date.parse(thread.thread_metadata.archive_timestamp);
+              oldestMs = Math.min(oldestMs, archivedMs);
+              if (archivedMs >= window.sinceMs) {
+                addThread(thread);
+              }
+            }
+            if (!page.has_more || page.threads.length === 0 || oldestMs <= window.sinceMs) {
+              break;
+            }
+            if (before && oldestMs >= Date.parse(before)) {
+              throw new Error("Discord archived-thread pagination did not advance.");
+            }
+            before = new Date(oldestMs).toISOString();
+          }
+        } catch (error) {
+          warn(`Discord archived threads for channel ${id}`, error);
+        }
+      }
+
+      for (const target of targets.values()) {
+        let after = ((BigInt(window.sinceMs) - epochMs) << 22n).toString();
+        try {
+          while (true) {
+            checkAbort(runtime.signal);
+            const page = parse(
+              messagesSchema,
+              await client.get(`/channels/${encodeURIComponent(target.id)}/messages`, {
+                limit: "100",
+                after,
+              }),
+            );
+            if (page.length === 0) {
+              break;
+            }
+            // Discord returns newest first even when selecting messages after a cursor.
+            page.sort((left, right) => (BigInt(left.id) < BigInt(right.id) ? -1 : 1));
+            let crossedEnd = false;
+            let newest = BigInt(after);
+            for (const entry of page) {
+              const id = BigInt(entry.id);
+              newest = id > newest ? id : newest;
+              const atMs = Number((id >> 22n) + epochMs);
+              if (atMs >= window.untilMs) {
+                crossedEnd = true;
+              }
+              const content = entry.content.trim();
+              if (
+                id <= BigInt(after) ||
+                atMs < window.sinceMs ||
+                atMs >= window.untilMs ||
+                entry.author.bot ||
+                !content
+              ) {
+                continue;
+              }
+              collected.set(entry.id, {
+                url: `https://discord.com/channels/${config.guildId}/${target.id}/${entry.id}`,
+                message: {
+                  channelId: target.id,
+                  parentChannelId: target.parentId,
+                  channelName: target.name,
+                  authorId: entry.author.id,
+                  authorIsBot: false,
+                  atMs,
+                  content,
+                },
+              });
+            }
+            if (crossedEnd || page.length < 100) {
+              break;
+            }
+            if (newest <= BigInt(after)) {
+              throw new Error("Discord message pagination did not advance.");
+            }
+            after = newest.toString();
+          }
+          const stat = target.id === target.parentId ? "channelsScanned" : "threadsScanned";
+          status.stats[stat] = Number(status.stats[stat]) + 1;
+        } catch (error) {
+          warn(`Discord messages for channel ${target.id}`, error);
+        }
+      }
+      checkAbort(runtime.signal);
+      const messages = [...collected.values()]
+        .sort(
+          (left, right) =>
+            left.message.atMs - right.message.atMs || left.url.localeCompare(right.url),
+        )
+        .map((entry) => entry.message);
+      return { messages, status };
+    },
+  };
 }

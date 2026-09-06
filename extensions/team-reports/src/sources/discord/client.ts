@@ -1,0 +1,146 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { z } from "zod";
+import type { DiscordSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
+
+const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() });
+const timeoutMs = 30_000;
+
+export function checkAbort(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    // Abort reasons and transport errors may contain credentials supplied by callers.
+    throw new DOMException("Discord collection aborted.", "AbortError");
+  }
+}
+
+async function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  // Long server delays must not overflow Node's 32-bit timer and become immediate retries.
+  if (ms > 2_147_483_647) {
+    await wait(2_147_483_647, signal);
+    return wait(ms - 2_147_483_647, signal);
+  }
+  checkAbort(signal);
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(new DOMException("Discord collection aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+export function createClient(
+  config: DiscordSourceConfig,
+  runtime: SourceRuntime,
+  status: SourceStatus,
+) {
+  let base: URL;
+  try {
+    base = new URL(`${config.apiBaseUrl.replace(/\/+$/, "")}/`);
+  } catch {
+    throw new Error("Discord API base URL is invalid.");
+  }
+  if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
+    throw new Error("Discord API base URL must use HTTPS without credentials, query, or fragment.");
+  }
+
+  async function request(url: string) {
+    const controller = new AbortController();
+    const signal = runtime.signal
+      ? AbortSignal.any([runtime.signal, controller.signal])
+      : controller.signal;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const init: RequestInit = {
+      headers: { Authorization: `Bot ${config.token}`, Accept: "application/json" },
+      signal,
+      redirect: "error",
+    };
+    let release: (() => Promise<void>) | undefined;
+    try {
+      checkAbort(runtime.signal);
+      status.stats.apiCalls = Number(status.stats.apiCalls) + 1;
+      let response: Response;
+      if (runtime.fetchImpl) {
+        response = await runtime.fetchImpl(url, init);
+      } else {
+        const result = await fetchWithSsrFGuard({
+          url,
+          init,
+          signal,
+          timeoutMs,
+          requireHttps: true,
+          maxRedirects: 0,
+          capture: false,
+        });
+        response = result.response;
+        release = result.release;
+      }
+      const body = await response.text();
+      checkAbort(runtime.signal);
+      let data: unknown;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        data = undefined;
+      }
+      return { status: response.status, headers: response.headers, data };
+    } finally {
+      clearTimeout(timer);
+      await release?.();
+    }
+  }
+
+  return {
+    async get(path: string, params?: Record<string, string>): Promise<unknown> {
+      const url = new URL(path.replace(/^\//, ""), base);
+      for (const [key, value] of Object.entries(params ?? {})) {
+        url.searchParams.set(key, value);
+      }
+      let retries = 0;
+      while (true) {
+        checkAbort(runtime.signal);
+        let result: Awaited<ReturnType<typeof request>>;
+        try {
+          result = await request(url.toString());
+        } catch {
+          checkAbort(runtime.signal);
+          if (retries >= 2) {
+            throw new Error(
+              "Discord request failed after retries; check connectivity and API access.",
+            );
+          }
+          await wait(1000 * 2 ** retries++, runtime.signal);
+          continue;
+        }
+        if (result.status === 429) {
+          const retry = retrySchema.safeParse(result.data);
+          const headerDelay = Number(result.headers.get("Retry-After"));
+          const seconds = retry.success ? retry.data.retry_after : headerDelay;
+          await wait(
+            Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000,
+            runtime.signal,
+          );
+          continue;
+        }
+        if (result.status >= 500 && retries < 2) {
+          await wait(1000 * 2 ** retries++, runtime.signal);
+          continue;
+        }
+        if (result.status < 200 || result.status >= 300) {
+          throw new Error(
+            `Discord request failed (HTTP ${result.status}); check bot channel permissions.`,
+          );
+        }
+        if (result.data === undefined) {
+          throw new Error("Discord returned invalid JSON.");
+        }
+        return result.data;
+      }
+    },
+  };
+}
