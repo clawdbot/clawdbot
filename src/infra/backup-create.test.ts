@@ -607,6 +607,27 @@ describe("createBackupVolatileStatCache", () => {
 });
 
 describe("createBackupArchive", () => {
+  it("excludes macOS AppleDouble SQLite sidecars without weakening database validation", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-appledouble-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        await state.writeText("._cron.sqlite", "AppleDouble metadata\n");
+        await expect(
+          createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+          }),
+        ).resolves.toEqual(expect.objectContaining({ archivePath: state.path("backup.tar.gz") }));
+        const entries = await listArchiveEntries(state.path("backup.tar.gz"));
+        expect(entries.some((entry) => entry.endsWith("/._cron.sqlite"))).toBe(false);
+      },
+    );
+  });
+
   it.each<{
     configRelativePath: string;
     onlyConfig: boolean;

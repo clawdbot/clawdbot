@@ -102,6 +102,10 @@ function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined
   return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
 }
 
+function isAppleDoubleSqliteSidecar(sourcePath: string): boolean {
+  return path.basename(sourcePath).startsWith("._") && sourcePath.endsWith(".sqlite");
+}
+
 export function classifyBackupSqliteSource(
   sourcePath: string,
   inventory: BackupResourceInventory,
@@ -119,6 +123,9 @@ export function classifyBackupSqliteSource(
     );
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
+  }
+  if (isAppleDoubleSqliteSidecar(resolvedSourcePath)) {
+    return "excluded";
   }
   if (transient) {
     return "excluded";
