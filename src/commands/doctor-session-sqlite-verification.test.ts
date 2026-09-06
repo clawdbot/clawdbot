@@ -129,6 +129,26 @@ describe("createRecoveryDestinationVerifier", () => {
     }
   });
 
+  it("throws when a sidecar file's size changes (substantive WAL commit)", () => {
+    const verify = createRecoveryDestinationVerifier(stateDir);
+    const target = makeMinimalTargetManifest(sqlitePath, agentId);
+
+    // Establish baseline.
+    verify([{ target }]);
+
+    // Grow the WAL sidecar file (simulates a substantive WAL commit that appends frames).
+    // The verifier should detect the size change on the sidecar even though ctime/mtime are
+    // excluded, because substantive writes must still be caught. (#140467)
+    const walPath = `${sqlitePath}-wal`;
+    const initial = fs.existsSync(walPath) ? fs.readFileSync(walPath) : Buffer.alloc(0);
+    fs.writeFileSync(walPath, Buffer.alloc(initial.length + 4096));
+
+    // SHOULD throw — sidecar size changed (substantive write is still fenced).
+    expect(() => verify([{ target }])).toThrow(
+      "Recovery destination database changed; preview cleanup again.",
+    );
+  });
+
   it("establishes baseline and passes on a clean re-check", () => {
     const verify = createRecoveryDestinationVerifier(stateDir);
     const target = makeMinimalTargetManifest(sqlitePath, agentId);
