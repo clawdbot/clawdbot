@@ -10,7 +10,7 @@ describe("clampOpenAIPromptCacheKey", () => {
     ["astral within the code-point cap", "🦞".repeat(40)],
     ["astral over the cap", "🦞".repeat(74)],
     ["cut inside a grapheme", "👨‍👩‍👧‍👦".repeat(20)],
-    ["lone surrogate at the boundary", "a".repeat(63) + "\ud83d" + "tail"],
+    ["lone surrogate at the boundary", "a".repeat(63) + "\ud83dtail"],
   ] as const)("preserves the 64-code-point contract: %s", (_name, key) => {
     expect(clampOpenAIPromptCacheKey(key)).toBe(
       key === undefined ? undefined : Array.from(key).slice(0, 64).join(""),

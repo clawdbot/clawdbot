@@ -1,12 +1,3 @@
-/** Counts Unicode code points without materializing a character array. */
-export function countCodePoints(text: string): number {
-  let count = 0;
-  for (const _codePoint of text) {
-    count += 1;
-  }
-  return count;
-}
-
 /** Truncates to a nonnegative code-point budget; grapheme clusters may be split. */
 export function truncateCodePoints(text: string, maxCodePoints: number): string {
   const limit = Math.max(0, Math.trunc(maxCodePoints) || 0);
