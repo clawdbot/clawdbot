@@ -1,6 +1,10 @@
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sleep } from "../utils/sleep.js";
+import {
+  exerciseDelayedPeerReplies,
+  exerciseLiveReplyRendering,
+} from "./tui-pty-assistant-fixture-test-support.js";
 import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
@@ -12,7 +16,6 @@ import {
   objectFieldEquals,
   readFixtureLog,
   startTuiFixture,
-  waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
 import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
@@ -110,6 +113,12 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     expect(fixture.run.visibleOutput()).toContain("local ready");
     expect(fixture.run.visibleOutput()).not.toContain("host local");
   });
+
+  it(
+    "orders a delayed peer prompt before every retained final reply",
+    () => exerciseDelayedPeerReplies(startTuiFixture, STARTUP_TIMEOUT_MS, TEST_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
+  );
 
   it(
     "renders a compact model and active thinking level in the footer",
@@ -359,28 +368,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
 
   it(
     "renders each live assistant reply once without replaying stale history",
-    async () => {
-      const liveFixture = await startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_COLS: "220", OPENCLAW_TUI_PTY_ROWS: "50" },
-      });
-      try {
-        await liveFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await liveFixture.run.write("live reply dedupe proof: first\r", { delay: false });
-        await liveFixture.run.waitForOutput("TUI_LIVE_FIRST");
-        await liveFixture.run.write("live reply dedupe proof: second\r", { delay: false });
-        const rows = await waitForSynchronizedFrameRows(
-          liveFixture.run,
-          (frame) => frame.some((row) => row.includes("TUI_LIVE_SECOND")),
-          STARTUP_TIMEOUT_MS,
-        );
-        const assistantRows = rows.filter(
-          (row) => row.includes("TUI_LIVE_FIRST") || row.includes("TUI_LIVE_SECOND"),
-        );
-        expect(assistantRows).toEqual(["TUI_LIVE_FIRST", "TUI_LIVE_SECOND"]);
-      } finally {
-        await liveFixture.cleanup();
-      }
-    },
+    () => exerciseLiveReplyRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
     STARTUP_TEST_TIMEOUT_MS,
   );
   // prettier-ignore

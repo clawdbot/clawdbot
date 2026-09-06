@@ -45,26 +45,51 @@ describe("ChatLog run state", () => {
     expect(rendered.indexOf("Streaming second reply.")).toBeLessThan(rendered.indexOf("Read File"));
   });
 
-  it("keeps a replacement final reply anchored when its previous reply is pruned", () => {
-    const chatLog = new ChatLog(20);
+  it.each([
+    { capacity: 20, previousReply: "retained" },
+    { capacity: 40, previousReply: "retained" },
+    { capacity: 20, previousReply: "pruned" },
+    { capacity: 40, previousReply: "pruned" },
+  ])(
+    "anchors every $previousReply final reply at capacity $capacity",
+    ({ capacity, previousReply }) => {
+      const chatLog = new ChatLog(capacity);
 
-    chatLog.finalizeAssistant("Previous completed reply.", "run-replaced");
-    for (let index = 0; index < 19; index += 1) {
-      chatLog.addSystem(`Retained notice ${index}.`);
-    }
-    chatLog.finalizeAssistant("Replacement completed reply.", "run-replaced");
-    chatLog.addLiveUser("Delayed replacement prompt.", {
-      messageId: "replacement-user",
-      runId: "run-replaced",
-    });
+      chatLog.finalizeAssistant("Previous completed reply.", "run-replaced");
+      if (previousReply === "pruned") {
+        for (let index = 0; index < capacity - 1; index += 1) {
+          chatLog.addSystem(`Retained notice ${index}.`);
+        }
+      }
+      chatLog.finalizeAssistant("Replacement completed reply.", "run-replaced");
+      const prompt = {
+        messageId: "replacement-user",
+        runId: "run-replaced",
+      };
+      chatLog.addLiveUser("Delayed replacement prompt.", prompt);
+      chatLog.addLiveUser("Delayed replacement prompt.", prompt);
 
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(chatLog.children).toHaveLength(20);
-    expect(rendered).not.toContain("Previous completed reply.");
-    expect(rendered.indexOf("Delayed replacement prompt.")).toBeLessThan(
-      rendered.indexOf("Replacement completed reply."),
-    );
-  });
+      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(rendered.split("Delayed replacement prompt.")).toHaveLength(2);
+      expect(rendered.split("Replacement completed reply.")).toHaveLength(2);
+      if (previousReply === "pruned") {
+        expect(chatLog.children).toHaveLength(capacity);
+        expect(rendered).not.toContain("Previous completed reply.");
+      } else {
+        expect(chatLog.children).toHaveLength(3);
+        expect(rendered.split("Previous completed reply.")).toHaveLength(2);
+        expect(rendered.indexOf("Delayed replacement prompt.")).toBeLessThan(
+          rendered.indexOf("Previous completed reply."),
+        );
+        expect(rendered.indexOf("Previous completed reply.")).toBeLessThan(
+          rendered.indexOf("Replacement completed reply."),
+        );
+      }
+      expect(rendered.indexOf("Delayed replacement prompt.")).toBeLessThan(
+        rendered.indexOf("Replacement completed reply."),
+      );
+    },
+  );
 
   it("infers active tool ownership after another finalized run leaves scrollback", () => {
     const chatLog = new ChatLog(20);
