@@ -6562,6 +6562,26 @@ process.exit(73);
     },
   );
 
+  it("passes source-qualified overrides without leaking frozen control-plane identity", () => {
+    const runner = readFileSync(MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      "MCP_CODE_MODE_SEED_ENV_ARGS=()",
+      "OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE=agent",
+      '"${MCP_CODE_MODE_SEED_ENV_ARGS[@]}"',
+    ]);
+    expect(runner).not.toContain("OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE");
+    for (const path of [
+      MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH,
+      ONBOARD_DOCKER_E2E_PATH,
+      "scripts/e2e/session-runtime-context-docker.sh",
+    ]) {
+      const source = readFileSync(path, "utf8");
+      expect(source).not.toContain('-e "OPENCLAW_SELECTED_SHA=$OPENCLAW_SELECTED_SHA"');
+      expect(source).not.toContain('-e "OPENCLAW_TOOLING_SHA=$OPENCLAW_TOOLING_SHA"');
+    }
+  });
+
   it.each([
     ["timeout", "OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", "180s"],
     ["body cap", "OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES", "64kb"],
