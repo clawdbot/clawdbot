@@ -887,13 +887,13 @@ export function spawnWatchedVitestProcess({
     teardownNoOutputWatchdog();
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
-    .then(async ([{ code, signal }]) => {
+    .then(async ([{ code, signal, groupJoined }]) => {
       await diagnosticsCompletion;
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
       }
-      return { code, signal: normalizeNodeSignal(signal) };
+      return { code, signal: normalizeNodeSignal(signal), groupJoined };
     })
     .finally(teardown);
 

@@ -302,6 +302,13 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
 
+Parallel project runs on macOS and Linux reuse filesystem transforms within
+exclusive worker slots, with separate directories for each Vitest configuration.
+A slot stays owned through preflight, retries, and verified child/group completion;
+uncertain cleanup retires it. Explicit isolated cache paths, serial and watch runs,
+and Windows retain their existing cache ownership. Concurrent invocations still
+need separate cache roots.
+
 Control UI builds report size budgets without enforcing them. Run
 `pnpm ui:check-performance` after a build to enforce absolute budgets, or
 `pnpm ui:check-performance:base <base-commit-sha>` to build and compare both

@@ -10,7 +10,8 @@ import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/t
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 
 const commands = vi.hoisted(() => ({ prepare: vi.fn(), prepareE2e: vi.fn(), reader: vi.fn() }));
-vi.mock("../../scripts/lib/managed-child-process.mts", () => ({
+vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mts")>()),
   runManagedCommand: commands.prepare,
 }));
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
@@ -406,6 +407,185 @@ async function start(args: string[]) {
   startCount += 1;
   await import(entryUrl);
 }
+
+describe("parallel cache lease completion", () => {
+  it.each(["preflight", "retry"])(
+    "refuses a next process after an unverified %s completion",
+    async (phase) => {
+      vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
+      vi.stubEnv("OPENCLAW_VITEST_NO_OUTPUT_RETRY", "1");
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      let preflights = 0;
+      let attempts = 0;
+      commands.reader.mockImplementation(({ pnpmArgs, onNoOutputTimeout }) => {
+        let groupJoined = true;
+        if (pnpmArgs.includes("scripts/ensure-playwright-chromium.mts")) {
+          preflights += 1;
+          groupJoined = phase !== "preflight";
+        } else if (pnpmArgs.includes("test/vitest/vitest.ui-e2e.config.ts")) {
+          attempts += 1;
+          groupJoined = false;
+          onNoOutputTimeout();
+        }
+        return {
+          completion: Promise.resolve({ code: 0, signal: null, groupJoined }),
+          getForwardedSignal: () => undefined,
+        };
+      });
+      await expect(
+        runTestProjects(async () => {}, [
+          "test/vitest/vitest.ui-e2e.config.ts",
+          "test/vitest/vitest.cli.config.ts",
+        ]),
+      ).rejects.toMatchObject({
+        errors: [
+          expect.objectContaining({
+            message: "Cannot continue a Vitest cache lease without verified group completion",
+          }),
+        ],
+      });
+      expect(preflights).toBe(1);
+      expect(attempts).toBe(phase === "preflight" ? 0 : 1);
+    },
+  );
+
+  it("holds one cache lease through preflight and a watchdog retry while its peer runs", async () => {
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
+    vi.stubEnv("OPENCLAW_VITEST_NO_OUTPUT_RETRY", "1");
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    const firstPreflight = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
+    const retryPreflight = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
+    const peer = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
+    const started = createDeferred();
+    const retryStarted = createDeferred();
+    const paths: string[] = [];
+    const uiPaths: string[] = [];
+    let peerPath: string | undefined;
+    let preflights = 0;
+    let attempts = 0;
+    const joined = { code: 0, signal: null, groupJoined: true };
+    commands.reader.mockImplementation(({ env, pnpmArgs, onNoOutputTimeout }) => {
+      const cache = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
+      paths.push(cache);
+      let completion;
+      if (pnpmArgs.includes("scripts/ensure-playwright-chromium.mts")) {
+        uiPaths.push(cache);
+        preflights += 1;
+        completion = preflights === 1 ? firstPreflight.promise : retryPreflight.promise;
+        if (preflights === 2) {
+          retryStarted.resolve();
+        }
+      } else if (pnpmArgs.includes("test/vitest/vitest.ui-e2e.config.ts")) {
+        uiPaths.push(cache);
+        attempts += 1;
+        if (attempts === 1) {
+          onNoOutputTimeout();
+        }
+        completion = Promise.resolve(
+          attempts === 1 ? { code: 143, signal: "SIGTERM", groupJoined: true } : joined,
+        );
+      } else {
+        peerPath = cache;
+        completion = peer.promise;
+      }
+      if (paths.length === 2) {
+        started.resolve();
+      }
+      return { completion, getForwardedSignal: () => undefined };
+    });
+    const running = runTestProjects(async () => {}, [
+      "test/vitest/vitest.ui-e2e.config.ts",
+      "test/vitest/vitest.cli.config.ts",
+    ]);
+    try {
+      await withTestTimeout(started.promise, 5_000, "preflight and peer admission");
+      expect(new Set(paths).size).toBe(2);
+      firstPreflight.resolve(joined);
+      await withTestTimeout(retryStarted.promise, 5_000, "retry preflight admission");
+      expect(uiPaths).toHaveLength(3);
+      expect(new Set(uiPaths).size).toBe(1);
+      expect(uiPaths).not.toContain(peerPath);
+      expect(attempts).toBe(1);
+    } finally {
+      firstPreflight.resolve(joined);
+      retryPreflight.resolve(joined);
+      peer.resolve(joined);
+      await running;
+    }
+    expect(uiPaths).toHaveLength(4);
+    expect(new Set(uiPaths).size).toBe(1);
+    expect(attempts).toBe(2);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it.each(["failure", "signal", "rejection"])(
+    "joins admitted work after %s without confusing failure with cleanup",
+    async (outcome) => {
+      vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      const first = createDeferred<{
+        code: number;
+        signal: NodeJS.Signals | null;
+        groupJoined: boolean;
+      }>();
+      const second = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
+      const admitted = createDeferred();
+      const settled = { value: false };
+      commands.reader.mockImplementation(() => {
+        const index = commands.reader.mock.calls.length;
+        if (index === 2) {
+          admitted.resolve();
+        }
+        return {
+          completion:
+            index === 1
+              ? first.promise
+              : index === 2
+                ? second.promise
+                : Promise.resolve({ code: 0, signal: null, groupJoined: true }),
+          getForwardedSignal: () => undefined,
+        };
+      });
+      const running = runTestProjects(async () => {}, [
+        "test/vitest/vitest.unit-fast.config.ts",
+        "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        "test/vitest/vitest.cli.config.ts",
+      ]).finally(() => {
+        settled.value = true;
+      });
+      const checked = outcome === "rejection" ? expect(running).rejects.toThrow() : running;
+      try {
+        await withTestTimeout(
+          Promise.race([admitted.promise, running]),
+          5_000,
+          "scheduler admission",
+        );
+        expect(commands.reader).toHaveBeenCalledTimes(2);
+        if (outcome === "rejection") {
+          first.reject(new Error("unverified group completion"));
+        } else {
+          first.resolve({
+            code: 1,
+            signal: outcome === "signal" ? "SIGTERM" : null,
+            groupJoined: true,
+          });
+        }
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled.value).toBe(false);
+        expect(commands.reader).toHaveBeenCalledTimes(outcome === "failure" ? 3 : 2);
+      } finally {
+        first.resolve({ code: 0, signal: null, groupJoined: true });
+        second.resolve({ code: 0, signal: null, groupJoined: true });
+        await checked;
+      }
+      if (outcome !== "rejection") {
+        expect(process.exitCode).toBe(outcome === "signal" ? 143 : 1);
+      }
+    },
+  );
+});
 
 function createPreparationGate<T>(prepare: typeof commands.prepare) {
   const started = createDeferred();
