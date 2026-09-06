@@ -10,6 +10,8 @@ type JsonlSocketRequest<T> = {
   socketPath: string;
   requestLine: string;
   timeoutMs: number;
+  onTimeout?: () => T;
+  onResponseLost?: () => T;
   signal?: AbortSignal;
   accept: (msg: unknown) => T | null | undefined;
 };
@@ -19,10 +21,12 @@ type JsonlSocketRequest<T> = {
  */
 export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Promise<T | null> {
   const { socketPath, requestLine, accept, signal } = params;
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const timeoutMs = params.timeoutMs === 0 ? 0 : resolveTimerTimeoutMs(params.timeoutMs, 1);
   return await new Promise((resolve) => {
     const client = new net.Socket();
     let settled = false;
+    let requestSent = false;
+    let timer: ReturnType<typeof setNodeTimeout> | undefined;
     // Keep raw bytes until a line is complete so chunk boundaries cannot split
     // a UTF-8 code point before JSON parsing.
     const lineChunks: Buffer[] = [];
@@ -33,7 +37,9 @@ export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Prom
         return;
       }
       settled = true;
-      clearNodeTimeout(timer);
+      if (timer) {
+        clearNodeTimeout(timer);
+      }
       abortListener?.[Symbol.dispose]();
       client.destroy();
       resolve(value);
@@ -51,7 +57,12 @@ export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Prom
       return true;
     };
 
-    const timer = setNodeTimeout(() => finish(null), timeoutMs);
+    if (timeoutMs > 0) {
+      timer = setNodeTimeout(
+        () => finish(requestSent ? (params.onTimeout?.() ?? null) : null),
+        timeoutMs,
+      );
+    }
     const abortListener = signal ? addAbortListener(signal, () => finish(null)) : undefined;
     // Preparation may have yielded before reaching the transport. Never connect
     // or send for an invocation that has already lost its lifetime.
@@ -60,11 +71,13 @@ export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Prom
       return;
     }
 
-    client.on("error", () => finish(null));
-    client.on("end", () => finish(null));
-    client.on("close", () => finish(null));
+    const finishPeerLoss = () => finish(requestSent ? (params.onResponseLost?.() ?? null) : null);
+    client.on("error", finishPeerLoss);
+    client.on("end", finishPeerLoss);
+    client.on("close", finishPeerLoss);
     client.connect(socketPath, () => {
       if (!settled) {
+        requestSent = true;
         client.end(`${requestLine}\n`);
       }
     });

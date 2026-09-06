@@ -8,7 +8,7 @@ vi.mock("./jsonl-socket.js", () => ({
   requestJsonlSocket: (...args: unknown[]) => requestJsonlSocketMock(...args),
 }));
 
-import { requestExecHostViaSocket } from "./exec-host.js";
+import { requestExecHostViaSocket, resolveExecHostResponseTimeoutMs } from "./exec-host.js";
 
 type JsonlSocketCall = {
   socketPath: string;
@@ -102,7 +102,7 @@ describe("requestExecHostViaSocket", () => {
     });
   });
 
-  it("accepts only exec response messages and maps malformed matches to null", async () => {
+  it("accepts only complete exec response messages", async () => {
     requestJsonlSocketMock.mockImplementationOnce(async ({ accept }) => {
       expect(accept({ type: "ignore" })).toBeUndefined();
       expect(accept({ type: "exec-res", ok: true, payload: { success: true } })).toEqual({
@@ -113,7 +113,7 @@ describe("requestExecHostViaSocket", () => {
         ok: false,
         error: { code: "DENIED" },
       });
-      expect(accept({ type: "exec-res", ok: true })).toBeNull();
+      expect(accept({ type: "exec-res", ok: true })).toBeUndefined();
       return null;
     });
 
@@ -127,5 +127,43 @@ describe("requestExecHostViaSocket", () => {
     ).resolves.toBeNull();
 
     expect(requireJsonlSocketCall().timeoutMs).toBe(123);
+  });
+
+  it("derives the socket deadline from the command timeout and preserves disabled timeouts", () => {
+    expect(resolveExecHostResponseTimeoutMs(30_000)).toBe(35_000);
+    expect(resolveExecHostResponseTimeoutMs(0)).toBe(0);
+    expect(resolveExecHostResponseTimeoutMs(undefined)).toBeUndefined();
+  });
+
+  it("uses the command timeout when no transport override is supplied", async () => {
+    requestJsonlSocketMock.mockResolvedValueOnce(null);
+
+    await requestExecHostViaSocket({
+      socketPath: "/tmp/socket",
+      token: "secret",
+      request: { command: ["sleep", "30"], timeoutMs: 30_000 },
+    });
+
+    expect(requireJsonlSocketCall().timeoutMs).toBe(35_000);
+  });
+
+  it("returns a typed timeout when the response deadline expires", async () => {
+    requestJsonlSocketMock.mockImplementationOnce(async ({ onTimeout }) => onTimeout?.() ?? null);
+
+    await expect(
+      requestExecHostViaSocket({
+        socketPath: "/tmp/socket",
+        token: "secret",
+        timeoutMs: 123,
+        request: { command: ["sleep", "1"] },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "TIMEOUT",
+        reason: "timeout",
+        message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+      },
+    });
   });
 });
