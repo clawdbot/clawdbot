@@ -116,9 +116,41 @@ describe("chunkDiscordText", () => {
     }
   });
 
-  it("keeps chunks within maxChars when a closing fence line carries trailing text", () => {
-    // A line that both closes the fence and carries a long tail must still reserve closing-fence
-    // space; otherwise a mid-line flush appended "```" and overflowed maxChars (e.g. 2004 > 2000).
+  it.each([
+    { marker: "```", suffix: "not-a-close", indent: "", newline: "\n", closing: "```" },
+    { marker: "~~~", suffix: "not-a-close", indent: "", newline: "\n", closing: "~~~~" },
+    { marker: "```", suffix: " not a close", indent: "   ", newline: "\n", closing: "``` \t" },
+    { marker: "```", suffix: "\u00a0", indent: "", newline: "\n", closing: "````" },
+    { marker: "~~~", suffix: "\u00a0", indent: "  ", newline: "\r\n", closing: "~~~\t " },
+    { marker: "```", suffix: "not-a-close", indent: "", newline: "\r\n", closing: "``` \t" },
+  ])(
+    "keeps trailing-text fence lines inside code: %j",
+    ({ marker, suffix, indent, newline, closing }) => {
+      const body = [
+        "before",
+        `${indent}${marker}${suffix}`,
+        ...Array.from({ length: 14 }, (_, i) => `# code-${i}`),
+      ];
+      const text = [`${indent}${marker}txt`, ...body, `${indent}${closing}`, "After"].join(newline);
+      const expected = fromMarkdown(text).children;
+      for (const chunkMode of ["length", "newline"] as const) {
+        const chunks = chunkDiscordTextWithMode(text, { chunkMode });
+        const nodes = chunks.flatMap((chunk) => fromMarkdown(chunk).children);
+        const blocks = nodes.filter((node) => node.type === "code");
+        expect(chunks.length).toBeGreaterThan(1);
+        expect(blocks.map((node) => node.value.replaceAll("\r\n", "\n")).join("\n")).toBe(
+          expected[0]?.type === "code" ? expected[0].value.replaceAll("\r\n", "\n") : undefined,
+        );
+        expect(nodes.filter((node) => node.type !== "code")).toMatchObject([
+          { type: "paragraph", children: [{ type: "text", value: "After" }] },
+        ]);
+        expect(chunks.every((chunk) => chunk.length <= 2000 && countLines(chunk) <= 17)).toBe(true);
+      }
+    },
+  );
+
+  it("keeps chunks within maxChars when a code-content fence line carries trailing text", () => {
+    // Trailing text leaves the block open, so a mid-line flush must reserve its synthetic closer.
     for (let pad = 1990; pad <= 2000; pad++) {
       const text = "hi\n```lang\n```" + "z".repeat(pad);
       for (const chunk of chunkDiscordText(text, { maxChars: 2000, maxLines: 100 })) {
@@ -241,6 +273,20 @@ describe("chunkDiscordText", () => {
     expect(expectDefined(chunks[0], "first Discord chunk")).toContain("_1. line");
     // Second chunk should reopen italics at the start
     expect(expectDefined(chunks[1], "second Discord chunk").trimStart().startsWith("_")).toBe(true);
+  });
+
+  it("keeps reasoning italic markers outside synthetic closing fences", () => {
+    const body = Array.from({ length: 12 }, (_, i) => `code-${i}`).join("\n");
+    const chunks = chunkDiscordText(`Reasoning:\n_Intro\n\`\`\`txt\n${body}\n\`\`\`_`, {
+      maxLines: 6,
+      maxChars: 50,
+    });
+    const blocks = chunks
+      .flatMap((chunk) => fromMarkdown(chunk).children)
+      .filter((node) => node.type === "code");
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(blocks.map((node) => node.value).join("\n")).toBe(body);
+    expect(chunks.every((chunk) => chunk.length <= 50)).toBe(true);
   });
 
   it("keeps reasoning italics balanced when chunks split by char limit", () => {
@@ -380,6 +426,11 @@ describe("chunkDiscordText", () => {
     ],
     ["inline code across a blank line", ["`one", "", "two`", "more"], "`one\n\ntwo`\n_more_"],
     ["a CRLF code fence", ["```ts\r", "body\r", "```\r", "more"], "```ts\r\nbody\r\n```\r\n_more_"],
+    [
+      "a CRLF tilde fence",
+      ["~~~ts\r", "body\r", "~~~\r", "more"],
+      "~~~ts\r\nbody\r\n~~~\r\n_more_",
+    ],
     [
       "consecutive leading code spans",
       ["```js", "one()", "```", "~~~sh", "two", "~~~", "more reasoning"],

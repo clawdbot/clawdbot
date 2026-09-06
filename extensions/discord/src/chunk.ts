@@ -27,9 +27,9 @@ type OpenFence = {
 
 const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
-const REASONING_ITALICS_MARKER_CHARS = 2;
+const REASONING_ITALICS_MARKER_CHARS = 3;
 const MIN_REASONING_ITALICS_CHUNK_CHARS = 4;
-const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)\r?$/;
 
 function hasReasoningItalics(text: string): boolean {
   return /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(text) && text.trimEnd().endsWith("_");
@@ -46,11 +46,11 @@ function countLines(text: string) {
   return text.split("\n").length;
 }
 
-// Keep Discord's existing fence grammar. Tiny caps retain original source when a synthetic
+// Tiny caps retain original source when a synthetic
 // marker pair cannot fit; otherwise drop an oversized language hint only on continuation fences.
 function parseFenceLine(line: string, maxChars = Number.POSITIVE_INFINITY): OpenFence | null {
   const match = line.match(FENCE_RE);
-  if (!match) {
+  if (!match || (match[2]?.startsWith("`") && match[3]?.includes("`"))) {
     return null;
   }
   const marker = match[2] ?? "";
@@ -60,24 +60,25 @@ function parseFenceLine(line: string, maxChars = Number.POSITIVE_INFINITY): Open
   return { marker, closeLine, reopenLine: canBalance ? reopenLine : null };
 }
 
-function closesFence(open: OpenFence, close: OpenFence): boolean {
-  return open.marker[0] === close.marker[0] && close.marker.length >= open.marker.length;
+function closesFence(open: OpenFence, line: string): boolean {
+  return new RegExp(`^ {0,3}${open.marker[0]}{${open.marker.length},}[ \\t]*\\r?$`).test(line);
 }
 
 type DiscordFrame = { start: number; end: number };
-function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
+function chunkDiscordText(source: string, opts: ChunkDiscordTextOpts = {}): string[] {
   const hardMaxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
   const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
-  if (!text) {
+  if (!source) {
     return [];
   }
-  if (text.length <= hardMaxChars && countLines(text) <= maxLines) {
-    return [text];
+  if (source.length <= hardMaxChars && countLines(source) <= maxLines) {
+    return [source];
   }
-  const maxChars =
-    hardMaxChars >= MIN_REASONING_ITALICS_CHUNK_CHARS && hasReasoningItalics(text)
-      ? hardMaxChars - REASONING_ITALICS_MARKER_CHARS
-      : hardMaxChars;
+  const reasoning =
+    hardMaxChars >= MIN_REASONING_ITALICS_CHUNK_CHARS && hasReasoningItalics(source);
+  // The outer reasoning italic marker is presentation, not a suffix on the final code fence.
+  const text = reasoning ? source.replace(/_(\s*)$/, "$1") : source;
+  const maxChars = reasoning ? hardMaxChars - REASONING_ITALICS_MARKER_CHARS : hardMaxChars;
   const ranges = createDiscordRanges(text, maxChars, maxLines);
   const chunks: string[] = [];
   let current: DiscordFrame | undefined;
@@ -185,7 +186,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
   while (current) {
     current = flush(current);
   }
-  return rebalanceReasoningItalics(text, chunks, hardMaxChars);
+  return rebalanceReasoningItalics(source, chunks, hardMaxChars);
 }
 
 export function chunkDiscordTextWithMode(
@@ -219,10 +220,10 @@ function leadingCodePrefixEnd(body: string): number {
     if (!marker) {
       return prefixEnd;
     }
-    // Fence continuations keep the legacy close rule; inline runs must match exactly,
+    // Fence closers allow only spaces/tabs after the marker; inline runs must match exactly,
     // including spans across CRLF or blank lines that CommonMark treats as blocks.
     const pattern = fence
-      ? `\\n( {0,3}${marker[0]}{${marker.length},} *)(?=[\\t ]*_?[\\t ]*(?:\\n|$))`
+      ? `\\n( {0,3}${marker[0]}{${marker.length},} *)(?=[\\t ]*_?[\\t ]*\\r?(?:\\n|$))`
       : "(?<!`)`{" + marker.length + "}(?!`)";
     const delimiter = new RegExp(pattern, "g");
     delimiter.lastIndex = fence ? 0 : marker.length;
@@ -270,7 +271,8 @@ function rebalanceReasoningItalics(source: string, chunks: string[], maxChars: n
       !body.trimEnd().endsWith("_") &&
       /^(?:_|(?:Reasoning:|Thinking\.{0,3})\n+_)/u.test(body.trimStart())
     ) {
-      body += "_";
+      // A closing italic marker must not turn a generated fence closer into code content.
+      body += parseFenceLine(body.split("\n").at(-1) ?? "") ? "\n_" : "_";
     }
     return prefix + body;
   });
@@ -316,7 +318,7 @@ type FenceRange = DiscordFrame &
     bodyStart: number;
     closeStart: number;
   };
-// Inline spans are collected only between Discord fences, using the existing close grammar.
+// Inline spans are collected only between Discord fences, never after a false closing marker.
 function createDiscordRanges(source: string, maxChars: number, maxLines: number) {
   const spans: InlineSpan[] = [];
   const fences: FenceRange[] = [];
@@ -368,7 +370,7 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
         ...info,
       };
       fences.push(fence);
-    } else if (info && fence && closesFence(fence, info)) {
+    } else if (info && fence && closesFence(fence, line)) {
       fence.closeStart = offset;
       fence.end = offset + line.length;
       fence = undefined;
