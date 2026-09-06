@@ -89,9 +89,20 @@ function seed(items: ChatQueueItem[], sessionKey = "global", version = 3) {
 async function expectBytes(host: ReturnType<typeof hostFor>, item: ChatQueueItem) {
   const result = await prepareOutboxPayload(host, item, "handoff");
   expect(result.status).toBe("ready");
-  expect(
-    result.status === "ready" ? result.update.attachments?.map(getChatAttachmentDataUrl) : [],
-  ).toEqual([dataUrl]);
+  const attachments = result.status === "ready" ? result.update.attachments : [];
+  expect(attachments).toHaveLength(1);
+  const restoredUrl = expectDefined(
+    getChatAttachmentDataUrl(expectDefined(attachments?.[0], "restored attachment")),
+    "restored attachment data URL",
+  );
+  const comma = restoredUrl.indexOf(",");
+  expect(comma).toBeGreaterThan(0);
+  const metadata = restoredUrl.slice(0, comma).split(";");
+  expect(metadata[0]).toBe("data:text/plain");
+  expect(metadata.at(-1)).toBe("base64");
+  expect(Buffer.from(restoredUrl.slice(comma + 1), "base64")).toEqual(
+    Buffer.from("complete source bytes"),
+  );
 }
 
 beforeEach(() => {
