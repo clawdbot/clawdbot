@@ -226,12 +226,19 @@ export function renderLinePresentation(
   const quickReplyItems: LineQuickReplyItem[] = [];
   const carriedBlocks: MessagePresentationBlock[] = [];
   const cardBody: string[] = [];
+  // Controls this renderer declines to draw. The shared adapter already names a
+  // control it drops for budget under `Actions:`, so naming these the same way
+  // keeps one wording for "offered, but not tappable here" no matter which layer
+  // dropped it; without it a two- or three-option question loses the free-text
+  // route from the card entirely.
+  const omittedControlLabels: string[] = [];
   const questionLabels = new Set<string>();
   const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
   for (const block of presentation.blocks) {
     if (block.type === "buttons") {
       for (const button of block.buttons) {
         if (isLineTextFallbackButton(button)) {
+          omittedControlLabels.push(button.label);
           continue;
         }
         const action = toLineAction(button, questionOptionIndices);
@@ -278,6 +285,9 @@ export function renderLinePresentation(
   }
   if (buttons.length === 0 && quickReplyItems.length === 0) {
     return null;
+  }
+  if (hasCard && omittedControlLabels.length > 0) {
+    cardBody.push(`Actions:\n${omittedControlLabels.map((label) => `- ${label}`).join("\n")}`);
   }
 
   const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};

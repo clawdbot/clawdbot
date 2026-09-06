@@ -171,6 +171,60 @@ describe("LINE rich-message boundaries", () => {
     );
   });
 
+  // The free-text route is only ever offered as text on LINE. Above the action
+  // budget the shared adapter writes it under `Actions:`; below it the control is
+  // still delivered here, so the renderer has to write the same words itself or a
+  // two- or three-option card offers no way to answer in your own words.
+  it("names the omitted Other… control on a card whatever the option count", () => {
+    const QUESTION_ID = "ask_3d8dbe55be452a9a39add7c909beb119";
+    const readCardBody = (optionCount: number): string | undefined => {
+      const labels = ["Staging", "Production", "Canary", "Sandbox"].slice(0, optionCount);
+      const prepared = prepareLineReplyPayload({
+        text: "Which environment?",
+        presentationTextMode: "fallback",
+        channelData: { askUser: { questionId: QUESTION_ID, optionValues: labels } },
+        presentation: {
+          blocks: [
+            { type: "text", text: "Which environment?" },
+            {
+              type: "buttons",
+              buttons: [
+                ...labels.map((label) => ({
+                  label,
+                  action: {
+                    type: "question" as const,
+                    questionId: QUESTION_ID,
+                    optionValue: label,
+                  },
+                })),
+                {
+                  label: "Other…",
+                  action: {
+                    type: "question" as const,
+                    questionId: QUESTION_ID,
+                    intent: "custom-input" as const,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const flex = (prepared.channelData?.line as { flexMessage?: { contents?: unknown } })
+        ?.flexMessage?.contents as
+        | { body?: { contents?: Array<{ text?: string }> } }
+        | undefined;
+      return flex?.body?.contents?.map((entry) => entry.text).find((text) => text?.includes("\n"));
+    };
+
+    // Four options push Other… past the action budget, so the shared adapter owns
+    // this wording. Comparing against it keeps the two shapes from drifting apart.
+    const overBudget = readCardBody(4);
+    expect(overBudget).toBe("Which environment?\nActions:\n- Other…");
+    expect(readCardBody(2)).toBe(overBudget);
+    expect(readCardBody(3)).toBe(overBudget);
+  });
+
   it("falls back to text when two options truncate to the same control label", () => {
     const prepared = prepareLineReplyPayload({
       text: "Which environment? 1. Deploy the release candidate to the shared staging cluster 2. Deploy the release candidate to the shared production cluster",

@@ -313,9 +313,8 @@ stays readable text that a typed reply still answers.
 The **Other…** free-text control is not drawn. Tapping it resolves nothing by itself, and LINE
 cannot take a control back off a card it already delivered, so the button would add a tap that
 changes nothing the question's own text does not already offer. Discord and Slack leave that
-route in text for the same reason. Every declared option therefore keeps a native control,
-including a four-option question, where **Other…** stays named in the card's text under
-`Actions:`.
+route in text for the same reason. Every declared option therefore keeps a native control, and
+**Other…** stays named in the card's text under `Actions:` whatever the option count.
 
 LINE cannot edit a message it already delivered, so the controls stay on screen after
 the question ends. A tap that arrives then is answered with `That question is no longer
