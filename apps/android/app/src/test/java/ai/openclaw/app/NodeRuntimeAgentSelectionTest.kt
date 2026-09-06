@@ -27,6 +27,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -990,6 +991,136 @@ class NodeRuntimeAgentSelectionTest {
       }
     }
     ReflectionHelpers.setField(chat, "requestGatewayForGateway", request)
+  }
+
+  @Test
+  fun reconnectToSameGatewayRestoresTalkAgentChoice() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val stableId = GatewayEndpoint.manual("127.0.0.1", 18789).stableId
+      try {
+        // Seed the agent list with a custom agent the user will select.
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"}]}"""
+        }
+        runtime.refreshAgents()
+        waitUntilAgentsRefreshed(runtime)
+        assertEquals(2, runtime.gatewayAgents.value.size)
+
+        // User explicitly selects the non-default agent.
+        runtime.selectChatAgent("scout")
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // Simulate a gateway scope change: clearOperatorGatewayState captures the
+        // (stableId, agentId) snapshot and clears the in-memory selection.
+        runtime.javaClass
+          .getDeclaredMethod("clearOperatorGatewayState", java.lang.Boolean.TYPE)
+          .apply { isAccessible = true }
+          .invoke(runtime, true)
+        ReflectionHelpers.setField(runtime, "operatorConnected", false)
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", null)
+        // After clearing, selectedChatAgentId is null (captured into pendingSelectedChatAgentRestore)
+        // but mainSessionKey is not yet reset — it is only re-synced on the next refreshAgentsFromGateway.
+        assertNull(ReflectionHelpers.getField<String?>(runtime, "selectedChatAgentId"))
+
+        // Simulate a reconnect to the SAME gateway.
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+        ReflectionHelpers.setField(runtime, "operatorConnected", true)
+        runtime.refreshAgents()
+        waitUntilAgentsRefreshed(runtime)
+
+        // The user's explicit agent choice is restored on same-gateway reconnect.
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun reconnectToDifferentGatewayDoesNotCarryOverAgentChoice() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"}]}"""
+        }
+        runtime.refreshAgents()
+        waitUntilAgentsRefreshed(runtime)
+
+        runtime.selectChatAgent("scout")
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // Disconnect from gateway A.
+        runtime.javaClass
+          .getDeclaredMethod("clearOperatorGatewayState", java.lang.Boolean.TYPE)
+          .apply { isAccessible = true }
+          .invoke(runtime, true)
+        ReflectionHelpers.setField(runtime, "operatorConnected", false)
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", null)
+        assertNull(ReflectionHelpers.getField<String?>(runtime, "selectedChatAgentId"))
+
+        // Reconnect to a DIFFERENT gateway (different stableId) that also has "scout".
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("10.0.0.1", 18789))
+        ReflectionHelpers.setField(runtime, "operatorConnected", true)
+        runtime.refreshAgents()
+        waitUntilAgentsRefreshed(runtime)
+
+        // A different gateway wins its canonical default agent; the stale choice is NOT carried over.
+        assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun explicitSelectionWhileDisconnectedSupersedesPendingRestore() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          """{"defaultId":"main","mainKey":"agent:main:node-test","agents":[{"id":"main","name":"Main"},{"id":"scout","name":"Scout"},{"id":"writer","name":"Writer"}]}"""
+        }
+        runtime.refreshAgents()
+        waitUntilAgentsRefreshed(runtime)
+
+        runtime.selectChatAgent("scout")
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // Disconnect: pending restore captures (stableId, "scout").
+        runtime.javaClass
+          .getDeclaredMethod("clearOperatorGatewayState", java.lang.Boolean.TYPE)
+          .apply { isAccessible = true }
+          .invoke(runtime, true)
+        ReflectionHelpers.setField(runtime, "operatorConnected", false)
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", null)
+        assertNull(ReflectionHelpers.getField<String?>(runtime, "selectedChatAgentId"))
+
+        // User selects a different agent while disconnected.
+        runtime.selectChatAgent("writer")
+        assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // Reconnect to the same gateway.
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+        ReflectionHelpers.setField(runtime, "operatorConnected", true)
+        runtime.refreshAgents()
+        waitUntilAgentsRefreshed(runtime)
+
+        // The explicit selection while disconnected wins; the stale pending restore is NOT used.
+        assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  private fun waitUntilAgentsRefreshed(runtime: NodeRuntime) {
+    repeat(200) {
+      if (runtime.gatewayAgents.value.isNotEmpty()) return
+      Thread.sleep(10)
+    }
+    error("Expected agents list to be refreshed")
   }
 
   private fun createConnectedRuntime(): NodeRuntime {

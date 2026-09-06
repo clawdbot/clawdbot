@@ -1395,6 +1395,12 @@ class NodeRuntime private constructor(
   // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
   // clear it so the newly connected gateway's canonical main agent wins again.
   @Volatile private var selectedChatAgentId: String? = null
+
+  // Snapshot of (gateway stableId, agentId) captured before a gateway scope change clears
+  // selectedChatAgentId, so a reconnect to the SAME gateway can restore the Talk binding
+  // instead of silently reverting to the default agent. A different-gateway connect still
+  // lets the new gateway's canonical main agent win.
+  @Volatile private var pendingSelectedChatAgentRestore: Pair<String, String>? = null
   private val chatSelectionSeq = AtomicLong(0)
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
   val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
@@ -1886,6 +1892,13 @@ class NodeRuntime private constructor(
     }
     skillsSummary.reset()
     synchronized(gatewayDataScopeLock) {
+      // Preserve the user's explicit agent choice for same-gateway reconnects. The
+      // reconnect resync (refreshAgentsFromGateway) restores it when the gateway
+      // stableId matches; a different gateway still wins its canonical default.
+      pendingSelectedChatAgentRestore =
+        selectedChatAgentId?.let { agentId ->
+          connectedEndpoint?.stableId?.let { stableId -> stableId to agentId }
+        }
       selectedChatAgentId = null
       chatSelectionSeq.incrementAndGet()
       sessionCatalogRefreshSeq.incrementAndGet()
@@ -5359,6 +5372,8 @@ class NodeRuntime private constructor(
       // Agent selection owns every main-session consumer; switching chat alone would
       // leave Talk mode bound to the previous agent.
       selectedChatAgentId = normalizedAgentId
+      // An explicit selection supersedes any pending restore snapshot.
+      pendingSelectedChatAgentRestore = null
       selectMainSessionKey(normalizedAgentId)
       selectedMainSessionKey = mainSessionKey.value
     }
@@ -6554,7 +6569,13 @@ class NodeRuntime private constructor(
       publishGatewayData(gatewayScope) {
         updateGatewayDefaultAgentId(defaultAgentId)
         _gatewayAgents.value = agents
-        val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
+        // Restore the user's explicit agent choice when reconnecting to the same gateway.
+        val restoredAgentId =
+          pendingSelectedChatAgentRestore?.let { (stableId, agentId) ->
+            if (stableId == connectedEndpoint?.stableId) agentId else null
+          }
+        if (restoredAgentId != null) pendingSelectedChatAgentRestore = null
+        val selectedAgentId = (restoredAgentId ?: selectedChatAgentId)?.takeIf { id -> agents.any { it.id == id } }
         selectedChatAgentId = selectedAgentId
         syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
       }
