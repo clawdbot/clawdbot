@@ -177,6 +177,13 @@ export class AcpSessionNewOrdering {
       const establishedSessionId = readSessionId(messageObject?.result);
       if (establishedSessionId) {
         this.establish(establishedSessionId);
+        // Release this session's backlog immediately rather than only the run at the
+        // head of the global queue. Sessions are independent streams, so holding one
+        // behind another buys no ordering the client can observe, while it does delay
+        // this session's updates past frames that never enter the queue at all — a
+        // prompt's completion response, above all, which would then arrive before the
+        // text it completes.
+        this.releaseSession(establishedSessionId, emit);
       }
       this.drain(emit);
       return;
@@ -200,10 +207,10 @@ export class AcpSessionNewOrdering {
   }
 
   private shouldQueue(sessionId: string): boolean {
-    // A session with updates still queued keeps queuing, recognized or not. Letting
-    // a newer update through while older ones wait behind another session's entry
-    // would deliver them out of order within the session — initial metadata after
-    // newer state — which is worse than the cross-session delay it would avoid.
+    // A session with updates still queued keeps queuing, recognized or not, so a
+    // newer update can never pass an older one from the same session. The backlog is
+    // released whole when the session is introduced, so this holds only for as long
+    // as the session has genuinely not reached the client.
     if (this.queuedPerSession.has(sessionId)) {
       return true;
     }

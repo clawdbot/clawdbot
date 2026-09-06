@@ -429,7 +429,7 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([accepted, update]);
   });
 
-  it("keeps a session's later updates behind its own queued backlog", async () => {
+  it("never lets an update pass an earlier one from the same session", async () => {
     const ordering = new AcpSessionNewOrdering();
     const a1 = sessionUpdate("sa", "a1");
     const b1 = sessionUpdate("sb", "b1");
@@ -445,12 +445,13 @@ describe("AcpSessionNewOrdering", () => {
       { outbound: b1 },
       { outbound: a2 },
       { outbound: resultA },
-      // sa is established now, but a2 is still queued behind b1. a3 must not overtake it.
       { outbound: a3 },
       { outbound: resultB },
     ]);
 
-    expect(output).toEqual([resultA, a1, resultB, b1, a2, a3]);
+    // resultA releases sa's backlog in order, so a3 follows a2 rather than overtaking
+    // it, and neither waits on sb.
+    expect(output).toEqual([resultA, a1, a2, a3, resultB, b1]);
   });
 
   it("keeps recognition established by one load when an overlapping load fails", async () => {
@@ -483,6 +484,33 @@ describe("AcpSessionNewOrdering", () => {
     // Load 11 confirmed the session. Load 10's rejection retires only its own claim,
     // so the session stays recognized and its update goes straight out.
     expect(output).toEqual([accepted, rejected, update]);
+  });
+
+  it("delivers a session's text before the prompt response that completes it", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const a1 = sessionUpdate("sa", "a1");
+    const b1 = sessionUpdate("sb", "b1");
+    const a2 = sessionUpdate("sa", "a2");
+    const resultA = newSessionResponse(1, "sa");
+    const chunk = sessionUpdate("sa", "agent_message_chunk");
+    // A prompt's completion carries no sessionId, so it never enters the queue.
+    const endTurn = { jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } } as AnyMessage;
+
+    const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(1) },
+      { inbound: newSessionRequest(2) },
+      { outbound: a1 },
+      { outbound: b1 },
+      { outbound: a2 },
+      { outbound: resultA },
+      { outbound: chunk },
+      { outbound: endTurn },
+    ]);
+
+    // sb is still pending. Holding sa behind it would put end_turn ahead of the text
+    // it completes, since the response bypasses the queue entirely.
+    expect(output.indexOf(chunk)).toBeLessThan(output.indexOf(endTurn));
+    expect(output).toEqual([resultA, a1, a2, chunk, endTurn]);
   });
 
   it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
@@ -527,8 +555,9 @@ describe("AcpSessionNewOrdering", () => {
       { outbound: resultB },
     ]);
 
-    // Draining a2 alongside a1 would put it ahead of b1, which arrived first. The
-    // queue drains from the front only, so a2 waits behind b1 until sb settles.
-    expect(output).toEqual([resultA, a1, resultB, b1, a2]);
+    // Each session is released whole when its own result is written, so sa's updates
+    // follow resultA in order and do not wait on sb. Within each session the order is
+    // exactly the arrival order.
+    expect(output).toEqual([resultA, a1, a2, resultB, b1]);
   });
 });
