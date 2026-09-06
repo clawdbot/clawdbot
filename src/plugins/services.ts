@@ -15,6 +15,7 @@ import {
   type DiagnosticExporterHealthUpdate,
 } from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import {
   createPluginRuntimeCapabilityLease,
@@ -217,6 +218,7 @@ export async function startPluginServices(params: {
     stopping: boolean;
     stop?: () => void | Promise<void>;
     cleanup?: Promise<void>;
+    startup?: Promise<void>;
     lease: PluginRuntimeCapabilityLease;
   }> = [];
   const runBeforeDeadline = async (
@@ -253,25 +255,31 @@ export async function startPluginServices(params: {
     entry: (typeof ownedServices)[number],
     failures?: unknown[],
     deadline?: number,
+    beforeStop?: Promise<void>,
   ) => {
     entry.stopping = true;
     try {
-      if (entry.stop) {
-        // Cleanup belongs to the service, not a caller's deadline. Keep even rejected
-        // cleanup; invoke synchronously so expired deadlines accept settled cleanup.
-        const cleanup = () => {
-          try {
-            return (entry.cleanup ??= Promise.resolve(
-              withPluginHttpRouteRegistry(params.registry, () => entry.stop?.(), entry.lease),
-            ));
-          } catch (error) {
-            return (entry.cleanup = (async () => {
-              throw error;
-            })());
-          }
-        };
-        await runBeforeDeadline(cleanup, deadline, "plugin service stop");
-      }
+      const cleanup = () => {
+        if (entry.cleanup) {
+          return entry.cleanup;
+        }
+        try {
+          // Deadlines bound observers; raw startup still owns the one final cleanup.
+          const ready = beforeStop ? beforeStop.then(() => entry.startup) : entry.startup;
+          const invokeStop = () =>
+            withPluginHttpRouteRegistry(params.registry, () => entry.stop?.(), entry.lease);
+          return (entry.cleanup = ready ? ready.then(invokeStop) : Promise.resolve(invokeStop()));
+        } catch (error) {
+          const failure = createDeferredCore();
+          failure.reject(error);
+          return (entry.cleanup = failure.promise);
+        }
+      };
+      await runBeforeDeadline(
+        cleanup,
+        deadline,
+        entry.startup ? "plugin service startup settlement" : "plugin service stop",
+      );
     } catch (err) {
       log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
       failures?.push(
@@ -305,20 +313,31 @@ export async function startPluginServices(params: {
     const afterDrain = oneShotTimeouts
       ? reversed
       : reversed.filter((entry) => entry.diagnosticsExporter);
-    for (const entry of oneShotTimeouts
-      ? []
-      : reversed.filter((candidate) => !candidate.diagnosticsExporter)) {
+    const producers = oneShotTimeouts ? [] : reversed.filter((entry) => !entry.diagnosticsExporter);
+    for (const entry of producers) {
       await stopService(entry, strict ? failures : undefined, deadline);
     }
+    let exporterReady: Promise<void> | undefined;
     if (afterDrain.length > 0) {
-      // Producers stop first; this barrier preserves their queued tail before exporters detach.
-      try {
-        await runBeforeDeadline(
+      const owners = afterDrain
+        .map((entry) => `plugin=${entry.pluginId}, service=${entry.id}`)
+        .join("; ");
+      // Exporters follow actual producer cleanup, even after a caller stops waiting.
+      const draining = Promise.allSettled([
+        ...afterDrain.map((entry) => entry.startup),
+        ...producers.map((entry) => entry.cleanup),
+      ]).then(() =>
+        runBeforeDeadline(
           waitForDiagnosticEventsDrained,
           oneShotTimeouts ? Date.now() + oneShotTimeouts.eventDrainMs : deadline,
           "plugin diagnostic event drain",
-          afterDrain.map((entry) => `plugin=${entry.pluginId}, service=${entry.id}`).join("; "),
-        );
+          owners,
+        ),
+      );
+      // A bounded drain failure cannot discard the exporter's final stop.
+      exporterReady = draining.catch(() => {});
+      try {
+        await runBeforeDeadline(() => draining, deadline, "plugin diagnostic event drain", owners);
       } catch (error) {
         if (!strict && !oneShotTimeouts) {
           throw error;
@@ -329,7 +348,7 @@ export async function startPluginServices(params: {
     // Fresh one-shot flush budgets start after drain; absolute replacement deadlines span all phases.
     const stopDeadline = oneShotTimeouts ? Date.now() + oneShotTimeouts.serviceStopMs : deadline;
     for (const entry of afterDrain) {
-      await stopService(entry, failures, stopDeadline);
+      await stopService(entry, failures, stopDeadline, exporterReady);
     }
   };
   let stopRequested = false;
@@ -349,13 +368,10 @@ export async function startPluginServices(params: {
           throw new AggregateError(failures, "plugin service reload cleanup failed");
         }
         for (const entry of selected) {
-          ownedServices.splice(ownedServices.indexOf(entry), 1);
-        }
-        for (const entry of selected) {
           if (stopRequested) {
             return;
           }
-          await startService(entry.registration, config, true);
+          await startService(entry.registration, config, true, ownedServices.indexOf(entry));
         }
       });
       reloadTail = reloading.catch(() => {});
@@ -365,24 +381,9 @@ export async function startPluginServices(params: {
       stopRequested = true;
       const strict = options?.strict === true;
       const deadline = strict ? options.deadlineAtMs : undefined;
-      // Each caller waits under its own policy; onHandle may run before startupSettled exists.
+      // Each caller observes the retained cleanup under its own deadline policy.
       const stopPromise = Promise.resolve().then(async () => {
         const failures: unknown[] = [];
-        try {
-          const starting = ownedServices.at(-1);
-          await runBeforeDeadline(
-            () => Promise.all([startupSettled.catch(() => {}), reloadTail]).then(() => {}),
-            deadline,
-            "plugin service startup settlement",
-            starting ? `plugin=${starting.pluginId}, service=${starting.id}` : undefined,
-          );
-        } catch (error) {
-          failures.push(error);
-          // Startup may resume after replacement timed out; its issued capabilities die now.
-          for (const entry of ownedServices) {
-            entry.lease.revoke();
-          }
-        }
         await stopServices(ownedServices, failures, strict, deadline);
         if (!strict && failures.length === 1) {
           throw failures[0];
@@ -406,6 +407,7 @@ export async function startPluginServices(params: {
     entry: PluginServiceRegistration,
     config: OpenClawConfig,
     strict = false,
+    index = ownedServices.length,
   ): Promise<boolean> => {
     const service = entry.service;
     const traceName = createPluginServiceTraceName(entry);
@@ -445,16 +447,27 @@ export async function startPluginServices(params: {
       stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
       lease,
     };
-    // Own capabilities before startup yields so a bounded replacement can revoke stale work.
-    ownedServices.push(ownedService);
+    // Publish before startup yields; preserve the registration's slot across failed reloads.
+    ownedServices.splice(index, 1, ownedService);
     try {
-      const invokeStart = () =>
-        withPluginHttpRouteRegistry(params.registry, () => service.start(serviceContext), lease);
-      if (params.startupTrace) {
-        await params.startupTrace.measure(traceName, invokeStart);
-      } else {
-        await invokeStart();
-      }
+      const invokeStart = async () => {
+        const settled = createDeferredCore();
+        ownedService.startup = settled.promise;
+        try {
+          await withPluginHttpRouteRegistry(
+            params.registry,
+            () => service.start(serviceContext),
+            lease,
+          );
+        } finally {
+          // Settlement excludes failed-start rollback, which waits for this raw work.
+          ownedService.startup = undefined;
+          settled.resolve();
+        }
+      };
+      await (params.startupTrace
+        ? params.startupTrace.measure(traceName, invokeStart)
+        : invokeStart());
       return true;
     } catch (err) {
       serviceContext.serviceHealth?.reportFailure(err);

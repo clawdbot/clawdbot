@@ -18,7 +18,6 @@ extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/pw-tools-core.browser-ssrf-guard.test.ts
-extensions/browser/src/browser/pw-tools-core.interactions.navigation-guard.test.ts
 extensions/browser/src/browser/routes/agent.act.ts
 extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/browser/src/cli/browser-cli-manage.ts
