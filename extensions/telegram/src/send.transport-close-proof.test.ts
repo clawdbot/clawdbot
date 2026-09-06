@@ -1,5 +1,5 @@
 // E2E proof for the transport cache-eviction lifecycle: no module mocks — real
-// grammY Bot, real undici agents, production-mode cache, against a local HTTP
+// grammY Bot, real undici agents, and the shared cache against a local HTTP
 // server standing in for the Telegram Bot API. Observes actual TCP sockets.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
@@ -72,10 +72,7 @@ describe("telegram transport cache eviction over real sockets", () => {
     });
   });
 
-  it("closes evicted transports, deferring close for an in-flight send", async () => {
-    // The cache is disabled under test env; force the production path.
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
+  it("closes retired transports only after their active sends finish", async () => {
     resetTelegramClientOptionsCacheForTests();
 
     const ACCOUNTS = 70;
@@ -157,5 +154,35 @@ describe("telegram transport cache eviction over real sockets", () => {
     await send(6, "retained");
     expect(sendMessageCalls).toBe(ACCOUNTS + 8);
     expect(requestSockets.size).toBe(ACCOUNTS);
+
+    const idleBeforeReset = await send(7, "idle before reset");
+    slowMode = true;
+    const resetInFlight = new Promise<void>((resolve) => {
+      slowRequestReceived = resolve;
+    });
+    const resetSend = send(6, "active during reset");
+    await resetInFlight;
+    slowMode = false;
+    const activeBeforeReset = socketForAccount(6);
+    const releaseResetResponse = releaseSlowResponse;
+    if (!releaseResetResponse) {
+      throw new Error("active reset response was not captured");
+    }
+    try {
+      resetTelegramClientOptionsCacheForTests();
+      expect(liveSockets.has(activeBeforeReset)).toBe(true);
+      await vi.waitFor(() => expect(liveSockets.has(idleBeforeReset)).toBe(false), {
+        timeout: 3000,
+      });
+    } finally {
+      releaseSlowResponse = undefined;
+      releaseResetResponse();
+      await resetSend.catch(() => undefined);
+    }
+    expect(await resetSend).toBe(activeBeforeReset);
+    await vi.waitFor(() => expect(liveSockets.has(activeBeforeReset)).toBe(false), {
+      timeout: 3000,
+    });
+    expect(await send(6, "fresh after reset")).not.toBe(activeBeforeReset);
   });
 });
