@@ -136,6 +136,7 @@ This compatibility path does not grant managed Tailscale semantics: `gateway.aut
 - Tailnet Serve traffic injects Tailscale identity headers. Public Funnel traffic uses a Funnel
   marker instead, while tailnet access to the same Funnel URL follows the Serve identity path.
 - OpenClaw-managed Serve/Funnel proxy to a dedicated `127.0.0.1:<ephemeral-port>` listener while ordinary local clients keep the configured Gateway port. Startup fails closed rather than sharing listener provenance, and the foreground claim releases the route when its Gateway owner disappears.
+- When the Gateway starts at boot before the local Tailscale daemon has connected (`tailscale status` reports `NoState` or `Starting`, or the daemon is not accepting connections yet), the managed claim waits up to 90 seconds for it, logging progress. Any other daemon state fails closed immediately.
 - Funnel requires Tailscale v1.38.3+, MagicDNS, HTTPS enabled, and a funnel node attribute.
 - Funnel only supports ports `443`, `8443`, and `10000` over TLS.
 - Funnel on macOS requires the open-source Tailscale app variant.

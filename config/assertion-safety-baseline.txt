@@ -3128,7 +3128,7 @@ src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	2
 src/infra/system-run-approval-binding.ts	3
 src/infra/system-run-approval-context.ts	6
-src/infra/tailscale.ts	9
+src/infra/tailscale.ts	7
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	3
