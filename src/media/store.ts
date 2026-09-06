@@ -18,13 +18,12 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
-import { isPathInside } from "../infra/fs-safe.js";
+import { FsSafeError, isPathInside, readLocalFileSafely } from "../infra/fs-safe.js";
 import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
-import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
+import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by store and plugin SDK callers. */
@@ -124,12 +123,12 @@ function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
  * Keeps: alphanumeric, dots, hyphens, underscores, Unicode letters/numbers.
  */
 function sanitizeFilename(name: string): string {
-  const base = sanitizeUntrustedFileName(name, "");
+  // Store keys require NFC; source filesystem paths keep their original spelling.
+  const base = sanitizeUntrustedFileName(name, "").normalize("NFC");
   if (!base) {
     return "";
   }
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
-  // Collapse multiple underscores, trim leading/trailing, limit length
   return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
@@ -378,8 +377,8 @@ function safeOriginalFilenameExtension(originalFilename?: string): string | unde
   if (!originalFilename) {
     return undefined;
   }
-  const ext = extnameFromAnyPath(originalFilename).toLowerCase();
-  return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : undefined;
+  const ext = extnameFromAnyPath(originalFilename);
+  return /^\.[a-z0-9]{1,16}$/i.test(ext) ? ext : undefined;
 }
 
 function extensionForAuthoritativeHeaderMime(contentType?: string): string | undefined {
@@ -481,7 +480,7 @@ async function writeMediaStreamToFile(params: {
       }
       total += buffer.byteLength;
       if (total > params.maxBytes) {
-        throw new Error(`Media exceeds ${formatMediaLimitMb(params.maxBytes)} limit`);
+        throw SaveMediaSourceError.tooLarge(params.maxBytes);
       }
       if (sniffLen < sniffBuffer.length) {
         // The next pull may reuse the chunk; retain only the prefix we own.
@@ -498,26 +497,7 @@ async function writeMediaStreamToFile(params: {
   }
 }
 
-/** Stable error categories for unsafe or failed source-file ingestion. */
-type SaveMediaSourceErrorCode =
-  | "invalid-path"
-  | "not-found"
-  | "not-file"
-  | "path-mismatch"
-  | "too-large";
-
-/** Error raised when saveMediaSource cannot safely read or persist a source path. */
-class SaveMediaSourceError extends Error {
-  code: SaveMediaSourceErrorCode;
-
-  constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.code = code;
-    this.name = "SaveMediaSourceError";
-  }
-}
-
-function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
+function toSaveMediaSourceError(err: FsSafeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -530,11 +510,7 @@ function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): Sav
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError(
-        "too-large",
-        `Media exceeds ${formatMediaLimitMb(maxBytes)} limit`,
-        { cause: err },
-      );
+      return SaveMediaSourceError.tooLarge(maxBytes, { cause: err });
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -576,7 +552,7 @@ export async function saveMediaSource(
     await writeSavedMediaBuffer({ subdir, id, buffer });
     return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
-    if (isFsSafeError(err)) {
+    if (err instanceof FsSafeError) {
       throw toSaveMediaSourceError(err, maxBytes);
     }
     throw err;
@@ -593,7 +569,7 @@ export async function saveMediaBuffer(
   detectionFilePathHint?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
+    throw SaveMediaSourceError.tooLarge(maxBytes);
   }
   const dir = resolveMediaScopedDir(subdir, "saveMediaBuffer");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });

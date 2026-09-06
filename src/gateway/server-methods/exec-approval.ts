@@ -492,7 +492,6 @@ export function createExecApprovalHandlers(
       await handlePendingApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond,
         context,
         clientConnId: client?.connId,

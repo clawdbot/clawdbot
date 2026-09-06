@@ -35,6 +35,7 @@ describe("plugin registry SQLite session ownership", () => {
         agents: { list: [{ id: "researcher", default: true }] },
       } as OpenClawConfig;
       const subagent = {
+        complete: vi.fn(async () => ({ text: "completed" })),
         run: vi.fn(async () => ({ runId: "workboard-run" })),
         waitForRun: vi.fn(async () => ({ status: "ok" as const })),
         getSessionMessages: vi.fn(async () => ({ messages: [] })),

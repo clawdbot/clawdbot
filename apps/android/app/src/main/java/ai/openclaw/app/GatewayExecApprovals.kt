@@ -32,6 +32,13 @@ data class GatewayExecApprovalSummary(
   val errorText: String? = null,
 )
 
+internal data class GatewayExecApprovalInboxState(
+  val approvals: List<GatewayExecApprovalSummary> = emptyList(),
+  val refreshing: Boolean = false,
+  val errorText: String? = null,
+  val notice: GatewayExecApprovalNotice? = null,
+)
+
 internal enum class GatewayApprovalTerminalStatus {
   Allowed,
   Denied,
@@ -75,7 +82,7 @@ data class GatewayExecApprovalNotice(
   val message: String,
   val warning: Boolean,
   // Distinct per constructed notice: a re-requested approval can lose again with an
-  // identical id/message, and the dismiss compareAndSet must not treat the stale
+  // identical id/message, and conditional dismissal must not treat the stale
   // banner as equal to its replacement.
   val publication: Long = execApprovalNoticePublications.incrementAndGet(),
 )

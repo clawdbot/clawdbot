@@ -2,10 +2,83 @@
 summary: "macOS app flow for controlling a remote OpenClaw gateway"
 read_when:
   - Setting up or debugging remote mac control
+  - Signing in to a Gateway from the Mac app or opening it from a website
 title: "Remote control"
 ---
 
-This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app connects directly to trusted LAN/Tailnet gateway URLs, or manages an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings -> General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app connects directly to trusted LAN/Tailnet gateway URLs, or manages an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from the native **Connection** window.
+
+## Connect with your browser
+
+Add a saved Gateway to use its dashboard and native chat with your personal
+account. This connection stays separate from the primary Gateway that owns
+Mac node capabilities and Talk Mode.
+
+1. On first launch, choose **Connect to an existing Gateway**. In an already
+   configured app, open **Connection… → Gateways → Add Gateway**.
+2. Enter the Gateway's address, such as `gateway.example.com` or
+   `https://gateway.example.com/operator/`. A hostname defaults to HTTPS;
+   include the full base path when the Gateway is hosted beneath one. **Name**
+   is optional.
+3. Click **Connect**. For a Gateway protected by Cloudflare Access, the app
+   opens your default browser. Continue with the account you use for that
+   Gateway and complete any sign-in prompts there.
+4. Return to OpenClaw. The saved Gateway's dashboard opens; check the account
+   name in its sidebar footer. You can open more windows from
+   **File → New Gateway Window…** or the **Gateways** menu. The app reopens your selected Gateway after
+   restart, including when a separate primary Gateway supplies Mac capabilities.
+
+Cloudflare Access issues the personal application session through its
+[browser-to-client sign-in flow](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/).
+The Mac app stores that session in Keychain and uses it for the saved Gateway's
+native connection and embedded dashboard. Its validity follows the session
+duration configured by the Access administrator. No shared Gateway token needs
+to be copied from the website.
+
+Browser sign-in currently supports Cloudflare Access. For Gateways that use a
+shared token or password, expand **Token or password** and provide the
+credential supplied by the administrator. Other browser sign-in providers are
+not supported by this flow. Existing private-network `ws://` and secure
+`wss://` connections remain available through this editor.
+
+A signed-in native operator device may still need a one-time approval on the
+Gateway. The Gateway's existing [automatic device approval policy](/gateway/trusted-proxy-auth#automatic-device-approval)
+determines whether verified proxy identities can enroll automatically.
+
+When the browser session expires, choose **Reconnect** for that saved Gateway,
+then **Connect** to sign in again. Renewing the same account keeps its native
+chat cache and queued messages. Signing in with a different account closes the
+previous account's native chat windows and uses that account's own cache and
+queue. Previously queued messages remain with their original account; sign
+back into that account to access them.
+
+To sign out of that Gateway in the Mac app,
+remove it from **Connection… → Gateways** and confirm **Remove**. This removes its
+saved credentials and dashboard browser data. Use your identity provider's
+session controls to revoke account access more broadly.
+
+### Open the Mac app from a website
+
+In the browser dashboard, open **Get the apps** from the account menu, then
+choose **Open in Mac app** on the macOS card. The link uses the connected
+Gateway's HTTPS address. OpenClaw shows **Add Gateway** with that address filled
+in; review it and click **Connect** to complete the same sign-in flow.
+
+Websites can launch this editor with the registered `openclaw` URL scheme:
+
+```text
+openclaw://gateway/add?url=https%3A%2F%2Fgateway.example.com%2Foperator%2F&name=Research
+```
+
+`url` is required and contains the percent-encoded full HTTPS Gateway base URL,
+including its port and base path when needed. `name` is an optional display
+label. The link carries connection intent only: it accepts no token, password,
+URL user information, query, or fragment in the Gateway address, and it does
+not authorize access. Credentials are obtained separately during sign-in.
+
+The existing `openclaw://gateway?host=…` setup route retains its primary-Gateway
+setup behavior. Use `openclaw://gateway/add` to add a saved Gateway without replacing
+the primary connection.
 
 ## Modes
 
@@ -56,7 +129,7 @@ openclaw-mac configure-remote \
 
 To configure from the UI instead:
 
-1. Open _Settings -> General_.
+1. Choose **Connection…** from the menu bar and select the **Connection** tab.
 2. Under **OpenClaw runs**, pick **Remote** and set:
    - **Transport**: **SSH tunnel** or **Direct (ws/wss)**.
    - **SSH target**: `user@host` (optional `:port`). If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
@@ -92,6 +165,8 @@ To configure from the UI instead:
 - Re-run login on that host if auth expires. The health check surfaces link problems.
 
 ## Troubleshooting
+
+The Dashboard error page shows the attempted address without embedded credentials. Check the host, port, and path when troubleshooting an unavailable Gateway. Choose **Connection Settings…** there, or **Connection…** from the menu bar, to repair the connection without loading the Dashboard.
 
 | Symptom                                          | Cause / fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

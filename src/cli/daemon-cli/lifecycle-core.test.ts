@@ -1,8 +1,10 @@
 // Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createGatewayServiceRunArgs as createServiceRunArgs,
   createGatewayUninstallArgs,
@@ -144,7 +146,12 @@ describe("runServiceRestart token drift", () => {
       await import("./lifecycle-core.js"));
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
+    mockSystemAccountHome();
     appendGatewayLifecycleAudit.mockClear();
     createGatewayLifecycleMutationAudit.mockClear();
     resetLifecycleRuntimeLogs();
@@ -483,6 +490,25 @@ describe("runServiceRestart token drift", () => {
     });
   });
 
+  it.each([true, false])(
+    "keeps Nix restart available without suggesting a forbidden token reinstall (json=%s)",
+    async (json) => {
+      await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+        await expect(
+          runServiceRestart({ ...createServiceRunArgs(true), opts: { json } }),
+        ).resolves.toBe(true);
+
+        expect(service.restart).toHaveBeenCalledOnce();
+        const output = json
+          ? readJsonLog<{ warnings: string[] }>().warnings.join("\n")
+          : lifecycleRuntimeLogs.join("\n");
+        expect(output).toContain("Config token differs from service token");
+        expect(output).toContain("Nix mode detected; service install is disabled.");
+        expect(output).not.toContain("gateway install --force");
+      });
+    },
+  );
+
   it("emits drift warning when enabled", async () => {
     await runServiceRestart(createServiceRunArgs(true));
 
@@ -639,7 +665,9 @@ describe("runServiceRestart token drift", () => {
       postRestartCheck,
     });
 
-    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(postRestartCheck).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ activationAccepted: true }),
+    );
     expect(service.restart).not.toHaveBeenCalled();
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("restarted");

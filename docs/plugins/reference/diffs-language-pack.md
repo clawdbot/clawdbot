@@ -2,21 +2,24 @@
 summary: "Adds syntax highlighting for languages outside the default diffs viewer set."
 read_when:
   - You are installing, configuring, or auditing the diffs-language-pack plugin
-title: "Diffs Language Pack plugin"
+title: "Diffs Language Pack plugin reference"
 ---
 
-# Diffs Language Pack plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds syntax highlighting for languages outside the default diffs viewer set.
 
 ## Distribution
 
 - Package: `@openclaw/diffs-language-pack`
-- Install route: npm; ClawHub: `clawhub:@openclaw/diffs-language-pack`
+- Install route: npm or ClawHub: `clawhub:@openclaw/diffs-language-pack`
 
 ## Surface
 
-plugin
+This plugin declares no channels, providers, commands, or contracts.
 
 <!-- openclaw-plugin-reference:manual-start -->
 

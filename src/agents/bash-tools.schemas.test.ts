@@ -7,6 +7,11 @@ describe("exec environment guidance", () => {
     ["completion", execCompletionSchema],
     ["node", nodeExecSchema],
   ] as const)("explains literal overrides and inheritance on the %s surface", (_name, schema) => {
+    expect(schema.properties.title).toMatchObject({
+      type: "string",
+      maxLength: 120,
+      description: expect.stringContaining("never claim success"),
+    });
     expect(schema.properties.env).toMatchObject({
       description: expect.stringMatching(/literal.*no expansion.*omit to inherit/i),
     });

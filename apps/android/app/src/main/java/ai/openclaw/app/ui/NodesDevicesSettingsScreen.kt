@@ -12,7 +12,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.canApproveGatewayDevicePairing
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.nativeString
-import ai.openclaw.app.ui.design.ClawDetailRow
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
@@ -489,7 +489,7 @@ private fun DeviceListRow(
   statusText: String,
   status: ClawStatus,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = title,
     subtitle = subtitle,
     leading = { ClawTextBadge(text = badge) },

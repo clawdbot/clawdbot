@@ -1,10 +1,11 @@
+// Register the shared tool mocks before any runtime dependency is evaluated.
+import "./worker-session-tool-executor.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
   initializeGlobalHookRunner,
@@ -12,104 +13,23 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import * as environmentServiceModule from "./service.js";
-import {
+const {
+  workerSessionToolTestMocks,
   SOURCE,
   CHILD,
   GRANDCHILD,
   PARENT_EXECUTION_IDENTITY_TOKEN,
   resolveGatewayContext,
   installWorkerSessionToolTestFixture,
-} from "./worker-session-tool-executor.test-support.js";
+} = await import("./worker-session-tool-executor.test-support.js");
 
-const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
-const delivered = vi.hoisted(() => vi.fn());
-const gatewayRequest = vi.hoisted(() => vi.fn());
-const gatewayCreate = vi.hoisted(() => vi.fn());
-const gatewayRuntimeIdentity = vi.hoisted(() => vi.fn());
-const dispatchChild = vi.hoisted(() => vi.fn());
-const spawnCallerIdentity = vi.hoisted(() => vi.fn());
-const spawnArgs = vi.hoisted(() => vi.fn());
-const githubPublicationRequest = vi.hoisted(() => vi.fn());
-const scopedSessionAccess = vi.hoisted(() =>
-  vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
-);
-
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils.js")>();
-  return {
-    ...actual,
-    loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
-      agentId: parseAgentSessionKey(sessionKey)?.agentId,
-      canonicalKey: sessionKey,
-      entry: structuredClone(sessionEntries.get(sessionKey)),
-    }),
-  };
-});
-
-vi.mock("../../agents/tools/sessions-send-tool.js", () => ({
-  createSessionsSendTool: (options: unknown) => ({
-    execute: async (toolCallId: string, args: unknown) => {
-      await delivered({ args, options, toolCallId });
-      return {
-        content: [{ type: "text", text: "sent" }],
-        details: { status: "ok" },
-      };
-    },
-  }),
-}));
-
-vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
-  const { getGatewayToolCallerIdentity } =
-    await import("../../agents/tools/gateway-caller-context.js");
-  return {
-    createSessionsSpawnTool: (options: {
-      agentSessionKey: string;
-      callGateway: (method: string, params: Record<string, unknown>) => Promise<unknown>;
-    }) => ({
-      execute: async (_toolCallId: string, args: { task: string; worktree?: boolean }) => {
-        spawnCallerIdentity(getGatewayToolCallerIdentity());
-        spawnArgs(args);
-        const details = await options.callGateway("sessions.create", {
-          parentSessionKey: options.agentSessionKey,
-          task: args.task,
-          ...(args.worktree ? { worktree: true } : {}),
-        });
-        return {
-          content: [{ type: "text", text: "spawned" }],
-          details,
-        };
-      },
-    }),
-  };
-});
-
-vi.mock("../../agents/tools/scoped-session-access.js", () => ({
-  runWithScopedSessionAccess: (params: unknown) => scopedSessionAccess(params as never),
-}));
-
-vi.mock("../../agents/tools/in-process-gateway.js", () => ({
-  callAgentToolGatewayRequest: (request: unknown) => gatewayRequest(request),
-  callInProcessGatewayTool: (method: string, params: Record<string, unknown>) =>
-    gatewayRequest({ method, params }),
-  callInProcessGatewayToolWithCreation: (
-    method: string,
-    params: Record<string, unknown>,
-    creation: unknown,
-    options: unknown,
-  ) => gatewayCreate({ creation, method, options, params }),
-  withAgentToolGatewayRuntimeIdentity: (request: unknown, identity: unknown) => {
-    gatewayRuntimeIdentity(request, identity);
-    return request;
-  },
-}));
-
-const fixtureMocks = {
+const fixtureMocks = workerSessionToolTestMocks();
+const {
   sessionEntries,
   delivered,
   gatewayRequest,
@@ -118,9 +38,7 @@ const fixtureMocks = {
   dispatchChild,
   spawnCallerIdentity,
   spawnArgs,
-  githubPublicationRequest,
-  scopedSessionAccess,
-};
+} = fixtureMocks;
 
 describe("worker session tool topology", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
@@ -219,67 +137,6 @@ describe("worker session tool topology", () => {
     expect(gatewayCreate).not.toHaveBeenCalled();
     expect(dispatchChild).not.toHaveBeenCalled();
     expect(gatewayRequest).not.toHaveBeenCalled();
-  });
-
-  it("records publication intent with the exact claim and no credential fields", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-
-    const result = await execute({
-      identity,
-      toolName: "github_publish",
-      request: {
-        toolCallId: "publish-cloud-work",
-        title: "Publish the cloud fix",
-      },
-    });
-
-    expect(JSON.parse(result.resultJson)).toMatchObject({
-      details: { requestId: "publication-1", status: "requested" },
-    });
-    expect(githubPublicationRequest).toHaveBeenCalledWith({
-      claim: sourceClaim,
-      sessionKey: SOURCE.sessionKey,
-      agentId: SOURCE.agentId,
-      idempotencyKey: "publish-cloud-work",
-      title: "Publish the cloud fix",
-      assertCurrent: expect.any(Function),
-    });
-    expect(JSON.stringify(githubPublicationRequest.mock.calls)).not.toContain("token");
-  });
-
-  it("revalidates publication authority after awaited Gateway work", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    githubPublicationRequest.mockImplementationOnce(async (request) => {
-      placements.closeWorkerTurnToolAdmission(sourceClaim);
-      request.assertCurrent?.();
-      return {
-        requestId: "unreachable",
-        status: "requested",
-        message: "unreachable",
-      };
-    });
-
-    await expect(
-      execute({
-        identity,
-        toolName: "github_publish",
-        request: { toolCallId: "publish-lost-authority" },
-      }),
-    ).rejects.toThrow("Worker session tool authority changed");
-  });
-
-  it("rejects publication when the exact turn was not granted the tool", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
-
-    await expect(
-      execute({
-        identity,
-        toolName: "github_publish",
-        request: { toolCallId: "publish-without-authority" },
-      }),
-    ).rejects.toThrow("Worker session tool authority changed");
-    expect(githubPublicationRequest).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -405,7 +262,7 @@ describe("worker session tool topology", () => {
       sessionSpawnContext: {
         inheritedToolPolicy: {
           version: 1,
-          allow: ["sessions_spawn", "sessions_send", "github_publish"],
+          allow: ["sessions_spawn", "sessions_send"],
           deny: [],
         },
       },

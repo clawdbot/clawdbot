@@ -11,30 +11,15 @@ export {
   matchesShortcutCombo,
 } from "./keyboard-shortcut-contract.ts";
 
-type KeyboardShortcutEntry = {
-  readonly id: string;
-  readonly label: string;
-  readonly combos: readonly KeyboardShortcutCombo[];
-};
+type KeyboardShortcutEntry = ReturnType<typeof keyboardShortcutEntry>;
+type KeyboardShortcutSection = ReturnType<typeof keyboardShortcutSection>;
 
-type KeyboardShortcutSection = {
-  readonly id: string;
-  readonly label: string;
-  readonly entries: readonly KeyboardShortcutEntry[];
-};
-
-function keyboardShortcutEntry(
-  id: string,
-  ...combos: KeyboardShortcutCombo[]
-): KeyboardShortcutEntry {
-  return { id, label: `shortcutsOverlay.labels.${id}`, combos };
+function keyboardShortcutEntry(id: string, ...combos: readonly KeyboardShortcutCombo[]) {
+  return { id, label: `shortcutsOverlay.labels.${id}`, combos } as const;
 }
 
-function keyboardShortcutSection(
-  id: string,
-  entries: readonly KeyboardShortcutEntry[],
-): KeyboardShortcutSection {
-  return { id, label: `shortcutsOverlay.sections.${id}`, entries };
+function keyboardShortcutSection(id: string, entries: readonly KeyboardShortcutEntry[]) {
+  return { id, label: `shortcutsOverlay.sections.${id}`, entries } as const;
 }
 
 const KEYBOARD_SHORTCUT_SECTIONS = [
@@ -66,6 +51,13 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("terminalPanel", KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
     keyboardShortcutEntry("homePanel", KEYBOARD_SHORTCUT_COMBOS.homePanel),
     keyboardShortcutEntry("workspaceFiles", KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
+    keyboardShortcutEntry("sideChat", KEYBOARD_SHORTCUT_COMBOS.sideChat),
+    keyboardShortcutEntry("browserPanel", KEYBOARD_SHORTCUT_COMBOS.browserPanel),
+    keyboardShortcutEntry("tasksPanel", KEYBOARD_SHORTCUT_COMBOS.tasksPanel),
+    keyboardShortcutEntry("desktopPanel", KEYBOARD_SHORTCUT_COMBOS.desktopPanel),
+    keyboardShortcutEntry("discussionPanel", KEYBOARD_SHORTCUT_COMBOS.discussionPanel),
+    keyboardShortcutEntry("dashboardPanel", KEYBOARD_SHORTCUT_COMBOS.dashboardPanel),
+    keyboardShortcutEntry("reviewPanel", KEYBOARD_SHORTCUT_COMBOS.reviewPanel),
   ]),
   keyboardShortcutSection("sidebar", [
     keyboardShortcutEntry("toggleSessionSelect", KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect),
@@ -94,15 +86,13 @@ export function resolveKeyboardShortcutSections(
     return KEYBOARD_SHORTCUT_SECTIONS;
   }
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
-    section.entries.some((entry) => SEND_PREFERENCE_ENTRY_IDS.has(entry.id))
-      ? keyboardShortcutSection(
-          section.id,
-          section.entries.map((entry) =>
-            SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
-              ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
-              : entry,
-          ),
-        )
-      : section,
+    keyboardShortcutSection(
+      section.id,
+      section.entries.map((entry) =>
+        SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
+          ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
+          : entry,
+      ),
+    ),
   );
 }

@@ -29,6 +29,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../src/plugins/runtime.js";
+import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import {
@@ -116,6 +117,7 @@ type CodexPromptSnapshotApi = {
     threadResumeParams: Record<string, unknown>;
     turnStartParams: Record<string, unknown> & {
       input?: unknown;
+      additionalContext?: Record<string, { kind: "application" | "untrusted"; value: string }>;
       collaborationMode?: { settings?: { developer_instructions?: string } };
     };
   };
@@ -723,12 +725,28 @@ function renderModelBoundPromptLayers(params: {
       ? params.codexSnapshot.turnStartParams.collaborationMode.settings.developer_instructions
       : "";
   const turnInputText = readCodexTurnInputText(params.codexSnapshot.turnStartParams);
+  // Codex emits context in key order before user input. This reconstructs the
+  // supplied values; native truncation, deduplication and prior history stay native.
+  const additionalContextLayers = Object.entries(
+    params.codexSnapshot.turnStartParams.additionalContext ?? {},
+  )
+    .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, entry]) => {
+      const role = entry.kind === "application" ? "Developer" : "User";
+      const tag = entry.kind === "application" ? key : `external_${key}`;
+      return {
+        heading: `### ${role}: OpenClaw Additional Context (${key})`,
+        text: `<${tag}>${entry.value}</${tag}>`,
+      };
+    });
+  const additionalContextText = additionalContextLayers.map(({ text }) => text).join("\n\n");
   const textOnlyTotal = [
     codexModelInstructions,
     CODEX_YOLO_PERMISSION_INSTRUCTIONS,
     codexConfigInstructions,
     openClawDeveloperInstructions,
     codexCollaborationModeInstructions,
+    additionalContextText,
     turnInputText,
   ]
     .filter(Boolean)
@@ -738,7 +756,7 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
@@ -762,11 +780,13 @@ function renderModelBoundPromptLayers(params: {
             "extensions/codex app-server thread/start developerInstructions",
           collaborationModeDeveloperInstructionsFrom:
             "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions",
+          additionalContextFrom: "extensions/codex app-server turn/start additionalContext",
           userInputFrom: "extensions/codex app-server turn/start input",
           dynamicToolsFrom: params.scenario.toolSnapshotFile,
         },
         limitations: [
           "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
+          "Additional context shows this turn's supplied values; native truncation, deduplication and retained history are not simulated.",
           "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API.",
         ],
       }),
@@ -782,6 +802,7 @@ function renderModelBoundPromptLayers(params: {
         codexWorkspaceBootstrapConfigInstructions: textStats(codexConfigInstructions),
         openClawDeveloperInstructions: textStats(openClawDeveloperInstructions),
         codexCollaborationModeDeveloperInstructions: textStats(codexCollaborationModeInstructions),
+        additionalContext: textStats(additionalContextText),
         userInputText: textStats(turnInputText),
         dynamicToolsJson: textStats(params.dynamicToolsJson),
         totalTextOnly: textStats(textOnlyTotal),
@@ -811,6 +832,12 @@ function renderModelBoundPromptLayers(params: {
       ? markdownFence("text", codexCollaborationModeInstructions)
       : "This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.",
     "",
+    ...additionalContextLayers.flatMap(({ heading, text }) => [
+      heading,
+      "",
+      markdownFence("text", text),
+      "",
+    ]),
     "### User: Turn Input Text",
     "",
     markdownFence("text", turnInputText),
@@ -1025,24 +1052,28 @@ function renderReadme(scenarios: PromptScenario[]): string {
 
 /** Build all Codex happy-path prompt snapshot files without writing them. */
 export async function createHappyPathPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
-  const codexApi = await loadCodexPromptSnapshotApi();
-  const scenarios = await createScenarios(codexApi);
-  const files = [
-    {
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
-      content: renderReadme(scenarios),
-    },
-    ...scenarios.map((scenario) => ({
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
-      content: renderScenarioSnapshot(codexApi, scenario),
-    })),
-    ...scenarios.map((scenario) => ({
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
-      content: stableJson(scenario.dynamicTools),
-    })),
-  ];
-  return files.map((file) => ({
-    path: file.path,
-    content: file.content.endsWith("\n") ? file.content : `${file.content}\n`,
-  }));
+  // Plugin-policy hashing reads machine state from the process state dir.
+  // Pin a fresh one so snapshot generation never reads the host's live database.
+  return withStateDirEnv("openclaw-prompt-snapshot-", async () => {
+    const codexApi = await loadCodexPromptSnapshotApi();
+    const scenarios = await createScenarios(codexApi);
+    const files = [
+      {
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
+        content: renderReadme(scenarios),
+      },
+      ...scenarios.map((scenario) => ({
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
+        content: renderScenarioSnapshot(codexApi, scenario),
+      })),
+      ...scenarios.map((scenario) => ({
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
+        content: stableJson(scenario.dynamicTools),
+      })),
+    ];
+    return files.map((file) => ({
+      path: file.path,
+      content: file.content.endsWith("\n") ? file.content : `${file.content}\n`,
+    }));
+  });
 }

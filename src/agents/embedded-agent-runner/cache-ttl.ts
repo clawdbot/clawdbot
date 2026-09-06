@@ -79,17 +79,19 @@ function matchesCacheTtlContext(
   return true;
 }
 
+/** Transcript entries visible to cache-TTL marker readers; stores without entries read as empty. */
+export function readCacheTtlEntries(sessionManager: unknown): CustomEntryLike[] {
+  const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
+  return sm?.getEntries ? sm.getEntries() : [];
+}
+
 /** Reads the most recent cache-TTL marker that matches the optional provider/model context. */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,
 ): number | null {
-  const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
-  if (!sm?.getEntries) {
-    return null;
-  }
   try {
-    const entries = sm.getEntries();
+    const entries = readCacheTtlEntries(sessionManager);
     let last: number | null = null;
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];

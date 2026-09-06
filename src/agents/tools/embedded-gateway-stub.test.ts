@@ -5,9 +5,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 
 const runtime = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(
-    (): OpenClawConfig => ({ agents: { list: [{ id: "main", default: true }] } }),
-  ),
+  getRuntimeConfig: vi.fn((): OpenClawConfig => ({
+    agents: { list: [{ id: "main", default: true }] },
+  })),
   resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
     sessionKey === "main" ? "agent:main:main" : sessionKey,
   ),
@@ -270,19 +270,6 @@ describe("embedded gateway stub", () => {
       params: { sessionKey: "agent:main:main", limit: 1 },
     });
 
-    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith({
-      entry: { sessionId: "sess-main" },
-      provider: "openai",
-      sessionId: "sess-main",
-      storePath: "/tmp/openclaw-sessions.json",
-      sessionAgentId: "main",
-      canonicalKey: "agent:main:main",
-      max: 1,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 100_000,
-      offset: undefined,
-      messageId: undefined,
-    });
     expect(result.messages).toEqual(messages);
     expect(result).not.toHaveProperty("offset");
   });

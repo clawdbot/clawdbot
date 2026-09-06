@@ -9,5 +9,6 @@ export function mergeRealtimePartialTranscript(previous: string, next: string): 
     return previous;
   }
   const merged = trimmed.startsWith(previous) ? trimmed : `${previous}${next}`;
-  return sliceUtf16Safe(merged, -PARTIAL_TRANSCRIPT_MAX_CHARS);
+  // Wake-name detection needs the original leading edge, never a sliding tail.
+  return sliceUtf16Safe(merged, 0, PARTIAL_TRANSCRIPT_MAX_CHARS);
 }

@@ -130,7 +130,10 @@ describe("loop command", () => {
     const params = buildLoopParams("/loop 5m check ci");
     params.command.senderIsOwner = false;
 
-    expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: false });
+    expect(await handleLoopCommand(params, true)).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("operator.admin") },
+    });
     expect(rewrittenBody(params)).toBe("/loop 5m check ci");
   });
 

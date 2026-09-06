@@ -44,17 +44,31 @@ const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
     "worker/workspace-rsync-receiver",
     "src/worker/workspace-rsync-receiver.ts",
   );
+const isWorkerGitHubExecLauncherConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(config, "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts");
 const isWorkerBuildConfig = (config: TsdownConfig) =>
-  isWorkerDeployConfig(config) || isWorkerRsyncReceiverConfig(config);
+  isWorkerDeployConfig(config) ||
+  isWorkerRsyncReceiverConfig(config) ||
+  isWorkerGitHubExecLauncherConfig(config);
 
 const FS_SAFE_CALLER_PROBE = `
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [entry, observer, rootDir, mode, outcome] = process.argv.slice(1);
-const { root } = await import(pathToFileURL(entry).href);
+const [entry, observer, rootDir, mode, outcome, sealed] = process.argv.slice(1);
+if (sealed) registerHooks({ resolve(specifier, context, next) {
+  if (!isBuiltin(specifier) && specifier !== pathToFileURL(entry).href)
+    throw new Error("sealed dependency escaped: " + specifier);
+  return next(specifier, context);
+}});
+const { root, parseJsonWithJson5Fallback, resolvePreferredOpenClawTmpDir, resolveRuntimeProcessEntrypointUrl } = await import(pathToFileURL(entry).href);
+if (sealed) {
+  assert.deepEqual(parseJsonWithJson5Fallback("{value:'bundled',}"), {value:"bundled"});
+  assert.equal(resolvePreferredOpenClawTmpDir({preferredDir:rootDir, tmpdir:()=>rootDir, platform:"linux"}), rootDir);
+  assert.equal(resolveRuntimeProcessEntrypointUrl("githubExec").href, new URL("./github-exec-launcher.mjs", pathToFileURL(entry)).href);
+}
 const { configureFsSafeNative, getFsSafeNativeConfig, FsSafeError } = await import(pathToFileURL(observer).href);
 assert.equal(getFsSafeNativeConfig().mode, mode === "configured" ? "off" : mode);
 if (mode === "configured") configureFsSafeNative({ mode: "require" });
@@ -335,7 +349,12 @@ describe("tsdown config", () => {
         observerSource,
         [
           ...(worker
-            ? [`import ${JSON.stringify(path.resolve("src/worker/worker-deploy-runtime.ts"))};`]
+            ? [
+                `import ${JSON.stringify(path.resolve("src/worker/worker-deploy-runtime.ts"))};`,
+                `export { parseJsonWithJson5Fallback } from ${JSON.stringify(path.resolve("src/utils/parse-json-compat.ts"))};`,
+                `export { resolvePreferredOpenClawTmpDir } from ${JSON.stringify(path.resolve("src/infra/tmp-openclaw-dir.ts"))};`,
+                `export { resolveRuntimeProcessEntrypointUrl } from ${JSON.stringify(path.resolve("src/infra/runtime-process-url.ts"))};`,
+              ]
             : []),
           `export { root } from ${JSON.stringify(sdkSource)};`,
           `export { configureFsSafeNative, getFsSafeNativeConfig } from ${JSON.stringify(worker ? require.resolve("@openclaw/fs-safe/config") : "@openclaw/fs-safe/config")};`,
@@ -384,6 +403,7 @@ describe("tsdown config", () => {
                   rootDir,
                   mode,
                   outcome,
+                  worker ? "sealed" : "",
                 ],
                 {
                   cwd: relocatedRoot,
@@ -453,7 +473,7 @@ describe("tsdown config", () => {
   );
 
   it.each(
-    ["runtime", "declarations", "worker", "receiver"].flatMap((target) =>
+    ["runtime", "declarations", "worker", "receiver", "github-launcher"].flatMap((target) =>
       [false, true].map((verbose) => ({ target, verbose })),
     ),
   )(
@@ -462,19 +482,22 @@ describe("tsdown config", () => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-dependencies-"));
       const declarations = target === "declarations";
-      const bundleAll = target === "worker" || target === "receiver";
+      const bundleAll = ["worker", "receiver", "github-launcher"].includes(target);
       const selected = configs.find(
         target === "worker"
           ? isWorkerDeployConfig
           : target === "receiver"
             ? isWorkerRsyncReceiverConfig
-            : (entry) =>
-                entry.name ===
-                (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP),
+            : target === "github-launcher"
+              ? isWorkerGitHubExecLauncherConfig
+              : (entry) =>
+                  entry.name ===
+                  (declarations
+                    ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0]
+                    : TSDOWN_UNIFIED_CONFIG_GROUP),
       );
       expect(selected).toBeDefined();
       const packages = [
-        ...(declarations ? ["@anthropic-ai/claude-agent-sdk"] : []),
         "@anthropic-ai/vertex-sdk",
         "@slack/bolt",
         "@slack/web-api",
@@ -651,8 +674,9 @@ describe("tsdown config", () => {
         (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
       ),
     ).toEqual(["src/index.ts"]);
-    expect(declarationSources).not.toContain("extensions/anthropic/agent-sdk-user-input.ts");
-    expect(declarationSources).not.toContain("extensions/anthropic/agent-sdk-runtime-helpers.ts");
+    expect(
+      declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
+    ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);
     expect(declarationSources.every((source) => /\.[cm]?tsx?$/u.test(source))).toBe(true);
     expect(new Set(declarationSources).size).toBe(declarationSources.length);
   });
@@ -678,11 +702,15 @@ describe("tsdown config", () => {
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
+    const launcherConfig = configs.find(isWorkerGitHubExecLauncherConfig);
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
     });
     expect(receiverConfig?.entry).toEqual({
       "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
+    });
+    expect(launcherConfig?.entry).toEqual({
+      "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts",
     });
     const packageVersion = (
       JSON.parse(fs.readFileSync("package.json", "utf8")) as {
@@ -691,6 +719,7 @@ describe("tsdown config", () => {
     ).version;
     expect(workerConfig?.define).toEqual({
       WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
     });
     expect(workerConfig?.alias).toMatchObject({
@@ -711,17 +740,19 @@ describe("tsdown config", () => {
       codeSplitting: false,
       assetFileNames: "worker/[name][extname]",
     });
-    expect(receiverConfig?.define).toBeUndefined();
-    expect(receiverConfig?.alias).toBeUndefined();
-    expect(receiverConfig?.plugins).toBeUndefined();
-    expect(receiverConfig?.outputOptions).toEqual({ codeSplitting: false });
+    for (const config of [receiverConfig, launcherConfig]) {
+      expect(config?.define).toBeUndefined();
+      expect(config?.alias).toBeUndefined();
+      expect(config?.plugins).toBeUndefined();
+      expect(config?.outputOptions).toEqual({ codeSplitting: false });
+    }
 
     const context = {
       format: "es",
       options: {},
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
-    for (const config of [workerConfig, receiverConfig]) {
+    for (const config of [workerConfig, receiverConfig, launcherConfig]) {
       expect(config?.dts).toBe(false);
       expect(config?.outDir).toBe("dist");
       expect(config?.shims).toBe(true);

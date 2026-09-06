@@ -5,6 +5,13 @@ import { parseFlagArgs, stringFlag } from "./arg-utils.mts";
 
 type ReportCliArgs = { jsonPath: string | null; markdownPath: string | null; rootDir: string };
 
+export const REPORT_CLI_PARSE_OPTIONS = {
+  duplicateOptionMessage: (flag: string) => `${flag} was provided more than once.`,
+  onUnhandledArg(arg: string) {
+    throw new Error(`Unsupported argument: ${arg}`);
+  },
+};
+
 export function parseReportCliArgs(argv: string[]) {
   const options: ReportCliArgs = {
     rootDir: process.cwd(),
@@ -23,12 +30,7 @@ export function parseReportCliArgs(argv: string[]) {
       rejectShortOptions: true,
     }),
   );
-  return parseFlagArgs(argv, options, flagSpecs, {
-    duplicateOptionMessage: (flag: string) => `${flag} was provided more than once.`,
-    onUnhandledArg(arg: string) {
-      throw new Error(`Unsupported argument: ${arg}`);
-    },
-  });
+  return parseFlagArgs(argv, options, flagSpecs, REPORT_CLI_PARSE_OPTIONS);
 }
 
 /**

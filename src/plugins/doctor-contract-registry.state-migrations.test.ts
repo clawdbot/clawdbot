@@ -25,6 +25,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorStateMigrationEntries: typeof import("./doctor-contract-registry.js").listPluginDoctorStateMigrationEntries;
+let resolveLivePluginDoctorStateMigrationInventory: typeof import("./doctor-contract-registry.js").resolveLivePluginDoctorStateMigrationInventory;
 let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
@@ -41,8 +42,11 @@ afterEach(() => {
 describe("doctor-contract-registry state migrations", () => {
   beforeAll(async () => {
     vi.resetModules();
-    ({ listPluginDoctorLegacyConfigRules, listPluginDoctorStateMigrationEntries } =
-      await import("./doctor-contract-registry.js"));
+    ({
+      listPluginDoctorLegacyConfigRules,
+      listPluginDoctorStateMigrationEntries,
+      resolveLivePluginDoctorStateMigrationInventory,
+    } = await import("./doctor-contract-registry.js"));
     ({
       clearPluginDoctorContractRegistryCache,
       setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
@@ -60,6 +64,49 @@ describe("doctor-contract-registry state migrations", () => {
     }
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
+  });
+
+  it("freezes dynamic and declared live actions in selected registry order", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      `module.exports = {
+  stateMigrations: [{
+    id: "dynamic-action",
+    label: "Dynamic action",
+    detectLegacyState: () => null,
+    migrateLegacyState: () => ({ changes: [], warnings: [] }),
+  }],
+};\n`,
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "dynamic-owner",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: [],
+          doctorContract: { stateMigrations: true },
+        },
+        {
+          id: "declared-owner",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: [],
+          doctorContract: { stateMigrations: [{ id: "declared-action" }] },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} }).descriptors,
+    ).toEqual([
+      { pluginId: "dynamic-owner", id: "dynamic-action" },
+      { pluginId: "declared-owner", id: "declared-action" },
+    ]);
   });
 
   it("loads a direct legacy detector without package or entry feature hints", async () => {

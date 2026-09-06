@@ -1,11 +1,12 @@
 // Covers gateway update runner scenarios.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import * as processExec from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
@@ -18,8 +19,10 @@ import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
   runGatewayUpdate,
+  runGatewayUpdatePreflight,
 } from "./update-runner.js";
 
+const { runCommandWithTimeout } = processExec;
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -157,15 +160,15 @@ describe("runGatewayUpdate", () => {
   async function createStableTagRunner(params: {
     stableTag: string;
     onDoctor?: () => Promise<void>;
-    onBuild?: () => Promise<void>;
-    onUiBuild?: (count: number) => Promise<void>;
+    onBuild?: (root: string) => Promise<void>;
+    onUiBuild?: (root: string, count: number) => Promise<void>;
   }) {
     const calls: string[] = [];
     let uiBuildCount = 0;
     const doctorNodePath = await resolveStableNodePath(process.execPath);
     const doctorKey = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
 
-    const runCommand = async (argv: string[]) => {
+    const runCommand = async (argv: string[], options?: TestCommandOptions) => {
       const key = argv.join(" ");
       calls.push(key);
 
@@ -182,12 +185,12 @@ describe("runGatewayUpdate", () => {
         return { stdout: PNPM_VERSION, stderr: "", code: 0 };
       }
       if (key === "pnpm build") {
-        await params.onBuild?.();
+        await params.onBuild?.(options?.cwd ?? tempDir);
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === "pnpm ui:build") {
         uiBuildCount += 1;
-        await params.onUiBuild?.(uiBuildCount);
+        await params.onUiBuild?.(options?.cwd ?? tempDir, uiBuildCount);
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === doctorKey) {
@@ -384,6 +387,7 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
       [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
+      [`git -C ${tempDir} rev-parse ${stableTag}^{commit}`]: { stdout: "b".repeat(40) },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
     };
   }
@@ -480,11 +484,8 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
         return toCommandResult({ stdout: "main" });
       }
-      if (
-        !targetRef &&
-        key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
-      ) {
-        return toCommandResult({ stdout: "origin/main" });
+      if (!targetRef && key === `git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`) {
+        return toCommandResult({ stdout: "refs/remotes/origin/main" });
       }
       if (!targetRef && key === `git -C ${tempDir} rev-parse @{upstream}`) {
         return toCommandResult({ stdout: targetSha });
@@ -536,7 +537,11 @@ describe("runGatewayUpdate", () => {
     );
     await fs.writeFile(path.join(sourceRoot, "openclaw.mjs"), "export {};\n");
     await fs.writeFile(path.join(sourceRoot, "README.md"), "base\n");
-    await runRealGit(sourceRoot, "add", "package.json", "openclaw.mjs", "README.md");
+    await fs.writeFile(
+      path.join(sourceRoot, ".gitignore"),
+      "dist/\nnode_modules/\n.artifacts/\n*.tmp\n",
+    );
+    await runRealGit(sourceRoot, "add", ".gitignore", "package.json", "openclaw.mjs", "README.md");
     await runRealGit(sourceRoot, "commit", "-m", "base");
     const baseSha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
     await runRealGit(path.dirname(localRoot), "clone", "--quiet", sourceRoot, localRoot);
@@ -552,9 +557,85 @@ describe("runGatewayUpdate", () => {
     return { sourceRoot, localRoot, baseSha, targetSha };
   }
 
+  it.each(["build", "locked worktree creation"] as const)(
+    "cancels preflight %s and removes its Git worktree before returning",
+    async (phase) => {
+      const { localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
+      const controller = new AbortController();
+      const stopped = new Error("preflight owner stopped");
+      let buildResult: Awaited<ReturnType<typeof runCommandWithTimeout>> | undefined;
+      let worktree: string | undefined;
+      const commandSpy = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockImplementation(async (argv, optionsOrTimeout) => {
+          const options =
+            typeof optionsOrTimeout === "number"
+              ? { timeoutMs: optionsOrTimeout }
+              : optionsOrTimeout;
+          if (argv[0] !== "pnpm") {
+            const result = await runCommandWithTimeout(argv, options);
+            if (
+              phase === "locked worktree creation" &&
+              argv.includes("worktree") &&
+              argv.includes("add")
+            ) {
+              worktree = argv.at(-2);
+              assert.ok(worktree);
+              // Git can retain this lock when creation is forcibly terminated during checkout.
+              await runRealGit(worktree, "worktree", "lock", "--reason", "initializing", worktree);
+              controller.abort(stopped);
+            }
+            return result;
+          }
+          if (argv[1] === "build") {
+            worktree = options.cwd;
+            buildResult = await runCommandWithTimeout(
+              [
+                process.execPath,
+                "-e",
+                'process.stdout.write("ready\\n"); setInterval(() => {}, 1000)',
+              ],
+              { ...options, onOutputChunk: () => controller.abort(stopped) },
+            );
+            return buildResult;
+          }
+          return {
+            stdout: argv[1] === "--version" ? PNPM_VERSION : "",
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+            noOutputTimedOut: false,
+          };
+        });
+      try {
+        await expect(
+          runGatewayUpdatePreflight(
+            localRoot,
+            5000,
+            { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
+            controller.signal,
+          ),
+        ).rejects.toBe(stopped);
+      } finally {
+        commandSpy.mockRestore();
+      }
+      if (phase === "build") {
+        expect(buildResult?.termination).toBe("signal");
+      }
+      assert.ok(worktree);
+      expect(await pathExists(path.dirname(worktree))).toBe(false);
+      expect(await runRealGit(localRoot, "worktree", "list", "--porcelain")).not.toContain(
+        worktree,
+      );
+      expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
+    },
+  );
+
   function createRealGitUpdateRunner(params: { finalHead?: { root: string; sha: string } } = {}) {
     let headReads = 0;
-    return async (argv: string[], options: { cwd?: string; timeoutMs?: number }) => {
+    return async (argv: string[], options: TestCommandOptions) => {
       if (argv[0] === "git") {
         const finalHead = params.finalHead;
         if (
@@ -564,12 +645,13 @@ describe("runGatewayUpdate", () => {
           argv[4] === "HEAD"
         ) {
           headReads += 1;
-          if (headReads === 2) {
+          if (headReads === 3) {
             return toCommandResult({ stdout: finalHead.sha });
           }
         }
         return await runCommandWithTimeout(argv, {
           cwd: options.cwd,
+          env: options.env,
           timeoutMs: options.timeoutMs ?? 5000,
         });
       }
@@ -583,6 +665,88 @@ describe("runGatewayUpdate", () => {
         await fs.writeFile(path.join(uiDir, "index.html"), "ok\n");
       }
       return toCommandResult();
+    };
+  }
+
+  function withGitCandidateFixture(
+    runCommand: (argv: string[], options?: TestCommandOptions) => Promise<CommandResult>,
+  ) {
+    const heads = new Map<string, string>();
+    const worktrees = new Set<string>();
+    let activated = false;
+    return async (argv: string[], options?: TestCommandOptions): Promise<CommandResult> => {
+      const executable = argv[0];
+      if (!executable) {
+        throw new Error("Candidate fixture received an empty command");
+      }
+      const root = executable === "git" && argv[1] === "-C" ? argv[2] : options?.cwd;
+      if (
+        root &&
+        worktrees.has(root) &&
+        ["pnpm", "npm", "bun"].includes(executable) &&
+        argv.includes("build")
+      ) {
+        const dist = path.join(root, "dist");
+        await fs.mkdir(path.join(dist, "control-ui"), { recursive: true });
+        await fs.writeFile(path.join(dist, "entry.js"), "export {};\n");
+        // Default fake builds include the UI; tests of missing assets override this output.
+        if (!(await pathExists(path.join(dist, "control-ui", "index.html")))) {
+          await fs.writeFile(path.join(dist, "control-ui", "index.html"), "ready\n");
+        }
+      }
+      const result = await runCommand(argv, options);
+      if (result.code !== 0) {
+        return result;
+      }
+      if (executable === "git" && root) {
+        const command = argv[3];
+        if (command === "worktree" && argv[4] === "add") {
+          const candidate = argv[6];
+          const revision = argv[7];
+          if (!candidate || !revision) {
+            throw new Error("Candidate worktree creation requires a path and revision");
+          }
+          worktrees.add(candidate);
+          heads.set(candidate, revision);
+          await fs.mkdir(candidate, { recursive: true });
+          for (const file of ["package.json", "openclaw.mjs"]) {
+            const destination = path.join(candidate, file);
+            if (!(await pathExists(destination)) && (await pathExists(path.join(tempDir, file)))) {
+              await fs.copyFile(path.join(tempDir, file), destination);
+            }
+          }
+        }
+        if (command === "checkout" || command === "rebase") {
+          const revision = argv.at(-1);
+          if (!revision || revision === command) {
+            throw new Error("Candidate checkout or rebase requires a revision");
+          }
+          if (revision !== "--abort") {
+            heads.set(root, revision);
+            activated ||= root === tempDir;
+          }
+        }
+        if (command === "reset" && argv.length === 6) {
+          const revision = argv[5];
+          if (!revision) {
+            throw new Error("Candidate reset requires a revision");
+          }
+          heads.set(root, revision);
+        }
+        if (command === "rev-parse" && argv[4] === "HEAD") {
+          if (worktrees.has(root) || (root === tempDir && activated)) {
+            return toCommandResult({ stdout: heads.get(root) });
+          }
+          heads.set(root, result.stdout.trim());
+        }
+        if (command === "rev-parse" && argv[4]?.endsWith("^{commit}") && !result.stdout) {
+          return toCommandResult({ stdout: argv[4].slice(0, -"^{commit}".length) });
+        }
+        if (command === "ls-files" && worktrees.has(root)) {
+          return toCommandResult({ stdout: "dist/\0" });
+        }
+      }
+      return result;
     };
   }
 
@@ -607,9 +771,40 @@ describe("runGatewayUpdate", () => {
       } | void>;
     },
   ) {
+    // These callers script Git responses, including clone's filesystem result.
+    // Native Git cases call runGatewayUpdate directly and never use this adapter.
+    const mirrors = new Map<string, string>();
+    const scriptedCommand = async (
+      argv: string[],
+      runOptions: Parameters<typeof runCommand>[1],
+    ) => {
+      if (argv[0] === "git" && argv[1] === "-C") {
+        const commandRoot = argv[2];
+        assert.ok(commandRoot);
+        if (argv[3] === "clone" && argv[4] === "--mirror") {
+          const result = await runCommand(argv, runOptions);
+          if (result.code === 0) {
+            const mirror = argv.at(-1);
+            assert.ok(mirror);
+            await fs.mkdir(mirror);
+            mirrors.set(mirror, commandRoot);
+          }
+          return result;
+        }
+        const mirror = argv[3]?.startsWith("--git-dir=") ? argv[3].slice(10) : commandRoot;
+        const original = mirrors.get(mirror);
+        if (original) {
+          return runCommand(
+            ["git", "-C", original, ...argv.slice(argv[3]?.startsWith("--git-dir=") ? 4 : 3)],
+            runOptions,
+          );
+        }
+      }
+      return runCommand(argv, runOptions);
+    };
     return runGatewayUpdate({
       cwd: options?.cwd ?? tempDir,
-      runCommand: async (argv, runOptions) => runCommand(argv, runOptions),
+      runCommand: withGitCandidateFixture(scriptedCommand),
       timeoutMs: 5000,
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
@@ -820,7 +1015,7 @@ describe("runGatewayUpdate", () => {
     const beforeGitMutation = vi.fn<() => Promise<void>>();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+      [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
         code: 1,
         stderr: "no upstream configured",
       },
@@ -876,8 +1071,8 @@ describe("runGatewayUpdate", () => {
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-        stdout: "origin/main",
+      [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+        stdout: "refs/remotes/origin/main",
       },
       [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
       [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -913,7 +1108,7 @@ describe("runGatewayUpdate", () => {
     expect(cleanupIndex).toBeGreaterThanOrEqual(0);
     expect(calls.indexOf("beforeGitMutation")).toBeGreaterThan(cleanupIndex);
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
-      calls.indexOf(`git -C ${tempDir} rebase ${upstreamSha}`),
+      calls.indexOf(`git -C ${tempDir} checkout -B main ${upstreamSha}`),
     );
   });
 
@@ -965,8 +1160,8 @@ describe("runGatewayUpdate", () => {
     const { runner } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-        stdout: "origin/main",
+      [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+        stdout: "refs/remotes/origin/main",
       },
       [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
       [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -993,7 +1188,7 @@ describe("runGatewayUpdate", () => {
       ...buildGitWorktreeProbeResponses({ branch: "feature" }),
       [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} show-ref --verify refs/heads/main`]: { stdout: "main\n" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`]: {
+      [`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`]: {
         code: 1,
         stderr: "no upstream configured",
       },
@@ -1007,9 +1202,7 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("no-upstream");
     expect(beforeGitMutation).not.toHaveBeenCalled();
     expect(calls).toContain(`git -C ${tempDir} show-ref --verify refs/heads/main`);
-    expect(calls).toContain(
-      `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`,
-    );
+    expect(calls).toContain(`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`);
     expect(calls).not.toContain(`git -C ${tempDir} remote`);
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
     expect(calls).not.toContain(`git -C ${tempDir} checkout main`);
@@ -1032,7 +1225,7 @@ describe("runGatewayUpdate", () => {
       if (response) {
         return toCommandResult(response);
       }
-      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`) {
+      if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
         return {
           stdout: "",
           stderr: "no upstream configured for branch 'main'",
@@ -1083,9 +1276,7 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain(
-      `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`,
-    );
+    expect(calls).toContain(`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`);
     expect(calls).toContain(`git -C ${tempDir} remote`);
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
     expect(calls).toContain(`git -C ${tempDir} show-ref --verify refs/heads/main`);
@@ -1121,7 +1312,7 @@ describe("runGatewayUpdate", () => {
       if (response) {
         return toCommandResult(response);
       }
-      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`) {
+      if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
         return {
           stdout: "",
           stderr: "no upstream configured for branch 'main'",
@@ -1280,79 +1471,33 @@ describe("runGatewayUpdate", () => {
   );
 
   it.each([
-    { operation: "rebase", rollbackSucceeds: true },
-    { operation: "checkout", rollbackSucceeds: true },
-    { operation: "rebase", rollbackSucceeds: false },
-    { operation: "checkout", rollbackSucceeds: false },
+    { command: "pnpm install", diagnostic: "ERR_PNPM_NETWORK" },
+    { command: "pnpm build", diagnostic: "candidate build failed" },
   ])(
-    "verifies rollback after failed $operation: restored=$rollbackSucceeds",
-    async ({ operation, rollbackSucceeds }) => {
-      await setupGitCheckout();
-      const stableTag = "v1.0.1";
+    "leaves the live checkout untouched when candidate $command fails",
+    async ({ command, diagnostic }) => {
+      await setupGitPackageManagerFixture();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
       const { runner, calls } = createRunner({
-        ...buildStableTagResponses(stableTag),
-        ...buildGitWorktreeProbeResponses(),
-        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-          stdout: "origin/main",
-        },
-        [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-        [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: "upstream123" },
-        [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: { stdout: "upstream123\n" },
-        [`git -C ${tempDir} rebase upstream123`]: { code: 1, stderr: "conflict" },
-        [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
-        [`git -C ${tempDir} checkout --detach ${stableTag}`]: {
-          code: 1,
-          stderr: "checkout failed",
-        },
-        [`git -C ${tempDir} reset --hard abc123`]: {
-          code: rollbackSucceeds ? 0 : 1,
-          stderr: rollbackSucceeds ? "" : "source restoration failed",
-        },
+        ...buildStableTagResponses("v1.0.1"),
+        [command]: { code: 1, stderr: diagnostic },
       });
-
-      const result = await runWithRunner(runner, {
-        channel: operation === "rebase" ? "dev" : "stable",
-      });
-
-      expect(result.status).toBe("error");
-      expect(result.reason).toBe(`${operation}-failed`);
-      expect(result.recovery).toEqual(
-        rollbackSucceeds
-          ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
-          : { serviceRestartSafe: false, reason: "source-rollback-failed" },
-      );
-      if (operation === "rebase") {
-        expect(calls).toContain(`git -C ${tempDir} rebase --abort`);
-      }
-      expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+      const result = await runWithRunner(runner, { channel: "stable", beforeGitMutation });
+      expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "git rollback verify HEAD", exitCode: 0 }),
+        expect.objectContaining({ exitCode: 1, stderrTail: diagnostic }),
       );
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.startsWith(`git -C ${tempDir} checkout `))).toBe(false);
+      expect(calls.some((call) => call.startsWith(`git -C ${tempDir} reset `))).toBe(false);
+      expect(await fs.readFile(path.join(tempDir, "package.json"), "utf8")).toContain(
+        '"version":"1.0.0"',
+      );
+      expect(
+        await fs.readFile(path.join(tempDir, "dist", "control-ui", "index.html"), "utf8"),
+      ).toBe("<html></html>");
     },
   );
-
-  it("returns error and stops early when deps install fails", async () => {
-    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
-    const stableTag = "v1.0.1-1";
-    const { runner, calls } = createRunner({
-      ...buildStableTagResponses(stableTag),
-      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
-      "pnpm install": { code: 1, stderr: "ERR_PNPM_NETWORK" },
-    });
-
-    const result = await runWithRunner(runner, { channel: "stable" });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("deps-install-failed");
-    expect(calls).not.toContain("pnpm build");
-    expect(calls).not.toContain("pnpm ui:build");
-    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
-    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
-    expect(calls.indexOf(`git -C ${tempDir} reset --hard`)).toBeLessThan(
-      calls.indexOf(`git -C ${tempDir} checkout --force main`),
-    );
-  });
 
   it("rejects extended-stable Git updates before checkout mutation", async () => {
     await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
@@ -1623,7 +1768,7 @@ describe("runGatewayUpdate", () => {
             step.name === `preflight ${failedPreparation} (upstream)` && step.exitCode === 1,
         ),
       ).toBe(true);
-      expect(calls).toContain(`git -C ${tempDir} rebase older123`);
+      expect(calls).toContain(`git -C ${tempDir} checkout -B main older123`);
     },
   );
 
@@ -1737,9 +1882,15 @@ describe("runGatewayUpdate", () => {
     expect(preflightInstallCommands).toEqual(["pnpm install"]);
   });
 
-  it.runIf(process.platform !== "win32").each([false, true])(
-    "stages dev preflight in artifact storage without dirtying the checkout (redirected: %s)",
-    async (redirected) => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(
+      [false, true].flatMap((redirected) =>
+        [false, true].map((admission) => ({ redirected, admission })),
+      ),
+    )(
+    "stages dev preflight without dirtying the checkout (redirected: $redirected, admission: $admission)",
+    async ({ redirected, admission }) => {
       const parent = path.join(tempDir, "parent");
       const checkout = path.join(parent, "checkout");
       const alias = path.join(tempDir, "checkout-link");
@@ -1783,6 +1934,7 @@ describe("runGatewayUpdate", () => {
         const result = await runGatewayUpdate({
           cwd: alias,
           channel: "dev",
+          prepareGitExposure: async () => {},
           devTarget: { mode: "detached", ref: targetSha },
           timeoutMs: 5000,
           runCommand: async (argv, options) => {
@@ -1801,21 +1953,32 @@ describe("runGatewayUpdate", () => {
             }
             return runner(argv, options);
           },
-          beforeGitMutation: async () => {
-            for (const root of preflightRoots) {
-              expect(await pathExists(root)).toBe(false);
-            }
-            expect(await runRealGit(checkout, "status", "--porcelain")).toBe("");
-          },
+          ...(admission
+            ? {
+                inspectGitTarget: async () => undefined,
+                beforeGitMutation: async () => {
+                  for (const root of preflightRoots) {
+                    expect(await pathExists(root)).toBe(false);
+                  }
+                  expect(await runRealGit(checkout, "status", "--porcelain")).toBe("");
+                },
+              }
+            : {}),
         });
         expect(result.status).toBe("ok");
         expect(stagedStatuses).toEqual([initialStatus]);
         expect(preflightRoots).toHaveLength(1);
         for (const root of preflightRoots) {
-          expect(root.startsWith(`${artifacts}${path.sep}`)).toBe(true);
+          expect(root.startsWith(`${artifacts}${path.sep}`)).toBe(!admission);
+          if (admission) {
+            expect(root.startsWith(`${checkout}${path.sep}`)).toBe(false);
+          }
+          expect(await pathExists(root)).toBe(false);
         }
         expect(modes).toEqual([0o700]);
-        expect(devices).toEqual([artifactDevice]);
+        if (!admission) {
+          expect(devices).toEqual([artifactDevice]);
+        }
         expect((await fs.stat(checkout)).mode & 0o777).toBe(0o755);
         expect((await fs.stat(parent)).mode & 0o777).toBe(0o555);
         expect((await fs.stat(artifacts)).mode & 0o777).toBe(0o750);
@@ -1838,11 +2001,19 @@ describe("runGatewayUpdate", () => {
     "returns a structured preflight failure when $operation rejects with $code",
     async ({ operation, code, reason }) => {
       await setupGitPackageManagerFixture();
-      const { runCommand } = createDevGitRunner();
       const beforeGitMutation = vi.fn<() => Promise<void>>();
-      const allocator = vi
-        .spyOn(fs, operation)
-        .mockRejectedValueOnce(Object.assign(new Error("preflight allocation failed"), { code }));
+      const allocator = vi.spyOn(fs, operation);
+      const { runCommand } = createDevGitRunner({
+        onCommand: (key) => {
+          // Inject at the worktree allocator, after private target inspection setup.
+          if (key === `git -C ${tempDir} rev-list --max-count=10 upstream123`) {
+            allocator.mockRejectedValueOnce(
+              Object.assign(new Error("preflight allocation failed"), { code }),
+            );
+          }
+          return undefined;
+        },
+      });
       try {
         await expect(
           runWithCommand(runCommand, { channel: "dev", beforeGitMutation }),
@@ -1951,7 +2122,7 @@ describe("runGatewayUpdate", () => {
       }
       expect(calls).toContain(`git -C ${tempDir} worktree prune`);
       if (!capacity) {
-        expect(calls).toContain(`git -C ${tempDir} rebase older123`);
+        expect(calls).toContain(`git -C ${tempDir} checkout -B main older123`);
       }
     },
   );
@@ -2027,8 +2198,8 @@ describe("runGatewayUpdate", () => {
       const responses = {
         ...buildGitWorktreeProbeResponses(),
         [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-          stdout: "origin/main",
+        [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+          stdout: "refs/remotes/origin/main",
         },
         [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
         [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -2082,7 +2253,7 @@ describe("runGatewayUpdate", () => {
     );
     expect(firstManagerProbeIndex).toBeGreaterThanOrEqual(0);
     expect(selectedCheckoutIndex).toBeGreaterThan(firstManagerProbeIndex);
-    expect(calls).toContain(`git -C ${tempDir} rebase ${selectedSha}`);
+    expect(calls).toContain(`git -C ${tempDir} checkout -B main ${selectedSha}`);
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${upstreamSha}`);
   });
 
@@ -2108,8 +2279,8 @@ describe("runGatewayUpdate", () => {
       const responses = {
         ...buildGitWorktreeProbeResponses(),
         [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
-        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-          stdout: "origin/main",
+        [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
+          stdout: "refs/remotes/origin/main",
         },
         [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
         [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
@@ -2164,66 +2335,34 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${olderSha}`);
   });
 
-  it("cleans and rolls back when a successful build leaves the checkout dirty", async () => {
-    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
-    const stableTag = "v1.0.1-1";
-    const statusCommand = `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`;
-    const { runner, calls } = createRunner({
-      ...buildStableTagResponses(stableTag),
-      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
-      "pnpm install": { stdout: "" },
-      "pnpm build": { stdout: "" },
+  it("rejects a candidate build that changes tracked source before stopping the gateway", async () => {
+    await setupGitPackageManagerFixture();
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+    const diagnostic = " M pnpm-lock.yaml\n?? generated-build-output.tmp";
+    const { runCommand, calls } = createDevGitRunner({
+      onCommand: (key, options, recorded) => {
+        if (
+          options?.cwd !== tempDir &&
+          key.includes(" status --porcelain ") &&
+          recorded.includes("pnpm build")
+        ) {
+          return { stdout: diagnostic };
+        }
+        return undefined;
+      },
     });
-    let statusCheckCount = 0;
-    const runCommand = async (argv: string[]) => {
-      const result = await runner(argv);
-      if (argv.join(" ") === statusCommand && ++statusCheckCount === 2) {
-        return toCommandResult({
-          stdout:
-            " M extensions/browser/chrome-extension/modules/copilot-runtime.js\n?? generated-build-output.tmp",
-        });
-      }
-      return result;
-    };
-
-    const result = await runWithCommand(runCommand, { channel: "stable" });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("build-dirty");
+    const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
+    expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
     expect(result.steps).toContainEqual(
       expect.objectContaining({
-        name: "build clean check",
-        stdoutTail:
-          " M extensions/browser/chrome-extension/modules/copilot-runtime.js\n?? generated-build-output.tmp",
+        name: "preflight candidate clean check (upstream)",
+        exitCode: 1,
+        stdoutTail: diagnostic,
       }),
     );
-    expect(calls.filter((call) => call === statusCommand)).toHaveLength(3);
-    expect(calls).not.toContain("pnpm ui:build");
-    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
-    expect(calls).toContain(`git -C ${tempDir} clean -fd -e dist/control-ui/`);
-    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
-  });
-
-  it("returns error and stops early when build fails", async () => {
-    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
-    const stableTag = "v1.0.1-1";
-    const { runner, calls } = createRunner({
-      ...buildStableTagResponses(stableTag),
-      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
-      "pnpm install": { stdout: "" },
-      "pnpm build": { code: 1, stderr: "tsc: error TS2345" },
-    });
-
-    const result = await runWithRunner(runner, { channel: "stable" });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("build-failed");
-    expect(calls).toContain("pnpm install");
-    expect(calls).not.toContain("pnpm ui:build");
-    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
-    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.startsWith(`git -C ${tempDir} checkout `))).toBe(false);
+    expect(calls.some((call) => call.startsWith(`git -C ${tempDir} reset `))).toBe(false);
   });
 
   it("retains candidate source when the final HEAD verification probe fails after Doctor", async () => {
@@ -2246,7 +2385,7 @@ describe("runGatewayUpdate", () => {
       const key = argv.join(" ");
       if (key === `git -C ${tempDir} rev-parse HEAD`) {
         revParseHeadCount += 1;
-        if (revParseHeadCount === 2) {
+        if (revParseHeadCount === 3) {
           return toCommandResult({ code: 1, stderr: "fatal: not a valid object name HEAD" });
         }
       }
@@ -2282,8 +2421,9 @@ describe("runGatewayUpdate", () => {
     const result = await runWithRunner(runner, { channel: "beta" });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
-    expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
+    expect(calls).toContain(`git -C ${tempDir} rev-parse ${stableTag}^{commit}`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${"b".repeat(40)}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse ${betaTag}^{commit}`);
   });
 
   it("uses stable tag for stable channel even when a newer alpha tag sorts first", async () => {
@@ -2381,7 +2521,7 @@ describe("runGatewayUpdate", () => {
 
     const result = await runGatewayUpdate({
       cwd: tempDir,
-      runCommand: async (argv, _options) => runCommand(argv),
+      runCommand: withGitCandidateFixture(runCommand),
       timeoutMs: 5000,
       channel: "stable",
     });
@@ -2462,7 +2602,7 @@ describe("runGatewayUpdate", () => {
     expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK_MODE).toBe("throttled");
   });
 
-  it("retries windows pnpm git installs with --ignore-scripts for dev updates", async () => {
+  it("installs Windows candidate dependencies with scripts disabled before activation", async () => {
     await setupGitPackageManagerFixture();
     let preflightInstallAttempts = 0;
     let preflightIgnoreScriptsAttempts = 0;
@@ -2496,11 +2636,11 @@ describe("runGatewayUpdate", () => {
       expect(result.status).toBe("ok");
       expect(preflightInstallAttempts).toBe(0);
       expect(preflightIgnoreScriptsAttempts).toBe(1);
-      expect(finalInstallAttempts).toBe(1);
+      expect(finalInstallAttempts).toBe(0);
       expect(result.steps.map((step) => step.name)).toContain(
         "preflight deps install (ignore scripts) (upstream)",
       );
-      expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
+      expect(result.steps.map((step) => step.name)).not.toContain("deps install (ignore scripts)");
       expect(calls).toContain("pnpm install --ignore-scripts");
       expect(calls).not.toContain("pnpm lint");
     });
@@ -2629,7 +2769,7 @@ describe("runGatewayUpdate", () => {
       expectedNodeOptions: "--max-old-space-size=16384",
     },
   ])(
-    "marks direct dev builds while preserving heap/cache/override ($skipDts)",
+    "marks candidate builds while preserving heap/cache/override ($skipDts)",
     async ({ nodeOptions, skipDts, expectedNodeOptions }) => {
       await setupGitPackageManagerFixture();
       const buildEnvs: NodeJS.ProcessEnv[] = [];
@@ -2652,7 +2792,7 @@ describe("runGatewayUpdate", () => {
         async () => {
           const result = await runWithCommand(runCommand, { channel: "dev" });
           expect(result.status).toBe("ok");
-          expect(buildEnvs).toHaveLength(2);
+          expect(buildEnvs).toHaveLength(1);
           for (const env of buildEnvs) {
             expect(env).toMatchObject({
               OPENCLAW_UPDATE_IN_PROGRESS: "1",
@@ -2668,7 +2808,7 @@ describe("runGatewayUpdate", () => {
           expect(process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
         },
       );
-      expect(calls.filter((call) => call === "pnpm build")).toHaveLength(2);
+      expect(calls.filter((call) => call === "pnpm build")).toHaveLength(1);
     },
   );
 
@@ -3548,306 +3688,86 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 
-  it.each([
-    {
-      failure: "build",
-      bundle: "complete",
-      rollbackInstallFails: false,
-      missingRollbackStartupAsset: false,
-      rollbackBuildStatus: null,
-      serviceRestartSafe: true,
-    },
-    {
-      failure: "build",
-      bundle: "incomplete",
-      rollbackInstallFails: false,
-      missingRollbackStartupAsset: true,
-      rollbackBuildStatus: null,
-      serviceRestartSafe: false,
-    },
-    {
-      failure: "build",
-      bundle: "dirty rollback build",
-      rollbackInstallFails: false,
-      missingRollbackStartupAsset: false,
-      rollbackBuildStatus: " M pnpm-lock.yaml\n",
-      serviceRestartSafe: false,
-    },
-    {
-      failure: "build",
-      bundle: "untracked rollback output",
-      rollbackInstallFails: false,
-      missingRollbackStartupAsset: false,
-      rollbackBuildStatus: "?? generated.tmp\n",
-      serviceRestartSafe: false,
-    },
-    {
-      bundle: "complete after partial dependency replacement",
-      rollbackInstallFails: false,
-      failure: "install",
-      missingRollbackStartupAsset: false,
-      rollbackBuildStatus: null,
-      serviceRestartSafe: true,
-    },
-    {
-      bundle: "unrestored dependencies",
-      failure: "install",
-      rollbackInstallFails: true,
-      missingRollbackStartupAsset: false,
-      rollbackBuildStatus: null,
-      serviceRestartSafe: false,
-    },
-    ...["doctor-error", "doctor-throw", "post-doctor-ui", "post-doctor-head"].map((failure) => ({
-      failure,
-      bundle: "candidate retained",
-      rollbackInstallFails: false,
-      missingRollbackStartupAsset: false,
-      rollbackBuildStatus: null,
-      serviceRestartSafe: false,
-    })),
-  ])(
-    "Git recovery boundary: $failure with $bundle startup bundle",
-    async ({
-      failure,
-      missingRollbackStartupAsset,
-      rollbackBuildStatus,
-      serviceRestartSafe,
-      rollbackInstallFails,
-    }) => {
-      await setupGitCheckout({ packageManager: "pnpm@11.22.0" });
-      const beforeSha = "a".repeat(40);
-      const targetSha = "b".repeat(40);
-      const stableTag = "v1.0.1-1";
-      let currentHead = beforeSha;
-      let buildCount = 0;
+  it.each(["doctor-error", "doctor-throw", "post-doctor-head"] as const)(
+    "retains the candidate after the migration boundary: %s",
+    async (failure) => {
+      await setupGitPackageManagerFixture();
+      const stateFile = path.join(await fixtureRootTracker.make("synthetic-state"), "canary");
+      await fs.writeFile(stateFile, "original-state");
       let doctorRan = false;
-      const canary = path.join(await fixtureRootTracker.make("synthetic-state"), "canary");
-      await fs.writeFile(canary, "original-state");
-      const calls: string[] = [];
-      const buildEnvs: NodeJS.ProcessEnv[] = [];
-      const managerVersions: string[] = [];
-      const statusCommand = `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`;
+      const stableTag = "v1.0.1";
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
-      const dependencyPath = path.join(tempDir, "node_modules", "update-dependency.cjs");
-      await fs.mkdir(path.dirname(dependencyPath), { recursive: true });
-      const writeDependency = (head: string) =>
-        fs.writeFile(dependencyPath, `module.exports = ${JSON.stringify(head)};\n`, "utf8");
-      await writeDependency(beforeSha);
-      const writeRuntime = async (head: string) => {
-        const distRoot = path.join(tempDir, "dist");
-        const startupAsset = path.join(distRoot, "control-ui", "assets", "startup.js");
-        await fs.mkdir(path.dirname(startupAsset), { recursive: true });
-        if (missingRollbackStartupAsset && head === beforeSha) {
-          await fs.rm(startupAsset, { force: true });
-        } else {
-          await fs.writeFile(startupAsset, "export {};\n", "utf8");
-        }
-        await Promise.all([
-          fs.writeFile(path.join(distRoot, "entry.js"), "export {};\n", "utf8"),
-          fs.writeFile(
-            path.join(distRoot, "build-info.json"),
-            `${JSON.stringify({ commit: head, version: head === beforeSha ? "1.0.0" : "1.0.1", buildId: head === beforeSha ? "original-built-runtime" : "candidate-built-runtime" })}\n`,
-            "utf8",
-          ),
-          fs.writeFile(path.join(distRoot, ".buildstamp"), `${JSON.stringify({ head })}\n`, "utf8"),
-          fs.writeFile(
-            path.join(distRoot, ".runtime-postbuildstamp"),
-            `${JSON.stringify({ head })}\n`,
-            "utf8",
-          ),
-          fs.writeFile(
-            path.join(distRoot, "control-ui", "index.html"),
-            '<script type="module" src="./assets/startup.js"></script>',
-            "utf8",
-          ),
-        ]);
-      };
-      const runCommand = async (argv: string[], options?: TestCommandOptions) => {
-        const key = argv.join(" ");
-        calls.push(key);
-        if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
-          return toCommandResult({ stdout: tempDir });
-        }
-        if (key === `git -C ${tempDir} rev-parse HEAD`) {
-          return toCommandResult(
-            doctorRan && failure === "post-doctor-head"
-              ? { code: 1, stderr: "HEAD verification failed" }
-              : { stdout: `${currentHead}\n` },
-          );
-        }
-        if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
-          return toCommandResult({ stdout: "main\n" });
-        }
-        if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
-          return toCommandResult({ stdout: `${stableTag}\n` });
-        }
-        if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
-          currentHead = targetSha;
-          await fs.writeFile(
-            path.join(tempDir, "package.json"),
-            JSON.stringify({ name: "openclaw", version: "1.0.1", packageManager: "pnpm@12.0.0" }),
-          );
-          return toCommandResult();
-        }
-        if (key === `git -C ${tempDir} reset --hard ${beforeSha}`) {
-          currentHead = beforeSha;
-          await fs.writeFile(
-            path.join(tempDir, "package.json"),
-            JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@11.22.0" }),
-          );
-          return toCommandResult();
-        }
-        if (key === "pnpm --version") {
-          expect(options?.cwd).toBe(tempDir);
-          const version = currentHead === beforeSha ? "11.22.0" : "12.0.0";
-          managerVersions.push(version);
-          return toCommandResult({ stdout: version });
-        }
-        if (key === "pnpm install") {
-          if (currentHead === beforeSha && rollbackInstallFails) {
-            return toCommandResult({ code: 1, stderr: "rollback dependency install failed" });
+      const { runCommand, calls } = createGitInstallRunner({
+        stableTag,
+        installCommand: "pnpm install",
+        buildCommand: "pnpm build",
+        uiBuildCommand: "pnpm ui:build",
+        doctorCommand,
+        onCommand: async (key, options) => {
+          if (key === "pnpm build") {
+            await fs.writeFile(
+              path.join(options!.cwd!, "dist", "build-info.json"),
+              JSON.stringify({ buildId: "candidate-built-runtime" }),
+            );
           }
-          await writeDependency(currentHead);
-          return toCommandResult(
-            currentHead === targetSha && failure === "install"
-              ? { code: 1, stderr: "install failed after replacing a dependency" }
-              : undefined,
-          );
-        }
-        if (key === "pnpm build") {
-          buildCount += 1;
-          buildEnvs.push(options?.env ?? {});
-          await writeRuntime(currentHead);
-          return toCommandResult(
-            failure === "build" && buildCount === 1
-              ? { code: 1, stderr: "candidate build failed" }
-              : undefined,
-          );
-        }
-        if (key === statusCommand && rollbackBuildStatus && buildCount >= 2) {
-          return toCommandResult({ stdout: rollbackBuildStatus });
-        }
-        if (key === doctorCommand) {
-          doctorRan = true;
-          await fs.writeFile(canary, "candidate-migrated-state");
-          if (failure === "doctor-throw") {
-            throw new Error("doctor crashed after migration");
+          if (
+            doctorRan &&
+            failure === "post-doctor-head" &&
+            key === `git -C ${tempDir} rev-parse HEAD`
+          ) {
+            return { code: 1, stderr: "HEAD verification failed" };
           }
-          if (failure === "post-doctor-ui") {
-            await removeControlUiAssets();
+          if (key === doctorCommand) {
+            doctorRan = true;
+            await fs.writeFile(stateFile, "candidate-migrated-state");
+            if (failure === "doctor-throw") {
+              throw new Error("doctor crashed after migration");
+            }
+            if (failure === "doctor-error") {
+              return { code: 1, stderr: "doctor failed after migration" };
+            }
           }
-          return toCommandResult(
-            failure === "doctor-error"
-              ? { code: 1, stderr: "doctor failed after migration" }
-              : undefined,
-          );
-        }
-        return toCommandResult();
-      };
-
-      const result = await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-          NODE_OPTIONS: "--max-old-space-size=8192",
+          return undefined;
         },
-        async () => {
-          const updateResult = await runWithCommand(runCommand, { channel: "stable" });
-          expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
-          return updateResult;
-        },
-      );
-
-      if (failure !== "build" && failure !== "install") {
-        expect(result).toMatchObject({
-          status: "error",
-          recovery: {
-            serviceRestartSafe: false,
-            reason: "state-migration-started",
-          },
-        });
-        expect(await fs.readFile(canary, "utf8")).toBe("candidate-migrated-state");
-        expect(currentHead).toBe(targetSha);
-        expect(buildCount).toBe(1);
-        expect(managerVersions).toEqual(["12.0.0"]);
-        expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
-        expect(calls.some((call) => call.includes(" reset ") || call.includes(" clean -"))).toBe(
-          false,
-        );
-        expect(
-          JSON.parse(await fs.readFile(path.join(tempDir, "dist/build-info.json"), "utf8")),
-        ).toMatchObject({ commit: targetSha, buildId: "candidate-built-runtime" });
-        return;
-      }
-      const dependency = await runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          "process.stdout.write(require('./node_modules/update-dependency.cjs'))",
-        ],
-        { cwd: tempDir, timeoutMs: 5000 },
-      );
-      expect(dependency.code).toBe(0);
-      expect(dependency.stdout).toBe(rollbackInstallFails ? targetSha : beforeSha);
-      expect(await fs.readFile(canary, "utf8")).toBe("original-state");
-      expect(calls).not.toContain(doctorCommand);
-      expect(managerVersions).toEqual(["12.0.0", "11.22.0"]);
+      });
+      const result = await runWithCommand(runCommand, { channel: "stable" });
       expect(result).toMatchObject({
         status: "error",
-        reason: failure === "install" ? "deps-install-failed" : "build-failed",
-        recovery: serviceRestartSafe
-          ? { serviceRestartSafe: true, version: "1.0.0", buildId: "original-built-runtime" }
-          : {
-              serviceRestartSafe: false,
-              reason: rollbackInstallFails
-                ? "deps-install-failed"
-                : rollbackBuildStatus
-                  ? "rollback-checkout-dirty"
-                  : "runtime-verification-failed",
-            },
+        reason:
+          failure === "doctor-error"
+            ? "doctor-failed"
+            : failure === "doctor-throw"
+              ? "unexpected-error"
+              : "head-verification-failed",
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       });
-      expect(managerVersions).toEqual(["12.0.0", "11.22.0"]);
-      const expectedBuilds = failure === "build" ? 2 : rollbackInstallFails ? 0 : 1;
-      expect(buildCount).toBe(expectedBuilds);
-      expect(buildEnvs).toEqual(
-        Array.from({ length: expectedBuilds }, () =>
-          expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
-        ),
-      );
-      expect(currentHead).toBe(beforeSha);
-      if (!rollbackInstallFails) {
-        expect(
-          JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
-        ).toMatchObject({ commit: beforeSha });
-      }
-      expect(result.steps.at(-1)).toMatchObject({
-        name: "git rollback runtime verify",
-        exitCode: serviceRestartSafe ? 0 : 1,
-      });
-      if (rollbackBuildStatus) {
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({
-            name: "git rollback build clean check",
-            exitCode: 0,
-            stdoutTail: rollbackBuildStatus.trimEnd(),
-          }),
-        );
-      }
-      if (!rollbackInstallFails) {
-        expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
-      }
+      expect(await fs.readFile(stateFile, "utf8")).toBe("candidate-migrated-state");
+      expect(
+        JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
+      ).toMatchObject({ buildId: "candidate-built-runtime" });
+      expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
+      expect(calls.filter((call) => call === "pnpm install")).toHaveLength(1);
+      expect(calls.filter((call) => call === "pnpm build")).toHaveLength(1);
     },
   );
 
-  it("returns the build identity produced by a dev Git update build", async () => {
+  it("preserves the original build identity while recording the dev candidate identity", async () => {
     await setupGitPackageManagerFixture();
+    const beforeBuildId = "2026.8.1-original-build";
     const buildId = "2026.8.1-target-build";
+    await fs.writeFile(
+      path.join(tempDir, "dist", "build-info.json"),
+      `${JSON.stringify({ buildId: beforeBuildId })}\n`,
+      "utf8",
+    );
     const { runCommand } = createDevGitRunner({
-      onCommand: async (key) => {
+      onCommand: async (key, options) => {
         if (key === "pnpm build") {
-          await fs.mkdir(path.join(tempDir, "dist"), { recursive: true });
+          const root = options?.cwd ?? tempDir;
+          await fs.mkdir(path.join(root, "dist"), { recursive: true });
           await fs.writeFile(
-            path.join(tempDir, "dist", "build-info.json"),
+            path.join(root, "dist", "build-info.json"),
             `${JSON.stringify({ buildId })}\n`,
             "utf8",
           );
@@ -3859,11 +3779,12 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
+    expect(result.before?.buildId).toBe(beforeBuildId);
     expect(result.after?.buildId).toBe(buildId);
   });
 
   it.each(["stable", "beta"] as const)(
-    "does not return a build identity for a %s Git update",
+    "returns the candidate build identity for a %s Git update",
     async (channel) => {
       await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
       await setupUiIndex();
@@ -3871,9 +3792,9 @@ describe("runGatewayUpdate", () => {
       const buildId = "2026.8.1-channel-build";
       const { runCommand } = await createStableTagRunner({
         stableTag,
-        onBuild: async () => {
+        onBuild: async (root) => {
           await fs.writeFile(
-            path.join(tempDir, "dist", "build-info.json"),
+            path.join(root, "dist", "build-info.json"),
             `${JSON.stringify({ buildId })}\n`,
             "utf8",
           );
@@ -3883,108 +3804,108 @@ describe("runGatewayUpdate", () => {
       const result = await runWithCommand(runCommand, { channel });
 
       expect(result.status).toBe("ok");
-      expect(result.after?.buildId).toBeUndefined();
+      expect(result.after?.buildId).toBe(buildId);
     },
   );
 
   it.each(["missing", "incomplete"] as const)(
-    "repairs %s Control UI assets left by the doctor pass",
+    "does not rebuild or roll back a %s startup bundle after Doctor migrates state",
     async (doctorBundle) => {
-      await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
-      const uiIndexPath = await setupUiIndex();
-      const startupAsset = path.join(path.dirname(uiIndexPath), "assets", "startup.js");
-
-      const stableTag = "v1.0.1-1";
+      await setupGitPackageManagerFixture();
       const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
-        stableTag,
-        onUiBuild: async () => {
-          await fs.mkdir(path.dirname(startupAsset), { recursive: true });
-          await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
-          await fs.writeFile(startupAsset, "export {};\n", "utf-8");
-        },
+        stableTag: "v1.0.1",
         onDoctor: async () => {
           if (doctorBundle === "missing") {
             await removeControlUiAssets();
           } else {
-            await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
+            await fs.writeFile(
+              path.join(tempDir, "dist", "control-ui", "index.html"),
+              '<script src="./assets/missing.js"></script>',
+            );
           }
         },
       });
-
       const result = await runWithCommand(runCommand, { channel: "stable" });
-
-      expect(result.status).toBe("ok");
-      expect(getUiBuildCount()).toBe(1);
-      expect(await pathExists(uiIndexPath)).toBe(true);
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "ui-assets-missing",
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+      });
       expect(calls).toContain(doctorKey);
-      expect(calls.indexOf("pnpm ui:build")).toBeGreaterThan(calls.indexOf(doctorKey));
+      expect(getUiBuildCount()).toBe(0);
+      expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
     },
   );
 
   it.each(["missing", "incomplete"] as const)(
-    "repairs a %s checkout startup bundle before the doctor pass",
-    async (checkoutBundle) => {
-      await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
-      const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-      const startupAsset = path.join(path.dirname(uiIndexPath), "assets", "startup.js");
-      if (checkoutBundle === "incomplete") {
-        await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-        await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
-      }
-      const stableTag = "v1.0.1-1";
+    "repairs a %s candidate startup bundle before activation",
+    async (candidateBundle) => {
+      await setupGitPackageManagerFixture();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
       const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
-        stableTag,
-        onUiBuild: async () => {
-          await fs.mkdir(path.dirname(startupAsset), { recursive: true });
-          await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
-          await fs.writeFile(startupAsset, "export {};\n", "utf-8");
+        stableTag: "v1.0.1",
+        onBuild: async (root) => {
+          const uiDir = path.join(root, "dist", "control-ui");
+          await fs.rm(uiDir, { recursive: true, force: true });
+          if (candidateBundle === "incomplete") {
+            await fs.mkdir(uiDir, { recursive: true });
+            await fs.writeFile(
+              path.join(uiDir, "index.html"),
+              '<script src="./assets/startup.js"></script>',
+            );
+          }
+        },
+        onUiBuild: async (root) => {
+          const uiDir = path.join(root, "dist", "control-ui");
+          await fs.mkdir(path.join(uiDir, "assets"), { recursive: true });
+          await fs.writeFile(
+            path.join(uiDir, "index.html"),
+            '<script src="./assets/startup.js"></script>',
+          );
+          await fs.writeFile(path.join(uiDir, "assets", "startup.js"), "export {};\n");
         },
       });
-
-      const result = await runWithCommand(runCommand, { channel: "stable" });
-
+      const result = await runWithCommand(runCommand, { channel: "stable", beforeGitMutation });
       expect(result.status).toBe("ok");
+      expect(beforeGitMutation).toHaveBeenCalledTimes(1);
       expect(getUiBuildCount()).toBe(1);
       expect(calls.indexOf("pnpm ui:build")).toBeLessThan(calls.indexOf(doctorKey));
+      expect(
+        await pathExists(path.join(tempDir, "dist", "control-ui", "assets", "startup.js")),
+      ).toBe(true);
     },
   );
 
   it.each(["missing", "incomplete"] as const)(
-    "fails when the post-doctor repair leaves a %s startup bundle",
-    async (repairedBundle) => {
-      await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
-      const uiIndexPath = await setupUiIndex();
-
-      const stableTag = "v1.0.1-1";
+    "rejects a successful UI build that leaves a %s candidate bundle",
+    async (candidateBundle) => {
+      await setupGitPackageManagerFixture();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
       const { runCommand } = await createStableTagRunner({
-        stableTag,
-        onDoctor: removeControlUiAssets,
-        onUiBuild: async () => {
-          if (repairedBundle === "incomplete") {
-            await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-            await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
+        stableTag: "v1.0.1",
+        onBuild: async (root) => {
+          await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true, force: true });
+        },
+        onUiBuild: async (root) => {
+          if (candidateBundle === "incomplete") {
+            const uiDir = path.join(root, "dist", "control-ui");
+            await fs.mkdir(uiDir, { recursive: true });
+            await fs.writeFile(
+              path.join(uiDir, "index.html"),
+              '<script src="./assets/missing.js"></script>',
+            );
           }
         },
       });
-
-      const result = await runWithCommand(runCommand, { channel: "stable" });
-
-      expect(result.status).toBe("error");
-      expect(result.reason).toBe("ui-assets-missing");
+      const result = await runWithCommand(runCommand, { channel: "stable", beforeGitMutation });
+      expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+      expect(beforeGitMutation).not.toHaveBeenCalled();
       expect(result.steps).toContainEqual(
-        expect.objectContaining({
-          name: "ui assets verify",
-          exitCode: 1,
-          stderrTail: expect.stringContaining(
-            repairedBundle === "incomplete" ? "assets/startup.js" : uiIndexPath,
-          ),
-        }),
+        expect.objectContaining({ name: "preflight ui assets verify (v1.0.1)", exitCode: 1 }),
       );
-      expect(result.recovery).toEqual({
-        serviceRestartSafe: false,
-        reason: "state-migration-started",
-      });
-      expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
+      expect(
+        await fs.readFile(path.join(tempDir, "dist", "control-ui", "index.html"), "utf8"),
+      ).toBe("<html></html>");
     },
   );
 });

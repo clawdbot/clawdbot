@@ -109,16 +109,13 @@ async function main() {
     }),
     options: { env: process.env, stdio: "inherit" },
   });
-  let forwardedSignal: NodeJS.Signals | undefined;
-  const teardown = installVitestProcessGroupCleanup({
+  const cleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
-  const result = await completion.finally(teardown);
+  const result = await completion.finally(cleanup.teardown);
+  const forwardedSignal = cleanup.getForwardedSignal();
   if (forwardedSignal) {
     console.error(`[run-vitest-profile] FAILED (exit ${signalExitCode(forwardedSignal)})`);
     process.kill(process.pid, forwardedSignal);

@@ -18,6 +18,28 @@ describe("project runner native empty-file policy", () => {
   it.for([
     { name: "delegated default", code: 1 },
     { name: "package test entry default", code: 1, entry: "projects" },
+    {
+      name: "projects compound help executes",
+      code: 0,
+      entry: "projects",
+      excluded: false,
+      tests: 1,
+      flags: ["--help", "--no-help"],
+    },
+    {
+      name: "projects compound help validates",
+      code: 1,
+      entry: "projects",
+      flags: ["--help", "--no-help", "--passWithNoTests", "--passWithNoTests"],
+      invalid: true,
+    },
+    {
+      name: "projects compound help metadata",
+      code: 0,
+      entry: "projects",
+      flags: ["--no-help", "--help", "--unknown-router-option"],
+      help: true,
+    },
     { name: "several exact files", code: 1, selectors: [target, sibling] },
     {
       name: "exact files across lanes",
@@ -28,6 +50,12 @@ describe("project runner native empty-file policy", () => {
     },
     { name: "explicit true", code: 0, flags: ["--passWithNoTests=true"] },
     { name: "bare opt-in", code: 0, flags: ["--passWithNoTests"] },
+    {
+      name: "separated exclusion matching routed target",
+      code: 0,
+      excluded: false,
+      flags: ["--exclude", target, "--passWithNoTests"],
+    },
     { name: "explicit false", code: 1, flags: ["--passWithNoTests=false"] },
     { name: "native negation", code: 1, flags: ["--no-passWithNoTests"] },
     { name: "native dashed spelling", code: 0, flags: ["--pass-with-no-tests=true"] },
@@ -38,6 +66,48 @@ describe("project runner native empty-file policy", () => {
       invalid: true,
     },
     { name: "direct configured default", code: 1, flags: ["--config", config] },
+    { name: "cfg long control", code: 0, excluded: false, tests: 1, flags: ["--config", config] },
+    { name: "cfg short control", code: 0, excluded: false, tests: 1, flags: ["-c", config] },
+    { name: "cfg inline short", code: 0, excluded: false, tests: 1, flags: [`-c=${config}`] },
+    { name: "cfg inline strict", code: 1, flags: [`-c=${config}`, "--passWithNoTests"] },
+    ...[
+      "--passWithNoTests=false",
+      "--passWithNoTests=true",
+      "--passWithNoTests",
+      "--pass-with-no-tests=true",
+    ].map((flag) => ({
+      name: `direct configured strict ${flag}`,
+      code: 1,
+      flags: ["--config", config, flag],
+    })),
+    { name: "delegated separated false", code: 1, flags: ["--passWithNoTests", "false"] },
+    { name: "delegated separated true", code: 0, flags: ["--passWithNoTests", "true"] },
+    {
+      name: "direct invalid scalar is not repaired",
+      code: 1,
+      flags: ["--config", config, "--no-passWithNoTests", "--passWithNoTests=true"],
+      invalid: true,
+    },
+    {
+      name: "direct help with strict scalar",
+      code: 0,
+      flags: ["--config", config, "--passWithNoTests=false", "--help=true"],
+      help: true,
+    },
+    {
+      name: "disabled help executes",
+      code: 0,
+      excluded: false,
+      tests: 1,
+      flags: ["--help", "false"],
+    },
+    {
+      name: "named run version executes",
+      code: 0,
+      excluded: false,
+      tests: 1,
+      flags: ["--version"],
+    },
     { name: "directory selection", code: 0, selectors: ["test/scripts"] },
     { name: "glob selection", code: 0, selectors: ["test/scripts/*.test.ts"] },
     { name: "mixed basename and exact selection", code: 0, selectors: ["empty-policy", target] },
@@ -193,6 +263,7 @@ it${scenario.skipped ? ".skip" : ""}("records execution", () => fs.appendFileSyn
         ).toHaveLength(scenario.emptyInvocations);
       } else if (scenario.help) {
         expect(stdout.text().match(/Usage:/gu), evidence).toHaveLength(1);
+        expect(stdout.text(), evidence).toMatch(/^vitest\//mu);
         expect(report).toBeUndefined();
       } else if (scenario.invalid) {
         expect(stderr.text()).toContain("Expected a single value for option");

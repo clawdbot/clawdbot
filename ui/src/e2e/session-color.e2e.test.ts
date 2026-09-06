@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
@@ -225,13 +227,16 @@ suite.define(() => {
       },
       featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "sessions.catalog.list"],
     });
-    const shot = async (name: string) => {
+    const shot = async (
+      name: string,
+      surface = page.locator(".shell"),
+      content = [page.locator(".chat-pane__session-title")],
+    ) => {
       if (capture) {
-        await page.screenshot({
-          path: path.join(proofDir, name),
-          animations: "disabled",
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(proofDir, name),
+          await takeControlUiViewportScreenshot(page, surface, content),
+        );
       }
     };
     const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
@@ -283,16 +288,23 @@ suite.define(() => {
           picker.getByRole("button", { name: "Purple", exact: true }).getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await shot("after-dark-menu.png");
+      const appearanceSubmenu = page
+        .getByRole("menuitem", { name: "Icon & color", exact: true })
+        .locator('[part="submenu"]');
+      const appearanceChoices = [
+        picker.getByRole("button", { name: "Purple", exact: true }),
+        picker.getByRole("button", { name: "book", exact: true }),
+      ];
+      await shot("after-dark-menu.png", appearanceSubmenu, appearanceChoices);
       await page.emulateMedia({ colorScheme: "light" });
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
       await expect.poll(stripe).not.toBe(darkStripe);
-      await shot("after-light-menu.png");
+      await shot("after-light-menu.png", appearanceSubmenu, appearanceChoices);
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
-      Object.assign(designReview, { label: "Design review refreshed", color: null });
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse(sessions));
+      Object.assign(designReview, { label: "Design review refreshed", color: null, icon: "book" });
+      await gateway.setSessionsListResponse(sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
       // Only the roster response carries this label; wait for that render so a
       // transient event-only clear cannot hide a stale color restored by refresh.
@@ -309,7 +321,11 @@ suite.define(() => {
       await page.getByRole("button", { name: "Blue", exact: true }).click();
       await waitForPatch(gateway, (params) => params.key === key && params.color === "blue");
       await expect.poll(() => dot.getAttribute("aria-label")).toBe("Session color: Blue");
-      await shot("after-compact-menu.png");
+      await shot(
+        "after-compact-menu.png",
+        page.locator('openclaw-chat-header-session-menu > wa-dropdown [part="menu"]'),
+        [page.getByRole("button", { name: "Blue", exact: true })],
+      );
       await page.getByRole("button", { name: "Reset to default", exact: true }).click();
       await waitForPatch(
         gateway,

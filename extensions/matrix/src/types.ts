@@ -219,9 +219,9 @@ export type MatrixConfig = {
    *   blocks to stay visible as separate progress messages. When combined with
    *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
-   * - `streaming.progress.toolProgress: false` hides interim tool/progress
-   *   lines in progress mode. `streaming.preview.toolProgress: false` keeps
-   *   legacy answer preview edits but hides interim tool/progress lines.
+   * - `streaming.progress.toolProgress: true` adds interim tool/progress
+   *   lines to the progress draft (default: quiet). `streaming.preview.toolProgress:
+   *   false` keeps legacy answer preview edits but hides interim tool/progress lines.
    * Legacy scalar/boolean spellings and the flat `blockStreaming`/`chunkMode`
    * keys migrate via `openclaw doctor --fix`.
    * Default: `mode: "off"`.

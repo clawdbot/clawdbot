@@ -27,7 +27,7 @@ import {
   normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -99,7 +99,7 @@ type SlackResolvedDelivery = Readonly<{
   teamId?: string;
   unfurl: SlackUnfurlOptions;
   upload?: Readonly<{
-    completionClient: WebClient;
+    client: WebClient;
     auditContext: string;
   }>;
 }>;
@@ -412,24 +412,20 @@ function resolveSlackDelivery(params: {
   recipient: SlackRecipient;
 }): SlackResolvedDelivery {
   if (params.eventScope) {
-    if (params.opts.mediaUrl && !params.eventScope.uploadCompletionClient) {
-      throw new Error("missing_enterprise_slack_upload_completion_client");
+    if (!params.eventScope.writeClient) {
+      throw new Error("missing_enterprise_slack_write_client");
     }
     return Object.freeze({
-      client: params.eventScope.client,
+      client: params.eventScope.writeClient,
       credential: SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL,
       identity: normalizeSlackSendIdentity(params.opts.identity),
       recipient: params.recipient,
       teamId: params.eventScope.teamId,
       unfurl: { unfurlMedia: params.account.config.unfurlMedia },
-      ...(params.eventScope.uploadCompletionClient
-        ? {
-            upload: Object.freeze({
-              completionClient: params.eventScope.uploadCompletionClient,
-              auditContext: "slack-enterprise-immediate-upload",
-            }),
-          }
-        : {}),
+      upload: Object.freeze({
+        client: params.eventScope.client,
+        auditContext: "slack-enterprise-immediate-upload",
+      }),
     });
   }
 
@@ -489,7 +485,7 @@ function resolveSlackTextChunks(params: {
     const chunks: string[] = [];
     let remaining = text;
     while (remaining) {
-      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || Array.from(remaining)[0] || "";
+      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || truncateCodePoints(remaining, 1);
       chunks.push(chunk);
       remaining = remaining.slice(chunk.length);
     }
@@ -1382,8 +1378,8 @@ async function sendMessageSlackQueuedInner(params: {
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
-      client,
-      ...(delivery.upload ? { completionClient: delivery.upload.completionClient } : {}),
+      client: delivery.upload?.client ?? client,
+      completionClient: client,
       channelId,
       mediaUrl: opts.mediaUrl,
       mediaAccess: opts.mediaAccess,

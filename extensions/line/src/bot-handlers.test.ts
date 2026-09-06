@@ -18,11 +18,13 @@ const pairingDeliveryMocks = vi.hoisted(() => ({
 }));
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
-// allowlist/groupPolicy gating and message-context wiring.
+// allowlist/groupPolicy gating, message-context wiring, and mention-drop diagnostics.
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   // Keep mention facts real without loading the inbound execution lifecycle.
   implicitMentionKindWhen: (await import("openclaw/plugin-sdk/channel-mention-gating"))
     .implicitMentionKindWhen,
+  logInboundDrop: (await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>())
+    .logInboundDrop,
   // What a gated message keeps for the mention that follows it is under test, so
   // the media projection stays the real one; it is pure and this entrypoint is
   // the only one that exports it.
@@ -1170,7 +1172,7 @@ describe("handleLineWebhookEvents", () => {
     expect(groupHistories.get("grp-fail")).toHaveLength(1);
   });
 
-  it("skips group messages without mention when requireMention is set", async () => {
+  it("logs missing mentions once per group at the default level", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({
       message: { id: "m-mention-1", type: "text", text: "hi there", quoteToken: "q-mention-1" },
@@ -1178,17 +1180,23 @@ describe("handleLineWebhookEvents", () => {
       webhookEventId: "evt-mention-1",
     });
 
-    await handleLineWebhookEvents(
-      [event],
-      createLineWebhookTestContext({
-        processMessage,
-        groupPolicy: "open",
-        requireMention: true,
-      }),
-    );
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+    });
+    await handleLineWebhookEvents([event, event], context);
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(context.runtime.log).toHaveBeenCalledOnce();
+    expect(context.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("line: drop no mention target=group-mention"),
+    );
+    expect(context.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("requireMention=false"),
+    );
+    expect(context.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("hi there"));
   });
 
   it.each([

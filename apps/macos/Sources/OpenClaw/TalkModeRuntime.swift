@@ -725,11 +725,11 @@ extension TalkModeRuntime {
         return await withTaskGroup(of: String?.self) { group in
             group.addTask { [runId, sessionKey] in
                 var latestText: String?
-                for await push in stream {
+                for await delivery in stream {
                     if Task.isCancelled {
                         return latestText
                     }
-                    guard case let .event(evt) = push else { continue }
+                    guard delivery.isCurrent, case let .event(evt) = delivery.push else { continue }
                     guard evt.event == "chat", let payload = evt.payload else { continue }
                     guard let chatEvent = try? GatewayPayloadDecoding.decode(
                         payload,

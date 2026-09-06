@@ -312,6 +312,13 @@ export const ModelsAuthLogoutParamsSchema = closedObject({
   agentId: Type.Optional(Type.String()),
 });
 
+/** Sets or clears the preferred auth-profile order for one provider and agent. */
+export const ModelsAuthOrderSetParamsSchema = closedObject({
+  provider: NonEmptyString,
+  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, uniqueItems: true })),
+  agentId: Type.Optional(Type.String()),
+});
+
 /** Model catalog result. */
 export const ModelCatalogProviderOutcomeSchema = closedObject({
   provider: NonEmptyString,
@@ -815,6 +822,22 @@ export const SkillsProposalsListResultSchema = closedObject({
   schema: Type.Literal("openclaw.skill-workshop.proposals-manifest.v1"),
   updatedAt: NonEmptyString,
   proposals: Type.Array(SkillProposalManifestEntrySchema),
+  installedSkills: Type.Array(
+    closedObject({ name: NonEmptyString, skillKey: NonEmptyString, description: Type.String() }),
+  ),
+});
+
+/** Reads the current agent-owned Workshop skill, independently of its proposal history. */
+export const SkillsWorkshopReadParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  name: NonEmptyString,
+});
+
+export const SkillsWorkshopReadResultSchema = closedObject({
+  name: NonEmptyString,
+  skillKey: NonEmptyString,
+  description: Type.String(),
+  content: Type.String(),
 });
 
 /** Reads a proposal record plus editable draft/support content. */
@@ -1026,6 +1049,7 @@ const SkillCollectionReviewStatusSchema = closedObject({
 const SkillExperienceReviewStatusSchema = closedObject({
   attemptedAtMs: Type.Number(),
   outcome: Type.Union([
+    Type.Literal("completed"),
     Type.Literal("applied"),
     Type.Literal("proposed"),
     Type.Literal("nothing"),
@@ -1426,6 +1450,7 @@ export type ModelCatalogProviderOutcome = Static<typeof ModelCatalogProviderOutc
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
+export type ModelsAuthOrderSetParams = Static<typeof ModelsAuthOrderSetParamsSchema>;
 export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
 export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
 export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;

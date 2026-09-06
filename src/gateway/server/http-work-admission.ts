@@ -55,17 +55,19 @@ export async function runWithGatewayHttpWorkAdmission(
   );
 }
 
-export function writeGatewayUpgradeServiceUnavailable(
-  socket: Pick<Duplex, "write">,
+export function rejectGatewayUpgradeServiceUnavailable(
+  socket: Pick<Duplex, "end" | "destroy">,
   body: string,
 ): void {
-  socket.write(
+  // Reused HTTP sockets can buffer upgrade writes; destroy only after flushing.
+  socket.end(
     "HTTP/1.1 503 Service Unavailable\r\n" +
       "Connection: close\r\n" +
       "Content-Type: text/plain; charset=utf-8\r\n" +
       `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n` +
       "\r\n" +
       body,
+    () => socket.destroy(),
   );
 }
 
@@ -77,8 +79,7 @@ export async function runWithGatewayUpgradeWorkAdmission(
   return await runWithGatewayBoundaryWorkAdmission(
     "http:upgrade",
     () => {
-      writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
-      socket.destroy();
+      rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
     },
     run,
   );

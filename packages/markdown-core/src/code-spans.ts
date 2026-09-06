@@ -14,8 +14,10 @@ export function createInlineCodeState(): InlineCodeState {
   return { open: false, ticks: 0 };
 }
 
+type CodeSpan = Pick<FenceSpan, "start" | "end">;
+
 type InlineCodeSpansResult = {
-  spans: Array<[number, number]>;
+  spans: CodeSpan[];
   state: InlineCodeState;
 };
 
@@ -47,8 +49,10 @@ export function buildCodeSpanIndex(
   return {
     inlineState: nextInlineState,
     fenceState: nextFenceState,
+    // Each scanner emits ordered, disjoint spans; inline spans can enclose fences.
+    // Search separately so overlap between the lists cannot hide a containing span.
     isInside: (index: number) =>
-      isInsideFenceSpan(index, fenceSpans) || isInsideInlineSpan(index, inlineSpans),
+      isInsideSpan(index, fenceSpans) || isInsideSpan(index, inlineSpans),
   };
 }
 
@@ -57,7 +61,7 @@ function parseInlineCodeSpans(
   fenceSpans: FenceSpan[],
   initialState: InlineCodeState,
 ): InlineCodeSpansResult {
-  const spans: Array<[number, number]> = [];
+  const spans: CodeSpan[] = [];
   let open = initialState.open;
   let ticks = initialState.ticks;
   let openStart = open ? 0 : -1;
@@ -94,7 +98,7 @@ function parseInlineCodeSpans(
     }
 
     if (runLength === ticks) {
-      spans.push([openStart, i]);
+      spans.push({ start: openStart, end: i });
       open = false;
       ticks = 0;
       openStart = -1;
@@ -102,7 +106,7 @@ function parseInlineCodeSpans(
   }
 
   if (open) {
-    spans.push([openStart, text.length]);
+    spans.push({ start: openStart, end: text.length });
   }
 
   return {
@@ -111,10 +115,21 @@ function parseInlineCodeSpans(
   };
 }
 
-function isInsideFenceSpan(index: number, spans: FenceSpan[]): boolean {
-  return spans.some((span) => index >= span.start && index < span.end);
-}
-
-function isInsideInlineSpan(index: number, spans: Array<[number, number]>): boolean {
-  return spans.some(([start, end]) => index >= start && index < end);
+function isInsideSpan(index: number, spans: CodeSpan[]): boolean {
+  let low = 0;
+  let high = spans.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const span = spans[middle];
+    if (!span) {
+      return false;
+    }
+    if (index >= span.end) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  const span = spans[low];
+  return span !== undefined && index >= span.start && index < span.end;
 }

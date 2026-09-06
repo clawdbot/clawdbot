@@ -145,13 +145,8 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "8.5px",
   },
   {
-    // Real DOM shape from chat-thread-interactions.ts. Found and fixed
-    // alongside the two P2s above during a final invariant sweep of every
-    // selector in the base.css corner block: this one already scaled its
-    // (bottom-only) radius but never carried corner-shape, same "radius
-    // grew, shape didn't follow" gap as the menu items. Its only non-zero
-    // corners are the bottom two (`border-radius: 0 0 var(...) var(...)`),
-    // so this is the one case that needs the bottom-left probe.
+    // The search bar rounds only its bottom corners. Probe bottom-left to
+    // verify its radius and shape stay aligned with the adjacent card.
     circular: "14px",
     corner: "bottomLeft",
     markup: '<div class="agent-chat__search-bar"><input type="text" /></div>',
@@ -208,6 +203,10 @@ const EXCLUDED_CASES: readonly CornerCase[] = [
 ];
 
 const ALL_CASES = [...CORNER_CASES, ...ROUND_CASES, ...EXCLUDED_CASES];
+
+// CSSOM can serialize the same circular shape as round or superellipse(1).
+// https://drafts.csswg.org/css-borders-4/#valdef-corner-shape-value-round
+const CIRCULAR_SHAPE = expect.stringMatching(/^(?:round|superellipse\(1\))$/);
 
 // The radius tokens themselves, read at :root exactly like
 // collectMcpAppStyleVariables() in mcp-app-theme.ts reads them for embedded
@@ -336,11 +335,11 @@ describeCornerShape("Control UI corner curvature", () => {
         ]),
         ...ROUND_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
         ...EXCLUDED_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
       ]),
     );
@@ -351,7 +350,10 @@ describeCornerShape("Control UI corner curvature", () => {
 
     expect(probe).toEqual(
       Object.fromEntries(
-        ALL_CASES.map((corner) => [corner.selector, { radius: corner.circular, shape: "round" }]),
+        ALL_CASES.map((corner) => [
+          corner.selector,
+          { radius: corner.circular, shape: CIRCULAR_SHAPE },
+        ]),
       ),
     );
   });

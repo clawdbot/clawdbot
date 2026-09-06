@@ -13,6 +13,7 @@ import "./app-host.ts";
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
   render: () => TemplateResult;
+  refreshControlUi: () => Promise<boolean>;
   routeState: {
     routeId?: string;
     location?: { pathname: string; search: string; hash: string };
@@ -294,6 +295,27 @@ describe("application shell pairing access", () => {
     );
     retry?.click();
     expect(retryRenderer).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the settings refresh result for stale-client recovery", () => {
+    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
+    const refreshResult = new Promise<boolean>(() => {
+      // Keep the probe pending so the callback must preserve its lifecycle.
+    });
+    const refreshControlUi = vi.fn(() => refreshResult);
+    const settingsSidebarRenderer = vi.fn((_props: { onRefresh: () => Promise<boolean> }) => null);
+    shell.routeState = {
+      routeId: "profile",
+      location: { pathname: "/settings/profile", search: "", hash: "" },
+    };
+    shell.refreshControlUi = refreshControlUi;
+    shell.settingsSidebarRenderer = settingsSidebarRenderer;
+
+    render(shell.render(), container);
+
+    const onRefresh = settingsSidebarRenderer.mock.calls[0]?.[0].onRefresh;
+    expect(onRefresh?.()).toBe(refreshResult);
+    expect(refreshControlUi).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

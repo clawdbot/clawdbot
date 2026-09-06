@@ -99,8 +99,16 @@ if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; 
   echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
   exit 1
 fi
+if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+  echo "mobile-pairing-reconnect requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+  exit 1
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
   echo "recovery-cleanup requires the isolated manual-restart fixture without live provider credentials" >&2
+  exit 1
+fi
+if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+  echo "mobile-pairing-reconnect requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
 
@@ -245,6 +253,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_BASELINE="$BASELINE_SPEC" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND="$CANDIDATE_KIND" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC="$CANDIDATE_SPEC" \
+    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
     -e OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     -e OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
@@ -535,6 +544,14 @@ install_companion_plugins() {
       plugins install "npm:@openclaw/codex@$package_version" --pin
     install_status=$?
   fi
+  if [ "$install_status" -eq 0 ]; then
+    # Inspection validates config too; keep the legacy migration specimen parked
+    # until companion installation and its provenance checks have both finished.
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+      assert-companion-installs "$package_version" \
+      "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
+    install_status=$?
+  fi
   node "$OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER" \
     restore "$OPENCLAW_CONFIG_PATH" "$authored_config"
   restore_status=$?
@@ -546,9 +563,6 @@ install_companion_plugins() {
   if [ "$restore_status" -ne 0 ]; then
     return "$restore_status"
   fi
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-companion-installs "$package_version" \
-    "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
 }
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"

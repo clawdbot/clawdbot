@@ -212,9 +212,11 @@ export class QuestionPage extends OpenClawLightDomElement {
       ? html`<div class="approval-page__state" role="status">${t("common.loading")}</div>`
       : this.requestError
         ? html`<div class="approval-page__state" role="status">
-            ${this.requestError === "connection"
-              ? t("chat.questions.disconnected")
-              : t("chat.questions.unavailable")}
+            ${
+              this.requestError === "connection"
+                ? t("chat.questions.disconnected")
+                : t("chat.questions.unavailable")
+            }
           </div>`
         : prompt
           ? this.renderQuestion(prompt)

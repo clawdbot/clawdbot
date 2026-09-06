@@ -36,7 +36,7 @@ describe("Codex thread ownership across module copies", () => {
       threadId,
       run: async () => {
         events.push("adoption");
-        return await bindingStore.read(identity);
+        return bindingStore.read(identity);
       },
     });
     const completed = Promise.all([mutation, adoption]);

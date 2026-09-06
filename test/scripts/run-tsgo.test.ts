@@ -31,6 +31,38 @@ it("runs the installed compiler version through the real tsgo wrapper", () => {
   expect(result.stdout).toMatch(/^Version \d/m);
 }, 30_000);
 
+it.each([false, true])(
+  "refuses a shared install without creating dependency links (linked=%s)",
+  (linked) => {
+    const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
+    const root = path.join(primary, ".claude/worktrees/validation");
+    fs.mkdirSync(root, { recursive: true });
+    expect(spawnSync("git", ["init", "-q"], { cwd: primary }).status).toBe(0);
+    fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(primary, ".git")}\n`);
+    fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
+    fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+    fs.symlinkSync(path.resolve("node_modules"), path.join(primary, "node_modules"), "junction");
+    const localModules = path.join(root, "node_modules");
+    if (linked) {
+      fs.symlinkSync(path.join(primary, "node_modules"), localModules, "junction");
+    }
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/run-tsgo.mjs"), "--version"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("Declaration input escapes checkout");
+    expect(result.stderr).toContain("shared installs and external symlinks are unsupported");
+    expect(fs.existsSync(localModules)).toBe(linked);
+  },
+);
+
 describe("run-tsgo sparse guard", () => {
   it("ends sparse-checkout failures with the stable failure trailer", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
@@ -219,6 +251,22 @@ describe("run-tsgo sparse guard", () => {
       - src
       Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
     `);
+  });
+
+  it.each([
+    "tsconfig.ui.json",
+    "test/tsconfig/tsconfig.core.test.json",
+    "test/tsconfig/tsconfig.core.test.ui-other.json",
+  ])("does not require plugin browser sources for %s", (project) => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const options = {
+      cwd,
+      fileExists: () => true,
+      isSparseCheckoutEnabled: () => true,
+      sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
+    };
+
+    expect(getSparseTsgoGuardError(["-p", project], options)).toBeNull();
   });
 
   it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {

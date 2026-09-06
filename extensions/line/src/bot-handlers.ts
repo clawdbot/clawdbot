@@ -5,6 +5,7 @@ import {
   buildMentionRegexes,
   formatInboundMediaUnavailableText,
   isChannelPartialDeliveryError,
+  logInboundDrop,
   matchesMentionPatterns,
   implicitMentionKindWhen,
   toHistoryMediaEntries,
@@ -18,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -456,18 +458,30 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
   const historyLimit = context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   if (isGroup && decision.access.activationAccess.shouldSkip) {
-    const sourceInfo = getLineSourceInfo(event.source);
-    logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
-    const senderId = sourceInfo.userId ?? "unknown";
+    const groupsConfigPath = resolveChannelGroupsConfigPath({
+      cfg,
+      channel: "line",
+      accountId: account.accountId,
+      groups: account.config.groups,
+    });
+    logInboundDrop({
+      log: context.runtime.log,
+      channel: "line",
+      reason: "no mention",
+      target: historyKey,
+      onceKey: JSON.stringify([account.accountId, historyKey]),
+      hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(historyKey)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+    });
+    const senderId = userId ?? "unknown";
     // A disabled window (documented as `historyLimit: 0`) keeps nothing, so the
     // download below would spend bandwidth on bytes the recorder then drops.
     if (historyKey && context.groupHistories && historyLimit > 0) {
-      const displayName = sourceInfo.userId
-        ? await getUserDisplayName(sourceInfo.userId, {
+      const displayName = userId
+        ? await getUserDisplayName(userId, {
             cfg,
             accountId: account.accountId,
             channelAccessToken: account.channelAccessToken,

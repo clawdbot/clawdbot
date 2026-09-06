@@ -300,7 +300,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -328,7 +327,6 @@ describe("memory index", () => {
   it("retries the optional primary after fallback initialization fails", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -361,7 +359,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -387,7 +384,6 @@ describe("memory index", () => {
   it("retries an optional primary after a null fallback result", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -412,7 +408,6 @@ describe("memory index", () => {
   it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });

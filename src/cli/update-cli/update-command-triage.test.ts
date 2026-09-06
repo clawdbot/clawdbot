@@ -11,6 +11,14 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 
+const runInteractiveUpdateFailureAction = vi.hoisted(() =>
+  vi.fn<typeof import("./update-command-report.js").runInteractiveUpdateFailureAction>(
+    async () => "triage" as const,
+  ),
+);
+
+vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction }));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const failedUpdate: UpdateRunResult = {
@@ -124,6 +132,8 @@ async function withTerminal(run: () => Promise<void>) {
 }
 
 beforeEach(() => {
+  runInteractiveUpdateFailureAction.mockReset();
+  runInteractiveUpdateFailureAction.mockResolvedValue("triage");
   vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
@@ -165,6 +175,7 @@ describe("update failure triage boundary", () => {
       expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(failedUpdate);
       expect(defaultRuntime.log).not.toHaveBeenCalled();
       expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining('"promptPath":'));
+      expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
     },
   );
 
@@ -189,6 +200,7 @@ describe("update failure triage boundary", () => {
       result: { recovery: { serviceRestartSafe: false } },
     });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
   });
 
   it.each(["reported", "unexpected"] as const)(
@@ -243,6 +255,7 @@ describe("update failure triage boundary", () => {
       });
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
       expect(defaultRuntime.log).not.toHaveBeenCalled();
+      expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
     },
   );
 
@@ -282,6 +295,95 @@ describe("update failure triage boundary", () => {
     });
     await expect(fs.stat(target.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("uses a new report identity for each distinct CLI update execution", async () => {
+    const target = await createInstalledTriage();
+    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
+
+    await withTerminal(async () => {
+      for (let index = 0; index < 2; index += 1) {
+        await expect(
+          withUpdateFailureTriage({}, target, async () => {
+            throw new UpdateCommandFailure(failedUpdate);
+          }),
+        ).rejects.toMatchObject({ code: 1 });
+      }
+    });
+
+    const attemptIds = runInteractiveUpdateFailureAction.mock.calls.map(
+      ([params]) => params.attemptId,
+    );
+    expect(attemptIds).toHaveLength(2);
+    expect(attemptIds[0]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(attemptIds[1]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(attemptIds[0]).not.toBe(attemptIds[1]);
+  });
+
+  it("passes the admitted run identity to interactive reporting", async () => {
+    const target = await createInstalledTriage();
+    const runId = "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3";
+    const opts = { json: false, run: { runId, env: target.env } };
+    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
+
+    await withTerminal(async () => {
+      await expect(
+        withUpdateFailureTriage(opts, target, async () => {
+          throw new UpdateCommandFailure(failedUpdate);
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+    });
+
+    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ attemptId: runId }),
+    );
+  });
+
+  it("keeps reporting in the admitted run's state scope", async () => {
+    const target = await createInstalledTriage();
+    const env = { ...target.env, OPENCLAW_STATE_DIR: path.join(target.root, "admitted-state") };
+    const opts = { run: { runId: "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3", env } };
+    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
+
+    await withTerminal(async () => {
+      await expect(
+        withUpdateFailureTriage(opts, target, async () => {
+          throw new UpdateCommandFailure(failedUpdate);
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+    });
+
+    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ env }),
+    );
+  });
+
+  it("does not start triage when the selected report action throws", async () => {
+    const target = await createInstalledTriage();
+    const bin = path.join(target.root, "bin");
+    const triageReceipt = path.join(target.root, "triage-receipt");
+    await fs.mkdir(bin);
+    await fs.writeFile(
+      path.join(bin, "claude"),
+      `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(triageReceipt)}, "called");\n`,
+      { mode: 0o700 },
+    );
+    runInteractiveUpdateFailureAction.mockRejectedValue(new Error("report storage unavailable"));
+
+    await withEnvAsync({ PATH: bin, HOME: target.root, USERPROFILE: target.root }, () =>
+      withTerminal(async () => {
+        await expect(
+          withUpdateFailureTriage({}, target, async () => {
+            throw new UpdateCommandFailure(failedUpdate);
+          }),
+        ).rejects.toMatchObject({ code: 1 });
+      }),
+    );
+
+    await expect(fs.stat(triageReceipt)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("report storage unavailable"),
+    );
   });
 
   it.each([

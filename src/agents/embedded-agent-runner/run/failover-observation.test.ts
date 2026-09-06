@@ -126,6 +126,24 @@ describe("createFailoverDecisionLogger counters", () => {
 });
 
 describe("createFailoverDecisionLogger", () => {
+  it.each([true, false])("keeps normal continuation at debug level (enabled=%s)", (enabled) => {
+    vi.spyOn(log, "isEnabled").mockReturnValue(enabled);
+    const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    createDecisionLogger()("continue_normal");
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(debugSpy).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    if (enabled) {
+      expect(firstWarnDetails(debugSpy)).toMatchObject({
+        event: "embedded_run_failover_decision",
+        decision: "continue_normal",
+        failoverReason: null,
+      });
+    }
+  });
+
   it("includes from and to model refs when the source differs from the selected target", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
     const logDecision = createDecisionLogger({

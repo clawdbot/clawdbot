@@ -1759,6 +1759,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         updatedAt: Date.now(),
         archivedAt,
         archivedBy: { type: "human", id: "profile-operator" },
+        archiveReason: "manual",
       };
       if (blocked || suppliedOwner) {
         placementContextMocks.getMany.mockReturnValue(
@@ -1819,6 +1820,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           type: "human",
           id: "profile-operator",
         });
+        expect(sessionStoreMocks.currentEntry?.archiveReason).toBe("manual");
         expect(replyResolver).not.toHaveBeenCalled();
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         return;
@@ -1829,6 +1831,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
       expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
       expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archiveReason).toBeUndefined();
       if (suppliedOwner) {
         expect(ownerGetMany).toHaveBeenCalledWith([sessionId]);
         expect(placementContextMocks.resolveSessionWorkerPlacementContext).not.toHaveBeenCalled();

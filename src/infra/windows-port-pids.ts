@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
 import { parseWindowsNetstatListeners } from "./ports-netstat.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -35,6 +36,7 @@ function readListeningPidsViaPowerShell(port: number, timeoutMs: number): number
       `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess)`,
     ],
     {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: timeoutMs,
       windowsHide: true,
@@ -67,6 +69,7 @@ export function readWindowsListeningPidsResultSync(
     return { ok: true, pids: powershellPids };
   }
   const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
+    env: resolveDiagnosticProcessEnv(),
     encoding: "utf8",
     timeout: timeoutMs,
     windowsHide: true,
@@ -117,6 +120,7 @@ export function readWindowsProcessArgsResultSync(
       `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
     ],
     {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: timeoutMs,
       windowsHide: true,
@@ -130,6 +134,7 @@ export function readWindowsProcessArgsResultSync(
     getWindowsWmicExePath(),
     ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
     {
+      env: resolveDiagnosticProcessEnv(),
       timeout: timeoutMs,
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],

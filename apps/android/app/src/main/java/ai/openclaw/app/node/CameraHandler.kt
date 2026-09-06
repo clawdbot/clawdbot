@@ -1,7 +1,6 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
-import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.takeUtf16Safe
 import android.content.Context
@@ -23,14 +22,11 @@ private const val CAMERA_DEBUG_STACK_TRACE_MAX_CHARS = 2_000
  */
 internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean = rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
 
-/**
- * Gateway camera command adapter that adds HUD feedback and payload-size enforcement.
- */
+/** Gateway camera commands with payload-size enforcement and audio ownership. */
 class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,
   private val setCameraAudioCaptureActive: (Boolean) -> Boolean,
-  private val showCameraHud: (message: String, kind: CameraHudKind, autoHideMs: Long?) -> Unit,
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
   /** Handles camera.list by exposing CameraX devices through gateway metadata. */
@@ -63,7 +59,6 @@ class CameraHandler(
       GatewaySession.InvokeResult.error(code = code, message = message)
     }
 
-  /** Handles camera.snap with HUD progress, flash feedback, and normalized invoke errors. */
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
 
@@ -76,8 +71,6 @@ class CameraHandler(
     try {
       logFile?.writeText("") // clear
       camLog("starting, params=$paramsJson")
-      camLog("calling showCameraHud")
-      showCameraHud("Taking photo…", CameraHudKind.Photo, null)
       val res =
         try {
           camLog("calling camera.snap()")
@@ -90,11 +83,9 @@ class CameraHandler(
           camLog("inner error: ${err::class.java.simpleName}: ${err.message}")
           camLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
-          showCameraHud(message, CameraHudKind.Error, 2200)
           return GatewaySession.InvokeResult.error(code = code, message = message)
         }
       camLog("returning result")
-      showCameraHud("Photo captured", CameraHudKind.Success, 1600)
       return GatewaySession.InvokeResult.ok(res.payloadJson)
     } catch (err: CancellationException) {
       throw err
@@ -127,8 +118,6 @@ class CameraHandler(
     try {
       clipLogFile?.writeText("") // clear
       clipLog("starting, params=$paramsJson includeAudio=$includeAudio")
-      clipLog("calling showCameraHud")
-      showCameraHud("Recording…", CameraHudKind.Recording, null)
       val filePayload =
         try {
           clipLog("calling camera.clip()")
@@ -144,13 +133,11 @@ class CameraHandler(
           clipLog("inner error: ${err::class.java.simpleName}: ${err.message}")
           clipLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
-          showCameraHud(message, CameraHudKind.Error, 2400)
           return GatewaySession.InvokeResult.error(code = code, message = message)
         }
       val rawBytes = filePayload.file.length()
       if (!isCameraClipWithinPayloadLimit(rawBytes)) {
         clipLog("payload too large: bytes=$rawBytes max=$CAMERA_CLIP_MAX_RAW_BYTES")
-        showCameraHud("Clip too large", CameraHudKind.Error, 2400)
         return GatewaySession.InvokeResult.error(
           code = "PAYLOAD_TOO_LARGE",
           message =
@@ -161,7 +148,6 @@ class CameraHandler(
       val bytes = withContext(Dispatchers.IO) { filePayload.file.readBytes() }
       val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
       clipLog("returning base64 payload")
-      showCameraHud("Clip captured", CameraHudKind.Success, 1800)
       return GatewaySession.InvokeResult.ok(
         """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}""",
       )

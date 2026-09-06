@@ -1,9 +1,15 @@
 // Control UI E2E tests cover chip-selected page scope and the all-agents escape.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  installMockGateway,
+  waitForControlUiRoute,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -115,60 +121,84 @@ suite.define(() => {
     );
   });
 
-  it("opens a named agent from the palette without changing the chat agent", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: multiAgentRoster,
+  it.each(["ordinary reload", "route before hello"])(
+    "opens a named agent from the palette without changing the chat agent (%s)",
+    async (ordering) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            deferredMethods: ordering === "route before hello" ? ["connect"] : [],
+            methodResponses: {
+              "agents.list": {
+                defaultId: "main",
+                mainKey: "main",
+                scope: "per-sender",
+                agents: multiAgentRoster,
+              },
+              "sessions.usage": emptyUsage,
             },
-            "sessions.usage": emptyUsage,
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}usage`);
-        await gateway.waitForRequest("agents.list");
-        const sidebar = page.locator("openclaw-app-sidebar");
-        await expect
-          .poll(async () =>
-            (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
-          )
-          .toBe("Main");
-        await page.keyboard.press("ControlOrMeta+k");
-        await page.locator(".cmd-palette__input").fill("Reviewer");
-        const result = page.getByRole("option", { name: "Reviewer reviewer", exact: true });
-        await result.waitFor();
-        await screenshot(page, "07-palette-reviewer-result.png");
-        await result.click();
-        const selectedAgent = page.locator("openclaw-agents-page openclaw-agent-select");
-        await selectedAgent.waitFor();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
-        await expect
-          .poll(() =>
-            selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
-          )
-          .toBe("reviewer");
-        await screenshot(page, "08-palette-selected-agent.png");
-        await page.reload();
-        await expect
-          .poll(() =>
-            selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
-          )
-          .toBe("reviewer");
-        await page.goBack();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
-        await expect
-          .poll(async () =>
-            (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
-          )
-          .toBe("Main");
-      },
-    );
-  });
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          if (ordering === "route before hello") {
+            await gateway.waitForRequest("connect");
+            await gateway.resolveDeferred("connect");
+          }
+          await gateway.waitForRequest("agents.list");
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await expect
+            .poll(async () =>
+              (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+            )
+            .toBe("Main");
+          await page.keyboard.press("ControlOrMeta+k");
+          await page.locator(".cmd-palette__input").fill("Reviewer");
+          const result = page.getByRole("option", { name: "Reviewer reviewer", exact: true });
+          await result.waitFor();
+          await screenshot(page, "07-palette-reviewer-result.png");
+          await result.click();
+          const selectedAgent = page.locator("openclaw-agents-page openclaw-agent-select");
+          await selectedAgent.waitFor();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
+          await expect
+            .poll(() =>
+              selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+            )
+            .toBe("reviewer");
+          await screenshot(page, "08-palette-selected-agent.png");
+          await page.reload();
+          if (ordering === "route before hello") {
+            await gateway.waitForRequest("connect");
+            // The route can settle before hello; its explicit target must survive
+            // until the canonical roster arrives from the new connection.
+            await waitForControlUiRoute(page, {
+              pathname: "/settings/agents/reviewer",
+              routeId: "agents",
+            });
+            await gateway.resolveDeferred("connect");
+          }
+          await expect
+            .poll(() =>
+              selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+            )
+            .toBe("reviewer");
+          await waitForRequest(
+            gateway,
+            "agents.files.list",
+            (params) => params.agentId === "reviewer",
+          );
+          await screenshot(page, "10-reloaded-reviewer.png");
+          await page.goBack();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
+          await expect
+            .poll(async () =>
+              (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+            )
+            .toBe("Main");
+        },
+      );
+    },
+  );
 
   it("preserves an in-flight canonical roster refresh while chat startup is delayed", async () => {
     await suite.withPage(
@@ -282,7 +312,15 @@ suite.define(() => {
         await agentMenu.getByText("Research", { exact: true }).waitFor();
         await agentMenu.getByText("Writer", { exact: true }).waitFor();
         expect(await agentMenu.getByText("Stale Main", { exact: true }).count()).toBe(0);
-        await screenshot(page, "00-refreshed-roster-wins.png");
+        if (captureUiProof) {
+          await writeFile(
+            path.join(proofDir, "00-refreshed-roster-wins.png"),
+            await takeControlUiViewportScreenshot(page, agentMenu.locator('[part="menu"]'), [
+              agentMenu.getByText("Research", { exact: true }),
+              agentMenu.getByText("Writer", { exact: true }),
+            ]),
+          );
+        }
       },
     );
   });

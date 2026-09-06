@@ -99,14 +99,3 @@ extension GatewayUsageSummary {
         }
     }
 }
-
-@MainActor
-enum UsageLoader {
-    static func loadSummary() async throws -> GatewayUsageSummary {
-        let data = try await ControlChannel.shared.request(
-            method: "usage.status",
-            params: nil,
-            timeoutMs: 5000)
-        return try JSONDecoder().decode(GatewayUsageSummary.self, from: data)
-    }
-}

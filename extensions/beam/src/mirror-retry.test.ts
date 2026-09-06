@@ -1,9 +1,8 @@
-import { createServer } from "node:http";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   beamTestNow,
@@ -171,22 +170,27 @@ describe("Beam terminal retry policy", () => {
     let phase: "build" | "final" = "build";
     let rejectedTargetWrites = 0;
     const store: BeamStore = {
-      put: async (session) => {
-        if (session.completed && phase === "build") {
-          throw new Error("hold terminal state while filling capacity");
-        }
-        if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
-          rejectedTargetWrites += 1;
-          throw new Error("temporary target terminal failure");
-        }
-        if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
-          throw new Error("hold non-target terminal state");
-        }
-        if (session.beamId === targetBeamId) {
-          acceptedTargetStates.push(session.completed);
-        }
-        await keyedStore.register(session.beamId, session);
-      },
+      update: async (beamId, updateValue) =>
+        await keyedStore.update!(beamId, (current) => {
+          const session = updateValue(current);
+          if (!session) {
+            return undefined;
+          }
+          if (session.completed && phase === "build") {
+            throw new Error("hold terminal state while filling capacity");
+          }
+          if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
+            rejectedTargetWrites += 1;
+            throw new Error("temporary target terminal failure");
+          }
+          if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
+            throw new Error("hold non-target terminal state");
+          }
+          if (session.beamId === targetBeamId) {
+            acceptedTargetStates.push(session.completed);
+          }
+          return session;
+        }),
       get: (beamId) => keyedStore.lookup(beamId),
       list: async () => (await keyedStore.entries()).map((entry) => entry.value),
     };
@@ -199,63 +203,58 @@ describe("Beam terminal retry policy", () => {
       }),
       resolveControlUiBasePath: () => "",
     });
-    const server = createServer((request, response) => {
-      requestNumber += 1;
-      void handler(request, response).catch(() => {
-        if (!response.writableEnded) {
-          response.statusCode = 503;
-          response.end("temporary receiver failure");
-        }
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("capacity receiver did not expose a TCP port");
-    }
-
-    let activeSessions: BeamTestSession[] = [];
-    const catalog = createBeamTestCatalog({
-      sessions: () => activeSessions,
-      items: (threadId) => [{ type: "agentMessage", text: threadId }],
-    });
-    const runner = createBeamTestRunner({
-      endpoint: `http://127.0.0.1:${address.port}/api/v1/beam/sessions`,
-      listCatalogs: () => [catalog],
-    });
     try {
-      let createdSessions = 0;
-      for (let batch = 0; createdSessions < BEAM_MAX_SESSIONS; batch += 1) {
-        const batchSize = Math.min(32, BEAM_MAX_SESSIONS - createdSessions);
-        activeSessions = Array.from({ length: batchSize }, (_, index) => ({
-          threadId: `session-${createdSessions + index}`,
-          recencyAt: beamTestNow + batch,
-        }));
-        createdSessions += batchSize;
-        await runner.tick();
-      }
+      await withServer(
+        (request, response) => {
+          requestNumber += 1;
+          void handler(request, response).catch(() => {
+            if (!response.writableEnded) {
+              response.statusCode = 503;
+              response.end("temporary receiver failure");
+            }
+          });
+        },
+        async (baseUrl) => {
+          let activeSessions: BeamTestSession[] = [];
+          const catalog = createBeamTestCatalog({
+            sessions: () => activeSessions,
+            items: (threadId) => [{ type: "agentMessage", text: threadId }],
+          });
+          const runner = createBeamTestRunner({
+            endpoint: `${baseUrl}/api/v1/beam/sessions`,
+            listCatalogs: () => [catalog],
+          });
+          try {
+            let createdSessions = 0;
+            for (let batch = 0; createdSessions < BEAM_MAX_SESSIONS; batch += 1) {
+              const batchSize = Math.min(32, BEAM_MAX_SESSIONS - createdSessions);
+              activeSessions = Array.from({ length: batchSize }, (_, index) => ({
+                threadId: `session-${createdSessions + index}`,
+                recencyAt: beamTestNow + batch,
+              }));
+              createdSessions += batchSize;
+              await runner.tick();
+            }
 
-      activeSessions = [{ threadId: "session-500", recencyAt: beamTestNow + 101 }];
-      await runner.tick();
-      await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: false });
+            activeSessions = [{ threadId: "session-500", recencyAt: beamTestNow + 101 }];
+            await runner.tick();
+            await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: false });
 
-      activeSessions = [];
-      phase = "final";
-      for (let tick = 0; tick < 40; tick += 1) {
-        await runner.tick();
-      }
+            activeSessions = [];
+            phase = "final";
+            for (let tick = 0; tick < 40; tick += 1) {
+              await runner.tick();
+            }
 
-      expect(rejectedTargetWrites).toBe(1);
-      expect(acceptedTargetStates).toEqual([false, true]);
-      await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: true });
+            expect(rejectedTargetWrites).toBe(1);
+            expect(acceptedTargetStates).toEqual([false, true]);
+            await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: true });
+          } finally {
+            await runner.stop();
+          }
+        },
+      );
     } finally {
-      await runner.stop();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
       resetPluginStateStoreForTests();
     }
   });

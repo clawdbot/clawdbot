@@ -51,20 +51,22 @@ export function renderWorkspaceConflictNotice(props: {
         <span class="chat-workspace-conflict-notice__chevron" aria-hidden="true"
           >${icons.chevronUp}</span
         >
-        ${props.onDismiss
-          ? html`<button
-              class="chat-error__dismiss"
-              type="button"
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onDismiss?.();
-              }}
-              aria-label=${t("chat.workspaceConflict.dismiss")}
-            >
-              ${icons.x}
-            </button>`
-          : nothing}
+        ${
+          props.onDismiss
+            ? html`<button
+                class="chat-error__dismiss"
+                type="button"
+                @click=${(event: Event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  props.onDismiss?.();
+                }}
+                aria-label=${t("chat.workspaceConflict.dismiss")}
+              >
+                ${icons.x}
+              </button>`
+            : nothing
+        }
       </summary>
       <div class="chat-workspace-conflict-notice__content">
         <ul class="chat-workspace-conflict-paths">
@@ -72,26 +74,30 @@ export function renderWorkspaceConflictNotice(props: {
             const entryCommands = workspaceConflictGitCommands(conflict, entryPath);
             return html`<li>
               <code>${workspaceConflictPathForDisplay(entryPath)}</code>
-              ${entryCommands
-                ? html`<span class="chat-workspace-conflict-path-actions">
-                    ${renderConflictCopyAction(
-                      entryCommands.inspect,
-                      t("chat.workspaceConflict.inspectCloud"),
-                    )}
-                    ${renderConflictCopyAction(
-                      entryCommands.takeCloud,
-                      t("chat.workspaceConflict.takeCloud"),
-                    )}
-                  </span>`
-                : nothing}
+              ${
+                entryCommands
+                  ? html`<span class="chat-workspace-conflict-path-actions">
+                      ${renderConflictCopyAction(
+                        entryCommands.inspect,
+                        t("chat.workspaceConflict.inspectCloud"),
+                      )}
+                      ${renderConflictCopyAction(
+                        entryCommands.takeCloud,
+                        t("chat.workspaceConflict.takeCloud"),
+                      )}
+                    </span>`
+                  : nothing
+              }
             </li>`;
           })}
         </ul>
-        ${visible.remaining > 0
-          ? html`<div class="chat-workspace-conflict-more">
-              ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
-            </div>`
-          : nothing}
+        ${
+          visible.remaining > 0
+            ? html`<div class="chat-workspace-conflict-more">
+                ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
+              </div>`
+            : nothing
+        }
         <details class="chat-workspace-conflict-commands-disclosure">
           <summary>${t("chat.workspaceConflict.showCommands")}</summary>
           <div class="chat-workspace-conflict-ref">
@@ -102,31 +108,33 @@ export function renderWorkspaceConflictNotice(props: {
               t("chat.workspaceConflict.copyStagedResult"),
             )}
           </div>
-          ${commands
-            ? html`<div class="chat-workspace-conflict-commands">
-                  <div>
-                    <span>${t("chat.workspaceConflict.inspectCloud")}</span>
-                    <code>${commands.inspect}</code>
-                    ${renderCopyButton(
-                      commands.inspect,
-                      t("chat.workspaceConflict.copyInspectCommand"),
-                    )}
+          ${
+            commands
+              ? html`<div class="chat-workspace-conflict-commands">
+                    <div>
+                      <span>${t("chat.workspaceConflict.inspectCloud")}</span>
+                      <code>${commands.inspect}</code>
+                      ${renderCopyButton(
+                        commands.inspect,
+                        t("chat.workspaceConflict.copyInspectCommand"),
+                      )}
+                    </div>
+                    <div>
+                      <span>${t("chat.workspaceConflict.takeCloud")}</span>
+                      <code>${commands.takeCloud}</code>
+                      ${renderCopyButton(
+                        commands.takeCloud,
+                        t("chat.workspaceConflict.copyTakeCommand"),
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <span>${t("chat.workspaceConflict.takeCloud")}</span>
-                    <code>${commands.takeCloud}</code>
-                    ${renderCopyButton(
-                      commands.takeCloud,
-                      t("chat.workspaceConflict.copyTakeCommand"),
-                    )}
-                  </div>
-                </div>
-                <p class="chat-workspace-conflict-command-help">
-                  ${t("chat.workspaceConflict.commandHelp")}
+                  <p class="chat-workspace-conflict-command-help">
+                    ${t("chat.workspaceConflict.commandHelp")}
+                  </p>`
+              : html`<p class="chat-workspace-conflict-command-help">
+                  ${t("chat.workspaceConflict.commandsUnavailable")}
                 </p>`
-            : html`<p class="chat-workspace-conflict-command-help">
-                ${t("chat.workspaceConflict.commandsUnavailable")}
-              </p>`}
+          }
         </details>
       </div>
     </details>
@@ -165,11 +173,13 @@ export function renderWorkspaceConflictTranscriptMessage(
               html`<li><code>${workspaceConflictPathForDisplay(entryPath)}</code></li>`,
           )}
         </ul>
-        ${visible.remaining > 0
-          ? html`<div class="chat-workspace-conflict-more">
-              ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
-            </div>`
-          : nothing}
+        ${
+          visible.remaining > 0
+            ? html`<div class="chat-workspace-conflict-more">
+                ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
+              </div>`
+            : nothing
+        }
         <div class="chat-workspace-conflict-ref">
           <span>${t("chat.workspaceConflict.stagedResult")}</span>
           <code>${conflict.stagedResultRef}</code>

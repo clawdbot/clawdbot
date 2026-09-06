@@ -357,43 +357,6 @@ describe("legacy workspace Doctor migration", () => {
     });
   });
 
-  it("removes a stale nested setup marker after the root marker wins", async () => {
-    const context = setup();
-    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-    const rootPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
-    const nestedPath = path.join(context.workspaceDir, ".openclaw", "workspace-state.json");
-    const rootSeededAt = "2026-07-15T10:00:00.000Z";
-    const completedAt = "2026-07-15T10:01:00.000Z";
-    await fsp.mkdir(path.dirname(nestedPath), { recursive: true });
-    await fsp.writeFile(
-      rootPath,
-      JSON.stringify({
-        version: 1,
-        bootstrapSeededAt: rootSeededAt,
-        setupCompletedAt: completedAt,
-      }),
-      "utf8",
-    );
-    await fsp.writeFile(
-      nestedPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-14T09:00:00.000Z" }),
-      "utf8",
-    );
-
-    const result = await migrate(context);
-
-    expect(result.warnings).toEqual([]);
-    expect(fs.existsSync(rootPath)).toBe(false);
-    expect(fs.existsSync(nestedPath)).toBe(false);
-    expect(
-      openOpenClawStateDatabase({ env: context.env })
-        .db.prepare(
-          "SELECT bootstrap_seeded_at, setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?",
-        )
-        .get(identity.workspaceKey),
-    ).toEqual({ bootstrap_seeded_at: rootSeededAt, setup_completed_at: completedAt });
-  });
-
   it("imports an orphan state-directory attestation by its hashed workspace key", async () => {
     const context = setup();
     const orphanKey = "c".repeat(64);

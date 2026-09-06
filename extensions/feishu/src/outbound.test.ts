@@ -3583,19 +3583,13 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     expectFeishuResult(result, "text_msg");
   });
 
-  // Regression for #112244 (fourteenth-review P1): the direct `send` action
-  // stamps the propagation marker on channelData.feishu before routing an
-  // attachment through sendPayload. The document-comment sendPayload branch
-  // preserves the marker (so the fallback helper requests propagation), but a
-  // comment target must NOT throw on the strength of that marker alone: the
-  // comment-target media-link fallback renders the media URL as a visible
-  // clickable link, which is established main behavior and NOT the silent
-  // text-only `ok:true` drop issue #112244 removes. Propagation is reserved for
-  // actual media-upload failures (the `sendMediaFeishu` catch), which a comment
-  // target never reaches because it never uploads. With the marker set, the
-  // comment target still renders the visible media-link fallback and returns a
-  // success receipt — the same outcome as the marker-absent case below.
-  it("renders the visible media-link fallback on a document-comment target even when the propagation marker is set", async () => {
+  it.each([
+    [
+      "renders the visible media-link fallback on a document-comment target even when the propagation marker is set",
+      true,
+    ],
+    ["still degrades a comment attachment to text when the propagation marker is absent", false],
+  ] as const)("%s", async (_name, propagate) => {
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "comment:docx:doxcn123:7623358762119646411",
@@ -3604,37 +3598,19 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
       payload: {
         text: "see attachment",
         mediaUrl: "https://example.com/pipeline.png",
-        channelData: {
-          feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
-        },
+        ...(propagate
+          ? {
+              channelData: {
+                feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
+              },
+            }
+          : {}),
       },
     });
 
-    // The media URL is delivered as a visible comment text link (not a silent
-    // text-only ok), and a success receipt is returned — comment targets keep
-    // their established media-link fallback regardless of the propagation flag.
     expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
     expectFeishuResult(result, "reply_msg");
-    // No media upload is attempted for a comment target.
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("still degrades a comment attachment to text when the propagation marker is absent", async () => {
-    const result = await feishuOutbound.sendPayload?.({
-      cfg: emptyConfig,
-      to: "comment:docx:doxcn123:7623358762119646411",
-      text: "see attachment",
-      accountId: "main",
-      payload: {
-        text: "see attachment",
-        mediaUrl: "https://example.com/pipeline.png",
-      },
-    });
-
-    // Default comment behavior is unchanged: the media link is rendered as a
-    // fallback text comment and a success receipt is returned.
-    expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
-    expectFeishuResult(result, "reply_msg");
   });
 });
 

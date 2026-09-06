@@ -1674,7 +1674,10 @@ describe("sqlite session normalization", () => {
             env,
             storePath: paths.sqlitePath,
           }).map((summary) => summary.sessionKey),
-        ).toEqual(["agent:main:newer", "agent:main:newest"]);
+        ).toEqual(["agent:main:active", "agent:main:newer", "agent:main:newest"]);
+        expect(loadSessionEntry(scopeFor("agent:main:active"))?.archivedAt).toEqual(
+          expect.any(Number),
+        );
       },
       { timeout: 5_000 },
     );
@@ -2484,6 +2487,7 @@ describe("sqlite session normalization", () => {
     };
     expect(loadSessionEntry({ ...sourceEntryScope, sessionKey: branchKey })).toEqual(result.entry);
     expect(notify).toHaveBeenCalledWith({
+      agentId: "main",
       kind: "create",
       previous: { sessionKeys: [] },
       current: { sessionId: result.entry.sessionId, sessionKeys: [branchKey] },

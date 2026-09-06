@@ -89,25 +89,29 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   const hasView = Boolean(controller.view);
   return html`
     <div class="bp-toolbar">
-      ${controller.operations.route
-        ? html`<span
-            class="bp-profile"
-            title=${t("browser.profile", { profile: controller.operations.route.profile })}
-            >${controller.operations.route.profile}</span
-          >`
-        : nothing}
-      ${embedded
-        ? html`<button
-            class="bp-icon"
-            type="button"
-            data-new-tab-action
-            title=${t("browser.newTab")}
-            aria-label=${t("browser.newTab")}
-            @click=${() => controller.beginNewTab()}
-          >
-            ${icons.plus}
-          </button>`
-        : nothing}
+      ${
+        controller.operations.route
+          ? html`<span
+              class="bp-profile"
+              title=${t("browser.profile", { profile: controller.operations.route.profile })}
+              >${controller.operations.route.profile}</span
+            >`
+          : nothing
+      }
+      ${
+        embedded
+          ? html`<button
+              class="bp-icon"
+              type="button"
+              data-new-tab-action
+              title=${t("browser.newTab")}
+              aria-label=${t("browser.newTab")}
+              @click=${() => controller.beginNewTab()}
+            >
+              ${icons.plus}
+            </button>`
+          : nothing
+      }
       <button
         class="bp-icon"
         type="button"
@@ -176,9 +180,9 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
       <button
         class="bp-icon ${controller.mode === "inspect" ? "is-active" : ""}"
         type="button"
-        title=${controller.evaluateUnavailable
-          ? t("browser.inspectUnavailable")
-          : t("browser.inspect")}
+        title=${
+          controller.evaluateUnavailable ? t("browser.inspectUnavailable") : t("browser.inspect")
+        }
         aria-label=${t("browser.inspect")}
         ?disabled=${!hasView || controller.evaluateUnavailable}
         @click=${() => controller.setMode("inspect")}
@@ -251,16 +255,20 @@ function renderInspectTooltip(controller: BrowserPanelController) {
           >${Math.round(node.rect.width)} × ${Math.round(node.rect.height)}</span
         >
       </div>
-      ${node.name
-        ? html`<div class="bp-tooltip__row">
-            <span>${t("browser.inspectName")}</span><span>${node.name}</span>
-          </div>`
-        : nothing}
-      ${node.role
-        ? html`<div class="bp-tooltip__row">
-            <span>${t("browser.inspectRole")}</span><span>${node.role}</span>
-          </div>`
-        : nothing}
+      ${
+        node.name
+          ? html`<div class="bp-tooltip__row">
+              <span>${t("browser.inspectName")}</span><span>${node.name}</span>
+            </div>`
+          : nothing
+      }
+      ${
+        node.role
+          ? html`<div class="bp-tooltip__row">
+              <span>${t("browser.inspectRole")}</span><span>${node.role}</span>
+            </div>`
+          : nothing
+      }
       <div class="bp-tooltip__row">
         <span>${t("browser.inspectFocusable")}</span><span>${node.focusable ? "✓" : "–"}</span>
       </div>
@@ -327,18 +335,20 @@ function renderViewport(controller: BrowserPanelController) {
       class="bp-viewport"
       name=${controller.activeTargetId ?? "browser"}
       active
-      aria-labelledby=${controller.activeTargetId
-        ? `browser-tab-${controller.activeTargetId}`
-        : nothing}
+      aria-labelledby=${
+        controller.activeTargetId ? `browser-tab-${controller.activeTargetId}` : nothing
+      }
       tabindex="0"
       @wheel=${(event: WheelEvent) => controller.handleWheel(event)}
       @keydown=${(event: KeyboardEvent) => controller.handleViewportKeydown(event)}
       aria-busy=${controller.loading ? "true" : "false"}
     >
       ${renderViewportContent(controller)}
-      ${controller.loading && controller.view
-        ? renderPanelLoadingSkeleton("browser", t("browser.loading"), false, true)
-        : nothing}
+      ${
+        controller.loading && controller.view
+          ? renderPanelLoadingSkeleton("browser", t("browser.loading"), false, true)
+          : nothing
+      }
     </wa-tab-panel>
   `;
 }
@@ -361,18 +371,22 @@ export function renderBrowserPanelChrome(
       aria-label=${t("browser.title")}
     >
       ${embedded ? nothing : resizer}
-      ${embedded && controller.tabs.length === 0
-        ? nothing
-        : html`<header class="rail-header bp-header">
-            ${renderTabStrip(controller, embedded)}
-            ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
-          </header>`}
+      ${
+        embedded && controller.tabs.length === 0
+          ? nothing
+          : html`<header class="rail-header bp-header">
+              ${renderTabStrip(controller, embedded)}
+              ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
+            </header>`
+      }
       ${renderToolbar(controller, embedded)} ${renderAnnotateBar(controller)}
-      ${controller.errorText
-        ? html`<div class="bp-note bp-note--error" role="alert">${controller.errorText}</div>`
-        : controller.noticeText
-          ? html`<div class="bp-note" role="status">${controller.noticeText}</div>`
-          : nothing}
+      ${
+        controller.errorText
+          ? html`<div class="bp-note bp-note--error" role="alert">${controller.errorText}</div>`
+          : controller.noticeText
+            ? html`<div class="bp-note" role="status">${controller.noticeText}</div>`
+            : nothing
+      }
       ${renderViewport(controller)}
     </section>
   `;

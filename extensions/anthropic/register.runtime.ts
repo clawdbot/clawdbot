@@ -52,7 +52,7 @@ import {
 import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
+import anthropicProviderDiscovery from "./provider-discovery.js";
 import {
   createClaudeSessionNodeInvokePolicies,
   registerClaudeSessionDiscovery,
@@ -154,6 +154,7 @@ function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): Provi
   // Discovered rows arrive id-sorted; keep the appended tail sorted too so the
   // catalog stays byte-stable for prompt caching.
   return {
+    ...result,
     provider: {
       ...result.provider,
       models: [...discovered, ...unpublished.toSorted((a, b) => a.id.localeCompare(b.id))],
@@ -836,6 +837,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       run: async (ctx) =>
         restoreUnpublishedAnthropicModels(
           await buildOpenAICompatibleProviderCatalog({
+            discoveryMode: "strict",
             ctx,
             providerId,
             buildProvider: buildAnthropicCatalogProvider,
@@ -872,10 +874,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ config, provider }) =>
-      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
-        ? resolveClaudeCliSyntheticAuth(config)
-        : undefined,
+    prepareSyntheticAuth: anthropicProviderDiscovery.prepareSyntheticAuth,
     ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
     isModernModelRef: ({ provider, modelId }) =>
       matchesAnthropicModernModel(modelId) &&

@@ -1,8 +1,6 @@
-// OpenAI-compatible audio tests cover attribution headers, auth selection,
+// OpenAI-compatible audio tests cover attribution headers,
 // filename normalization, and stable malformed-response errors.
-import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { VERSION } from "../version.js";
 import {
   createRequestCaptureJsonFetch,
@@ -99,83 +97,6 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       expect(form).toBeInstanceOf(FormData);
       expect((form as FormData).get("language")).toBe(language ?? null);
       expect((form as FormData).get("prompt")).toBeNull();
-    },
-  );
-
-  it("omits bearer auth for explicit no-auth requests", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
-
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.mp3",
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      auth: { kind: "none", source: "local provider" },
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "local-audio",
-      baseUrl: "https://audio.example.com/v1",
-      defaultBaseUrl: "https://audio.example.com/v1",
-      defaultModel: "whisper-local",
-    });
-
-    const headers = new Headers(getRequest().init?.headers);
-    expect(headers.get("authorization")).toBeNull();
-  });
-
-  it("uses typed api-key auth for bearer headers", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
-
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.mp3",
-      apiKey: "legacy-key",
-      auth: { kind: "api-key", apiKey: "typed-key", source: "test" },
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "local-audio",
-      baseUrl: "https://audio.example.com/v1",
-      defaultBaseUrl: "https://audio.example.com/v1",
-      defaultModel: "whisper-local",
-    });
-
-    const headers = new Headers(getRequest().init?.headers);
-    expect(headers.get("authorization")).toBe("Bearer typed-key");
-  });
-
-  it.each([400, 200])(
-    "redacts reflected request credentials from HTTP %s diagnostics",
-    async (status) => {
-      const credential = "synthetic-only";
-      const fetchFn = vi.fn<typeof fetch>().mockImplementationOnce(async (_url, init) => {
-        const authorization = new Headers(init?.headers).get("authorization");
-        expect(authorization).toBe(`Bearer ${credential}`);
-        return new Response(
-          status === 400
-            ? JSON.stringify({ error: { message: `Rejected ${credential}`, code: credential } })
-            : credential,
-          { status, headers: { "x-request-id": credential } },
-        );
-      });
-
-      const error = await transcribeOpenAiCompatibleAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "note.mp3",
-        apiKey: "unused-fixture-key",
-        headers: { authorization: `Bearer ${credential}` },
-        timeoutMs: 1000,
-        fetchFn,
-        provider: "openai",
-        defaultBaseUrl: "https://api.openai.com/v1",
-        defaultModel: "gpt-4o-transcribe",
-      }).catch((cause: unknown) => cause);
-      expect(error).toBeInstanceOf(Error);
-      expect(error).toMatchObject({
-        message:
-          status === 400
-            ? "Audio transcription failed (HTTP 400): Rejected *** [code=***] [request_id=***]"
-            : "Audio transcription failed: malformed JSON response",
-      });
-      expect(inspect(error)).not.toContain(credential);
     },
   );
 

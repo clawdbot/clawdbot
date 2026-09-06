@@ -142,7 +142,7 @@ describe("runMessageAction media behavior", () => {
     expect(requireRecord(sendArgs.ctx).idempotencyKey).toBe(
       "run-1:message-tool:send-1:fingerprint",
     );
-    expect(requireRecord(sendArgs.ctx).plugin).toBe(workspacePlugin);
+    expect(requireRecord(sendArgs.ctx).channelPlugin).toBe(workspacePlugin);
     expect(channelResolutionMocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
   });
 

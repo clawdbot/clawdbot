@@ -145,6 +145,70 @@ suite.define(() => {
         }),
       )
       .toEqual(["28px", "28px", "none"]);
+    const actionStyles = await sidebarBrand
+      .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
+      .evaluateAll((actions) =>
+        actions.map((action) => {
+          const icon = action.querySelector("svg");
+          const actionStyle = getComputedStyle(action);
+          const iconStyle = icon ? getComputedStyle(icon) : null;
+          return {
+            backgroundColor: actionStyle.backgroundColor,
+            borderStyle: actionStyle.borderTopStyle,
+            borderWidth: actionStyle.borderTopWidth,
+            boxShadow: actionStyle.boxShadow,
+            color: actionStyle.color,
+            iconOpacity: iconStyle?.opacity,
+            iconStrokeWidth: iconStyle?.strokeWidth,
+          };
+        }),
+      );
+    expect(actionStyles).toHaveLength(3);
+    expect(actionStyles[1]).toEqual(actionStyles[0]);
+    expect(actionStyles[2]).toEqual(actionStyles[0]);
+    await expect
+      .poll(() =>
+        sidebarBrand
+          .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
+          .evaluateAll((actions) =>
+            actions.map((action) => {
+              const icon = action.querySelector("svg");
+              if (!icon) {
+                return null;
+              }
+              const shapes = Array.from(
+                icon.querySelectorAll<SVGGraphicsElement>(
+                  "circle, ellipse, line, path, polygon, polyline, rect",
+                ),
+              );
+              const bounds = shapes.map((shape) => shape.getBBox());
+              const left = Math.min(...bounds.map((box) => box.x));
+              const right = Math.max(...bounds.map((box) => box.x + box.width));
+              return Math.round((right - left) * (icon.getBoundingClientRect().width / 24));
+            }),
+          ),
+      )
+      .toEqual([12, 12, 12]);
+
+    // One rail, one gap: adjacent controls touch in both directions, so no
+    // button carries a private optical offset left over from a bordered box.
+    const controlGaps = () =>
+      sidebarBrand
+        .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
+        .evaluateAll((actions) => {
+          const [first, ...rest] = actions.map((action) => action.getBoundingClientRect());
+          if (!first) {
+            return [];
+          }
+          let previous = first;
+          return rest.map((box) => {
+            const gap = Math.round(Math.max(box.left - previous.right, previous.left - box.right));
+            previous = box;
+            return gap;
+          });
+        });
+
+    await expect.poll(controlGaps).toEqual([0, 0]);
 
     const actionInset = async (direction: "ltr" | "rtl") => {
       const [brandBox, actionsBox] = await Promise.all([
@@ -170,6 +234,7 @@ suite.define(() => {
       document.documentElement.dir = "rtl";
     });
     await expect.poll(() => actionInset("rtl")).toBe(0);
+    await expect.poll(controlGaps).toEqual([0, 0]);
     await expect.poll(nameFade).toEqual(["8px", "0px", expect.stringContaining("270deg")]);
   });
 

@@ -1,6 +1,7 @@
 // Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
 // and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
 import type {
   ChannelsStatusSnapshot,
@@ -51,6 +52,7 @@ const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
 
 export function renderChannels(props: ChannelsProps) {
   const channelOrder = resolveChannelOrder(props.snapshot);
+  // Key both lists so status updates cannot retarget an in-flight channel click.
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
@@ -60,24 +62,31 @@ export function renderChannels(props: ChannelsProps) {
       .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
+  const selectedPlugin = selected ? resolveChannelPlugin(props, selected) : undefined;
 
   return html`
     ${renderSettingsPage(html`
-      ${showingStaleSnapshot
-        ? html`<div class="callout info">${t("channels.refreshingStaleSnapshot")}</div>`
-        : nothing}
-      ${props.snapshot?.partial
-        ? html`
-            <div class="callout warn">
-              ${t("channels.hub.partialSnapshot")}
-              ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
-            </div>
-          `
-        : nothing}
+      ${
+        showingStaleSnapshot
+          ? html`<div class="callout info">${t("channels.refreshingStaleSnapshot")}</div>`
+          : nothing
+      }
+      ${
+        props.snapshot?.partial
+          ? html`
+              <div class="callout warn">
+                ${t("channels.hub.partialSnapshot")}
+                ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
+              </div>
+            `
+          : nothing
+      }
       ${props.lastError ? html`<div class="callout danger">${props.lastError}</div>` : nothing}
-      ${props.setupBlockedByDirtyConfig && props.configFormDirty
-        ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
-        : nothing}
+      ${
+        props.setupBlockedByDirtyConfig && props.configFormDirty
+          ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
+          : nothing
+      }
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
@@ -96,7 +105,11 @@ export function renderChannels(props: ChannelsProps) {
                 ${renderSettingsEmpty(t("channels.hub.noneConnected"))}
               </div>
             `
-          : connected.map((key) => renderConnectedRow(key, props)),
+          : repeat(
+              connected,
+              (key) => key,
+              (key) => renderConnectedRow(key, props),
+            ),
       )}
       ${renderSettingsSection(
         {
@@ -104,44 +117,59 @@ export function renderChannels(props: ChannelsProps) {
           description: t("channels.hub.addSubtitle"),
         },
         html`
-          ${!props.canAdmin
-            ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
-            : html`${available.map((key) => renderAvailableRow(key, props))}
-              ${renderBrowseAllRow(props)}`}
+          ${
+            !props.canAdmin
+              ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
+              : html`${repeat(
+                  available,
+                  (key) => key,
+                  (key) => renderAvailableRow(key, props),
+                )}
+                ${renderBrowseAllRow(props)}`
+          }
         `,
       )}
       ${renderChannelPairingQueue(props)}
     `)}
-    ${selected
-      ? renderChannelDetail({
-          channelId: selected,
-          label: resolveChannelLabel(props.snapshot, selected),
-          props,
-          data,
-          onClose: () => props.onCloseDetail(),
-          onSetup: () => props.onStartSetup(selected),
-        })
-      : nothing}
-    ${props.canAdmin
-      ? renderChannelWizard({
-          wizard: props.wizard,
-          channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
-          multiselectValues: props.wizardMultiselect,
-          onToggleMultiselect: props.onWizardToggleMultiselect,
-          textValue: props.wizardTextValue,
-          secretVisible: props.wizardSecretVisible,
-          onTextInput: props.onWizardTextInput,
-          onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
-          onAnswer: props.onWizardAnswer,
-          onClose: props.onWizardClose,
-          whatsappQrDataUrl: props.whatsappQrDataUrl,
-          whatsappMessage: props.whatsappMessage,
-          whatsappConnected: props.whatsappConnected,
-          whatsappBusy: props.whatsappBusy,
-          onWhatsAppStart: props.onWhatsAppStart,
-          onWhatsAppWait: props.onWhatsAppWait,
-        })
-      : nothing}
+    ${
+      selected
+        ? renderChannelDetail({
+            channelId: selected,
+            label: resolveChannelLabel(props, selected),
+            pluginIconUrl: props.pluginIconUrls[selected],
+            preferPluginIcon: selectedPlugin?.hasIcon === true,
+            props,
+            data,
+            onClose: () => props.onCloseDetail(),
+            onSetup: () => props.onStartSetup(selected),
+          })
+        : nothing
+    }
+    ${
+      props.canAdmin
+        ? renderChannelWizard({
+            wizard: props.wizard,
+            channelLabel: (channelId) => resolveChannelLabel(props, channelId),
+            channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
+            channelHasPluginIcon: (channelId) =>
+              resolveChannelPlugin(props, channelId)?.hasIcon === true,
+            multiselectValues: props.wizardMultiselect,
+            onToggleMultiselect: props.onWizardToggleMultiselect,
+            textValue: props.wizardTextValue,
+            secretVisible: props.wizardSecretVisible,
+            onTextInput: props.onWizardTextInput,
+            onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
+            onAnswer: props.onWizardAnswer,
+            onClose: props.onWizardClose,
+            whatsappQrDataUrl: props.whatsappQrDataUrl,
+            whatsappMessage: props.whatsappMessage,
+            whatsappConnected: props.whatsappConnected,
+            whatsappBusy: props.whatsappBusy,
+            onWhatsAppStart: props.onWhatsAppStart,
+            onWhatsAppWait: props.onWhatsAppWait,
+          })
+        : nothing
+    }
     ${renderChannelPairingPrompt(props)}
   `;
 }
@@ -161,31 +189,35 @@ function buildChannelData(props: ChannelsProps): ChannelsChannelData {
   };
 }
 
-function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
+export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
   const statusOrder = snapshot?.channelMeta?.length
     ? snapshot.channelMeta.map((entry) => entry.id)
     : (snapshot?.channelOrder ?? []);
   return [...new Set([...statusOrder, ...RECOMMENDED_CHANNEL_ORDER])];
 }
 
-function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: string): string {
+function resolveChannelPlugin(props: ChannelsProps, key: string) {
+  return props.pluginCatalog?.plugins.find((plugin) => plugin.id === key);
+}
+
+function resolveChannelLabel(props: ChannelsProps, key: string): string {
+  const snapshot = props.snapshot;
   const labels = snapshot?.channelLabels;
   return (
+    resolveChannelPlugin(props, key)?.name ??
     snapshot?.channelMeta?.find((entry) => entry.id === key)?.label ??
     (labels && Object.hasOwn(labels, key) ? labels[key] : undefined) ??
     key
   );
 }
 
-function resolveChannelDetailLabel(
-  snapshot: ChannelsStatusSnapshot | null,
-  key: string,
-): string | null {
+function resolveChannelDetailLabel(props: ChannelsProps, key: string): string | null {
+  const snapshot = props.snapshot;
   const labels = snapshot?.channelDetailLabels;
   const detail =
     snapshot?.channelMeta?.find((entry) => entry.id === key)?.detailLabel ??
     (labels && Object.hasOwn(labels, key) ? labels[key] : null);
-  return detail && detail !== resolveChannelLabel(snapshot, key) ? detail : null;
+  return detail && detail !== resolveChannelLabel(props, key) ? detail : null;
 }
 
 function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardState {
@@ -230,10 +262,10 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
 }
 
 function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
-  const label = resolveChannelLabel(props.snapshot, key);
+  const label = resolveChannelLabel(props, key);
   const description =
     lastActivityLine(key, props) ??
-    resolveChannelDetailLabel(props.snapshot, key) ??
+    resolveChannelDetailLabel(props, key) ??
     t("channels.hub.openDetails");
   return html`
     <button
@@ -241,7 +273,10 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
       class="settings-row settings-row--nav channels-item"
       @click=${() => props.onShowDetail(key)}
     >
-      ${renderChannelIcon(key, label, "tile")}
+      ${renderChannelIcon(key, label, "tile", {
+        pluginIconUrl: props.pluginIconUrls[key],
+        preferPluginIcon: resolveChannelPlugin(props, key)?.hasIcon === true,
+      })}
       <div class="settings-row__text">
         <span class="settings-row__title">${label}</span>
         <span class="settings-row__desc">${description}</span>
@@ -255,9 +290,10 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
 }
 
 function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
-  const label = resolveChannelLabel(props.snapshot, key);
+  const plugin = resolveChannelPlugin(props, key);
+  const label = resolveChannelLabel(props, key);
   const description =
-    resolveChannelDetailLabel(props.snapshot, key) ?? t("channels.hub.guidedSetup");
+    plugin?.description ?? resolveChannelDetailLabel(props, key) ?? t("channels.hub.guidedSetup");
   return html`
     <div class="settings-row channels-item">
       <button
@@ -266,7 +302,10 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
         title=${t("channels.hub.openDetails")}
         @click=${() => props.onShowDetail(key)}
       >
-        ${renderChannelIcon(key, label, "tile")}
+        ${renderChannelIcon(key, label, "tile", {
+          pluginIconUrl: props.pluginIconUrls[key],
+          preferPluginIcon: plugin?.hasIcon === true,
+        })}
         <span class="settings-row__text">
           <span class="settings-row__title">${label}</span>
           <span class="settings-row__desc">${description}</span>

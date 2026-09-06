@@ -41,14 +41,14 @@ export async function runByteLimitedArchiveCleanupFixture(storePath: string): Pr
   }
   await replaceSessionEntry(
     { sessionKey: "agent:main:worker-byte-retained", storePath },
-    { sessionId: "worker-byte-session-retained", updatedAt: sessionIds.length },
+    { sessionId: "worker-byte-session-retained", updatedAt: Date.now() },
   );
   await applySessionEntryLifecycleMutation({
     storePath,
     maintenanceOverride: {
-      maxEntries: 1,
+      maxEntries: 100,
       mode: "enforce",
-      pruneAfterMs: Number.MAX_SAFE_INTEGER,
+      pruneAfterMs: 60_000,
     },
   });
   return sessionIds;

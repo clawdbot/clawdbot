@@ -643,7 +643,7 @@ extension DashboardWindowSmokeTests {
             persistedWidth: 400) == 400)
 
         let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
-        await TestIsolation.withUserDefaultsValues([key: nil]) {
+        try await TestIsolation.withUserDefaultsValues([key: nil]) {
             let defaults = AppDefaults.standard
             let dashboard = server.url("/control/")
             let link = readerServer.url("/reader/half-width")
@@ -671,11 +671,20 @@ extension DashboardWindowSmokeTests {
                     DashboardWindowLayout.mainBrowserMinWidth)
             #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItem.unspecifiedDimension)
 
-            defaults.set(Double(openedLinkBrowserWidth + 37), forKey: key)
-            controller._testCompleteLinkBrowserDividerDrag()
+            let window = try #require(controller.window)
+            let widerWidth = min(
+                openedLinkBrowserWidth + 80,
+                openedSplitWidth - dividerThickness - DashboardWindowLayout.mainBrowserMinWidth)
+            let narrowerWidth = max(openedLinkBrowserWidth - 80, DashboardWindowLayout.linkBrowserMinWidth)
+            for url in [link, readerServer.url("/reader/second")] {
+                controller._testOpenLinkBrowser(url)
+                for width in [widerWidth, narrowerWidth] {
+                    try Self.resizeLinkBrowser(in: window, toWidth: width)
+                    #expect(abs(controller._testLinkBrowserWidth - width) < 1)
+                }
+            }
             let resizedWidth = controller._testLinkBrowserWidth
-            #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
-            #expect(abs(CGFloat(defaults.double(forKey: key)) - openedLinkBrowserWidth - 37) >= 1)
+            defaults.set(Double(resizedWidth), forKey: key)
 
             controller._testCloseLinkBrowser()
             controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
@@ -707,6 +716,24 @@ extension DashboardWindowSmokeTests {
                 #expect(abs(controller._testLinkBrowserWidth - width) < 1)
             }
         }
+    }
+
+    private static func resizeLinkBrowser(in window: NSWindow, toWidth width: CGFloat) throws {
+        var descendants = try [#require(window.contentView)]
+        var splitView: NSSplitView?
+        while let view = descendants.popLast() {
+            if let split = view as? NSSplitView {
+                splitView = split
+                break
+            }
+            descendants.append(contentsOf: view.subviews)
+        }
+        let split = try #require(splitView)
+        split.layoutSubtreeIfNeeded()
+        // AppKit applies the same constraints as a user drag without entering
+        // a nested mouse-tracking loop inside Swift Testing's executor.
+        split.setPosition(split.bounds.width - width - split.dividerThickness, ofDividerAt: 0)
+        split.layoutSubtreeIfNeeded()
     }
 
     @Test func `dashboard link browser reorders and closes other tabs`() async throws {
@@ -978,11 +1005,6 @@ extension DashboardWindowSmokeTests {
         #expect(DashboardWindowController.originString(for: url) == "http://[fd12:3456:789a::1]:18789")
     }
 
-    @Test func `dashboard log string strips token fragment`() throws {
-        let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=sekret")) // pragma: allowlist secret
-        #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
-    }
-
     @Test func `dashboard native chrome clears both desktop sidebars`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -1094,9 +1116,10 @@ extension DashboardWindowSmokeTests {
         let replacementServer = try await DashboardHTTPFixture.start()
         defer { replacementServer.stop() }
         let controller = self.makeShownController(server: server)
-        defer { controller.closeDashboard() }
+        let window = try #require(controller.window)
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
+        defer { manager.close() }
 
         await manager.handleEndpointState(.ready(
             mode: .remote,
@@ -1104,8 +1127,12 @@ extension DashboardWindowSmokeTests {
             token: "device-token",
             password: nil))
 
-        #expect(controller.currentURL.absoluteString == replacementServer.url("/#token=device-token").absoluteString)
-        let authScripts = controller._testUserScripts
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(replacement.window === window)
+        #expect(window.isVisible)
+        #expect(replacement.currentURL.absoluteString == replacementServer.url("/#token=device-token").absoluteString)
+        let authScripts = replacement._testUserScripts
             .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
         #expect(authScripts.count == 1)
         // JSONSerialization escapes "/" so match on host:port, not the full origin.
