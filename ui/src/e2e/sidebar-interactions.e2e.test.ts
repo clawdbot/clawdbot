@@ -399,6 +399,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
+    const agentName = "Scheduled Automations";
     const agentsList = {
       agents: [{ id: "main" }, { id: "research" }, { id: "forge" }],
       defaultId: "main",
@@ -411,7 +412,7 @@ suite.define(() => {
           cases: [
             {
               match: { agentId: "main" },
-              response: { agentId: "main", avatar: "", emoji: "🦞", name: "Main" },
+              response: { agentId: "main", avatar: "", emoji: "🦞", name: agentName },
             },
             {
               match: { agentId: "research" },
@@ -444,7 +445,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-      const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
+      const mainSwitch = menu.getByRole("menuitemradio", { name: agentName });
       const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
       await expect
         .poll(() =>
@@ -512,6 +513,29 @@ suite.define(() => {
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      await page.evaluate(() => document.fonts.ready);
+      const capabilities = menu.locator('wa-dropdown-item[value="command:capabilities"]');
+      expect(await capabilities.ariaSnapshot()).toContain(agentName);
+      const actionBounds = await capabilities
+        .locator(".sidebar-customize-menu__text")
+        .evaluate((text) => {
+          const bounds = text
+            .closest("wa-dropdown")
+            ?.shadowRoot?.querySelector('[part~="menu"]')
+            ?.getBoundingClientRect();
+          if (!bounds) {
+            throw new Error("Expected the rendered agent menu");
+          }
+          const label = text.getBoundingClientRect();
+          return {
+            labelLeft: label.left,
+            labelRight: label.right,
+            menuLeft: bounds.left,
+            menuRight: bounds.right,
+          };
+        });
+      expect(actionBounds.labelLeft).toBeGreaterThanOrEqual(actionBounds.menuLeft);
+      expect(actionBounds.labelRight).toBeLessThanOrEqual(actionBounds.menuRight);
       await page.keyboard.press("End");
       await expect
         .poll(() =>
