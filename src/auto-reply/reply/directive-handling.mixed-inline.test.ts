@@ -1,28 +1,25 @@
-import "./directive-handling.mixed-inline.test-mocks.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as authProfileStore from "../../agents/auth-profiles/store.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveThinkingDefault } from "../../agents/model-thinking-default.js";
-import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
-import {
-  lifecycleEvents,
-  persistenceMocks,
-  type PersistenceResult,
-} from "./directive-handling.mixed-inline.test-harness.js";
+import { lifecycleEvents } from "./directive-handling.mixed-inline.test-harness.js";
 import {
   applyMixedDirectives,
   createSessionEntry,
-} from "./directive-handling.mixed-inline.test-helpers.js";
+  enqueueSystemEvent,
+  loadProviderScopedThinkingCatalog,
+  persistenceMocks,
+  persistStickyModelSelectionBestEffort,
+  refreshQueuedFollowupSession,
+  triggerSessionPatchHook,
+  type PersistenceResult,
+} from "./directive-handling.mixed-inline.test-mocks.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
-import { refreshQueuedFollowupSession } from "./queue.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 describe("mixed inline directives", () => {

@@ -1,18 +1,15 @@
-import "./directive-handling.mixed-inline.test-mocks.js";
 import { describe, expect, it } from "vitest";
-import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
-import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
-import {
-  lifecycleEvents,
-  persistenceMocks,
-} from "./directive-handling.mixed-inline.test-harness.js";
+import { lifecycleEvents } from "./directive-handling.mixed-inline.test-harness.js";
 import {
   applyMixedDirectives,
   createSessionEntry,
-} from "./directive-handling.mixed-inline.test-helpers.js";
-import { refreshQueuedFollowupSession } from "./queue.js";
+  enqueueSystemEvent,
+  persistenceMocks,
+  persistStickyModelSelectionBestEffort,
+  refreshQueuedFollowupSession,
+  triggerSessionPatchHook,
+} from "./directive-handling.mixed-inline.test-mocks.js";
 
 describe("mixed inline directives / model selection", () => {
   describe.each(["", "please reply "])("model scope with prefix %j", (prefix) => {

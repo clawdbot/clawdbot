@@ -1,6 +1,15 @@
 // Install directive dependency mocks before tests import their consumers.
 import { vi } from "vitest";
+import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  applyMixedDirectives,
+  createSessionEntry,
+} from "./directive-handling.mixed-inline.test-helpers.js";
+import { refreshQueuedFollowupSession } from "./queue.js";
 
 export type PersistenceResult =
   | { status: "current"; entry: SessionEntry }
@@ -50,4 +59,13 @@ vi.mock("./session-entry-persistence.js", () => ({
   persistReplySessionEntry: (params: { entry: SessionEntry }) => persistenceMocks.persist(params),
 }));
 
-export { persistenceMocks };
+export {
+  applyMixedDirectives,
+  createSessionEntry,
+  enqueueSystemEvent,
+  loadProviderScopedThinkingCatalog,
+  persistenceMocks,
+  persistStickyModelSelectionBestEffort,
+  refreshQueuedFollowupSession,
+  triggerSessionPatchHook,
+};

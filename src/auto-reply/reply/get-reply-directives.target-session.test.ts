@@ -11,6 +11,12 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import {
+  expectContinueResult,
+  makeSessionEntry,
+  makeTypingController,
+  mockCallInput,
+} from "./get-reply-directives.target-session.test-helpers.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   prepareReplyConversation,
@@ -32,52 +38,6 @@ const mocks = vi.hoisted(() => ({
   resolveGroupRequireMention: vi.fn(async (_params: unknown) => false),
   shouldHandleTextCommands: vi.fn(() => false),
 }));
-
-function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-id",
-    updatedAt: Date.now(),
-    ...overrides,
-  };
-}
-
-function makeTypingController() {
-  return {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
-}
-
-function mockCallInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  const input = call[0];
-  if (!input || typeof input !== "object") {
-    throw new Error(`expected mock input ${index}`);
-  }
-  return input as Record<string, unknown>;
-}
-
-function expectContinueResult(
-  value: Awaited<ReturnType<typeof resolveReplyDirectives>>,
-  fields: Record<string, unknown>,
-) {
-  expect(value.kind).toBe("continue");
-  if (value.kind !== "continue") {
-    throw new Error(`expected continue result, got ${value.kind}`);
-  }
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(value.result[key as keyof typeof value.result]).toEqual(expected);
-  }
-}
 
 async function resolveHelloWithModelDefaults(params: {
   defaultThinking: "off" | "low" | "medium";

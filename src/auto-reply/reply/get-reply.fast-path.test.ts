@@ -24,6 +24,7 @@ import { buildCommandContext } from "./commands-context.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
+  emptyAliasIndex,
   markCompleteReplyConfig,
   withFastReplyConfig,
 } from "./get-reply-fast-path.test-support.js";
@@ -44,11 +45,6 @@ registerGetReplyBaselineBypass();
 
 type LoadModelCatalogFn =
   typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
-type ModelAliasIndex = import("../../agents/model-selection.js").ModelAliasIndex;
-
-function emptyAliasIndex(): ModelAliasIndex {
-  return { byAlias: new Map(), byKey: new Map() };
-}
 
 const mocks = vi.hoisted(() => ({
   buildStatusReply: vi.fn(),

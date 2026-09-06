@@ -1,5 +1,5 @@
 // Tests invocation rejection outcomes through shared dispatch and the diagnostic bus.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
