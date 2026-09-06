@@ -19,6 +19,7 @@ import {
 } from "../../tool-search.js";
 import { log } from "../logger.js";
 import { remapSkillReferencePaths } from "../sandbox-skills.js";
+import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
@@ -36,7 +37,6 @@ import {
 } from "./attempt-sessions-yield.js";
 import {
   prepareEmbeddedAttemptSetup,
-  prepareEmbeddedAttemptSkills,
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-setup.js";
@@ -129,7 +129,8 @@ export async function runEmbeddedAttempt(
   });
   try {
     const preparedSkills = await prepare("attempt.skills", () =>
-      prepareEmbeddedAttemptSkills({
+      prepareEmbeddedSkills({
+        includeCodeModeSkills: true,
         attempt: params,
         effectiveWorkspace,
         sandbox,
