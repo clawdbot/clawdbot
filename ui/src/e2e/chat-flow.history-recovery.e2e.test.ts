@@ -848,12 +848,6 @@ suite.define(() => {
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
-      await gateway.setHistoryMessages([
-        {
-          role: "user",
-          __openclaw: { idempotencyKey: `${runId}:user` },
-        },
-      ]);
       await gateway.emitChatFinal({ runId, text: "Delivered after reconnect." });
       await queue.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });

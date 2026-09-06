@@ -1549,15 +1549,14 @@ describe("tryDispatchAcpReplyCore", () => {
       const controller = new AbortController();
       const recorder = createUserTurnTranscriptRecorder({
         target: { ...target, sessionEntry: undefined },
-        resolveInput: async () => {
-          controller.abort();
-          return { text: "Cancel while saving this turn." };
-        },
+        resolveInput: async () => ({ text: "Cancel while saving this turn." }),
       });
       const actualTranscript = await vi.importActual<
         typeof import("./dispatch-acp-transcript.runtime.js")
       >("./dispatch-acp-transcript.runtime.js");
       transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async (input) => {
+        expect(managerMocks.runTurn).toHaveBeenCalledOnce();
+        controller.abort();
         await actualTranscript.persistAcpDispatchTranscript(
           input as Parameters<typeof actualTranscript.persistAcpDispatchTranscript>[0],
         );

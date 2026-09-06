@@ -660,9 +660,9 @@ suite.define(() => {
         sessionInfo: acceptedSession,
         messages: [],
       });
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-      // Publish acceptance after the ACK settles, then wait for its durable
-      // retirement before disconnecting this already accepted tool run.
+      await gateway.resolveDeferred("chat.send");
+      // Default execution commits the original source before its ACK. Publish
+      // live state after consumption, then disconnect during the tool run.
       await waitForCommittedState(
         page,
         ({ runId: expectedRunId }) => {

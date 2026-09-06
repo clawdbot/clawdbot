@@ -8,7 +8,6 @@ import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { redactSensitiveArgv } from "../../config/redact-argv.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../../config/schema.js";
-import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import {
   commandReply,
@@ -17,10 +16,8 @@ import {
   requireGatewayClientScope,
 } from "./command-gates.js";
 import {
+  buildPrivateCommandApprovalRequest,
   deliverPrivateCommandReply,
-  readCommandDeliveryTarget,
-  readCommandMessageThreadId,
-  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -91,7 +88,7 @@ async function buildMcpShowReply(name?: string): Promise<ReplyPayload> {
   };
 }
 
-function buildMcpShowPrivateRouteRequest(params: HandleCommandsParams): ExecApprovalRequest {
+async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, name?: string) {
   const now = Date.now();
   const agentId =
     params.agentId ??
@@ -99,27 +96,15 @@ function buildMcpShowPrivateRouteRequest(params: HandleCommandsParams): ExecAppr
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  return {
-    approvalKind: "exec",
-    id: "mcp-show-private-route",
-    request: {
-      command: params.command.commandBodyNormalized,
-      agentId,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      turnSourceChannel: params.command.channel,
-      turnSourceTo: readCommandDeliveryTarget(params) ?? null,
-      turnSourceAccountId: params.ctx.AccountId ?? null,
-      turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
-    },
-    createdAtMs: now,
-    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
-  };
-}
-
-async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, name?: string) {
   const targets = await resolvePrivateCommandRouteTargets({
     commandParams: params,
-    request: buildMcpShowPrivateRouteRequest(params),
+    request: buildPrivateCommandApprovalRequest({
+      commandParams: params,
+      id: "mcp-show-private-route",
+      command: params.command.commandBodyNormalized,
+      agentId,
+      createdAtMs: now,
+    }),
   });
   if (targets.length === 0) {
     return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);

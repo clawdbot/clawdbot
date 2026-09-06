@@ -596,6 +596,21 @@ export async function tryDispatchAcpReplyCore(params: {
     runId: params.runId,
   });
   const pendingAnswerText = resolveAcpPromptText(params.ctx);
+  const inputRecorder = params.userTurnTranscriptRecorder;
+  const assertInputCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    inputRecorder?.withPendingInput?.(() => {});
+  };
+  const persistInput = inputRecorder
+    ? async () => {
+        assertInputCurrent();
+        await inputRecorder.persistApproved();
+        assertInputCurrent();
+        if (!inputRecorder.hasPersisted()) {
+          throw new Error("ACP input must be durably committed before dispatch.");
+        }
+      }
+    : undefined;
   try {
     if (
       pendingAnswerText &&
@@ -605,6 +620,8 @@ export async function tryDispatchAcpReplyCore(params: {
       (await claimPendingAgentQuestionAnswer({
         sessionKey: acpResolution.sessionKey,
         text: pendingAnswerText,
+        sourceRecorder: inputRecorder,
+        authority: { kind: "run", assertCurrent: assertInputCurrent },
       }))
     ) {
       recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
@@ -940,7 +957,6 @@ export async function tryDispatchAcpReplyCore(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
-    turnDispatched = true;
     const channelAdmission = consumeChannelRunAdmission(
       readChannelContextAdmissionEvidence(params.ctx),
     );
@@ -974,6 +990,14 @@ export async function tryDispatchAcpReplyCore(params: {
         getAdmittedRunDelegatedAuthority(turnAdmission) !== undefined,
     };
     const onElicitation = createLazyAcpElicitationHandler(elicitationParams);
+    // ACP can act before its terminal transcript arrives. Consume accepted input
+    // before submission while leaving final assistant/outcome persistence below.
+    await persistInput?.();
+    assertInputCurrent();
+    if (getAdmittedRunDelegatedAuthority(turnAdmission) === undefined) {
+      throw new Error("ACP turn admission ended before input dispatch.");
+    }
+    turnDispatched = true;
     await acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,

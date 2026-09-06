@@ -259,7 +259,6 @@ extensions/whatsapp/src/connection-controller.ts
 extensions/workboard/browser/lib/workboard/index.test.ts
 extensions/workboard/browser/pages/workboard/view.test.ts
 extensions/workboard/src/sqlite-store.ts
-extensions/workboard/src/store-card-helpers.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts

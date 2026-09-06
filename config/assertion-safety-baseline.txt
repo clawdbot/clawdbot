@@ -172,7 +172,7 @@ extensions/codex/src/app-server/compact.ts	1
 extensions/codex/src/app-server/computer-use-cache.ts	1
 extensions/codex/src/app-server/config-reviewer.ts	2
 extensions/codex/src/app-server/config-utils.ts	1
-extensions/codex/src/app-server/context-engine-projection.ts	4
+extensions/codex/src/app-server/context-engine-projection.ts	3
 extensions/codex/src/app-server/dynamic-tool-build.ts	1
 extensions/codex/src/app-server/dynamic-tools.ts	5
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
@@ -2518,7 +2518,7 @@ src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
 src/commands/onboard-helpers.ts	2
 src/commands/onboard-non-interactive/local.ts	3
-src/commands/onboard-non-interactive/local/auth-choice-inference.ts	2
+src/commands/onboard-non-interactive/local/auth-choice-inference.ts	1
 src/commands/onboard-non-interactive/local/auth-choice.plugin-providers.ts	1
 src/commands/onboard-non-interactive/local/auth-choice.ts	3
 src/commands/onboarding-plugin-install.ts	1
@@ -3476,8 +3476,7 @@ src/plugins/setup-registry-loader-state.ts	1
 src/plugins/setup-registry.ts	12
 src/plugins/slots.ts	3
 src/plugins/toggle-config.ts	3
-src/plugins/tool-descriptor-cache.ts	4
-src/plugins/tools.ts	8
+src/plugins/tools.ts	3
 src/plugins/trusted-tool-policy.ts	1
 src/plugins/uninstall-config.ts	3
 src/plugins/uninstall-package-config.ts	2

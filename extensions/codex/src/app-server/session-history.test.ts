@@ -186,54 +186,62 @@ function settledFixture() {
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
-  it("does not expose arbitrary consumer errors across the history boundary", async () => {
+  it.each([
+    new Error("private transcript detail"),
+    new Error("Codex settled-turn projection exceeds the item limit: private detail"),
+    Object.assign(new Error("private missing consumer data"), { code: "ENOENT" }),
+  ])("sanitizes unknown consumer failures without classifying their text (%s)", async (error) => {
     const result = await readCodexNativeHistory({ kind: "empty" }, "session-id", () => {
-      throw new Error("private transcript detail");
+      throw error;
     });
 
     expect(result).toEqual({
-      value: undefined,
-      failure: { code: "history_consumer_failed" },
+      status: "rejected",
+      reason: "history_read_failed",
     });
-    expect(JSON.stringify(result)).not.toContain("private transcript detail");
   });
 
-  it("preserves a sanitized settled-turn projection failure for capture diagnostics", async () => {
-    const { marker, sessionTarget } = await writeSqliteSession({ incognito: true });
-    for (let index = 0; index < 201; index += 1) {
-      await appendSessionTranscriptMessageByIdentity({
-        ...sessionTarget,
-        message: { role: "user", content: `prior-${index}`, timestamp: index + 3 },
-      });
-    }
-    const { settledMessages } = settledFixture();
-    for (const message of settledMessages) {
-      await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
-    }
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    try {
-      await expect(
-        captureCodexSettledTurnFinalizationContext({
+  it.each([
+    { incognito: false, reason: "item_limit", count: 201, text: "prior" },
+    { incognito: true, reason: "item_limit", count: 201, text: "prior" },
+    { incognito: false, reason: "field_limit", count: 1, text: "x".repeat(65537) },
+    { incognito: true, reason: "field_limit", count: 1, text: "x".repeat(65537) },
+  ])(
+    "retains $reason in capture diagnostics (incognito=$incognito)",
+    async ({ incognito, reason, count, text }) => {
+      const { marker, sessionTarget } = await writeSqliteSession({ incognito });
+      for (let index = 0; index < count; index += 1) {
+        await appendSessionTranscriptMessageByIdentity({
           ...sessionTarget,
-          sessionTarget,
-          sessionFile: marker,
-          model: "gpt-5.6-luna",
-          settledMessages,
-          mirroredMessages: settledMessages,
-          turnId: "settled",
-        }),
-      ).resolves.toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
-        "codex settled-turn finalization context capture failed",
-        expect.objectContaining({
-          error: "Codex settled-turn projection exceeds the item limit",
-          turnId: "settled",
-        }),
-      );
-    } finally {
-      warn.mockRestore();
-    }
-  });
+          message: { role: "user", content: text, timestamp: index + 3 },
+        });
+      }
+      const { settledMessages } = settledFixture();
+      for (const message of settledMessages) {
+        await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
+      }
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      try {
+        await expect(
+          captureCodexSettledTurnFinalizationContext({
+            ...sessionTarget,
+            sessionTarget,
+            sessionFile: marker,
+            model: "gpt-5.6-luna",
+            settledMessages,
+            mirroredMessages: settledMessages,
+            turnId: "settled",
+          }),
+        ).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          "codex settled-turn finalization context capture failed",
+          { reason },
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 
   it.each([
     { oversized: false, incognito: false },
@@ -309,14 +317,28 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     },
   );
 
-  it.each(["rewrite", "append", "other-session"])(
-    "revalidates native evidence after the worker returns (%s)",
-    async (mutation) => {
+  it.each([
+    { mutation: "rewrite", oversized: false, reason: "snapshot_invalidated" },
+    { mutation: "append", oversized: false, reason: "snapshot_invalidated" },
+    { mutation: "other-session", oversized: false, reason: undefined },
+    { mutation: "rewrite", oversized: true, reason: "snapshot_invalidated" },
+    { mutation: "append", oversized: true, reason: "snapshot_invalidated" },
+    { mutation: "other-session", oversized: true, reason: "field_limit" },
+  ])(
+    "revalidates before reporting projection rejection ($mutation, oversized=$oversized)",
+    async ({ mutation, oversized, reason }) => {
       const { marker, sessionTarget } = await writeSqliteSession();
+      if (oversized) {
+        await appendSessionTranscriptMessageByIdentity({
+          ...sessionTarget,
+          message: { role: "user", content: "x".repeat(65537), timestamp: 3 },
+        });
+      }
       const { settledMessages } = settledFixture();
       for (const message of settledMessages) {
         await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
       }
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
       const readFinished = createDeferred<void>();
       const acceptResult = createDeferred<void>();
       const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
@@ -373,14 +395,19 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         }
         acceptResult.resolve();
         const captured = await pending;
-        if (mutation === "other-session") {
+        if (reason === undefined) {
           expect(captured).toBeInstanceOf(CodexSettledTurnContext);
         } else {
           expect(captured).toBeUndefined();
+          expect(warn).toHaveBeenCalledWith(
+            "codex settled-turn finalization context capture failed",
+            { reason },
+          );
         }
       } finally {
         acceptResult.resolve();
         spy.mockRestore();
+        warn.mockRestore();
       }
     },
   );
@@ -447,6 +474,38 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ).resolves.toEqual([]);
   });
 
+  it("sanitizes consumer rejection after a missing file is read as empty history", async () => {
+    const existing = await writeSession([]);
+    const sessionFile = path.join(path.dirname(existing), "absent.jsonl");
+    await expect(
+      readCodexNativeHistory({ kind: "file", sessionFile }, "codex-session", () => {
+        throw new Error("private missing-file consumer detail");
+      }),
+    ).resolves.toEqual({ status: "rejected", reason: "history_read_failed" });
+  });
+
+  it("reports an admission for another session without exposing its identifiers", async () => {
+    const { sessionTarget } = await writeSqliteSession();
+    const appended = await appendSessionTranscriptMessageByIdentity({
+      ...sessionTarget,
+      message: { role: "user", content: "private admitted input", timestamp: 3 },
+    });
+    expect(appended?.anchor).toBeDefined();
+    await expect(
+      readCodexNativeHistory(
+        { kind: "sqlite", target: sessionTarget },
+        sessionTarget.sessionId,
+        (messages) => Array.from(messages),
+        {
+          ...appended!.anchor!,
+          sessionId: "private-other-session",
+          logicalTurnId: "private-turn",
+          role: "user",
+        },
+      ),
+    ).resolves.toEqual({ status: "rejected", reason: "access_rejected" });
+  });
+
   it("does not create a database for a missing explicit SQLite session key", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-missing-"));
     tempDirs.push(dir);
@@ -484,6 +543,12 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     tempDirs.push(dir);
     const sessionFile = path.join(dir, "session.jsonl");
     await fs.writeFile(sessionFile, JSON.stringify({ type: "session", id: 42 }) + "\n");
+
+    await expect(
+      readCodexNativeHistory({ kind: "file", sessionFile }, "codex-session", (messages) =>
+        Array.from(messages),
+      ),
+    ).resolves.toEqual({ status: "rejected", reason: "malformed_header" });
 
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),

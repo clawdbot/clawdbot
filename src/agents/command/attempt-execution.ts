@@ -379,6 +379,8 @@ async function persistTextTurnTranscript(
   if (userMessage) {
     messages.push({
       message: userMessage,
+      // Early persistence already owns this row, even when the input has no message key.
+      eventId: params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId,
       idempotencyLookup: "scan" as const,
       prepareMessageAfterIdempotencyCheck: (message: unknown) =>
         preparePersistedUserTurnMessageForTranscriptWrite(message as PersistedUserTurnMessage, {

@@ -419,7 +419,7 @@ describe("Gateway ACP completion ownership", () => {
             temperature,
           )
           .toEqual(
-            scenario.rebound || (scenario.rpcAbort && scenario.persistFail)
+            scenario.rebound
               ? []
               : Array.from({ length: index + 1 }, () =>
                   scenario.persistFail ? ["user"] : ["user", "assistant"],
@@ -449,6 +449,7 @@ describe("Gateway ACP completion ownership", () => {
             .toBe(true);
         }
         if (scenario.bound) {
+          // Source custody precedes ACP effects; the bound transcript owns the reply.
           expect
             .soft(
               readTranscriptMessages({
@@ -458,7 +459,13 @@ describe("Gateway ACP completion ownership", () => {
                 storePath,
               }),
             )
-            .toEqual([]);
+            .toMatchObject(
+              ["cold", "warm"].slice(0, index + 1).map((turn) => ({
+                role: "user",
+                content: `request ${turn}`,
+                idempotencyKey: `acp-completion-${suffix}-${turn}:user`,
+              })),
+            );
         }
       }
     } finally {

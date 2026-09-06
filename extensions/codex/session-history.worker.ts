@@ -2,10 +2,10 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SessionTranscriptContextVersion } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { CodexHistoryReadResult } from "./src/app-server/history-rejection.js";
 import type { JsonValue } from "./src/app-server/protocol.js";
 import {
   readCodexNativeHistory,
-  type CodexHistoryReadFailure,
   type ResolvedCodexHistoryTarget,
 } from "./src/app-server/session-history-read.js";
 import {
@@ -21,9 +21,9 @@ type ReadInput = {
 export type CodexHistoryWorkerInput = ReadInput &
   ({ kind: "messages" } | { kind: "settled"; evidence: SettledTurnMessages });
 export type CodexHistoryWorkerResult = (
-  | { kind: "messages"; messages: AgentMessage[] | undefined }
-  | { kind: "settled"; data: JsonValue[] | undefined }
-) & { version?: SessionTranscriptContextVersion; failure?: CodexHistoryReadFailure };
+  | { kind: "messages"; result: CodexHistoryReadResult<AgentMessage[]> }
+  | { kind: "settled"; result: CodexHistoryReadResult<JsonValue[]> }
+) & { version?: SessionTranscriptContextVersion };
 
 // This top-level plugin entry is packaged in both standalone and bundled builds.
 export const codexHistoryWorkerUrl = new URL(import.meta.url);
@@ -47,9 +47,8 @@ export async function runCodexHistoryWorkerInput(
     );
     return {
       kind: request.kind,
-      messages: result.value,
+      result,
       version,
-      ...(result.failure ? { failure: result.failure } : {}),
     };
   }
   if (request.kind === "settled") {
@@ -62,9 +61,8 @@ export async function runCodexHistoryWorkerInput(
     );
     return {
       kind: request.kind,
-      data: result.value,
+      result,
       version,
-      ...(result.failure ? { failure: result.failure } : {}),
     };
   }
   throw new Error("Invalid Codex history worker operation");
