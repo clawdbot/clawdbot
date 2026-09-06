@@ -225,7 +225,7 @@ export function createProviderApiKeyResolver(
           apiKey: fromProfiles.apiKey,
           discoveryApiKey: fromProfiles.discoveryApiKey,
           profileId: fromProfiles.profileId,
-          mode: authStore.profiles[fromProfiles.profileId].type,
+          mode: fromProfiles.mode,
         }
       : { apiKey: undefined, discoveryApiKey: undefined };
   };

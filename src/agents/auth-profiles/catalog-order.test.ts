@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
-} from "./models-config.providers.secrets.js";
+} from "../models-config.providers.secrets.js";
+import type { AuthProfileStore } from "./types.js";
 
-vi.mock("./provider-auth-aliases.js", () => ({
+vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({ "proof-alias": "openai" }),
   resolveProviderIdForAuth: (provider: string) => {
     const normalized = provider.trim().toLowerCase();
@@ -14,7 +14,7 @@ vi.mock("./provider-auth-aliases.js", () => ({
   },
 }));
 
-vi.mock("./model-auth-env-vars.js", () => ({
+vi.mock("../model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => [],
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: { "proof-alias": "openai" },
@@ -23,7 +23,7 @@ vi.mock("./model-auth-env-vars.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 

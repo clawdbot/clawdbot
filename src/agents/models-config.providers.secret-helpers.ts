@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import {
   isNonSecretApiKeyMarker,
@@ -223,12 +223,18 @@ export function resolveApiKeyFromProfiles(params: {
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
   profileIds?: readonly string[];
-}): (ProfileApiKeyResolution & { profileId: string }) | undefined {
+}):
+  | (ProfileApiKeyResolution & { profileId: string; mode: AuthProfileCredential["type"] })
+  | undefined {
   const ids = params.profileIds ?? listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
-    const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
+    const credential = params.store.profiles[id];
+    if (!credential) {
+      continue;
+    }
+    const resolved = resolveApiKeyFromCredential(credential, params.env);
     if (resolved) {
-      return { ...resolved, profileId: id };
+      return { ...resolved, profileId: id, mode: credential.type };
     }
   }
   return undefined;
