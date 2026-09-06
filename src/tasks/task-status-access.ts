@@ -48,7 +48,7 @@ export function listTasksForSessionKeyForStatus(
 }
 
 export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTaskRecords().filter(
+  return listTaskRecords(
     (task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey,
   );
 }
