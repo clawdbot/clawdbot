@@ -1274,12 +1274,13 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const configPath = createConfigIO().configPath;
+    const command = resolveOpenPathCommand(configPath);
     try {
-      await execOpenPath(resolveOpenPathCommand(configPath));
+      await execOpenPath(command);
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
       const errorMessage = formatOpenPathError(error);
-      const isHeadlessError = isHeadlessOpenPathError(errorMessage);
+      const isHeadlessError = isHeadlessOpenPathError(error, command);
       const detailedError = isHeadlessError
         ? `Cannot open file in headless environment. File path: ${configPath}. This environment appears to lack a graphical or terminal browser handler.`
         : `Failed to open config file: ${errorMessage}`;

@@ -1335,6 +1335,14 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       "preserves cache-safe shaping across compaction followup turns",
       async () => {
         const sessionId = `${ANTHROPIC_SESSION_ID}-compaction`;
+        const { workspaceDir } = buildRunnerSessionPaths(sessionId);
+        await fs.mkdir(workspaceDir, { recursive: true });
+        // Extra system context sits after the cache boundary. Workspace context must
+        // make the marked prefix exceed Haiku 4.5's 4,096-token cache minimum.
+        await fs.writeFile(
+          path.join(workspaceDir, "AGENTS.md"),
+          buildStableCachePrefix("anthropic-compaction", 96),
+        );
         await runEmbeddedCacheProbe({
           ...fixture,
           cacheRetention: "short",

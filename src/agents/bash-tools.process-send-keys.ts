@@ -20,7 +20,7 @@ export type WritableStdin = {
 };
 
 function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed" });
+  return textResult(text, { status: "failed", error: text });
 }
 
 export async function writeProcessStdin(stdin: WritableStdin, data: string) {

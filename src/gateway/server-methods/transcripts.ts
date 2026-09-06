@@ -6,12 +6,9 @@ import {
   validateTranscriptsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import {
-  isTranscriptSessionActive,
-  resolveSourceProvider,
-} from "../../agents/tools/transcripts-tool-runtime.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isTranscriptSessionActive, resolveSourceProvider } from "../../transcripts/capture.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
 import type { TranscriptReadEntry } from "../../transcripts/store-read.js";

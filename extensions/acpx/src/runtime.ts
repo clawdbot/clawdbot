@@ -629,7 +629,8 @@ function classifyCodexAcpModelRequest(
       : { kind: "unsupported" };
   }
 
-  const reasoningEffort = thinkingReasoningEffort ?? modelReasoningEffort;
+  // Explicit `off` omits the override even when the model carries an effort suffix.
+  const reasoningEffort = rawThinking?.trim() ? thinkingReasoningEffort : modelReasoningEffort;
   return {
     kind: "override",
     override: {

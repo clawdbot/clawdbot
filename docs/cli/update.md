@@ -170,7 +170,9 @@ chat, the Control UI, the CLI, and automatic update campaigns. Dry-run previews
 and updates refused after admission keep a skipped or failed record with their
 reason. CLI invocations rejected before admission leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
-the outcome.
+the outcome. Post-core finalization children report back to their parent without
+creating a separate update run, including when an older updater cannot forward
+a run ID.
 
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
@@ -224,6 +226,9 @@ openclaw update repair --accept-capabilities
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
+Configured runtime plugins whose versions follow OpenClaw are checked against
+the newly installed core during post-update repair, even when the updater process
+started on the previous version.
 It does not install a new core package and does not restart the Gateway.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
@@ -535,7 +540,7 @@ the sentinel.
 
     The updater attempts to remove staging before changing the live checkout; cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
 
-    If a candidate fails, walks back up to 10 commits to find the newest buildable commit. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Content-addressed declaration outputs from the successful candidate are reused by the final checkout build; rebased source changes automatically invalidate the affected cache groups. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
+    If a candidate fails, walks back up to 10 commits to find the newest buildable commit. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. If you explicitly request declarations with `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0`, content-addressed declaration outputs from the successful candidate can be reused by the final checkout build; changed inputs invalidate the affected cache groups. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
     The updater already running owns staging. Updating to a commit with this repair cannot change an older published updater's first hop; that default path requires a published baseline containing the repair.
 
@@ -559,22 +564,25 @@ the sentinel.
 
 ### Plugin sync details
 
-After a beta core update, eligible official npm and trusted official ClawHub
-plugins with a default/latest catalog target try the exact installed core
-version. This also applies to a one-off `--tag <beta-version>` while the
-configured channel is stable, including when plugin synchronization resumes
-in a fresh process. Other default-line npm and ClawHub plugins on the beta
-channel try their plugin `@beta` tag.
+Managed npm plugins on the beta channel select the newest version by semantic
+version order from their `beta` and `latest` dist-tags, using the same policy as
+the core updater. This includes official plugins with a default/latest catalog
+target and managed `@beta` selectors. OpenClaw installs the exact inspected
+version and retains the recorded selector for future updates.
 
-If the selected beta plugin release is unavailable, OpenClaw falls back to the
-default/latest spec and reports a warning naming the requested and used targets.
+ClawHub plugins on the beta channel try their own `@beta` tag. If that release
+is unavailable, OpenClaw falls back to the default/latest spec and reports a
+warning naming the requested and used targets.
 Integrity, compatibility, trust, install-policy, and capability-consent failures
 do not trigger fallback. Availability fallback warnings do not fail the core
-update. Ordinary exact versions and explicit non-`latest` tags retain their selector.
+update. Ordinary exact versions, ranges, and explicit tags other than `beta`
+retain their selector.
 Doctor can refresh a stale official runtime plugin that is bound to the current
 OpenClaw release cohort. That repair stays on the recorded registry, verifies
 the replacement artifact, and records its exact version if the npm install was
 previously pinned.
+Already-current runtime plugins are kept in place; a no-op startup repair does
+not reinstall the package or invalidate the migration checkpoint.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying you trust the new artifact.

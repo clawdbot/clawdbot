@@ -12,10 +12,11 @@ import {
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
+import { resolveMatrixThreadRootId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import type { PluginRuntime } from "./runtime-api.js";
-import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
+import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 const loadApprovalReactionAuth = createLazyRuntimeModule(
@@ -239,12 +240,7 @@ export async function handleInboundMatrixReaction(params: {
     targetEvent && targetEvent.content && typeof targetEvent.content === "object"
       ? (targetEvent.content as RoomMessageEventContent)
       : undefined;
-  const threadRootId = targetContent
-    ? resolveMatrixThreadRootId({
-        event: targetEvent as MatrixRawEvent,
-        content: targetContent,
-      })
-    : undefined;
+  const threadRootId = targetContent ? resolveMatrixThreadRootId(targetContent) : undefined;
   const accountConfig = resolveMatrixAccountConfig({
     cfg: params.cfg,
     accountId: params.accountId,

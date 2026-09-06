@@ -210,6 +210,36 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
 }
 
 /**
+ * Click a control inside a board widget document once pointer events reach it.
+ *
+ * Board widget frames stay `inert` and transparent until the sandbox reports
+ * the document rendered, and Linux Chromium keeps routing pointer events to the
+ * outer iframe element instead of into the revealed cross-origin document until
+ * that reveal reaches its compositor. Playwright's actionability checks read the
+ * DOM, and its hit-target interceptor reports a click that reached no frame as
+ * delivered, so a click issued in that window is a silent no-op. Hover until the
+ * widget document itself observes the pointer, then click; a control that never
+ * observes it fails loudly instead.
+ */
+export async function clickBoardWidgetControl(page: Page, control: Locator): Promise<void> {
+  const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+  for (;;) {
+    // Leave and re-enter: a stationary pointer keeps the browser's stale
+    // routing decision, while a fresh move re-runs hit testing.
+    await page.mouse.move(0, 0);
+    await control.hover();
+    if (await control.evaluate((element) => element.matches(":hover"))) {
+      break;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Board widget control never received pointer events.");
+    }
+    await page.waitForTimeout(100);
+  }
+  await control.click();
+}
+
+/**
  * Wait for the settled in-app confirmation modal. Control UI routes destructive
  * confirms through `showConfirmDialog`, so no native browser dialog ever fires;
  * waiting for full opacity keeps the click from landing mid-animation.

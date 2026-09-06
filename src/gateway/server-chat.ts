@@ -39,10 +39,10 @@ import {
 } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
+import { mergeAssistantText, resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
+  capLiveAssistantText,
   projectLiveAssistantBufferedText,
-  resolveAssistantLiveChatInput,
-  resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
 import type {
@@ -1023,7 +1023,7 @@ export function createAgentEventHandler({
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    input: NonNullable<ReturnType<typeof resolveAssistantLiveChatInput>>,
+    input: NonNullable<ReturnType<typeof resolveAssistantTextInput>>,
     opts?: { controlUiVisible?: boolean; isCurrent?: () => boolean },
   ) => {
     const run = chatRunState.getOrCreate(clientRunId);
@@ -1035,21 +1035,13 @@ export function createAgentEventHandler({
       delete run.bufferProjection;
     }
     const previousRawText = run.rawBuffer ?? "";
-    if (!input.itemId) {
-      delete run.assistantScope;
-    } else if (run.assistantScope?.itemId !== input.itemId) {
-      // Only provisional stream replacements discard prior text; bounded message snapshots retain it.
-      run.assistantScope = {
-        itemId: input.itemId,
-        prefix: input.replaceStream ? "" : previousRawText,
-      };
-    }
-    const mergedRawText = resolveMergedAssistantText({
-      previousText: previousRawText,
-      nextText: input.text,
-      nextDelta: input.delta,
-      scope: run.assistantScope,
-    });
+    const snapshot = mergeAssistantText(
+      { text: previousRawText, scope: run.assistantScope },
+      input,
+      "live",
+    );
+    run.assistantScope = snapshot.scope;
+    const mergedRawText = capLiveAssistantText(snapshot);
     if (!mergedRawText && !previousRawText) {
       return;
     }
@@ -1728,7 +1720,7 @@ export function createAgentEventHandler({
         );
       }
       const assistantLiveChatInput =
-        evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
+        evt.stream === "assistant" ? resolveAssistantTextInput(evt.data) : undefined;
       const suppressAssistant = shouldSuppressAssistantEventForLiveChat(evt.data);
       if (
         !isAborted &&

@@ -371,8 +371,7 @@ function scheduleTranscriptsAutoStartSidecar(params: {
     waitForPostReadyWork: params.waitForPostReadyWork,
     shouldRun: params.shouldRun,
     run: async (isStopped) => {
-      const { createTranscriptsAutoStartService } =
-        await import("../agents/tools/transcripts-tool.js");
+      const { createTranscriptsAutoStartService } = await import("../transcripts/auto-start.js");
       if (isStopped()) {
         return;
       }

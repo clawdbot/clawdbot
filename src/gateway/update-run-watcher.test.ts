@@ -138,22 +138,31 @@ describe("Gateway update run watcher", () => {
     expect(broadcast).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["teardown", "deadline"] as const)("bounds a running watcher at %s", async (ending) => {
+  it("broadcasts a terminal repair after an update has remained running for over 45 minutes", async () => {
     beginRun();
+    ledger.run!.steps = [{ step: "notice:ack", status: "completed" }];
     const broadcast = vi.fn();
     watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
-    if (ending === "teardown") {
-      await watcher.stop();
-    } else {
-      vi.advanceTimersByTime(45 * 60_000);
-    }
+    vi.advanceTimersByTime(46 * 60_000);
+    ledger.run = { ...ledger.run!, phase: "finished", status: "failed", updatedAtMs: 2 };
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+    expect(ledger.notice).toHaveBeenCalledExactlyOnceWith(ledger.run);
     const reads = ledger.reads.mock.calls.length;
     vi.advanceTimersByTime(60_000);
     expect(ledger.reads).toHaveBeenCalledTimes(reads);
-    expect(broadcast).toHaveBeenCalledTimes(ending === "teardown" ? 1 : 2);
-    if (ending === "teardown") {
-      wakeUpdateRunWatcher();
-      expect(ledger.reads).toHaveBeenCalledTimes(reads);
-    }
+  });
+
+  it("stops polling and cannot be woken after teardown", async () => {
+    beginRun();
+    const broadcast = vi.fn();
+    watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+    await watcher.stop();
+    const reads = ledger.reads.mock.calls.length;
+    vi.advanceTimersByTime(60_000);
+    expect(ledger.reads).toHaveBeenCalledTimes(reads);
+    expect(broadcast).toHaveBeenCalledOnce();
+    wakeUpdateRunWatcher();
+    expect(ledger.reads).toHaveBeenCalledTimes(reads);
   });
 });

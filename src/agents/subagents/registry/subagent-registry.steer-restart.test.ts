@@ -100,7 +100,7 @@ const announceSpy = vi.fn(
   async (_params: unknown): Promise<"delivered" | "retryable"> => "delivered",
 );
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
-const emitSessionLifecycleEventMock = vi.fn();
+const emitSessionLifecycleEventMock = vi.hoisted(() => vi.fn());
 const removeInternalSessionEffectsSessionMock = vi.fn(async (_target?: unknown) => {});
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {

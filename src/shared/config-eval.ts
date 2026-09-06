@@ -137,7 +137,7 @@ export function evaluateRuntimeEligibility(
   const remotePlatforms = params.remotePlatforms ?? [];
   if (
     osList.length > 0 &&
-    !osList.includes(resolveRuntimePlatform()) &&
+    !osList.includes(process.platform) &&
     !remotePlatforms.some((platform) => osList.includes(platform))
   ) {
     return false;
@@ -145,19 +145,7 @@ export function evaluateRuntimeEligibility(
   if (params.always === true) {
     return true;
   }
-  return evaluateRuntimeRequires({
-    requires: params.requires,
-    hasBin: params.hasBin,
-    hasRemoteBin: params.hasRemoteBin,
-    hasAnyRemoteBin: params.hasAnyRemoteBin,
-    hasEnv: params.hasEnv,
-    isConfigPathTruthy: params.isConfigPathTruthy,
-  });
-}
-
-/** Returns the current Node runtime platform used by eligibility checks. */
-function resolveRuntimePlatform(): string {
-  return process.platform;
+  return evaluateRuntimeRequires(params);
 }
 
 function windowsPathExtensions(): string[] {

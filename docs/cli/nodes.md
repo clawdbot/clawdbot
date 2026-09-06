@@ -49,6 +49,7 @@ openclaw nodes rename --node <id|name|ip> --name <displayName>
 These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake. See [Nodes](/nodes) for how the two relate.
 
 - `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles; a node-only device record is deleted.
+- Removal stays effective even if worker cleanup reports an error: revoked node connections still close.
 - `pending` only needs `operator.pairing` scope.
 - `gateway.nodes.pairing.autoApproveCidrs` can skip the pending step for explicitly trusted, first-time `role: node` device pairing. Off by default; does not approve role upgrades.
 - `gateway.nodes.pairing.sshVerify` (on by default) auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host; the first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
