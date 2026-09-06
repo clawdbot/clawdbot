@@ -587,7 +587,7 @@
     <string name="native_55d8e7da6d0a752c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Högtalare av"</string>
     <string name="native_560d3e826c413dc9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sök trådar"</string>
     <string name="native_565339bc4d33d728" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OK"</string>
-    <string name="native_5674cf9fd8450fd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ej cachelagrade indata"</string>
+    <string name="native_5674cf9fd8450fd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Icke-cachelagrad indata"</string>
     <string name="native_569ca49f4aaf7846" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Installera"</string>
     <string name="native_56a508f3f2bf424a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kunde inte öppna konfigurationsguiden."</string>
     <string name="native_56c41c606c44f3fc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"fråga OpenClaw %1$s"</string>
@@ -596,7 +596,7 @@
     <string name="native_5702e1d243eeb4e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Schemalagt arbete som skapas på gatewayen visas här."</string>
     <string name="native_572739b05d138f8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Visar det senaste loggavsnittet."</string>
     <string name="native_57666930af1af35e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Använd konfigurationskod"</string>
-    <string name="native_5789588c57bbd1e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ej cachelagrade indata omfattar inte cacheläsningar."</string>
+    <string name="native_5789588c57bbd1e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Icke-cachad indata exkluderar cacheläsningar."</string>
     <string name="native_57c4b13a4c7335e7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker"</string>
     <string name="native_57efc4ebe625cab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Använd en säker wss://- eller Tailscale Serve-Gateway, generera en konfigurationskod med fullständig åtkomst i Control UI eller med openclaw qr, skanna eller klistra sedan in den nedan och återanslut för att aktivera inställningar och uppgraderingar."</string>
     <string name="native_57fce44d7c6df51a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"steer"</string>
@@ -1193,7 +1193,7 @@
     <string name="native_b2a96c3d3fc2b6ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ban"</string>
     <string name="native_b2d672f21eed539a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Token för Gateway behövs"</string>
     <string name="native_b2e5f1e45872f947" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Parkopplad enhet"</string>
-    <string name="native_b322b65227bc3ec9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hopfälld"</string>
+    <string name="native_b322b65227bc3ec9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Komprimerad"</string>
     <string name="native_b3975aa73d16205c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kräver nytt godkännande"</string>
     <string name="native_b3e24789bf8dc89b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inte schemalagt"</string>
     <string name="native_b450645debe2cf0a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontakter"</string>
@@ -1529,7 +1529,7 @@
     <string name="native_e674447337e83c13" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tillgänglig"</string>
     <string name="native_e68e23dc04b0f986" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ta bort automatisering?"</string>
     <string name="native_e7053d96b6704dbb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s idag · %2$s totalt"</string>
-    <string name="native_e72d5d8d0b167d21" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utfälld"</string>
+    <string name="native_e72d5d8d0b167d21" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Expanderad"</string>
     <string name="native_e7cf3ef4f17c3999" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lösenord"</string>
     <string name="native_e7dda143005d7e2e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sätta förslaget i karantän?"</string>
     <string name="native_e7e90bb5eb97b173" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inga licensmeddelanden ingår i den här versionen."</string>
