@@ -1,3 +1,4 @@
+import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +40,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
+import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -93,37 +95,51 @@ function createGatewayHarness() {
   return { gateway, clients };
 }
 
+function createGatewaySurface(gateway: ApplicationGateway, pathname = "/chat") {
+  const app = document.createElement("openclaw-app") as unknown as {
+    runtime: Pick<
+      ApplicationRuntime,
+      | "context"
+      | "documentMode"
+      | "focusLocation"
+      | "confirmPendingGatewayConnection"
+      | "cancelPendingGatewayConnection"
+    >;
+    pendingGatewayUrl: string | null;
+    render: () => unknown;
+    synchronizeGateway: (gateway: ApplicationGateway) => void;
+  };
+  app.runtime = {
+    documentMode: resolveControlUiDocumentMode(pathname, ""),
+    focusLocation: parseControlUiFocusLocation(pathname, ""),
+    confirmPendingGatewayConnection: vi.fn(),
+    cancelPendingGatewayConnection: vi.fn(),
+    context: {
+      gateway,
+      basePath: "",
+      agentSelection: { state: { selectedId: null } },
+      config: { current: { terminalEnabled: false } },
+      theme: { resolvedMode: "dark" },
+    } as unknown as ApplicationContext,
+  };
+  const container = document.createElement("div");
+  const draw = () => {
+    app.synchronizeGateway(gateway);
+    render(app.render(), container);
+  };
+  return { app, container, draw };
+}
+
 function renderGatewaySurface(
   gateway: ApplicationGateway,
   documentView?: "desktop" | "terminal",
 ): string {
-  const originalUrl = `${location.pathname}${location.search}${location.hash}`;
-  if (documentView) {
-    history.replaceState({}, "", `?view=${documentView}`);
-  }
-  try {
-    const app = document.createElement("openclaw-app") as unknown as {
-      runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
-      render: () => { strings: readonly string[] };
-      synchronizeGateway: (gateway: ApplicationGateway) => void;
-    };
-    app.runtime = {
-      documentMode: null,
-      context: {
-        gateway,
-        basePath: "",
-        agentSelection: { state: { selectedId: null } },
-        config: { current: { terminalEnabled: false } },
-        theme: { resolvedMode: "dark" },
-      } as unknown as ApplicationContext,
-    };
-    app.synchronizeGateway(gateway);
-    const container = document.createElement("div");
-    render(app.render(), container);
-    return container.innerHTML;
-  } finally {
-    history.replaceState({}, "", originalUrl);
-  }
+  const surface = createGatewaySurface(
+    gateway,
+    documentView ? `/focus/${documentView}` : undefined,
+  );
+  surface.draw();
+  return surface.container.innerHTML;
 }
 
 afterEach(() => {
@@ -132,6 +148,54 @@ afterEach(() => {
 });
 
 describe("Control UI Gateway target lineage", () => {
+  it.each([
+    { pathname: "/focus/terminal", phase: "connecting" },
+    { pathname: "/focus/desktop", phase: "connecting" },
+    { pathname: "/focus/dashboard/main", phase: "connecting" },
+    { pathname: "/settings/connection", phase: "connecting" },
+    { pathname: "/settings/connection", phase: "stopped" },
+    { pathname: "/settings/connection", phase: "connected" },
+    { pathname: "/approve/pending", phase: "connected" },
+    { pathname: "/question/pending", phase: "connected" },
+  ])("keeps Gateway confirmation actionable at $pathname while $phase", ({ pathname, phase }) => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.start();
+    if (phase === "connected") {
+      clients[0]!.opts.onHello?.(HELLO);
+    } else if (phase === "stopped") {
+      clients[0]!.opts.onClose?.({ code: 1006, reason: "login required", willRetry: false });
+    }
+    const { app, container, draw } = createGatewaySurface(gateway, pathname);
+    try {
+      for (const action of ["onConfirm", "onCancel"] as const) {
+        app.pendingGatewayUrl = "wss://pending-gateway.example";
+        draw();
+        const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
+        expect(confirmations).toHaveLength(1);
+        const confirmation = confirmations[0] as HTMLElement & {
+          props: { pendingGatewayUrl: string; onConfirm(): void; onCancel(): void };
+        };
+        expect(confirmation.closest("openclaw-tooltip-provider")).not.toBeNull();
+        expect(confirmation.props.pendingGatewayUrl).toBe(app.pendingGatewayUrl);
+        if (pathname.startsWith("/approve/")) {
+          expect(container.querySelector("openclaw-approval-page")).toBeNull();
+        }
+        confirmation.props[action]();
+        draw();
+        expect(container.querySelector("openclaw-gateway-url-confirmation")).toBeNull();
+        expect(app.pendingGatewayUrl).toBeNull();
+      }
+      expect(app.runtime.confirmPendingGatewayConnection).toHaveBeenCalledOnce();
+      expect(app.runtime.cancelPendingGatewayConnection).toHaveBeenCalledOnce();
+      if (pathname.startsWith("/approve/")) {
+        expect(container.querySelector("openclaw-approval-page")).not.toBeNull();
+      }
+    } finally {
+      render(null, container);
+      gateway.stop();
+    }
+  });
+
   it.each(
     [false, true].flatMap((incognito) =>
       ["synthetic-recovery-a", "synthetic-recovery-b"].map((nextRecovery) => ({

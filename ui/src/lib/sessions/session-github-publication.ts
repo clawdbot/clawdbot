@@ -122,7 +122,7 @@ export function createSessionGitHubPublication(host: Host) {
             host.deletionState(candidate.row) !== "confirmed",
           controller: new GitHubPublicationController({
             client: connection.client,
-            sessionKey: row.key,
+            target: route,
             isCurrent: () => candidate.current(),
             reserve: () => {
               if (candidate.retained) {

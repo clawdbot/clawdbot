@@ -89,7 +89,7 @@ describe("SQLite session row persistence", () => {
     },
   );
 
-  it.each(["committed", "declined", "revoked"] as const)(
+  it.each(["committed", "declined", "cancelled", "revoked"] as const)(
     "records only committed owner facts before cancellation observers (%s)",
     async (mode) => {
       const env = {
@@ -109,6 +109,7 @@ describe("SQLite session row persistence", () => {
       const controller = new AbortController();
       const cancelled = new Error("cancelled after identity publication");
       const revoked = new Error("writer revoked before commit");
+      let commitAllowed = true;
       const facts: InternalSessionEntry[] = [];
       const observed: Array<{ acceptedId?: string; persistedId?: string }> = [];
       const unsubscribe = onSessionIdentityMutation((mutation) => {
@@ -124,6 +125,7 @@ describe("SQLite session row persistence", () => {
       const clone = vi.spyOn(globalThis, "structuredClone");
       try {
         const options = {
+          shouldCommit: () => commitAllowed,
           onCommitted: (entry: InternalSessionEntry) => {
             facts.push(entry);
           },
@@ -135,13 +137,23 @@ describe("SQLite session row persistence", () => {
         };
         const pending = patchSessionEntryCore(
           scope,
-          () => (mode === "declined" ? null : { sessionId: "successor" }),
+          () => {
+            if (mode === "cancelled") {
+              queueMicrotask(() => {
+                commitAllowed = false;
+              });
+            }
+            return mode === "declined" ? null : { sessionId: "successor" };
+          },
           options,
         );
         if (mode === "revoked") {
           await expect(pending).rejects.toBe(revoked);
         } else {
-          await pending;
+          const result = await pending;
+          if (mode === "cancelled") {
+            expect(result).toBeNull();
+          }
         }
         if (mode === "committed") {
           expect(facts).toHaveLength(1);

@@ -78,6 +78,7 @@ export function runPlugin(
     onNoOutputTimeout?: NonNullable<
       Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
     >;
+    onOutstandingWorkChange?: (active: boolean) => void;
     onInterrupted?: (reason: "aborted" | "timeout") => boolean;
   } = {},
 ) {
@@ -103,6 +104,7 @@ export function runPlugin(
         }
       : {}),
     ...(options.onNoOutputTimeout ? { onNoOutputTimeout: options.onNoOutputTimeout } : {}),
+    onOutstandingWorkChange: options.onOutstandingWorkChange,
     ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
     consumeStdout: options.consumeStdout ?? (() => {}),

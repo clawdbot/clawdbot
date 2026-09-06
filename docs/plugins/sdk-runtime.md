@@ -81,6 +81,12 @@ Native command probes should use `runCommandWithTimeout` from
 before returning. For commands whose output is always UTF-8, such as JSON status
 probes, use `runUtf8CommandWithTimeout` from the same subpath.
 
+Use `splitCommandArgs(raw)` from the same subpath to group quoted process
+arguments. Backslashes and `#` stay literal; there is no shell expansion.
+Unfinished quotes return `null` unless the caller passes
+`{ allowUnclosedQuotes: true }` to preserve an existing permissive input contract.
+Empty quoted arguments are omitted.
+
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
 exited. Keep the probe pending through cleanup, use `detached: true` only for a

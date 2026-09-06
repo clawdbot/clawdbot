@@ -1434,7 +1434,8 @@ does not reserve it against a subsequent native reload.
 
 - `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
   `appServer.command` is unset.
-- `OPENCLAW_CODEX_APP_SERVER_ARGS`
+- `OPENCLAW_CODEX_APP_SERVER_ARGS` accepts a quoted argument string; see
+  [argument parsing](/plugins/codex-harness-reference#app-server-transport).
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`

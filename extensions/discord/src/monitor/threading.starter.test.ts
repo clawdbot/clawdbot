@@ -1,5 +1,5 @@
 // Discord tests cover threading.starter plugin behavior.
-import { StickerFormatType } from "discord-api-types/v10";
+import { ComponentType, MessageFlags, StickerFormatType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { ChannelType, DiscordError, type Client } from "../internal/discord.js";
 import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
@@ -10,6 +10,8 @@ let threadIdIndex = 0;
 
 type ThreadStarterRestMessage = {
   content?: string | null;
+  components?: unknown;
+  flags?: number;
   attachments?: unknown[];
   embeds?: Array<{ title?: string | null; description?: string | null }>;
   message_snapshots?: Array<{
@@ -21,6 +23,7 @@ type ThreadStarterRestMessage = {
     };
   }>;
   sticker_items?: unknown[];
+  stickers?: unknown[];
   author?: {
     id?: string | null;
     username?: string | null;
@@ -68,6 +71,20 @@ function createStarterMessage(overrides: ThreadStarterRestMessage = {}): ThreadS
     ...overrides,
   };
 }
+
+const COMPONENTS_V2_STARTER_BODY = [
+  {
+    type: ComponentType.Container,
+    components: [
+      { type: ComponentType.TextDisplay, content: "Deploy failed" },
+      {
+        type: ComponentType.Section,
+        components: [{ type: ComponentType.TextDisplay, content: "staging pipeline exited 1" }],
+        accessory: { type: ComponentType.Thumbnail, media: { url: "attachment://log.png" } },
+      },
+    ],
+  },
+];
 
 function createDiscordError(status: number): DiscordError {
   return new DiscordError(new Response(null, { status }), {});
@@ -441,6 +458,68 @@ describe("resolveDiscordThreadStarter", () => {
       throw new Error("starter content should have produced a resolved starter payload");
     }
     expect(result.text).toBe("starter content");
+  });
+
+  it.each([
+    { name: "text channel", parentType: ChannelType.GuildText },
+    { name: "forum", parentType: ChannelType.GuildForum },
+  ])(
+    "keeps Components v2 text from a component-only starter in a $name thread",
+    async ({ parentType }) => {
+      const { result } = await resolveStarter({
+        message: createStarterMessage({
+          components: COMPONENTS_V2_STARTER_BODY,
+          flags: MessageFlags.IsComponentsV2,
+        }),
+        parentType,
+      });
+
+      expect(requireThreadStarter(result).text).toBe("Deploy failed\nstaging pipeline exited 1");
+    },
+  );
+
+  it("prefers starter content over Components v2 text", async () => {
+    const { result } = await resolveStarter({
+      message: createStarterMessage({
+        content: "starter content",
+        components: COMPONENTS_V2_STARTER_BODY,
+      }),
+    });
+
+    expect(requireThreadStarter(result).text).toBe("starter content");
+  });
+
+  it("prefers Components v2 text over a forwarded snapshot when a starter carries both", async () => {
+    const { result } = await resolveStarter({
+      message: createStarterMessage({
+        components: COMPONENTS_V2_STARTER_BODY,
+        flags: MessageFlags.IsComponentsV2 | MessageFlags.HasSnapshot,
+        message_snapshots: [createForwardedSnapshot({ content: "forwarded content" })],
+      }),
+    });
+
+    expect(requireThreadStarter(result).text).toBe("Deploy failed\nstaging pipeline exited 1");
+  });
+
+  it("renders the sticker placeholder for every REST sticker shape", async () => {
+    const sticker = { id: "s1", name: "party", format_type: StickerFormatType.PNG };
+    const shapes: Record<string, ThreadStarterRestMessage> = {
+      stickerItemsOnly: { sticker_items: [sticker] },
+      stickersOnly: { stickers: [sticker] },
+      emptyStickersBesideStickerItems: { stickers: [], sticker_items: [sticker] },
+    };
+
+    const texts: Record<string, string | null> = {};
+    for (const [name, message] of Object.entries(shapes)) {
+      const { result } = await resolveStarter({ message: createStarterMessage(message) });
+      texts[name] = result?.text ?? null;
+    }
+
+    expect(texts).toEqual({
+      stickerItemsOnly: "<media:sticker>",
+      stickersOnly: "<media:sticker>",
+      emptyStickersBesideStickerItems: "<media:sticker>",
+    });
   });
 
   it("preserves username, tag, and role metadata for downstream visibility checks", async () => {

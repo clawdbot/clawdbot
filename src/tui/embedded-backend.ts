@@ -633,16 +633,18 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
-      opts.sessionKey,
-      { ...loadOptions, includeStoreChildEntries: true },
-    );
-    const sessionId = entry?.sessionId;
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey: opts.sessionKey,
-      config: cfg,
-      agentId: opts.agentId,
+    const {
+      cfg,
+      agentId: sessionAgentId,
+      storePath,
+      store,
+      entry,
+      canonicalKey,
+    } = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
+      ...loadOptions,
+      includeStoreChildEntries: true,
     });
+    const sessionId = entry?.sessionId;
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
       cfg,
       sessionAgentId,
@@ -714,7 +716,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       store,
       key: canonicalKey,
       entry,
-      agentId: opts.agentId,
+      agentId: sessionAgentId,
     });
     sessionInfo.thinkingLevel = thinkingLevel;
     sessionInfo.verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
@@ -739,7 +741,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
+    const { storePath, store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
       agentId: opts?.agentId,
       projection: "list",
     });
@@ -747,6 +749,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       storePath,
       store,
+      targetsBySessionKey,
       opts: opts ?? {},
     })) as TuiSessionList;
   }
@@ -784,7 +787,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           existingEntry,
           isLabelInUse,
           storeKey: primaryKey,
-          agentId: opts.agentId,
+          agentId: target.agentId,
           patch: opts,
           loadGatewayModelCatalog: () =>
             this.withRuntimePluginRegistry(() => loadEmbeddedTuiModelCatalog(cfg)),
@@ -794,12 +797,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       throw new Error(applied.error.message);
     }
 
-    const agentId = resolveSessionAgentId({
-      sessionKey: target.canonicalKey ?? opts.key,
-      config: cfg,
-      agentId: opts.agentId,
-    });
-    const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    const resolved = resolveSessionModelRef(cfg, applied.entry, target.agentId);
     return {
       ok: true as const,
       path: target.storePath,
@@ -868,18 +866,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     controller: AbortController;
   }) {
     const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-    const { cfg, canonicalKey, storePath, store, entry } = loadSessionEntry(
-      params.sessionKey,
-      loadOptions,
-    );
+    const {
+      cfg,
+      agentId: sessionAgentId,
+      canonicalKey,
+      storePath,
+      store,
+      entry,
+    } = loadSessionEntry(params.sessionKey, loadOptions);
     if (!entry?.sessionId) {
       throw new Error("/btw requires an active session with existing context.");
     }
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey: canonicalKey,
-      config: cfg,
-      agentId: params.agentId,
-    });
     const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
     const { runBtwSideQuestion } = await import("../agents/btw.js");
@@ -950,8 +947,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { canonicalKey, storePath, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
-    const sessionKey = canonicalKey ?? opts.sessionKey;
+    const { agentId, canonicalKey, storePath, entry } = loadSessionEntry(
+      opts.sessionKey,
+      loadOptions,
+    );
     const parsed = parseGoalCommand(opts.command.trim());
     if (!parsed) {
       throw new Error("invalid goal command");
@@ -959,10 +958,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const result = await executeSessionGoalCommand({
       parsed,
-      sessionKey,
+      sessionKey: canonicalKey,
       storePath,
       fallbackEntry: entry ?? { sessionId: randomUUID(), updatedAt: Date.now() },
-      agentId: opts.agentId,
+      agentId,
     });
     return result.continuationPrompt
       ? { text: result.text, continuationPrompt: result.continuationPrompt }
@@ -971,7 +970,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async runUsageCostCommand(opts: Parameters<NonNullable<TuiBackend["runUsageCostCommand"]>>[0]) {
     await this.ready;
-    const { cfg, canonicalKey, storePath, entry } = loadSessionEntry(
+    const { cfg, agentId, canonicalKey, storePath, entry } = loadSessionEntry(
       opts.sessionKey,
       opts.agentId ? { agentId: opts.agentId } : undefined,
     );
@@ -980,8 +979,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return {
       text: await formatSessionUsageCostSummary({
         cfg,
-        sessionKey: canonicalKey ?? opts.sessionKey,
-        agentId: opts.agentId,
+        sessionKey: canonicalKey,
+        agentId,
         sessionEntry: entry,
         storePath,
       }),
@@ -1466,7 +1465,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-      const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      const { agentId, canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
       const result = await agentCommandFromIngress(
         {
           // The per-message timestamp prefix is applied at the single LLM
@@ -1475,7 +1474,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           // bytes on the wire. See: https://github.com/openclaw/openclaw/issues/3658
           message,
           sessionKey: canonicalKey,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
+          agentId,
           ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),
           thinking: params.thinking,
           deliver: params.deliver,

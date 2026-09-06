@@ -177,7 +177,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         guard let route = DeepLinkParser.parse(url) else { return }
 
         switch route {
-        case .agent, .dashboard:
+        case .agent, .dashboard, .gatewayAdd:
             await model.handleDeepLink(url: url)
         case let .gateway(link):
             model.stageGatewaySetupLink(link)

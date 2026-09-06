@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { applyClawCronUpdate } from "./cron-update.js";
 import {
@@ -48,13 +49,13 @@ function cronReadView(agentId: string, value: PersistedClawCronRef) {
   if (!normalized || !value.schedulerJobId) {
     throw new Error("expected complete cron provenance");
   }
-  return {
+  return cronJobReadView({
     ...normalized,
     id: value.schedulerJobId,
     createdAtMs: 1,
     updatedAtMs: 1,
-    state: {},
-  };
+    state: { nextRunAtMs: 100, lastRunAtMs: 50, lastStatus: "ok" },
+  });
 }
 
 function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {

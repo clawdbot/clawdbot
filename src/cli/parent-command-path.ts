@@ -60,11 +60,21 @@ export function resolveModelsParentCommandPath(argv: readonly string[]): string[
   );
 }
 
+export function resolveConfigParentCommandPath(argv: readonly string[]): string[] | null {
+  return resolveParentCommandPath(argv, "config", [], ["--section"]);
+}
+
+export function resolveSkillsParentCommandPath(argv: readonly string[]): string[] | null {
+  return resolveParentCommandPath(argv, "skills", ["--json"], ["--agent"]);
+}
+
 /** Resolve the parent commands whose options may precede a child command. */
 export function resolveParentAwareCommandPath(argv: readonly string[]): string[] | null {
   return (
     resolveParentCommandPath(argv, "agent", AGENT_PARENT_BOOLEAN_FLAGS, AGENT_PARENT_VALUE_FLAGS) ??
     resolveModelsParentCommandPath(argv) ??
+    resolveConfigParentCommandPath(argv) ??
+    resolveSkillsParentCommandPath(argv) ??
     resolveParentCommandPath(argv, "channels", [], ["--agent"]) ??
     resolveParentCommandPath(argv, "update", UPDATE_PARENT_BOOLEAN_FLAGS, UPDATE_PARENT_VALUE_FLAGS)
   );

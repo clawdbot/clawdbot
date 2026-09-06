@@ -1,20 +1,30 @@
 import { consume } from "@lit/context";
-import { html } from "lit";
+import type { BoardGetParams, ProgressCardGetParams } from "@openclaw/gateway-protocol";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
+  resolveSessionProgressCardTarget,
   sessionProgressCardsForGateway,
   type SessionProgressCardStore,
 } from "../../session-progress-cards.ts";
+import { parseAgentSessionKey } from "../../sessions/session-key.ts";
 import type { BoardWidget } from "../types.ts";
 import type { PluginBoardWidgetRenderer } from "./index.ts";
 
-function readSessionKeyProp(widget: BoardWidget | undefined): string | undefined {
+function resolveSessionTarget(
+  widget: BoardWidget | undefined,
+  boardSession: BoardGetParams,
+): ProgressCardGetParams {
   const value = widget?.props?.sessionKey;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  const key = typeof value === "string" ? value.trim() : "";
+  // Unqualified overrides retain the board's captured owner; qualified links name their own.
+  return key
+    ? { sessionKey: key, agentId: parseAgentSessionKey(key)?.agentId ?? boardSession.agentId }
+    : boardSession;
 }
 
 class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
@@ -22,11 +32,11 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
   private context?: ApplicationContext;
 
   @property({ attribute: false }) widget?: BoardWidget;
-  @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) session: BoardGetParams = { sessionKey: "" };
   @property({ attribute: false }) active = true;
 
   private store?: SessionProgressCardStore;
-  private targetSessionKey = "";
+  private target: ProgressCardGetParams = { sessionKey: "" };
   private unsubscribe?: () => void;
   private unsubscribeSessions?: () => void;
 
@@ -45,30 +55,35 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
   }
 
   override render() {
-    const loadError = this.store?.getError(this.targetSessionKey);
-    if (loadError) {
-      return html`<div
-        class="board-widget__plugin-loading"
-        data-test-id="session-progress-error"
-        role="alert"
-      >
-        <span
-          >${t(
-            loadError === "access-denied"
-              ? "sessionProgressCard.widgetAccessDenied"
-              : "sessionProgressCard.widgetUnavailable",
-          )}</span
+    const loadError = this.store?.getError(this.target);
+    const card = this.store?.get(this.target);
+    const errorNotice = loadError
+      ? html`<div
+          class="board-widget__plugin-loading"
+          data-test-id="session-progress-error"
+          role="alert"
         >
-        ${
-          loadError === "unavailable"
-            ? html`<button class="btn btn--sm" type="button" @click=${this.retryLoad}>
-                ${t("common.retry")}
-              </button>`
-            : null
-        }
-      </div>`;
+          <span
+            >${t(
+              loadError === "access-denied"
+                ? "sessionProgressCard.widgetAccessDenied"
+                : loadError === "unsupported-owner"
+                  ? "sessionProgressCard.ownerUnsupported"
+                  : "sessionProgressCard.widgetUnavailable",
+            )}</span
+          >
+          ${
+            loadError === "unavailable"
+              ? html`<button class="btn btn--sm" type="button" @click=${this.retryLoad}>
+                  ${t("common.retry")}
+                </button>`
+              : null
+          }
+        </div>`
+      : nothing;
+    if (loadError && (loadError !== "unsupported-owner" || !card)) {
+      return errorNotice;
     }
-    const card = this.store?.get(this.targetSessionKey);
     if (card === undefined) {
       return html`<p class="board-widget__plugin-loading">
         ${t("sessionProgressCard.widgetLoading")}
@@ -79,43 +94,53 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
         ${t("sessionProgressCard.widgetEmpty")}
       </p>`;
     }
-    const row = this.context?.sessions?.state.result?.sessions.find(
-      (entry) => entry.key === this.targetSessionKey,
+    const identity = resolveSessionProgressCardTarget(
+      this.context?.gateway.snapshot ?? {},
+      this.target,
     );
-    return renderSessionProgressCard(
+    const row = this.context?.sessions?.state.result?.sessions.find(
+      (entry) =>
+        entry.key === identity.sessionKey &&
+        (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === identity.agentId,
+    );
+    return html`${errorNotice}${renderSessionProgressCard(
       card,
       "board",
       undefined,
       row?.status,
       row?.startedAt,
       row?.endedAt,
-    );
+    )}`;
   }
 
   private syncStore(): void {
-    const targetSessionKey = readSessionKeyProp(this.widget) ?? this.sessionKey.trim();
+    const target = resolveSessionTarget(this.widget, this.session);
     const store =
       this.active && this.context
         ? sessionProgressCardsForGateway(this.context.gateway)
         : undefined;
-    if (store === this.store && targetSessionKey === this.targetSessionKey) {
+    if (
+      store === this.store &&
+      target.sessionKey === this.target.sessionKey &&
+      target.agentId === this.target.agentId
+    ) {
       return;
     }
     this.releaseStore();
     this.store = store;
-    this.targetSessionKey = targetSessionKey;
-    if (store && targetSessionKey) {
-      store.watch(this, [targetSessionKey]);
+    this.target = target;
+    if (store && target.sessionKey) {
+      store.watch(this, [target]);
       this.unsubscribe = store.subscribe(() => this.requestUpdate());
       this.unsubscribeSessions = this.context?.sessions?.subscribe(() => this.requestUpdate());
     }
   }
 
   private readonly retryLoad = () => {
-    if (!this.store || !this.targetSessionKey) {
+    if (!this.store || !this.target.sessionKey) {
       return;
     }
-    void this.store.load(this.targetSessionKey).catch(() => undefined);
+    void this.store.load(this.target).catch(() => undefined);
   };
 
   private releaseStore(): void {
@@ -134,12 +159,12 @@ if (!customElements.get("openclaw-session-progress-widget")) {
 
 export const renderSessionProgressWidget: PluginBoardWidgetRenderer = ({
   widget,
-  sessionKey,
+  session,
   active,
 }) => html`
   <openclaw-session-progress-widget
     .widget=${widget}
-    .sessionKey=${sessionKey}
+    .session=${session}
     .active=${active}
   ></openclaw-session-progress-widget>
 `;

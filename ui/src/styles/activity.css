@@ -215,18 +215,13 @@ openclaw-activity-page {
   gap: 4px;
 }
 
-.activity-feed__people-name,
-.activity-feed__last-active {
+.activity-feed__people-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.activity-feed__people-name {
   color: var(--text-strong);
 }
 
-.activity-feed__last-active,
 .activity-feed__people-count,
 .activity-feed__people-group-label {
   color: var(--muted);

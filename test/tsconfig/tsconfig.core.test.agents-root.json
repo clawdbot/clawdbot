@@ -6,5 +6,12 @@
   "include": [
     "../../src/agents/*.test.ts",
     "../../src/agents/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/agent-tools*.test.ts",
+    "../../src/agents/agent-tools*.test.tsx"
   ]
 }

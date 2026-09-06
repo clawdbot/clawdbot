@@ -362,9 +362,9 @@ it("keeps the failure visible until the operator explicitly opens its review act
  * the request (disconnected, already running, no admin), which leaves the
  * banner in place.
  */
-function createRetryStream(options: { accepted: boolean }) {
+function createRetryStream(options: { accepted: boolean; run?: UpdateProgress["run"] }) {
   let progress: UpdateProgress = {
-    run: null,
+    run: options.run ?? null,
     busy: false,
     connected: true,
     failure: "The update failed at install: ENOSPC: no space left on device, write.",
@@ -386,29 +386,38 @@ function createRetryStream(options: { accepted: boolean }) {
   };
 }
 
-it("reports a refused retry as unanswered rather than as the old failure", async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-  try {
-    const stream = createRetryStream({ accepted: false });
-    const { settled } = startUpdate({
-      startGatewayUpdate: stream.startGatewayUpdate,
-      watchUpdateProgress: stream.watchUpdateProgress,
-    });
-    const { modal } = await getRenderedModalDialog(document.body);
+it.each([false, true])(
+  "reports a refused retry without inheriting a retained run (%s)",
+  async (retainedRun) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const stream = createRetryStream({
+        accepted: false,
+        run: retainedRun
+          ? createUpdateRunFixture({ status: "failed", phase: "finished", finishedAtMs: 10 })
+          : null,
+      });
+      const { settled } = startUpdate({
+        startGatewayUpdate: stream.startGatewayUpdate,
+        watchUpdateProgress: stream.watchUpdateProgress,
+      });
+      const { modal } = await getRenderedModalDialog(document.body);
 
-    findButton("Update and restart").click();
-    await Promise.resolve();
-    // The refused request must not inherit the previous error as its outcome.
-    expect(modal.textContent).not.toContain("ENOSPC");
+      findButton("Update and restart").click();
+      await Promise.resolve();
+      // The refused request must not inherit the previous error as its outcome.
+      expect(modal.textContent).not.toContain("ENOSPC");
+      expect(modal.querySelector("openclaw-update-run-view")).toBeNull();
 
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(modal.textContent).toContain("The update request went unanswered");
-    findButton("Close").click();
-    await settled;
-  } finally {
-    vi.useRealTimers();
-  }
-});
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(modal.textContent).toContain("The update request went unanswered");
+      findButton("Close").click();
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 it("reports a request the Gateway never accepted instead of spinning forever", async () => {
   // Auto-advancing keeps the modal's own animation frames running while the
@@ -435,104 +444,110 @@ it.each([
   { status: "failed", entry: "existing" },
   { status: "succeeded", entry: "existing" },
   { status: "running", entry: "started" },
-] as const)(
-  "keeps the $status report and exposes read recovery for a $entry run",
-  async ({ status, entry }) => {
-    const run = createUpdateRunFixture({
-      status,
-      phase: status === "running" ? "verifying" : "finished",
-      finishedAtMs: status === "running" ? null : 4_000,
-      reason: status === "failed" ? "build-failed" : null,
-    });
-    let admitted = entry === "existing";
-    let rejectRunReads = false;
-    const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "update.run") {
-        admitted = true;
-        return { runId: run.runId };
+  { status: "running", entry: "first-read" },
+  { status: "failed", entry: "first-read" },
+  { status: "succeeded", entry: "first-read" },
+] as const)("recovers status reads for a $status update ($entry)", async ({ status, entry }) => {
+  const run = createUpdateRunFixture({
+    status,
+    phase: status === "running" ? "verifying" : "finished",
+    finishedAtMs: status === "running" ? null : 4_000,
+    reason: status === "failed" ? "build-failed" : null,
+  });
+  let admitted = entry === "existing";
+  let rejectRunReads = entry === "first-read";
+  const request = vi.fn<RequestFn>(async (method) => {
+    if (method === "update.run") {
+      admitted = true;
+      return { runId: run.runId };
+    }
+    if (method === "update.runs.get") {
+      if (rejectRunReads) {
+        throw new Error("Run status read failed");
       }
-      if (method === "update.runs.get") {
-        if (rejectRunReads) {
-          throw new Error("Run status read failed");
-        }
-        return { run };
-      }
-      return method === "update.status" && admitted
-        ? { [status === "running" ? "activeRun" : "lastRun"]: run }
-        : {};
+      return { run };
+    }
+    return method === "update.status" && admitted
+      ? { [status === "running" ? "activeRun" : "lastRun"]: run }
+      : {};
+  });
+  const harness = updateRunHarness(request);
+  const listeners = new Set<() => void>();
+  const updates = createApplicationUpdateOverlays(harness.gateway, () =>
+    listeners.forEach((emit) => emit()),
+  );
+  const overlays = {
+    get snapshot() {
+      return updates.snapshot;
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  let operation: Promise<void> | undefined;
+  let settled: Promise<void> | undefined;
+  const startGatewayUpdate = vi.fn(() => {
+    operation = updates.runUpdate();
+  });
+  try {
+    await updates.refreshUpdateStatus();
+    settled = confirmAndStartUpdateRuntime({
+      ...(entry === "existing" ? { existingRun: run } : {}),
+      startGatewayUpdate,
+      onCheckStatus: () => updates.refreshUpdateStatus(),
+      watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
     });
-    const harness = updateRunHarness(request);
-    const listeners = new Set<() => void>();
-    const updates = createApplicationUpdateOverlays(harness.gateway, () =>
-      listeners.forEach((emit) => emit()),
-    );
-    const overlays = {
-      get snapshot() {
-        return updates.snapshot;
-      },
-      subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-    };
-    let operation: Promise<void> | undefined;
-    let settled: Promise<void> | undefined;
-    const startGatewayUpdate = vi.fn(() => {
-      operation = updates.runUpdate();
-    });
-    try {
-      await updates.refreshUpdateStatus();
-      settled = confirmAndStartUpdateRuntime({
-        ...(entry === "existing" ? { existingRun: run } : {}),
-        startGatewayUpdate,
-        onCheckStatus: () => updates.refreshUpdateStatus(),
-        watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
-        updateAvailable: UPDATE_AVAILABLE,
-        updateSchedule: null,
-        viaNativeApp: false,
-      });
-      const { modal } = await getRenderedModalDialog(document.body);
-      if (entry === "started") {
-        findButton("Update and restart").click();
-        await flushMicrotasks();
-        await operation;
-      }
+    const { modal } = await getRenderedModalDialog(document.body);
+    if (entry !== "existing") {
+      findButton("Update and restart").click();
+      await flushMicrotasks();
+      await operation;
+    }
+    if (entry !== "first-read") {
       rejectRunReads = true;
       updates.handleUpdateRunChanged({ ...run, updatedAtMs: run.updatedAtMs + 1 });
       await flushMicrotasks();
-      expect(updates.snapshot.updateStatusBanner?.text).toContain("Run status read failed");
-      const view = modal.querySelector<
-        HTMLElement & { run: unknown; updateComplete: Promise<boolean> }
-      >("openclaw-update-run-view")!;
-      await view.updateComplete;
-      expect(modal.textContent).toContain("Run status read failed");
-      expect(view.run).toEqual(run);
-      const check = findButton("Check status");
-      expect(check.disabled).toBe(false);
-      if (status === "running") {
-        expect(
-          [...modal.querySelectorAll("button")].some(
-            (button) => button.textContent?.trim() === "Retry update",
-          ),
-        ).toBe(false);
-      }
-      check.click();
-      await flushMicrotasks();
-      expect(modal.textContent).not.toContain("Run status read failed");
-      expect(view.run).toEqual(run);
-      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
-        entry === "started" ? 1 : 0,
-      );
-      expect(startGatewayUpdate).toHaveBeenCalledTimes(entry === "started" ? 1 : 0);
-    } finally {
-      document.body
-        .querySelector("openclaw-modal-dialog")
-        ?.dispatchEvent(new Event("modal-cancel"));
-      await settled;
-      await operation;
-      updates.dispose();
     }
-  },
-);
+    expect(updates.snapshot.updateStatusBanner?.text).toContain("Run status read failed");
+    const view = modal.querySelector<
+      HTMLElement & { run: unknown; updateComplete: Promise<boolean> }
+    >("openclaw-update-run-view");
+    await view?.updateComplete;
+    expect(modal.textContent).toContain("Run status read failed");
+    if (entry === "first-read") {
+      expect(view).toBeNull();
+    } else {
+      expect(view?.run).toEqual(run);
+    }
+    const check = findButton("Check status");
+    expect(check.disabled).toBe(false);
+    if (status === "running" || entry === "first-read") {
+      expect(
+        [...modal.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Retry update",
+        ),
+      ).toBe(false);
+    }
+    check.click();
+    await flushMicrotasks();
+    expect(modal.textContent).not.toContain("Run status read failed");
+    expect(
+      modal.querySelector<HTMLElement & { run: unknown }>("openclaw-update-run-view")?.run,
+    ).toEqual(run);
+    expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
+      entry === "existing" ? 0 : 1,
+    );
+    expect(startGatewayUpdate).toHaveBeenCalledTimes(entry === "existing" ? 0 : 1);
+  } finally {
+    document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
+    await settled;
+    await operation;
+    updates.dispose();
+  }
+});

@@ -55,6 +55,7 @@ import {
 } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
+  projectCodexHostTranscriptBytePreflightConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import type { acceptCompactionSuccessor } from "./compaction-successor.js";
@@ -72,6 +73,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
 } from "./runs.js";
+import { resolveTranscriptBytePreflightAuthority } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 type QueuedCompactionParams = CompactEmbeddedAgentSessionParams & {
@@ -211,6 +213,10 @@ export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
   host: QueuedCompactionHostOptions = {},
 ): Promise<EmbeddedAgentCompactResult> {
+  const projectedConfig = projectCodexHostTranscriptBytePreflightConfig(
+    params.config,
+    Boolean(host.transcriptBytePreflightHarness),
+  );
   const contextEngineAgentId =
     normalizeOptionalString(params.contextEngineAgentId) ?? normalizeOptionalString(params.agentId);
   const contextEngineSessionKey =
@@ -229,6 +235,7 @@ export async function compactEmbeddedAgentSession(
   };
   const resolvedParams = {
     ...params,
+    config: projectedConfig,
     sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
     agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
@@ -520,6 +527,13 @@ async function compactResolvedContextEngine(
   });
   assertQueuedCompactionPreparationActive(params, host);
   const preparedHarnessRuntime = selectedPreparedHarness.id;
+  const transcriptBytePreflightAuthority =
+    host.transcriptBytePreflightHarness === preparedHarnessRuntime
+      ? resolveTranscriptBytePreflightAuthority(selectedPreparedHarness)
+      : undefined;
+  if (host.transcriptBytePreflightHarness && !transcriptBytePreflightAuthority) {
+    return lockedCompactionRuntimeFailure(host.transcriptBytePreflightHarness);
+  }
   const attemptNativeHarnessCompaction =
     selectedNativeHarnessCompaction && preparedHarnessRuntime !== "openclaw";
   const runtimeAuthPlan = runtimeAuthPreparation.plan;
@@ -599,7 +613,9 @@ async function compactResolvedContextEngine(
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   let requiredPreflightNativeCapabilityUsed = false;
   const harnessResult =
-    attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
+    attemptNativeHarnessCompaction &&
+    !transcriptBytePreflightAuthority &&
+    (!contextEngineOwnsCompaction || lockedNativeHarness)
       ? await runPrimaryNativeCompactionInLanes(preparedParams, expectedEntry, host, async () => {
           if (params.abortSignal?.aborted) {
             return createQueuedCompactionAbortedResult();
@@ -630,6 +646,7 @@ async function compactResolvedContextEngine(
   // fallback for a locked harness; public result fields cannot escape the lock.
   if (
     lockedNativeHarness &&
+    !transcriptBytePreflightAuthority &&
     !(
       preparedParams.preflightRequired === true &&
       requiredPreflightNativeCapabilityUsed &&
@@ -684,6 +701,7 @@ async function compactResolvedContextEngine(
     preparedHarnessRuntime,
     contextTokenBudget,
     attemptNativeHarnessCompaction,
+    transcriptBytePreflightAuthority,
   });
 }
 

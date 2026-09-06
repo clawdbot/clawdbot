@@ -78,6 +78,7 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
+import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
@@ -111,7 +112,6 @@ import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
-const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
@@ -265,12 +265,6 @@ function normalizeAssistantMediaSource(source: string): string | null {
     return resolveUserPath(trimmed);
   }
   return trimmed;
-}
-
-function resolveAssistantMediaRoutePath(basePath?: string): string {
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
 }
 
 type AssistantMediaAvailability =
@@ -775,10 +769,9 @@ export async function handleControlUiAvatarRequest(
 
   const identity = resolveAssistantIdentity({ cfg: opts.config, agentId });
   const projection = openGatewayAssistantAvatar({ cfg: opts.config, identity });
-  const resolved = projection.resolution;
-
-  if (url.searchParams.get("meta") === "1") {
-    try {
+  try {
+    const resolved = projection.resolution;
+    if (url.searchParams.get("meta") === "1") {
       const meta = controlUiAvatarResolutionMeta(resolved);
       const avatarUrl =
         gatewayAssistantAvatarUrl(projection, basePath, agentId) ??
@@ -789,65 +782,59 @@ export async function handleControlUiAvatarRequest(
         avatarStatus: meta.avatarStatus,
         avatarReason: meta.avatarReason,
       } satisfies ControlUiAvatarMeta);
-    } finally {
-      if (projection.openedFile) {
-        fs.closeSync(projection.openedFile.fd);
-      }
-    }
-    return true;
-  }
-
-  if (url.searchParams.has("v") && (projection.openedFile || resolved?.kind === "data")) {
-    const source = projection.openedFile
-      ? { file: projection.openedFile }
-      : { dataUrl: identity.avatar };
-    try {
-      const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
-      // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
-      res.setHeader("vary", "Authorization, Cookie");
-      sendHttpImageResponse({
-        req,
-        res,
-        image,
-        filename: "avatar",
-        cacheControl:
-          url.searchParams.get("v") === gatewayAvatarImageRevision(source)
-            ? "private, max-age=31536000, immutable"
-            : "private, no-cache",
-      });
-    } catch {
-      respondControlUiNotFound(res);
-    } finally {
-      if (projection.openedFile) {
-        fs.closeSync(projection.openedFile.fd);
-      }
-    }
-    return true;
-  }
-
-  if (resolved?.kind !== "local" || !projection.openedFile) {
-    respondControlUiNotFound(res);
-    return true;
-  }
-
-  try {
-    res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
-    res.setHeader("Cache-Control", "no-cache");
-    if (req.method === "HEAD") {
-      res.statusCode = 200;
-      // The pinned descriptor exposes GET's exact byte count without reading the avatar.
-      res.setHeader("Content-Length", String(projection.openedFile.stat.size));
-      res.end();
       return true;
     }
-    const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
-    res.end(body);
-    return true;
-  } catch {
-    respondControlUiNotFound(res);
-    return true;
+
+    if (url.searchParams.has("v") && (projection.openedFile || resolved?.kind === "data")) {
+      const source = projection.openedFile
+        ? { file: projection.openedFile }
+        : { dataUrl: identity.avatar };
+      try {
+        const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
+        // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
+        res.setHeader("vary", "Authorization, Cookie");
+        sendHttpImageResponse({
+          req,
+          res,
+          image,
+          filename: "avatar",
+          cacheControl:
+            url.searchParams.get("v") === gatewayAvatarImageRevision(source)
+              ? "private, max-age=31536000, immutable"
+              : "private, no-cache",
+        });
+      } catch {
+        respondControlUiNotFound(res);
+      }
+      return true;
+    }
+
+    if (resolved?.kind !== "local" || !projection.openedFile) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+
+    try {
+      res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
+      res.setHeader("Cache-Control", "no-cache");
+      if (req.method === "HEAD") {
+        res.statusCode = 200;
+        // The pinned descriptor exposes GET's exact byte count without reading the avatar.
+        res.setHeader("Content-Length", String(projection.openedFile.stat.size));
+        res.end();
+        return true;
+      }
+      const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
+      res.end(body);
+      return true;
+    } catch {
+      respondControlUiNotFound(res);
+      return true;
+    }
   } finally {
-    fs.closeSync(projection.openedFile.fd);
+    if (projection.openedFile) {
+      fs.closeSync(projection.openedFile.fd);
+    }
   }
 }
 

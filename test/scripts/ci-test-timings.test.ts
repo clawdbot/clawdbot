@@ -210,6 +210,13 @@ it.todo("retains todo coverage");
       serialProject: "ui-e2e-serial-standalone",
       mixed: true,
     },
+    ...["ui-e2e-real-gateway", "ui-e2e-real-gateway-standalone"].flatMap((parallelProject) =>
+      [false, true].map((mixed) => ({
+        parallelProject,
+        serialProject: "ui-e2e-serial-standalone",
+        mixed,
+      })),
+    ),
   ])(
     "keeps $parallelProject weights without refitting $serialProject overhead (mixed: $mixed)",
     ({ parallelProject, serialProject, mixed }) => {

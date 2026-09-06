@@ -126,6 +126,58 @@ describe("native app i18n inventory", () => {
     expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
   });
 
+  it.each([
+    { surface: "apple", value: String.raw`agent:\(owner):global` },
+    { surface: "android", value: "agent:$agentId:global" },
+    { surface: "apple", value: String.raw`cache:\(scope.path):\(makeKey(value: token)):entry` },
+    { surface: "apple", value: String.raw`cache:\(makeKey(name: "local")):entry` },
+    { surface: "android", value: "cache:${scope.path}:$entryId" },
+    { surface: "android", value: "cache:${keys.getOrElse(index) { fallback }}:$entryId" },
+  ] as const)(
+    "excludes $surface interpolated identifiers but preserves explicit UI copy: $value",
+    ({ surface, value }) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const branch = (text: string) =>
+        surface === "apple"
+          ? `let key = enabled ? "${text}" : fallback`
+          : `val key = if (enabled) "${text}" else fallback`;
+
+      expect(extractNativeI18nCandidates(surface, repoPath, branch(value))).toEqual([]);
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, `Text("${value}")`).map(
+          (entry) => entry.source,
+        ),
+      ).toEqual([value]);
+      const prose = `Current route: ${value}`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, branch(prose)).map((entry) => entry.source),
+      ).toEqual([prose]);
+    },
+  );
+
+  it.each(["apple", "android"] as const)(
+    "preserves compact %s prose and the candidate length boundary",
+    (surface) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const value = surface === "apple" ? String.raw`\(hours)h` : "${hours}h";
+      const source =
+        surface === "apple"
+          ? `let label = enabled ? "${value}" : fallback`
+          : `val label = if (enabled) "${value}" else fallback`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, source).map((entry) => entry.source),
+      ).toEqual([value]);
+      for (const length of [500, 501]) {
+        const text = "a".repeat(length);
+        expect(
+          extractNativeI18nCandidates(surface, repoPath, `Text("${text}")`).map(
+            (entry) => entry.source,
+          ),
+        ).toEqual(length === 500 ? [text] : []);
+      }
+    },
+  );
+
   it("preserves the typed expiry key from Swift extraction through macOS catalog projection", () => {
     const entries = assignNativeI18nIds(
       extractNativeI18nCandidates(
@@ -357,6 +409,21 @@ describe("native app i18n inventory", () => {
           ) && entry.source === "Current session",
       ),
     ).toBe(true);
+    // Wear-only entries do not reach phone resources; the phone owner must declare its modes.
+    expect(
+      entries
+        .filter(
+          (entry) =>
+            entry.surface === "android" &&
+            hasSite(
+              entry,
+              (site) =>
+                site.path ===
+                "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+            ),
+        )
+        .map((entry) => entry.source),
+    ).toEqual(expect.arrayContaining(["System", "Dark", "Light"]));
     expect(
       entries.some(
         (entry) =>
@@ -494,6 +561,27 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);
+    expect
+      .soft(
+        entries
+          .filter(
+            (entry) => entry.source === "Update the gateway to load progress cards for this agent.",
+          )
+          .map((entry) => entry.surface)
+          .toSorted(),
+      )
+      .toEqual(["android", "apple"]);
+    expect
+      .soft(
+        entries
+          .filter(
+            (entry) =>
+              entry.source ===
+              "Update the gateway before sending queued messages. This version requires safe delivery routing.",
+          )
+          .map((entry) => entry.surface),
+      )
+      .toEqual(["apple"]);
     expect(
       entries.some(
         (entry) =>

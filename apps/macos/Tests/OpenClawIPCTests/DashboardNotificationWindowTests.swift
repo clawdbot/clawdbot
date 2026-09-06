@@ -87,131 +87,121 @@ extension DashboardWindowOwnershipTests {
     }
 
     @Test func `background completion restores a failed dashboard before navigating`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let manager = self.notificationManager(server: server)
-        defer { manager.close() }
-        try await manager.show()
-        let controller = try #require(manager._testController())
-        try await self.waitForDashboard(controller, path: "/")
-        let window = try #require(controller.window)
+        try await self.withNotificationDashboard { server, manager in
+            try await manager.show()
+            let controller = try #require(manager._testController())
+            try await self.waitForDashboard(controller, path: "/")
+            let window = try #require(controller.window)
 
-        controller.webView(controller.webView, didFail: nil, withError: URLError(.networkConnectionLost))
-        #expect(!controller.canDeliverNativeCommands)
-        try await manager.openBackgroundSession(
-            self.completion(), target: .primary, sourceURL: server.url())
+            controller.webView(controller.webView, didFail: nil, withError: URLError(.networkConnectionLost))
+            #expect(!controller.canDeliverNativeCommands)
+            try await manager.openBackgroundSession(
+                self.completion(), target: .primary, sourceURL: server.url())
 
-        let restored = try #require(manager._testController())
-        #expect(restored.window === window)
-        #expect(restored.canDeliverNativeCommands)
-        try await self.waitForDashboard(restored, path: "/chat/main/dashboard/completed")
-        #expect(restored._testPendingNativeNavigation == nil)
+            let restored = try #require(manager._testController())
+            #expect(restored.window === window)
+            #expect(restored.canDeliverNativeCommands)
+            try await self.waitForDashboard(restored, path: "/chat/main/dashboard/completed")
+            #expect(restored._testPendingNativeNavigation == nil)
+        }
     }
 
     @Test(arguments: ["new-session", "window-close", "manager-close"])
     func `pending notification click cannot supersede newer window intent`(_ action: String) async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
         let gate = DashboardWindowOwnershipPresentationGate(released: true)
-        let manager = self.notificationManager(server: server, gate: gate)
-        defer { manager.close() }
-        try await manager.show()
-        let controller = try #require(manager._testController())
-        try await self.waitForDashboard(controller, path: "/")
-        await gate.hold()
+        try await self.withNotificationDashboard(gate: gate) { server, manager in
+            try await manager.show()
+            let controller = try #require(manager._testController())
+            try await self.waitForDashboard(controller, path: "/")
+            await gate.hold()
 
-        let click = Task { @MainActor in
-            try await manager.openBackgroundSession(
-                self.completion(), target: .primary, sourceURL: server.url())
-        }
-        await gate.waitUntilRequested()
-        switch action {
-        case "new-session": manager.dispatchNativeCommand(.newSession)
-        case "window-close": controller.window?.performClose(nil)
-        default: manager.close()
-        }
-        let generation = controller._testNavigationGeneration
-        await gate.release()
-        try await click.value
+            let click = Task { @MainActor in
+                try await manager.openBackgroundSession(
+                    self.completion(), target: .primary, sourceURL: server.url())
+            }
+            await gate.waitUntilRequested()
+            switch action {
+            case "new-session": manager.dispatchNativeCommand(.newSession)
+            case "window-close": controller.window?.performClose(nil)
+            default: manager.close()
+            }
+            let generation = controller._testNavigationGeneration
+            await gate.release()
+            try await click.value
 
-        #expect(controller._testPendingNativeNavigation == nil)
-        #expect(controller._testNavigationGeneration == generation)
-        #expect(controller.currentURL.path == "/")
-        #expect(manager._testController() === controller)
-        #expect(controller.isWindowOpen == (action == "new-session"))
+            #expect(controller._testPendingNativeNavigation == nil)
+            #expect(controller._testNavigationGeneration == generation)
+            #expect(controller.currentURL.path == "/")
+            #expect(manager._testController() === controller)
+            #expect(controller.isWindowOpen == (action == "new-session"))
+        }
     }
 
     @Test func `notification clicked after window close reopens its exact session`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let manager = self.notificationManager(server: server)
-        defer { manager.close() }
-        try await manager.show()
-        let controller = try #require(manager._testController())
-        try await self.waitForDashboard(controller, path: "/")
-        let window = try #require(controller.window)
-        window.performClose(nil)
-        #expect(!controller.isWindowOpen)
+        try await self.withNotificationDashboard { server, manager in
+            try await manager.show()
+            let controller = try #require(manager._testController())
+            try await self.waitForDashboard(controller, path: "/")
+            let window = try #require(controller.window)
+            window.performClose(nil)
+            #expect(!controller.isWindowOpen)
 
-        try await manager.openBackgroundSession(
-            self.completion(), target: .primary, sourceURL: server.url())
+            try await manager.openBackgroundSession(
+                self.completion(), target: .primary, sourceURL: server.url())
 
-        let reopened = try #require(manager._testController())
-        #expect(reopened.window === window)
-        #expect(reopened.isWindowOpen)
-        try await self.waitForDashboard(reopened, path: "/chat/main/dashboard/completed")
+            let reopened = try #require(manager._testController())
+            #expect(reopened.window === window)
+            #expect(reopened.isWindowOpen)
+            try await self.waitForDashboard(reopened, path: "/chat/main/dashboard/completed")
+        }
     }
 
     @Test func `profile notification survives unrelated primary endpoint updates`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
         let gate = DashboardWindowOwnershipPresentationGate(released: true)
-        let manager = self.notificationManager(server: server, gate: gate)
-        defer { manager.close() }
-        let target = DashboardGatewayTarget.profile("background")
-        await manager._testOpenWindow(for: target)
-        let controller = try #require(manager._testAuxiliaryWindows().first?.controller)
-        try await self.waitForDashboard(controller, path: "/")
-        await gate.hold()
+        try await self.withNotificationDashboard(gate: gate) { server, manager in
+            let target = DashboardGatewayTarget.profile("background")
+            await manager._testOpenWindow(for: target)
+            let controller = try #require(manager._testAuxiliaryWindows().first?.controller)
+            try await self.waitForDashboard(controller, path: "/")
+            await gate.hold()
 
-        let click = Task { @MainActor in
-            try await manager.openBackgroundSession(
-                self.completion(), target: target, sourceURL: server.url())
+            let click = Task { @MainActor in
+                try await manager.openBackgroundSession(
+                    self.completion(), target: target, sourceURL: server.url())
+            }
+            await gate.waitUntilRequested()
+            await manager.handleEndpointState(.connecting(mode: .remote, detail: "Connecting"))
+            await gate.release()
+            try await click.value
+
+            try await self.waitForDashboard(controller, path: "/chat/main/dashboard/completed")
+            #expect(manager._testAuxiliaryWindows().first?.controller === controller)
         }
-        await gate.waitUntilRequested()
-        await manager.handleEndpointState(.connecting(mode: .remote, detail: "Connecting"))
-        await gate.release()
-        try await click.value
-
-        try await self.waitForDashboard(controller, path: "/chat/main/dashboard/completed")
-        #expect(manager._testAuxiliaryWindows().first?.controller === controller)
     }
 
     @Test func `older queued command replay does not cancel a newer notification click`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
         let gate = DashboardWindowOwnershipPresentationGate(released: true)
-        let manager = self.notificationManager(server: server, gate: gate)
-        defer { manager.close() }
-        try await manager.show()
-        let controller = try #require(manager._testController())
-        try await self.waitForDashboard(controller, path: "/")
-        controller.webView(controller.webView, didCommit: nil)
-        controller.dispatchNativeCommand(.newSession)
-        #expect(controller._testPendingNativeCommands == [.newSession])
-        await gate.hold()
+        try await self.withNotificationDashboard(gate: gate) { server, manager in
+            try await manager.show()
+            let controller = try #require(manager._testController())
+            try await self.waitForDashboard(controller, path: "/")
+            controller.webView(controller.webView, didCommit: nil)
+            controller.dispatchNativeCommand(.newSession)
+            #expect(controller._testPendingNativeCommands == [.newSession])
+            await gate.hold()
 
-        let click = Task { @MainActor in
-            try await manager.openBackgroundSession(
-                self.completion(), target: .primary, sourceURL: server.url())
+            let click = Task { @MainActor in
+                try await manager.openBackgroundSession(
+                    self.completion(), target: .primary, sourceURL: server.url())
+            }
+            await gate.waitUntilRequested()
+            controller.webView(controller.webView, didFinish: nil)
+            #expect(controller._testPendingNativeCommands.isEmpty)
+            await gate.release()
+            try await click.value
+
+            try await self.waitForDashboard(controller, path: "/chat/main/dashboard/completed")
         }
-        await gate.waitUntilRequested()
-        controller.webView(controller.webView, didFinish: nil)
-        #expect(controller._testPendingNativeCommands.isEmpty)
-        await gate.release()
-        try await click.value
-
-        try await self.waitForDashboard(controller, path: "/chat/main/dashboard/completed")
     }
 
     @Test(arguments: ["same", "refreshed", "refreshed-close", "new-window-close"])
@@ -424,47 +414,45 @@ extension DashboardWindowOwnershipTests {
     }
 
     @Test func `notification retains its native window when unrelated window moves forward`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
         let gate = DashboardWindowOwnershipPresentationGate(released: true)
-        let manager = self.notificationManager(server: server, gate: gate)
-        defer { manager.close() }
-        try await manager.show()
-        let main = try #require(manager._testController())
-        await manager._testOpenWindow(for: .primary)
-        let clicked = try #require(manager._testAuxiliaryWindows().first?.controller)
-        await manager._testOpenWindow(for: .profile("background"))
-        let other = try #require(manager._testAuxiliaryWindows().first { $0.target != .primary }?.controller)
-        try await self.waitForDashboard(main, path: "/")
-        try await self.waitForDashboard(clicked, path: "/")
-        try await self.waitForDashboard(other, path: "/")
-        let windows = [main, clicked, other].compactMap(\.window)
-        await gate.hold()
-        let click = Task { @MainActor in
-            // Focus and admission are one UI action; yielding between them lets
-            // unrelated AppKit tests choose the window before this click starts.
-            clicked.show()
-            #expect(NSApp.orderedWindows.first(where: { windows.contains($0) }) === clicked.window)
-            #expect(windows.first(where: \.isKeyWindow).map { $0 === clicked.window } ?? true)
-            try await manager.openBackgroundSession(self.completion(), target: .primary, sourceURL: server.url())
-        }
-        await gate.waitUntilRequested()
-        do {
-            other.show()
-            try #require(NSApp.orderedWindows.first(where: { windows.contains($0) }) === other.window)
-            try #require(windows.first(where: \.isKeyWindow).map { $0 === other.window } ?? true)
-        } catch {
-            click.cancel()
+        try await self.withNotificationDashboard(gate: gate) { server, manager in
+            try await manager.show()
+            let main = try #require(manager._testController())
+            await manager._testOpenWindow(for: .primary)
+            let clicked = try #require(manager._testAuxiliaryWindows().first?.controller)
+            await manager._testOpenWindow(for: .profile("background"))
+            let other = try #require(manager._testAuxiliaryWindows().first { $0.target != .primary }?.controller)
+            try await self.waitForDashboard(main, path: "/")
+            try await self.waitForDashboard(clicked, path: "/")
+            try await self.waitForDashboard(other, path: "/")
+            let windows = [main, clicked, other].compactMap(\.window)
+            await gate.hold()
+            let click = Task { @MainActor in
+                // Focus and admission are one UI action; yielding between them lets
+                // unrelated AppKit tests choose the window before this click starts.
+                clicked.show()
+                #expect(NSApp.orderedWindows.first(where: { windows.contains($0) }) === clicked.window)
+                #expect(windows.first(where: \.isKeyWindow).map { $0 === clicked.window } ?? true)
+                try await manager.openBackgroundSession(self.completion(), target: .primary, sourceURL: server.url())
+            }
+            await gate.waitUntilRequested()
+            do {
+                other.show()
+                try #require(NSApp.orderedWindows.first(where: { windows.contains($0) }) === other.window)
+                try #require(windows.first(where: \.isKeyWindow).map { $0 === other.window } ?? true)
+            } catch {
+                click.cancel()
+                await gate.release()
+                _ = try? await click.value
+                throw error
+            }
             await gate.release()
-            _ = try? await click.value
-            throw error
-        }
-        await gate.release()
-        try await click.value
+            try await click.value
 
-        try await self.waitForDashboard(clicked, path: "/chat/main/dashboard/completed")
-        #expect(main.webView.url?.path == "/")
-        #expect(other.webView.url?.path == "/")
+            try await self.waitForDashboard(clicked, path: "/chat/main/dashboard/completed")
+            #expect(main.webView.url?.path == "/")
+            #expect(other.webView.url?.path == "/")
+        }
     }
 
     @Test(arguments: ["endpoint", "credentials"])
@@ -543,33 +531,45 @@ extension DashboardWindowOwnershipTests {
         }
     }
 
-    private func notificationManager(
-        server: DashboardHTTPFixture,
-        gate: DashboardWindowOwnershipPresentationGate? = nil) -> DashboardManager
+    private func withNotificationDashboard(
+        gate: DashboardWindowOwnershipPresentationGate? = nil,
+        _ body: @MainActor (DashboardHTTPFixture, DashboardManager) async throws -> Void) async throws
     {
-        let endpointURL = server.websocketURL()
-        return DashboardManager._testMake(
-            primaryEndpointProvider: { _ in
-                await gate?.waitForRelease()
-                return GatewayConnection.EndpointSnapshot(
-                    config: (url: endpointURL, token: "synthetic", password: nil),
-                    routeAuthority: nil)
-            },
-            profileEndpointProvider: { _ in
-                await gate?.waitForRelease()
-                return GatewayConnection.EndpointSnapshot(
-                    config: (url: endpointURL, token: "synthetic", password: nil),
-                    routeAuthority: nil)
-            },
-            gatewayEntriesProvider: {
-                [Self.primaryGateway, DashboardGatewayEntry(
-                    id: "profile:background",
-                    name: "Background",
-                    kind: "remote",
-                    isPrimary: false,
-                    canPromote: false,
-                    health: .ok)]
-            })
+        // These cases address configured Primary. An unconfigured app correctly
+        // opens the sole saved profile instead, which is a different window owner.
+        try await TestIsolation.withIsolatedState(defaults: [connectionModeKey: "local"]) {
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .local
+            defer { state.connectionMode = previousMode }
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let endpointURL = server.websocketURL()
+            let manager = DashboardManager._testMake(
+                primaryEndpointProvider: { _ in
+                    await gate?.waitForRelease()
+                    return GatewayConnection.EndpointSnapshot(
+                        config: (url: endpointURL, token: "synthetic", password: nil),
+                        routeAuthority: nil)
+                },
+                profileEndpointProvider: { _ in
+                    await gate?.waitForRelease()
+                    return GatewayConnection.EndpointSnapshot(
+                        config: (url: endpointURL, token: "synthetic", password: nil),
+                        routeAuthority: nil)
+                },
+                gatewayEntriesProvider: {
+                    [Self.primaryGateway, DashboardGatewayEntry(
+                        id: "profile:background",
+                        name: "Background",
+                        kind: "remote",
+                        isPrimary: false,
+                        canPromote: false,
+                        health: .ok)]
+                })
+            defer { manager.close() }
+            try await body(server, manager)
+        }
     }
 
     private func waitForQueuedToggles(_ manager: DashboardManager) async throws -> DashboardWindowController {

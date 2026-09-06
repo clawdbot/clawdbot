@@ -38,9 +38,9 @@ import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.j
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { projectSessionActor } from "./session-identity-projection.js";
+import { buildSessionRowFixture, listSessionFixture } from "./session-list.test-support.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
-import { listSessionsFromStoreAsync } from "./session-utils-list.js";
 import {
   getSessionDefaults,
   projectSessionPatchResult,
@@ -124,6 +124,7 @@ test("projects a channel avatar route without exposing its media-store reference
 
   const row = buildGatewaySessionRowOwner({
     cfg,
+    agentId: "main",
     storePath: "",
     store: { [key]: entry },
     key,
@@ -154,6 +155,7 @@ test("projects a channel avatar route without exposing its media-store reference
   } satisfies SessionEntry;
   const replacedRow = buildGatewaySessionRowOwner({
     cfg,
+    agentId: "main",
     storePath: "",
     store: { [key]: replacedEntry },
     key,
@@ -265,7 +267,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function buildGatewaySessionRow(
-  params: Parameters<typeof buildGatewaySessionRowOwner>[0],
+  params: Parameters<typeof buildSessionRowFixture>[0],
 ): ReturnType<typeof buildGatewaySessionRowOwner> {
   const entry = params.entry ?? ({} as SessionEntry);
   const rowContext = buildSessionListRowMetadataContext({
@@ -274,7 +276,7 @@ function buildGatewaySessionRow(
   // Row projection tests do not own ACP persistence. Mark the supplied fixture
   // as already checked so each assertion does not open the ambient state DB.
   rowContext.acpSessionMetaByEntry.set(entry, undefined);
-  return buildGatewaySessionRowOwner({
+  return buildSessionRowFixture({
     ...params,
     entry,
     rowContext,
@@ -625,7 +627,7 @@ describe("gateway session utils", () => {
       ]),
     );
 
-    const listed = await listSessionsFromStoreAsync({
+    const listed = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -654,7 +656,7 @@ describe("gateway session utils", () => {
       ]),
     );
 
-    const listed = await listSessionsFromStoreAsync({
+    const listed = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -686,7 +688,7 @@ describe("gateway session utils", () => {
       },
     } satisfies Record<string, SessionEntry>;
 
-    const active = await listSessionsFromStoreAsync({ cfg, storePath: "", store, opts: {} });
+    const active = await listSessionFixture({ cfg, storePath: "", store, opts: {} });
     expect(active.sessions.map((session) => session.key)).toEqual(["pinned", "recent"]);
     expect(active.sessions[0]).toMatchObject({
       pinned: true,
@@ -694,7 +696,7 @@ describe("gateway session utils", () => {
       archived: false,
     });
 
-    const archived = await listSessionsFromStoreAsync({
+    const archived = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -710,7 +712,7 @@ describe("gateway session utils", () => {
       },
     ]);
 
-    const all = await listSessionsFromStoreAsync({
+    const all = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -732,7 +734,7 @@ describe("gateway session utils", () => {
       ]),
     );
 
-    const listed = await listSessionsFromStoreAsync({
+    const listed = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -765,7 +767,7 @@ describe("gateway session utils", () => {
       },
     };
 
-    const listed = await listSessionsFromStoreAsync({
+    const listed = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -798,7 +800,7 @@ describe("gateway session utils", () => {
       },
     };
 
-    const listed = await listSessionsFromStoreAsync({
+    const listed = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -823,7 +825,7 @@ describe("gateway session utils", () => {
       ]),
     );
 
-    const listed = await listSessionsFromStoreAsync({
+    const listed = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -1274,7 +1276,7 @@ describe("gateway session utils", () => {
 
     const historicalModel = vi.spyOn(sessionModelRefs, "resolveSessionModelIdentityRef");
     onTestFinished(() => historicalModel.mockRestore());
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "",
       store,
@@ -1319,7 +1321,7 @@ describe("gateway session utils", () => {
         compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
       },
     ];
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "",
       modelCatalog,
@@ -1580,6 +1582,7 @@ describe("gateway session utils", () => {
       const readRow = (key: keyof typeof store) =>
         buildGatewaySessionRowOwner({
           cfg,
+          agentId: "main",
           storePath: "",
           store,
           key,
@@ -1590,7 +1593,7 @@ describe("gateway session utils", () => {
         });
       const nativeRow = readRow(nativeKey);
       expect(nativeRow).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-luna" });
-      const matches = await listSessionsFromStoreAsync({
+      const matches = await listSessionFixture({
         cfg,
         storePath: "",
         store,
@@ -2421,6 +2424,7 @@ describe("gateway session utils", () => {
     const projectKind = (key: string, entry?: SessionEntry) =>
       buildGatewaySessionRow({
         cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        agentId: "main",
         storePath: "",
         store: {},
         key,
@@ -3674,75 +3678,78 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadSessionEntry preserves a listed deleted main session over the live default main", async () => {
-    resetConfigRuntimeState();
-    try {
-      await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
-        const storeTemplate = path.join(
-          stateDir,
-          "agents",
-          "{agentId}",
-          "sessions",
-          "sessions.json",
-        );
-        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
-        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-        fs.mkdirSync(liveSessionsDir, { recursive: true });
-        fs.mkdirSync(deletedSessionsDir, { recursive: true });
-        const liveStorePath = path.join(liveSessionsDir, "sessions.json");
-        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-        await seedSessionEntries(liveStorePath, {
-          "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
-        });
-        await seedSessionEntries(deletedStorePath, {
-          "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
-        });
-        const cfg = {
-          session: { mainKey: "main", store: storeTemplate },
-          agents: { list: [{ id: "ops", default: true }] },
-        } as OpenClawConfig;
-        setRuntimeConfigSnapshot(cfg, cfg);
-
-        const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main" });
-        const loaded = loadSessionEntry("agent:main:main");
-
-        expect(target.canonicalKey).toBe("agent:main:main");
-        expect(target.agentId).toBe("main");
-        expect(target.storePath).toBe(path.resolve(deletedStorePath));
-        expect(loaded.canonicalKey).toBe("agent:main:main");
-        expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
-        closeOpenClawAgentDatabasesForTest();
-        const parse = JSON.parse;
-        let liveDefaultParses = 0;
-        const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-          if (text.includes('"sessionId":"sess-live-default"')) {
-            liveDefaultParses += 1;
-          }
-          return parse(text, reviver);
-        });
-        try {
-          expect(
-            resolveGatewaySessionStoreTargetsReadOnly({
-              cfg,
-              targets: [{ key: "agent:main:main" }],
-            }),
-          ).toMatchObject([
-            {
-              agentId: "main",
-              storePath: path.resolve(deletedStorePath),
-              store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
-            },
-          ]);
-          expect(liveDefaultParses).toBe(0);
-        } finally {
-          parseSpy.mockRestore();
-        }
-      });
-    } finally {
+  test.each([undefined, "main", "research"])(
+    "keeps private deleted-main discovery ahead of replacement selection (%s)",
+    async (agentId) => {
       resetConfigRuntimeState();
-    }
-  });
+      try {
+        await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
+          const storeTemplate = path.join(
+            stateDir,
+            "agents",
+            "{agentId}",
+            "sessions",
+            "sessions.json",
+          );
+          const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+          const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+          fs.mkdirSync(liveSessionsDir, { recursive: true });
+          fs.mkdirSync(deletedSessionsDir, { recursive: true });
+          const liveStorePath = path.join(liveSessionsDir, "sessions.json");
+          const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+          await seedSessionEntries(liveStorePath, {
+            "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
+          });
+          await seedSessionEntries(deletedStorePath, {
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          });
+          const cfg = {
+            session: { store: storeTemplate },
+            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          } as OpenClawConfig;
+          setRuntimeConfigSnapshot(cfg, cfg);
+
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main", agentId });
+          const loaded = loadSessionEntry("agent:main:main", { agentId });
+
+          expect(target.canonicalKey).toBe("agent:main:main");
+          expect(target.agentId).toBe("main");
+          expect(target.storePath).toBe(path.resolve(deletedStorePath));
+          expect(loaded.canonicalKey).toBe("agent:main:main");
+          expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
+          expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+          closeOpenClawAgentDatabasesForTest();
+          const parse = JSON.parse;
+          let liveDefaultParses = 0;
+          const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+            if (text.includes('"sessionId":"sess-live-default"')) {
+              liveDefaultParses += 1;
+            }
+            return parse(text, reviver);
+          });
+          try {
+            expect(
+              resolveGatewaySessionStoreTargetsReadOnly({
+                cfg,
+                targets: [{ key: "agent:main:main", agentId }],
+              }),
+            ).toMatchObject([
+              {
+                agentId: "main",
+                storePath: path.resolve(deletedStorePath),
+                store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
+              },
+            ]);
+            expect(liveDefaultParses).toBe(0);
+          } finally {
+            parseSpy.mockRestore();
+          }
+        });
+      } finally {
+        resetConfigRuntimeState();
+      }
+    },
+  );
 
   test.each([false, true])(
     "keeps deleted-main incognito lookups in their process store (exactRead=%s)",
@@ -4560,7 +4567,7 @@ describe("session list selected model display", () => {
         store,
         opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 11 },
       };
-      const listedPromise = listSessionsFromStoreAsync(params);
+      const listedPromise = listSessionFixture(params);
       let settled = false;
       void listedPromise.then(() => {
         settled = true;
@@ -4631,7 +4638,7 @@ describe("session list selected model display", () => {
         }
       }
 
-      const result = await listSessionsFromStoreAsync({
+      const result = await listSessionFixture({
         cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
         storePath,
         store,
@@ -4660,7 +4667,7 @@ describe("session list selected model display", () => {
       "agent:main:middle-b": { sessionId: "middle-b", updatedAt: now - 5_000 } as SessionEntry,
       "agent:main:newer": { sessionId: "newer", updatedAt: now - 1_000 } as SessionEntry,
     };
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
       storePath: "/tmp/sessions.json",
       store,
@@ -4677,7 +4684,7 @@ describe("session list selected model display", () => {
 
   test("keeps the scoped global row when filtering by agent", async () => {
     const now = Date.now();
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg: {
         ...createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
         agents: {
@@ -4706,7 +4713,7 @@ describe("session list selected model display", () => {
 
   test("searches a selected agent's global row in an ownerless explicit fleet", async () => {
     const now = Date.now();
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg: {
         agents: {
           ownership: "explicit",
@@ -4735,7 +4742,7 @@ describe("session list selected model display", () => {
 
   test("filters phantom agent store placeholder rows from session lists", async () => {
     const now = Date.now();
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
       storePath: "/tmp/sessions.json",
       store: {
@@ -4753,7 +4760,7 @@ describe("session list selected model display", () => {
       primary: "anthropic/claude-opus-4-6",
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: {
@@ -4779,7 +4786,7 @@ describe("session list selected model display", () => {
       agentRuntime: { id: "claude-cli" },
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: {
@@ -4812,7 +4819,7 @@ describe("session list selected model display", () => {
       agentRuntime: { id: "claude-cli" },
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: {
@@ -4850,7 +4857,7 @@ describe("session list selected model display", () => {
       },
     } as OpenClawConfig;
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: {
@@ -4887,7 +4894,7 @@ describe("session list selected model display", () => {
       },
     } as OpenClawConfig;
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: {
@@ -4913,7 +4920,7 @@ describe("session list selected model display", () => {
       },
     } as OpenClawConfig;
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: {

@@ -307,6 +307,7 @@ describe("resolveEffectiveReplyRoute", () => {
           InternalTurnSource: "exec",
           OriginatingChannel: "telegram",
           OriginatingTo: "chat:live",
+          MessageThreadId: 43,
           AccountId: "live-account",
         }),
         entry: entry({
@@ -324,6 +325,7 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "telegram",
       to: "chat:live",
       accountId: "live-account",
+      threadId: 43,
     });
   });
 

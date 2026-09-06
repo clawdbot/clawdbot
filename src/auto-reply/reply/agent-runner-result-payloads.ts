@@ -243,6 +243,8 @@ export async function prepareReplyAgentPayloads(state: {
   // Share this state across deliverable lanes so replyToMode=first still threads
   // at most one visible payload without hidden reasoning/commentary consuming it.
   const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+  const isGeneratedToolWarning = (payload: ReplyPayload) =>
+    getReplyPayloadMetadata(payload)?.toolErrorWarning !== undefined;
   const applyFinalReplyToMode = (payload: ReplyPayload) => {
     const isDisabledReasoningLane =
       payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
@@ -250,7 +252,11 @@ export async function prepareReplyAgentPayloads(state: {
       payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
     const isFilteredPayload =
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
-    return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
+    const shouldDeferToolWarning = yieldAcknowledgmentPayload && isGeneratedToolWarning(payload);
+    return isDisabledReasoningLane ||
+      isDisabledCommentaryLane ||
+      isFilteredPayload ||
+      shouldDeferToolWarning
       ? payload
       : applyDeliveredReplyToMode(payload);
   };
@@ -418,18 +424,29 @@ export async function prepareReplyAgentPayloads(state: {
   const payloadResult = await buildFinalPayloads(payloadCandidates);
   let { replyPayloads } = payloadResult;
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
-  const hasTerminalReplyPayload = replyPayloads.some(
+  const replyPayloadsWithoutToolWarnings = yieldAcknowledgmentPayload
+    ? replyPayloads.filter((payload) => !isGeneratedToolWarning(payload))
+    : replyPayloads;
+  const hasTerminalReplyPayload = replyPayloadsWithoutToolWarnings.some(
     (payload) =>
       isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
+  if (yieldAcknowledgmentPayload && hasTerminalReplyPayload) {
+    replyPayloads = replyPayloadsWithoutToolWarnings;
+  }
   if (shouldDeliverTerminalFailure && !hasTerminalReplyPayload && terminalFailurePayload) {
     const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
     replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
     didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
   } else if (yieldAcknowledgmentPayload && !hasTerminalReplyPayload) {
     const acknowledgmentResult = await buildFinalPayloads([yieldAcknowledgmentPayload]);
-    replyPayloads = [...replyPayloads, ...acknowledgmentResult.replyPayloads];
+    replyPayloads =
+      acknowledgmentResult.replyPayloads.length > 0
+        ? [...replyPayloadsWithoutToolWarnings, ...acknowledgmentResult.replyPayloads]
+        : replyPayloads.map((payload) =>
+            isGeneratedToolWarning(payload) ? applyFinalReplyToMode(payload) : payload,
+          );
     didLogHeartbeatStrip = acknowledgmentResult.didLogHeartbeatStrip;
   } else if (hasSpecificFallbackFailure && !hasTerminalReplyPayload) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();

@@ -720,12 +720,31 @@ describe("SessionManager.open", () => {
     ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
   });
 
-  it("normalizes session names to one line", () => {
+  it.each([
+    { label: "missing", names: [], expected: undefined, rewind: false },
+    {
+      label: "single-line normalized",
+      names: ["  first\nsecond\r\nthird  "],
+      expected: "first second third",
+      rewind: false,
+    },
+    { label: "cleared", names: ["old name", "  "], expected: undefined, rewind: false },
+    {
+      label: "off-branch latest",
+      names: ["old name", "latest name"],
+      expected: "latest name",
+      rewind: true,
+    },
+  ])("reads $label session names", ({ names, expected, rewind }) => {
     const manager = SessionManager.inMemory();
-
-    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
-
-    expect(manager.getSessionName()).toBe("first second third");
+    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    for (const name of names) {
+      manager.appendSessionInfo(name);
+    }
+    if (rewind) {
+      manager.branch(root);
+    }
+    expect(manager.getSessionName()).toBe(expected);
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {

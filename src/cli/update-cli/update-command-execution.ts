@@ -264,7 +264,7 @@ export async function executeMutableUpdate(params: {
     }
     const postStopPackageSchemaPreflight =
       params.updateInstallKind === "package"
-        ? checkTargetDatabaseSchemas(
+        ? await checkTargetDatabaseSchemas(
             params.packageTargetSchemaVersions,
             preManagedServiceStop?.serviceEnv ?? process.env,
           )

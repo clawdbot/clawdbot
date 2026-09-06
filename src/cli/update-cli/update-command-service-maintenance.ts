@@ -350,6 +350,11 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   const suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
   const recovery: WindowsTaskAutoStartRecovery = {
     beginMutation: () => {
+      // Async preflight may outlive a signal or settled recovery. Admit mutation
+      // only while this owner can still keep native autostart suspended.
+      if (interrupted || !finishUpdate) {
+        throw new UpdateCommandAbort();
+      }
       restoreAllowed = false;
     },
     restore,
@@ -415,17 +420,13 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
-  const markInspectionUnavailable = (
-    base: PreManagedServiceStop,
-    message: string,
-  ): PreManagedServiceStop =>
-    params.shouldRestart
-      ? {
-          ...base,
-          serviceMutationAllowed: false,
-          blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
-        }
-      : { ...base, serviceMutationAllowed: false, serviceMutationSkipMessage: message };
+  const markInspectionUnavailable = (base: PreManagedServiceStop): PreManagedServiceStop => ({
+    ...base,
+    serviceMutationAllowed: false,
+    ...(params.shouldRestart
+      ? { blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE }
+      : { serviceMutationSkipMessage: GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE }),
+  });
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
   );
@@ -446,7 +447,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
+    return markInspectionUnavailable(uninspected);
   }
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,
@@ -477,7 +478,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {
-    return markInspectionUnavailable(inspected, serviceUpdateVerdict.message);
+    return markInspectionUnavailable(inspected);
   }
   if (serviceUpdateVerdict.kind === "foreign") {
     return {

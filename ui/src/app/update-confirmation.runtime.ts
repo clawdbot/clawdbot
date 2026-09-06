@@ -26,7 +26,7 @@ const UPDATE_DIALOG_OPEN_CLASS = "update-dialog-open";
 
 type DialogPhase =
   | { kind: "confirm" }
-  | { kind: "working"; connected: boolean }
+  | { kind: "working"; connected: boolean; readError?: string | null }
   | { kind: "run"; run: UpdateRunRecord; connected: boolean; readError?: string | null }
   | { kind: "failed"; message: string };
 
@@ -145,20 +145,21 @@ export async function confirmAndStartUpdateRuntime(
       }
       const current = phase;
       const run = current.kind === "run" ? current.run : null;
-      const readError = current.kind === "run" ? current.readError : null;
+      const readError = "readError" in current ? current.readError : null;
       const working = current.kind === "working" || run?.status === "running";
       const failed =
         current.kind === "failed" ||
         (run !== null && run.status !== "running" && run.status !== "succeeded");
       const finished = run !== null && run.status !== "running";
       const body =
-        current.kind === "run"
-          ? (readError ?? "")
+        readError ??
+        (current.kind === "run"
+          ? ""
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
               ? workingMessage(current.connected)
-              : `${route.message} ${t("updates.confirm.impact")}`;
+              : `${route.message} ${t("updates.confirm.impact")}`);
       render(
         html`
           <openclaw-modal-dialog label=${route.title} description=${body} @modal-cancel=${finish}>
@@ -246,6 +247,16 @@ export async function confirmAndStartUpdateRuntime(
       );
     };
 
+    function showProgress(progress: UpdateProgress) {
+      const { run, connected, readError } = progress;
+      // Admission can succeed before the first row is readable. A read error
+      // offers status recovery without permitting another update request.
+      phase = run
+        ? { kind: "run", run, connected, readError }
+        : { kind: "working", connected, readError };
+      draw();
+    }
+
     function confirm() {
       if (phase.kind !== "confirm") {
         return;
@@ -281,24 +292,17 @@ export async function confirmAndStartUpdateRuntime(
         }
         if (progress.run && (!staleFailure || progress.run.status === "running")) {
           sawBusy = true;
-          phase = {
-            kind: "run",
-            run: progress.run,
-            connected: progress.connected,
-            readError: progress.readError,
-          };
-          draw();
+          showProgress(progress);
           return;
         }
-        const failure = progress.failure ?? progress.readError;
+        const failure = progress.failure;
         if (failure && !staleFailure) {
           phase = { kind: "failed", message: failure };
           draw();
           return;
         }
         sawBusy ||= progress.busy;
-        phase = { kind: "working", connected: progress.connected };
-        draw();
+        showProgress({ ...progress, run: null });
       });
       if (settled) {
         return;
@@ -315,13 +319,7 @@ export async function confirmAndStartUpdateRuntime(
     if (params.existingRun && params.watchUpdateProgress) {
       watchProgress(params.watchUpdateProgress, (progress) => {
         if (progress.run) {
-          phase = {
-            kind: "run",
-            run: progress.run,
-            connected: progress.connected,
-            readError: progress.readError,
-          };
-          draw();
+          showProgress(progress);
         }
       });
     }

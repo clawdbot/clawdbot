@@ -65,11 +65,7 @@ struct WebChatWindowLifetimeTests {
     }
 
     @Test func `admitting a replacement primary Gateway retires only its native window`() async throws {
-        try await withIsolatedWebChatManager { manager in
-            let profile = try MacGatewayProfile(
-                id: "independent-profile-\(UUID().uuidString)",
-                name: "Independent Gateway",
-                url: #require(URL(string: "wss://independent.example")))
+        try await withIsolatedWebChatProfile { manager, profile in
             try await manager.show(profile: profile)
             var primaryVisibility: [Bool] = []
             manager.onChatWindowVisibilityChanged = { primaryVisibility.append($0) }
@@ -84,17 +80,13 @@ struct WebChatWindowLifetimeTests {
             #expect(primaryVisibility == [true, false])
             #expect(manager.activeSessionKey == nil)
             #expect(manager._testProfileWindowCount(profileID: profile.id) == 1)
-            await manager.closeGatewayWindows(profileID: profile.id)
+            manager.closeGatewayWindows(profileID: profile.id)
         }
     }
 
     @Test(arguments: [false, true])
     func `retiring a profile connection releases its session observer`(closeAll: Bool) async throws {
-        try await withIsolatedWebChatManager { manager in
-            let profile = try MacGatewayProfile(
-                id: "retired-profile-\(UUID().uuidString)",
-                name: "Retired Gateway",
-                url: #require(URL(string: "wss://retired.example")))
+        try await withIsolatedWebChatProfile { manager, profile in
             var connection: GatewayConnection? = await MacGatewayConnectionFleet.shared
                 .connection(profileID: profile.id)
             weak var retiredConnection = connection
@@ -102,7 +94,7 @@ struct WebChatWindowLifetimeTests {
             if closeAll {
                 manager.close()
             } else {
-                await manager.closeGatewayWindows(profileID: profile.id)
+                try await MacGatewayProfileStore.shared.remove(profileID: profile.id)
             }
             connection = nil
 
@@ -145,6 +137,35 @@ struct WebChatWindowLifetimeTests {
 }
 
 @MainActor
+func withIsolatedWebChatProfile(
+    _ body: @MainActor (WebChatManager, MacGatewayProfile) async throws -> Void) async throws
+{
+    try await withIsolatedWebChatManager { manager in
+        // Window admission uses the saved profile's account owner. Keep network
+        // attempts on a test-owned loopback endpoint while exercising that lookup.
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let store = MacGatewayProfileStore.shared
+        let attempt = try await store.beginBrowserSignIn(url: server.websocketURL("/\(UUID().uuidString)"))
+        let profile = try await store.saveConnection(
+            name: "Window fixture",
+            token: nil,
+            password: nil,
+            attempt: attempt)
+        var failure: (any Error)?
+        do {
+            try await body(manager, profile)
+        } catch {
+            failure = error
+        }
+        if try await store.profiles().contains(where: { $0.id == profile.id }) {
+            try await store.remove(profileID: profile.id)
+        }
+        if let failure { throw failure }
+    }
+}
+
+@MainActor
 func withIsolatedWebChatManager(
     primaryConnection: GatewayConnection = .shared,
     env: [String: String?] = [:],
@@ -161,9 +182,14 @@ func withWebChatManagerLifetime(
     _ body: (WebChatManager) async throws -> Void) async throws
 {
     weak var retiredManager: WebChatManager?
+    let suiteName = "WebChatSelectionTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
     var failure: (any Error)?
     do {
-        let manager = WebChatManager(primaryConnection: primaryConnection)
+        let manager = WebChatManager(
+            primaryConnection: primaryConnection,
+            selection: MacGatewaySelectionPreferences(defaults: defaults))
         retiredManager = manager
         defer { manager.close() }
         try await body(manager)

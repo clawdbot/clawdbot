@@ -110,6 +110,8 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     expect(subagentRuns.get("ended")).toBe(ended);
     const entered = createDeferred();
     const resume = createDeferred();
+    const endedMutationEntered = createDeferred();
+    const resumeEndedMutation = createDeferred();
     const admission = await sessionLifecycle.beginSessionWorkAdmission({
       scope: storePath,
       identities: [activeKey, "active-session"],
@@ -117,6 +119,25 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       onInterrupt: () => admission.release(),
     });
     const interruptAdmissions = sessionLifecycle.interruptSessionWorkAdmissions;
+    const mutateSession = sessionLifecycle.runExclusiveSessionLifecycleMutation;
+    let holdEndedMutation = !completed;
+    const mutation = vi
+      .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
+      .mockImplementation(async (params) => {
+        if (
+          holdEndedMutation &&
+          "scope" in params &&
+          params.scope === storePath &&
+          Array.from(params.identities).includes(endedKey)
+        ) {
+          holdEndedMutation = false;
+          // Preserve the reset/admission-before-Stop race at the actual mutation
+          // entry. Completed ancestors remain ungated late-discovery coverage.
+          endedMutationEntered.resolve();
+          await resumeEndedMutation.promise;
+        }
+        return await mutateSession(params);
+      });
     const drain = vi
       .spyOn(sessionLifecycle, "interruptSessionWorkAdmissions")
       .mockImplementation(async (params) => {
@@ -145,6 +166,9 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       ]);
       expect(abort.parent.controller.signal.aborted).toBe(true);
       expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [activeKey])).toBe(false);
+      if (!completed) {
+        await endedMutationEntered.promise;
+      }
       if (reset) {
         const respond = vi.fn();
         await sessionMutationHandlers["sessions.reset"]!({
@@ -198,6 +222,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         onStartFailure: () => true,
       });
       resume.resolve();
+      resumeEndedMutation.resolve();
       const respond = await abort.pending;
       expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
       expect(subagentRuns.get("active")?.endedReason).toBe("subagent-killed");
@@ -216,11 +241,13 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     } finally {
       newAdmission?.release();
       resume.resolve();
+      resumeEndedMutation.resolve();
       admission.release();
       try {
         await abort.pending;
       } finally {
         drain.mockRestore();
+        mutation.mockRestore();
         releaseSwarmRun("capacity");
         releaseSwarmRun("grandchild");
       }

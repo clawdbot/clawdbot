@@ -40,6 +40,7 @@ import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { createTypingController } from "./typing.js";
@@ -424,7 +425,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionKey: sessionState.sessionKey,
     storePath: sessionState.storePath,
     sessionScope: sessionState.sessionScope,
-    groupResolution: sessionState.groupResolution,
+    conversation: prepareReplyConversation({
+      ctx: sessionState.sessionCtx,
+      sessionEntry: sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry,
+      groupResolution: sessionState.groupResolution,
+    }),
     isGroup: sessionState.isGroup,
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,

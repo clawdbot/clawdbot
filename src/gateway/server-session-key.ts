@@ -4,7 +4,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -16,7 +16,7 @@ import {
   toAgentRequestSessionKey,
 } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
 const RUN_LOOKUP_CACHE_LIMIT = 256;
@@ -67,8 +67,8 @@ function setResolvedSessionKeyCache(
   });
 }
 
-// Agent scoping accepts global sessions only when global scope is configured,
-// and rejects malformed agent-prefixed keys before store normalization.
+// Keep global run matching scoped and reject malformed qualified keys before
+// normalizing aliases; the prepared owner must survive a main alias becoming global.
 function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenClawConfig): boolean {
   if (cfg.session?.scope === "global" && sessionKey.trim().toLowerCase() === "global") {
     return true;
@@ -78,8 +78,14 @@ function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenCl
   if (!parsed && sessionKey.trim().toLowerCase().startsWith("agent:")) {
     return false;
   }
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId });
-  return resolveSessionStoreAgentId(cfg, canonicalKey) === normalizedAgentId;
+  try {
+    return resolveSessionStoreIdentity({ cfg, sessionKey, agentId }).agentId === normalizedAgentId;
+  } catch (error) {
+    if (error instanceof AgentSelectionRequiredError) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function resolveRunSessionKeyForCaller(storeKey: string) {

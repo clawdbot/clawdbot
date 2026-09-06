@@ -163,6 +163,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
   it.each([
     ["auth", "terminal error"],
     ["prepare", "terminal error"],
+    ["auth", "rejected test"],
     ["auth", "busy start"],
     ["prepare", "busy start"],
     ["auth", "busy next"],
@@ -219,7 +220,19 @@ describe("ModelSetupPage first-run activation ownership", () => {
         }
         return outcome === "validation error"
           ? { done: false, status: "running", error: failure, step: { id: "login", type: "text" } }
-          : { done: true, status: "error", error: failure };
+          : {
+              done: true,
+              status: "error",
+              error: failure,
+              ...(outcome === "rejected test"
+                ? {
+                    activationRejection: {
+                      disposition: "rejected-before-promotion",
+                      status: "auth",
+                    },
+                  }
+                : {}),
+            };
       }
       if (method === "wizard.cancel") {
         if (outcome === "validation error") {
@@ -256,7 +269,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
       .click();
     await page.updateComplete;
     expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-    const terminal = outcome === "terminal error" || outcome === "busy start";
+    const terminal =
+      (mode === "prepare" && outcome === "terminal error") ||
+      outcome === "rejected test" ||
+      outcome === "busy start";
     if (outcome === "busy start") {
       expect(request.mock.calls.map(([method]) => method)).toEqual([startMethod]);
     }
@@ -576,12 +592,12 @@ describe("ModelSetupPage first-run activation ownership", () => {
 
   it.each(
     ["active", "replacement"].flatMap((ownership) =>
-      ["result", "busy"].flatMap((rejection) =>
+      ["result", "uncertain", "busy"].flatMap((rejection) =>
         ["candidate", "manual"].map((entry) => ({ ownership, rejection, entry })),
       ),
     ),
   )(
-    "cleans up a definitive $rejection rejection without losing failure feedback or replacement ownership ($ownership, $entry)",
+    "handles $rejection without losing failure feedback or replacement ownership ($ownership, $entry)",
     async ({ ownership, rejection, entry }) => {
       const { context, client, request } = createFirstRunContext();
       const rejected = createDeferred<unknown>();
@@ -617,6 +633,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
       }
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+      const originalReceipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
       const replacement =
         ownership === "replacement"
           ? persistFirstRunActivationReceipt(
@@ -639,7 +656,14 @@ describe("ModelSetupPage first-run activation ownership", () => {
           }),
         );
       } else {
-        rejected.resolve({ done: true, status: "error", error: "Provider rejected this test key" });
+        rejected.resolve({
+          done: true,
+          status: "error",
+          error: "Provider rejected this test key",
+          ...(rejection === "result"
+            ? { activationRejection: { disposition: "rejected-before-promotion", status: "auth" } }
+            : {}),
+        });
       }
       await waitForFast(() =>
         expect(context.runtimeConfig.runExternalMutation).toHaveResolvedWith(
@@ -655,10 +679,14 @@ describe("ModelSetupPage first-run activation ownership", () => {
       expect(page.textContent).not.toContain("Cannot read properties");
       expect(page.textContent).not.toContain("Connection verified");
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(
-        replacement ? JSON.stringify(replacement) : null,
+        replacement
+          ? JSON.stringify(replacement)
+          : rejection === "uncertain"
+            ? originalReceipt
+            : null,
       );
       expect(context.navigate).not.toHaveBeenCalled();
-      if (ownership === "active" && entry === "manual") {
+      if (ownership === "active" && entry === "manual" && rejection !== "uncertain") {
         [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
           .find((button) => button.textContent?.trim() === "Close")!
           .click();
@@ -788,10 +816,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
           '[data-auth-choice="provider-login"] button',
         );
         expect(button).not.toBeNull();
-        expect(button!.disabled).toBe(!["cancelled", "error", "busy"].includes(cancelStatus));
+        expect(button!.disabled).toBe(!["cancelled", "busy"].includes(cancelStatus));
       });
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1") === null).toBe(
-        ["cancelled", "error", "busy"].includes(cancelStatus),
+        ["cancelled", "busy"].includes(cancelStatus),
       );
       expect(context.navigate).not.toHaveBeenCalled();
     },

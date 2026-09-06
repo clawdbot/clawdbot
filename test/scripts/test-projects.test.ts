@@ -1945,6 +1945,16 @@ describe("scripts/test-projects changed-target routing", () => {
     },
   );
 
+  it.each(agentVitestProjectOwners.spawnProductionBoundary.include)(
+    "routes production-boundary agent test %s to its dedicated shard",
+    (testFile) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+        config: "test/vitest/vitest.agents-spawn-production-boundary.config.ts",
+        includePatterns: [testFile],
+      });
+    },
+  );
+
   it.each([
     ["src/agents/agent-scope.test.ts", "test/vitest/vitest.agents-core.config.ts"],
     [

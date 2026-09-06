@@ -5,6 +5,8 @@
   },
   "include": [
     "../../src/infra/**/*.test.ts",
-    "../../src/infra/**/*.test.tsx"
+    "../../src/infra/**/*.test.tsx",
+    "../../src/shared/**/*.test.ts",
+    "../../src/shared/**/*.test.tsx"
   ]
 }

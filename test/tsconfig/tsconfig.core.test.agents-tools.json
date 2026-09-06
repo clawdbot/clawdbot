@@ -5,6 +5,8 @@
   },
   "include": [
     "../../src/agents/tools/**/*.test.ts",
-    "../../src/agents/tools/**/*.test.tsx"
+    "../../src/agents/tools/**/*.test.tsx",
+    "../../src/agents/agent-tools*.test.ts",
+    "../../src/agents/agent-tools*.test.tsx"
   ]
 }

@@ -49,9 +49,10 @@ does not pass that check. Each verification check has a 90-second deadline;
 changing `agents.defaults.timeoutSeconds` does not extend setup verification.
 Failures identify whether the response check or tool-use check timed out.
 
-Managed setup also enables [local model lean mode](/concepts/experimental-features#local-model-lean-mode)
-unless you have explicitly configured it. By default, large tool catalogs use Tool Search,
-reducing the input the model must process before replying. Normal chats still
+Managed local models automatically use structured [Tool Search](/tools/tool-search)
+unless you have explicitly configured it. Optional capabilities remain available;
+their schemas load as needed, reducing the input the model must process before
+replying. Setup does not enable lean mode. Normal chats still
 include your agent's instructions. On CPU-only hosts, the first reply can take
 several minutes even after setup verification succeeds.
 

@@ -159,6 +159,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               ? "aborted"
               : undefined,
           allowedToolNames,
+          withCompactionPersistence: params.transcriptByteCompactionPersistence,
         },
       );
       checkpointSnapshot = memoryTranscript
@@ -499,26 +500,28 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
             accountingRecorder?.recordCompaction(serverTokensAfter);
           };
-          const serverResult = await attemptServerEndpointCompaction({
-            trigger,
-            streamFn: session.agent.streamFn,
-            model: effectiveModel,
-            context: { systemPrompt: systemPromptText, messages: session.messages },
-            sessionManager,
-            extraParams: effectiveExtraParams,
-            customInstructions: params.customInstructions,
-            config: params.config,
-            onUsage: recordUsage,
-            onCompactionCommitted: recordServerCompaction,
-            assertActive,
-            requestOptions: {
-              apiKey: transportApiKey,
-              sessionId: params.sessionId,
-              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-              timeoutMs: compactionTimeoutMs,
-              signal: params.abortSignal,
-            },
-          });
+          const serverResult = params.transcriptBytePreflightAuthority
+            ? undefined
+            : await attemptServerEndpointCompaction({
+                trigger,
+                streamFn: session.agent.streamFn,
+                model: effectiveModel,
+                context: { systemPrompt: systemPromptText, messages: session.messages },
+                sessionManager,
+                extraParams: effectiveExtraParams,
+                customInstructions: params.customInstructions,
+                config: params.config,
+                onUsage: recordUsage,
+                onCompactionCommitted: recordServerCompaction,
+                assertActive,
+                requestOptions: {
+                  apiKey: transportApiKey,
+                  sessionId: params.sessionId,
+                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                  timeoutMs: compactionTimeoutMs,
+                  signal: params.abortSignal,
+                },
+              });
           const activeSession = session;
           let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
           if (!serverResult) {

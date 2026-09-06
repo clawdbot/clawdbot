@@ -294,10 +294,16 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
+  // Cleanup selectors use metadata; saved prompts are reserved from plugin slots.
+  // The patch owner rereads each selected full entry before changing it.
   for (const { entry, sessionKey } of listSessionEntriesCore({
     agentId: params.agentId,
     storePath: params.storePath,
+    projection: "list",
   })) {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
     if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
       continue;
     }
@@ -307,7 +313,7 @@ export async function cleanupPluginHostSessionStore(
     ) {
       continue;
     }
-    const updated = await patchSessionEntryCore(
+    await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       (currentEntry) => {
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {
@@ -321,13 +327,14 @@ export async function cleanupPluginHostSessionStore(
         return currentEntry;
       },
       {
+        shouldCommit: params.shouldCleanup,
+        onCommitted: () => {
+          cleared += 1;
+        },
         replaceEntry: true,
         skipMaintenance: true,
       },
     );
-    if (updated) {
-      cleared += 1;
-    }
   }
   return cleared;
 }

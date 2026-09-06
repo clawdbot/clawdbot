@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -99,13 +101,12 @@ describe("skill_workshop model projection", () => {
     "handles a 21,000-character collection skill on a $modelContextWindowTokens-token model",
     async ({ modelContextWindowTokens, contentIncluded }) => {
       const workspaceDir = await tempDirs.make("openclaw-skill-collection-context-read-");
-      await writeWorkspaceSkills(workspaceDir, [
-        {
-          name: "large",
-          description: "Large procedure",
-          body: `MODEL_VISIBLE_SKILL_BODY\n${"x".repeat(21_000)}`,
-        },
-      ]);
+      await writeSkill({
+        dir: path.join(resolveWorkshopSkillsDir({}, "main", testState.env), "large"),
+        name: "large",
+        description: "Large procedure",
+        body: `MODEL_VISIBLE_SKILL_BODY\n${"x".repeat(21_000)}`,
+      });
       const tool = createConfiguredSkillWorkshopTool({
         workspaceDir,
         config: {},
@@ -113,7 +114,7 @@ describe("skill_workshop model projection", () => {
         modelContextWindowTokens,
         run: {
           env: testState.env,
-          collectionReconcile: { approvedSkillNames: new Set(["large"]) },
+          collectionReconcile: { approvedSkillKeys: new Set(["large"]) },
         },
       });
 
@@ -131,7 +132,7 @@ describe("skill_workshop model projection", () => {
         await expect(
           tool.execute("change-rejected", {
             action: "reconcile",
-            collection: [{ action: "drop", name: "large", reason: "Oversized" }],
+            collection: [{ action: "drop", skill_key: "large", reason: "Oversized" }],
           }),
         ).rejects.toThrow("Read the skill before changing it: large");
       }

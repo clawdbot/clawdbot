@@ -47,6 +47,7 @@ struct DashboardGatewaySnapshot: Codable, Equatable, Sendable {
 struct MacGatewayCatalogProfile: Equatable, Sendable {
     let profile: MacGatewayProfile
     let canPromote: Bool
+    var usesBrowserIdentity = false
 }
 
 enum DashboardGatewayCatalog {
@@ -64,7 +65,9 @@ enum DashboardGatewayCatalog {
             }
             : nil
         let duplicate = canonicalPrimaryURL.flatMap { primaryURL in
-            profiles.first { (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL }
+            profiles.first {
+                !$0.usesBrowserIdentity && (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL
+            }
         }
         let primaryName: String = if mode == .local {
             "Local Gateway"
@@ -81,8 +84,8 @@ enum DashboardGatewayCatalog {
             canPromote: false,
             health: primaryHealth)
         let saved = profiles.compactMap { item -> DashboardGatewayEntry? in
-            // A saved identity for the active route is represented by the
-            // primary row so one physical Gateway never appears twice.
+            // A browser sign-in is a separate human authority even when its
+            // address matches the primary machine connection.
             if item.profile.id == duplicate?.profile.id { return nil }
             return DashboardGatewayEntry(
                 id: DashboardGatewayTarget.profile(item.profile.id).bridgeID,

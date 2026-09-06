@@ -11,6 +11,7 @@ import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
@@ -44,6 +45,7 @@ export type ExecOverrides = Pick<
 export type RunPreparedReplyParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
+  conversation: PreparedReplyConversation;
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
