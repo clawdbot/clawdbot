@@ -3,6 +3,7 @@
  */
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -10,6 +11,8 @@ import {
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
+import { INCOMPLETE_ASSISTANT_STREAM_RE } from "../../failover/message-patterns.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
@@ -85,13 +88,14 @@ function resolveSettledTurnFinalizationContext(params: {
     terminal.timedOutDuringCompaction ||
     terminal.timedOutDuringToolExecution ||
     (terminal.promptErrorSource !== null && terminal.promptErrorSource !== "prompt") ||
-    !isTransientNetworkError(failure)
+    !isTransientSettledTurnFailure(failure)
   ) {
     return undefined;
   }
-  // A turn that already produced visible text has nothing to finalize, and a
-  // turn without a tool result never settled one.
-  if (!params.assistantTexts.every((text) => !text.trim())) {
+  // Pre-tool commentary is not a final answer. Only text after the last tool
+  // result, or subscription text that cannot be attributed to that commentary,
+  // means the turn already composed something to keep.
+  if (hasComposedVisibleAnswerAfterSettledTools(params)) {
     return undefined;
   }
   if (!params.messagesSnapshot.some((message) => message.role === "toolResult")) {
@@ -101,6 +105,63 @@ function resolveSettledTurnFinalizationContext(params: {
     source: "openclaw-transcript",
     messages: Object.freeze([...params.messagesSnapshot]),
   };
+}
+
+function isTransientSettledTurnFailure(failure: unknown): boolean {
+  if (isTransientNetworkError(failure)) {
+    return true;
+  }
+  const message =
+    typeof failure === "object" &&
+    failure !== null &&
+    "message" in failure &&
+    typeof failure.message === "string"
+      ? failure.message.trim()
+      : "";
+  return message.length > 0 && INCOMPLETE_ASSISTANT_STREAM_RE.test(message);
+}
+
+function isAssistantSnapshotMessage(
+  message: EmbeddedRunAttemptResult["messagesSnapshot"][number],
+): message is AssistantMessage {
+  return message.role === "assistant";
+}
+
+function readAssistantSnapshotText(
+  message: EmbeddedRunAttemptResult["messagesSnapshot"][number],
+): string {
+  if (!isAssistantSnapshotMessage(message)) {
+    return "";
+  }
+  return extractEmbeddedAssistantText(message).trim();
+}
+
+function hasComposedVisibleAnswerAfterSettledTools(params: {
+  assistantTexts: readonly string[];
+  messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
+}): boolean {
+  const lastToolResultIndex = params.messagesSnapshot.findLastIndex(
+    (message) => message.role === "toolResult",
+  );
+  if (lastToolResultIndex < 0) {
+    return params.assistantTexts.some((text) => text.trim().length > 0);
+  }
+  if (
+    params.messagesSnapshot
+      .slice(lastToolResultIndex + 1)
+      .some((message) => readAssistantSnapshotText(message).length > 0)
+  ) {
+    return true;
+  }
+  const preToolText = params.messagesSnapshot
+    .slice(0, lastToolResultIndex)
+    .map((message) => readAssistantSnapshotText(message))
+    .filter((text) => text.length > 0)
+    .join("\n");
+  return params.assistantTexts.some((text) => {
+    const trimmed = text.trim();
+    return trimmed.length > 0 && !preToolText.includes(trimmed);
+  });
 }
 
 function normalizeEmbeddedAttemptToolMetas(
