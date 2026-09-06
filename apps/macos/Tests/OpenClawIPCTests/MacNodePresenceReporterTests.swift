@@ -136,21 +136,6 @@ struct MacNodePresenceReporterTests {
         #expect(clear.unsupportedCalls == 0)
     }
 
-    /// Temporary controlled baseline; remove the manual clock/pause plumbing after before/after proof.
-    @Test func `completed clear is accepted when polling resumes after its deadline`() async {
-        let clear = PresenceClearRecorder()
-        _ = await clear.clear()
-        let started = ContinuousClock.now
-        var instant = started
-        await clear.waitForCallCount(2, now: { instant }, pause: {
-            _ = await clear.clear()
-            instant = started.advanced(by: .seconds(5))
-            let elapsed = started.duration(to: instant).components.seconds
-            print("PRESENCE_WAIT_PROOF calls=\(clear.calls) elapsedSeconds=\(elapsed)")
-        })
-        #expect(clear.calls == 2)
-    }
-
     @Test(arguments: [false, true])
     func `activity crossing opt out is followed by a clear`(retryClear: Bool) async {
         let sender = SuspendingPresenceSender()
@@ -348,15 +333,12 @@ private final class PresenceClearRecorder {
         self.unsupportedCalls += 1
     }
 
-    func waitForCallCount(
-        _ expected: Int,
-        now: @MainActor () -> ContinuousClock.Instant = { ContinuousClock.now },
-        pause: @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(10)) }) async
-    {
-        let deadline = now().advanced(by: .seconds(4))
-        while now() < deadline {
+    func waitForCallCount(_ expected: Int) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(4))
+        while clock.now < deadline {
             if self.calls >= expected { return }
-            await pause()
+            try? await Task.sleep(for: .milliseconds(10))
         }
         // The final suspension may have completed the work before this waiter resumes.
         #expect(self.calls >= expected, "timed out waiting for \(expected) presence clear calls")
