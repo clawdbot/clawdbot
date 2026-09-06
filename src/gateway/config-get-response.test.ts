@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -78,6 +80,125 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
+  it("round-trips wildcard plugin SecretRefs through an unrelated form save", async () => {
+    const secretRef = {
+      source: "store" as const,
+      provider: "default",
+      id: `TEST_${randomUUID().replaceAll("-", "").toUpperCase()}`,
+    };
+    const plaintext = randomUUID();
+    const config = {
+      gateway: { port: 19_001 },
+      plugins: {
+        entries: {
+          webhooks: {
+            enabled: true,
+            config: {
+              routes: {
+                publish: { sessionKey: "agent:main", secret: secretRef },
+                deploy: { sessionKey: "agent:main", secret: secretRef },
+                plain: { sessionKey: "agent:main", secret: plaintext },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const { manifestRegistry } = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "webhooks",
+          origin: "bundled",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "routes.*.secret", expected: "string", ownerKind: "route" }],
+            },
+          },
+          configSchema: {
+            type: "object",
+            $defs: {
+              secretRef: {
+                type: "object",
+                properties: {
+                  source: { type: "string" },
+                  provider: { type: "string" },
+                  id: { type: "string" },
+                },
+              },
+              secretInput: {
+                anyOf: [{ type: "string" }, { $ref: "#/$defs/secretRef" }],
+              },
+              route: {
+                type: "object",
+                properties: { secret: { $ref: "#/$defs/secretInput" } },
+              },
+            },
+            properties: {
+              routes: {
+                type: "object",
+                additionalProperties: { $ref: "#/$defs/route" },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const runtimeSchema = buildRuntimeConfigSchemaFromRegistry(manifestRegistry, config);
+    const secretPath = "plugins.entries.webhooks.config.routes.*.secret";
+    expect(runtimeSchema.uiHints[secretPath]?.sensitive).toBe(true);
+
+    mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot(config));
+    const response = await readConfigGetResponse({
+      loadUiHints: () => runtimeSchema.uiHints,
+    });
+    const redactedSecret = {
+      source: "store",
+      provider: "default",
+      id: REDACTED_SENTINEL,
+    };
+    expect(response.config.plugins?.entries?.webhooks?.config).toMatchObject({
+      routes: {
+        publish: { secret: redactedSecret },
+        deploy: { secret: redactedSecret },
+        plain: { secret: REDACTED_SENTINEL },
+      },
+    });
+    expect(response.raw).not.toBeNull();
+    expect(response.raw).toContain(REDACTED_SENTINEL);
+    expect(response.raw).not.toContain(secretRef.id);
+    expect(JSON.stringify(response)).not.toContain(plaintext);
+    expect(JSON.stringify(response)).not.toContain(secretRef.id);
+
+    const formValue = structuredClone(response.config);
+    formValue.gateway = { ...formValue.gateway, port: 19_002 };
+    expect(restoreRedactedValues(formValue, config, runtimeSchema.uiHints)).toEqual({
+      ok: true,
+      result: {
+        ...config,
+        gateway: { port: 19_002 },
+      },
+    });
+    for (const identityChange of [{ source: "env" }, { provider: "alternate" }]) {
+      const changedIdentity = {
+        ...formValue,
+        plugins: {
+          entries: {
+            webhooks: {
+              config: {
+                routes: {
+                  publish: { secret: { ...redactedSecret, ...identityChange } },
+                },
+              },
+            },
+          },
+        },
+      };
+      expect(restoreRedactedValues(changedIdentity, config, runtimeSchema.uiHints)).toMatchObject({
+        ok: false,
+      });
+    }
+  });
+
   it.each(["core", "plus"])(
     "redacts retained owner credentials from every snapshot projection with %s selected",
     async (owner) => {
