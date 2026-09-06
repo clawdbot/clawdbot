@@ -9,10 +9,12 @@ import {
   readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { PREPARED_THINKING_POLICY } from "../plugins/provider-thinking-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -22,7 +24,10 @@ import * as usageFormat from "../utils/usage-format.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import * as titleReader from "./session-transcript-title-reader.js";
 import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
-import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
+import {
+  projectSessionPatchResult,
+  resolveGatewaySessionThinkingProjectionInternal,
+} from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
 
@@ -38,6 +43,89 @@ import * as rowProjection from "./session-utils-row.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test.each(["Model", "model"])(
+    "reuses projected catalog metadata for rows and patches with first match %s",
+    async (firstModelId) => {
+      await withStateDirEnv("openclaw-projected-catalog-", async ({ stateDir }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: { main: {} },
+            defaults: { model: { primary: "synthetic/Model" }, thinkingDefault: "off" },
+          },
+        };
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const policy = vi.fn(() => ({
+          levels: [
+            { id: "off" as const, rank: 0 },
+            { id: "low" as const, rank: 90 },
+            { id: "high" as const, rank: 10 },
+          ],
+          defaultLevel: "low" as const,
+        }));
+        const modelCatalog = [firstModelId, "Model"].map((id, index) => ({
+          provider: "synthetic",
+          id,
+          name: id,
+          reasoning: true,
+          contextWindow: 128_000 * (index + 1),
+          contextWindows: [{ id: "full", label: "Full", contextWindow: 128_000 * (index + 1) }],
+          contextWindowDefault: "full",
+          [PREPARED_THINKING_POLICY]: policy,
+        }));
+        const entry: SessionEntry = {
+          sessionId: "catalog-projection",
+          updatedAt: 1,
+          thinkingLevel: "medium",
+        };
+        const rowContext = buildSessionListRowMetadataContext({ now: 1 });
+        rowContext.acpSessionMetaByEntry.set(entry, undefined);
+        const lookup = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
+        try {
+          for (let index = 0; index < 4; index += 1) {
+            const row = rowProjection.buildGatewaySessionRow({
+              cfg,
+              storePath: "",
+              store: {},
+              key: `agent:main:catalog-${index}`,
+              entry,
+              rowContext,
+              modelCatalog,
+              lightweightListRow: true,
+              skipTranscriptUsageFallback: true,
+            });
+            expect(row).toMatchObject({
+              contextWindow: "full",
+              contextTokens: 128_000,
+              thinkingLevel: "high",
+            });
+            expect(row).not.toHaveProperty("catalogEntry");
+          }
+          const patch = await projectSessionPatchResult({
+            cfg,
+            canonicalKey: "agent:main:catalog",
+            targetAgentId: "main",
+            entry,
+            storePath: path.join(stateDir, "agents/main/sessions/sessions.json"),
+            modelCatalogByAgent: new Map([["main", Promise.resolve(modelCatalog)]]),
+          });
+          expect(patch.resolved).toMatchObject({ contextWindow: "full", thinkingLevel: "high" });
+          expect(patch.resolved?.contextWindows).toEqual(modelCatalog[0]?.contextWindows);
+          expect(patch.resolved).not.toHaveProperty("catalogEntry");
+          expect(policy).toHaveBeenCalledTimes(9);
+          // Four rows plus the patch share each projection's resolved context metadata.
+          expect(lookup.mock.calls.length).toBeLessThanOrEqual(17);
+        } finally {
+          lookup.mockRestore();
+          resetConfigRuntimeState();
+          resetPluginRuntimeStateForTest();
+        }
+      });
+    },
+  );
+
   test.each([
     { rowWorkMs: 0, shouldYield: false },
     { rowWorkMs: 20, shouldYield: true },
