@@ -335,20 +335,17 @@ function resolveContainedSkillPath(params: {
   return null;
 }
 
-function resolveNestedSkillsRoot(
-  dir: string,
-  opts?: { maxEntriesToScan?: number },
-): { baseDir: string; note?: string } {
+function resolveNestedSkillsRoot(dir: string, maxEntriesToScan: number): string {
   const nested = path.join(dir, "skills");
   try {
     if (!fs.existsSync(nested) || !fs.statSync(nested).isDirectory()) {
-      return { baseDir: dir };
+      return dir;
     }
   } catch {
-    return { baseDir: dir };
+    return dir;
   }
 
-  const scanLimit = Math.max(0, opts?.maxEntriesToScan ?? 100);
+  const scanLimit = Math.max(0, maxEntriesToScan);
   if (
     !hasSkillFileCandidate(dir) &&
     containsDiscoverableSkill(dir, {
@@ -356,14 +353,14 @@ function resolveNestedSkillsRoot(
       skipTopLevelDirName: "skills",
     })
   ) {
-    return { baseDir: dir };
+    return dir;
   }
 
   const discoveryBudget = createSkillDiscoveryBudget(scanLimit);
   const queue: Array<{ dir: string; depth: number }> = [{ dir: nested, depth: 0 }];
   for (const candidate of queue) {
     if (hasSkillFileCandidate(candidate.dir)) {
-      return { baseDir: nested, note: `Detected nested skills root at ${nested}` };
+      return nested;
     }
     if (candidate.depth >= MAX_GROUPED_SKILL_SCAN_DEPTH) {
       continue;
@@ -377,7 +374,7 @@ function resolveNestedSkillsRoot(
       queue.push({ dir: path.join(candidate.dir, childDir), depth: candidate.depth + 1 });
     }
   }
-  return { baseDir: dir };
+  return dir;
 }
 
 function shouldEnforceConfiguredSkillRootContainment(source: string): boolean {
@@ -460,10 +457,11 @@ export function discoverSkillCandidates(params: {
     }
     return { candidates: [], rootIsSkill: false };
   }
-  const resolved = resolveNestedSkillsRoot(params.dir, {
-    maxEntriesToScan: params.limits.maxCandidatesPerRoot,
-  });
-  const baseDir = resolved.baseDir;
+  // Workshop roots are containers; promotion would hide a child skill named "skills".
+  const rootIsContainer = params.source === "openclaw-workshop";
+  const baseDir = rootIsContainer
+    ? rootDir
+    : resolveNestedSkillsRoot(params.dir, params.limits.maxCandidatesPerRoot);
   const baseDirRealPath = resolveSkillRootCandidatePath({
     source: params.source,
     rootDir,
@@ -476,7 +474,6 @@ export function discoverSkillCandidates(params: {
     return { candidates: [], rootIsSkill: false };
   }
 
-  const rootIsContainer = params.source === "openclaw-workshop";
   if (!rootIsContainer && hasSkillFileCandidate(baseDir)) {
     const rootSkillRealPath = resolveSkillFilePath({
       source: params.source,

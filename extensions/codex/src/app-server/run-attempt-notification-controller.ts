@@ -127,7 +127,7 @@ export function createCodexAttemptNotificationController(
             }
           }
           if (item?.type === "userMessage" && typeof item.clientId === "string") {
-            await steeringQueueRef.current?.confirmConsumed(item.clientId);
+            steeringQueueRef.current?.confirmConsumed(item.clientId);
           }
         }
         if (

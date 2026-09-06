@@ -57,7 +57,8 @@ Merge order (later wins):
 
 1. `agents.defaults.params` - global default for all models
 2. `agents.defaults.models["provider/model"].params` - per-model override
-3. `agents.entries.*.params` - per-agent override, matched by agent id
+3. `agents.entries.*.models["provider/model"].params` - agent-specific per-model override
+4. `agents.entries.*.params` - agent-wide override, matched by agent id
 
 Source: `src/agents/embedded-agent-runner/extra-params.ts` (`resolveExtraParams`).
 

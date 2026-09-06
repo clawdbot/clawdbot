@@ -79,14 +79,6 @@ public enum TalkConfigParsing {
         if let timeout = value?.intValue, timeout > 0 {
             return timeout
         }
-        if
-            let timeout = value?.doubleValue,
-            timeout > 0,
-            timeout.rounded(.towardZero) == timeout,
-            timeout <= Double(Int.max)
-        {
-            return Int(timeout)
-        }
         return fallback
     }
 

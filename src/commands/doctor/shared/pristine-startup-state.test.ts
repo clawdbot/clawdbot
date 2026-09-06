@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
-  canSkipPristineStartupStateMigrations,
   planPristineStartupConfigMigrations,
   planPristineStartupStateMigrations,
 } from "./pristine-startup-state.js";
@@ -133,18 +132,20 @@ describe("pristine startup state", () => {
       plugins: { enabled: true, entries: { browser: { enabled: false } } },
     });
 
-    expect(canSkipPristineStartupStateMigrations(env)).toBe(true);
+    expect(planPristineStartupStateMigrations(env).skipAllStateMigrations).toBe(true);
   });
 
   it("rejects existing state and migration-bearing agent config", () => {
-    expect(canSkipPristineStartupStateMigrations(createFixture({}, ["agents"]))).toBe(false);
     expect(
-      canSkipPristineStartupStateMigrations(
+      planPristineStartupStateMigrations(createFixture({}, ["agents"])).skipAllStateMigrations,
+    ).toBe(false);
+    expect(
+      planPristineStartupStateMigrations(
         createFixture({
           memory: { search: { provider: "local" } },
           agents: { defaults: {} },
         }),
-      ),
+      ).skipAllStateMigrations,
     ).toBe(false);
   });
 
@@ -165,7 +166,7 @@ describe("pristine startup state", () => {
       "openai",
     );
 
-    expect(canSkipPristineStartupStateMigrations(env)).toBe(true);
+    expect(planPristineStartupStateMigrations(env).skipAllStateMigrations).toBe(true);
   });
 
   it("accepts canonical internal hook configuration", () => {
@@ -220,7 +221,7 @@ describe("pristine startup state", () => {
       { doctorContract: true },
     );
 
-    expect(canSkipPristineStartupStateMigrations(env)).toBe(false);
+    expect(planPristineStartupStateMigrations(env).skipAllStateMigrations).toBe(false);
   });
 
   it("skips migration discovery for manifest-owned stateless configured plugin paths", () => {
@@ -321,12 +322,13 @@ describe("pristine startup state", () => {
 
   it("rejects enabled plugin entries and includes", () => {
     expect(
-      canSkipPristineStartupStateMigrations(
+      planPristineStartupStateMigrations(
         createFixture({ plugins: { entries: { example: { enabled: true } } } }),
-      ),
+      ).skipAllStateMigrations,
     ).toBe(false);
-    expect(canSkipPristineStartupStateMigrations(createFixture({ $include: "base.json" }))).toBe(
-      false,
-    );
+    expect(
+      planPristineStartupStateMigrations(createFixture({ $include: "base.json" }))
+        .skipAllStateMigrations,
+    ).toBe(false);
   });
 });

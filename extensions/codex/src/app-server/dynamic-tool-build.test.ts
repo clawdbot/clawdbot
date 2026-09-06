@@ -233,7 +233,7 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
-  it("forwards the explicit yield acknowledgment without exposing private context", async () => {
+  it("forwards private yield context and acknowledgment to the lifecycle owner", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -256,7 +256,10 @@ describe("Codex app-server dynamic tool build", () => {
       "Research started; results will follow.",
     );
 
-    expect(onYieldDetected).toHaveBeenCalledWith("Research started; results will follow.");
+    expect(onYieldDetected).toHaveBeenCalledWith(
+      "Resume after the fact-checker replies",
+      "Research started; results will follow.",
+    );
   });
 
   it("hands the question tools this run's own way to show a prompt", async () => {
@@ -943,6 +946,9 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.clientCaps = ["tool-events", "inline-widgets"];
+    params.pinnedWidgetAuthoring = true;
+    params.toolBindings = { browser: { kind: "tab", tabId: 7, target: "host" } };
+    params.memberRoleIds = ["maintainer-role"];
     params.chatId = "native-chat-123";
     params.chatType = "direct";
     params.messageActionTurnCapability = "turn-capability-1";
@@ -956,6 +962,9 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(receivedOptions).toMatchObject({
       clientCaps: ["tool-events", "inline-widgets"],
+      pinnedWidgetAuthoring: true,
+      toolBindings: { browser: { kind: "tab", tabId: 7, target: "host" } },
+      memberRoleIds: ["maintainer-role"],
       chatType: "direct",
       nativeChannelId: "native-chat-123",
       messageActionTurnCapability: "turn-capability-1",

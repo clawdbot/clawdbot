@@ -1,15 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Model } from "@openclaw/llm-core";
-import {
-  asFiniteNumberInRange,
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAiTransportHost } from "../host.js";
-import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
+export { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "../internal/retry-after.js";
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
@@ -108,30 +103,6 @@ export function isGoogleGemini3ProModel(modelId: string): boolean {
 
 export function isGoogleGemini3FlashModel(modelId: string): boolean {
   return isGoogleGemini3Model(modelId, "flash");
-}
-
-export function parseRetryAfterSeconds(headers: Headers): number | undefined {
-  const retryAfterMs = headers.get("retry-after-ms");
-  if (retryAfterMs) {
-    const trimmed = retryAfterMs.trim();
-    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmed), {
-        min: 0,
-        max: Number.MAX_SAFE_INTEGER,
-      });
-      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
-    }
-  }
-
-  const retryAfter = headers.get("retry-after")?.trim();
-  if (!retryAfter) {
-    return undefined;
-  }
-  if (/^\d+$/.test(retryAfter)) {
-    return parseStrictNonNegativeInteger(retryAfter) ?? Number.POSITIVE_INFINITY;
-  }
-  const retryAt = parseRetryAfterHttpDateMs(retryAfter);
-  return retryAt === undefined ? undefined : Math.max(0, (retryAt - Date.now()) / 1000);
 }
 
 async function readChunkWithIdleTimeout(

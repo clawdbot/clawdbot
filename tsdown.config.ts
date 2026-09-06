@@ -812,6 +812,9 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
+      // Explicit ESM chunks avoid repeated package-format parsing in Node;
+      // named entrypoints retain their public .js paths.
+      outputOptions: { chunkFileNames: "[name]-[hash].mjs" },
       plugins: [createStateSchemaInlinePlugin(), createGatewayRunChunkMetadataPlugin()],
     },
     false,

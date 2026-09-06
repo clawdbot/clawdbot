@@ -171,6 +171,9 @@ function createNativeMcpRuntime(params: {
       const status = (await loadStatuses()).find((entry) => entry.name === serverName);
       return { resourceTemplates: status?.resourceTemplates ?? [] } as never;
     },
+    // This facade owns no MCP transport. The retained app-server client owns
+    // process cleanup, including refusal to retire while another view holds it.
+    joinCleanup: async () => {},
     dispose: async () => {},
   };
   return runtime;

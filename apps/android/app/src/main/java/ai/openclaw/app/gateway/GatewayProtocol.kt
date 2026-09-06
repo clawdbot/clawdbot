@@ -134,6 +134,8 @@ data class SessionObserverPlanProgress(
 data class SessionObserverDigest(
   val sessionKey: String,
   val agentId: String? = null,
+  val sessionId: String? = null,
+  val lifecycleRevision: String? = null,
   val runId: String? = null,
   val revision: Long,
   val updatedAt: Long,

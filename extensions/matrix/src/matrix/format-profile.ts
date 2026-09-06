@@ -1,10 +1,6 @@
 // Matrix helper module declares formatting capabilities and shared projections.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import {
-  convertMarkdownTables,
-  FormatCapabilityProfile,
-  renderMarkdownWithMarkers,
-} from "openclaw/plugin-sdk/text-chunking";
+import { convertMarkdownTables, FormatCapabilityProfile } from "openclaw/plugin-sdk/text-chunking";
 
 export type MatrixSpoilerMarkers = { open: string; close: string; padding: string };
 export type MatrixSpoilerProtection = { markdown: string; markers?: MatrixSpoilerMarkers };
@@ -53,12 +49,7 @@ export function isMarkdownEscaped(markdown: string, index: number): boolean {
 }
 
 export function projectMatrixMarkdown(markdown: string): string {
-  const normalized = (markdown ?? "").replace(/\r\n?/gu, "\n");
-  return renderMarkdownWithMarkers(
-    { text: normalized, styles: [], links: [] },
-    { styleMarkers: {}, escapeText: (text) => text },
-    MATRIX_FORMAT_PROFILE,
-  );
+  return (markdown ?? "").replace(/\r\n?/gu, "\n");
 }
 
 export function renderMatrixMarkdownTables(markdown: string, mode: MarkdownTableMode): string {

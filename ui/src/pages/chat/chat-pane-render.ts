@@ -76,7 +76,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
     const swarmTarget = this.resolveChatReadTarget();
     const selectedSessionArchived = this.isCurrentSessionArchived(state);

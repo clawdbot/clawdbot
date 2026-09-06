@@ -229,13 +229,15 @@ export function pruneExpiredCacheTtlToolResults(params: {
     return next ?? unchanged;
   }
   const estimate = params.dropThinkingBlocksForEstimate ? dropThinkingBlocks(messages) : messages;
-  let totalChars = estimate.reduce((sum, message) => sum + cacheTtlMessageChars(message), 0);
+  // Thinking removal preserves positions; reuse costs only within this pruning pass.
+  const messageChars = estimate.map(cacheTtlMessageChars);
+  let totalChars = messageChars.reduce((sum, chars) => sum + chars, 0);
   const charWindow = params.contextWindowTokens * 4;
   if (totalChars / charWindow < 0.3) {
     return next ?? unchanged;
   }
   let pruned = false;
-  const eligible: number[] = [];
+  const eligible: { index: number; chars: number }[] = [];
   for (let index = start; index < cutoff; index++) {
     const message = messages[index];
     if (
@@ -249,7 +251,8 @@ export function pruneExpiredCacheTtlToolResults(params: {
     if (previousMode === "hard") {
       continue;
     }
-    eligible.push(index);
+    const candidate = { index, chars: messageChars[index]! };
+    eligible.push(candidate);
     if (previousMode === "soft") {
       continue;
     }
@@ -257,18 +260,19 @@ export function pruneExpiredCacheTtlToolResults(params: {
     const source = params.messages[index];
     const projected = source?.role === "toolResult" ? softPruneCacheTtlToolResult(source) : source;
     if (projected && projected !== source && projected.role === "toolResult") {
-      totalChars += cacheTtlMessageChars(projected) - cacheTtlMessageChars(message);
+      const projectedChars = cacheTtlMessageChars(projected);
+      totalChars += projectedChars - candidate.chars;
+      candidate.chars = projectedChars;
       recordProjection(index, projected, "soft");
       pruned = true;
     }
   }
-  const output = next ?? unchanged;
   if (
     totalChars / charWindow >= 0.5 &&
     settings.hardClear &&
-    eligible.reduce((sum, index) => sum + cacheTtlMessageChars(output[index]!), 0) >= 50_000
+    eligible.reduce((sum, candidate) => sum + candidate.chars, 0) >= 50_000
   ) {
-    for (const index of eligible) {
+    for (const { index, chars } of eligible) {
       if (totalChars / charWindow < 0.5) {
         break;
       }
@@ -277,7 +281,7 @@ export function pruneExpiredCacheTtlToolResults(params: {
         continue;
       }
       const cleared = clearCacheTtlToolResult(message);
-      totalChars += cacheTtlMessageChars(cleared) - cacheTtlMessageChars(message);
+      totalChars += cacheTtlMessageChars(cleared) - chars;
       recordProjection(index, cleared, "hard");
       pruned = true;
     }

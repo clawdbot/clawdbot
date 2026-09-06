@@ -1,5 +1,4 @@
 import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/claude-model-runtime";
-// Opencode API module exposes the plugin public contract.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,

@@ -23,9 +23,9 @@ export function getPlaywrightUserAgent() { return getUserAgent(); }`;
 const UNDICI_REQUIRE_BOOTSTRAP = [
   'import { createRequire } from "node:module";',
   "const requireUndici = createRequire(import.meta.url);\n",
-  'return requireUndici("undici") as typeof import("undici");',
+  'return requireUndici("undici/index.js") as typeof import("undici");',
 ] as const;
-const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici";';
+const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
 
 export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));

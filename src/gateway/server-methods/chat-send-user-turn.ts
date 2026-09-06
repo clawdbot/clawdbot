@@ -1,13 +1,15 @@
 import path from "node:path";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { MediaFact } from "../../media/media-facts.js";
+import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+  discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -215,6 +217,23 @@ export function prepareChatSendUserTurn(params: {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
+    discardUnreferencedMedia: async (approved: PersistedUserTurnMessage | undefined) => {
+      if (!approved) {
+        return;
+      }
+      const retained = new Set(
+        (readPersistedMediaFacts(approved) ?? []).flatMap((fact) => [fact.url, fact.path]),
+      );
+      const prepared = await persistedMediaForTranscriptPromise;
+      // Re-admission retains the original approved files. Dispose only copies
+      // prepared by this request, after its live input consumer releases custody.
+      await discardPreparedInboundMedia(
+        prepared.entries.filter(
+          (entry) => !retained.has(entry.fact.url) && !retained.has(entry.path),
+        ),
+        logGateway,
+      );
+    },
     accountId,
     ctx,
     isInternalTextSlashCommandTurn: commandSource === "text",

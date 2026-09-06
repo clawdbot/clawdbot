@@ -27,6 +27,12 @@ Native sqlite-vec queries run in a separate, read-only process so a slow query
 does not block the Gateway event loop. Cancelling a search terminates its query
 process; OpenClaw does not retry that native query on the Gateway thread.
 
+If semantic retrieval reaches the 15-second tool deadline after keyword matches
+from memory files are ready, `memory_search` returns those matches with a
+partial-result warning. Session transcript hits require fresh visibility checks
+and are excluded from timeout recovery. A partial response does not put the
+entire memory corpus into the timeout cooldown.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -123,6 +129,13 @@ the agent's current embedding settings; status inspection remains read-only.
 Search-triggered maintenance applies pending memory and session changes
 incrementally while searches remain available. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+If a memory file changes or disappears during indexing, only that file's
+unfinished work is retried incrementally. Other files finish indexing, and
+the changed file's obsolete chunks are not published.
+
+Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
+another SQLite writer is active. Cache pruning removes the oldest entries in
+bounded batches, yielding between batches while preserving the existing cache cap.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the

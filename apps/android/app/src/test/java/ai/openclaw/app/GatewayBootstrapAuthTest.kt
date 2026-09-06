@@ -605,8 +605,8 @@ class GatewayBootstrapAuthTest {
 
       runtime.acceptGatewayTrustPrompt()
 
-      assertEquals("ab".repeat(32), prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "nodeSession"))
+      assertEquals("ab".repeat(32), prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("ab".repeat(32), runtime.gatewayControlPage.value?.tlsFingerprintSha256)
       assertNull(desiredBootstrapToken(runtime, "operatorSession"))
     }
@@ -633,6 +633,7 @@ class GatewayBootstrapAuthTest {
       assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
 
       runtime.declineGatewayTrustPrompt()
+      withTimeout(500) { runtime.pendingGatewayTrust.first { it == null } }
 
       assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
 
@@ -643,6 +644,9 @@ class GatewayBootstrapAuthTest {
       waitForGatewayTrustPrompt(runtime)
       runtime.acceptGatewayTrustPrompt()
 
+      val desired = waitForDesiredConnection(runtime, "nodeSession")
+      val tls = readField<GatewayTlsParams>(desired, "tls")
+      assertEquals(newFingerprint, tls.expectedFingerprint)
       assertEquals(newFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
     }
 

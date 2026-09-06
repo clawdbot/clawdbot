@@ -19,6 +19,7 @@ describe("resolveRuntimeWorkerUrl", () => {
     for (const currentModuleUrl of [
       pathToFileURL(path.join(root, "dist/agents/code-mode.js")).href,
       pathToFileURL(path.join(root, "dist/selection-abc123.js")).href,
+      pathToFileURL(path.join(root, "dist/selection-abc123.mjs")).href,
     ]) {
       expect(
         fileURLToPath(
@@ -29,6 +30,17 @@ describe("resolveRuntimeWorkerUrl", () => {
           }),
         ),
       ).toBe(path.join(root, "dist/agents/code-mode.worker.js"));
+      const candidateRoot = path.join(root, "candidate");
+      expect(
+        fileURLToPath(
+          resolveRuntimeWorkerUrl({
+            currentModuleUrl,
+            sourceWorkerName: "code-mode.worker",
+            distWorkerPath: "agents/code-mode.worker.js",
+            root: candidateRoot,
+          }),
+        ),
+      ).toBe(path.join(candidateRoot, "dist/agents/code-mode.worker.js"));
     }
   });
 });

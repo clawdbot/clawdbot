@@ -171,7 +171,7 @@ it("invalidates the cache after terminal observer-digest synthesis", async () =>
       source: {
         state: observerState(sessionKey, sessionId, previousDigest),
       },
-      readSession: () => undefined,
+      readSession: () => loadSessionEntry({ sessionKey, agentId: "main" }),
       persistDigest: defaultPersistDigest,
       now: () => 2,
     });
