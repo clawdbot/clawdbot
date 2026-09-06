@@ -4,6 +4,7 @@ import {
   createExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionWork,
 } from "../audit/execution-identity-admission.js";
+import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -323,7 +324,7 @@ describe("prepared run admission", () => {
     async (refusedRebind) => {
       let current = true;
       const { runtime, ...admissionFacts } = facts;
-      const prepared = prepareAgentRunAdmission({
+      const source = prepareAgentRunAdmission({
         cfg: {},
         facts: { ...admissionFacts, runId: "native-source-lease" },
         operationalRunInstance: createOperationalRunInstanceRef("native-source-lease"),
@@ -333,6 +334,7 @@ describe("prepared run admission", () => {
           }
         },
       });
+      const prepared = withPostAdmissionExecutionOwnerBinding(source, () => {});
       const admitted = await prepared.admit(runtime.kind);
       const recovery = retainAdmittedRunBeforeToolCallRecovery(admitted);
       expect(recovery).toBeDefined();
