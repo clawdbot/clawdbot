@@ -121,6 +121,9 @@ function buildDiscordButtonComponent(
   if (action.type === "web-app" && !action.url) {
     return undefined;
   }
+  if (action.type === "copy-text") {
+    return undefined;
+  }
   const component: DiscordComponentButtonSpec = {
     label: button.label,
     style:

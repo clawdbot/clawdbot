@@ -36,6 +36,7 @@ export type TelegramButtonStyle = "danger" | "success" | "primary";
 type TelegramInlineButton = {
   text: string;
   callback_data?: string;
+  copy_text?: { text: string };
   url?: string;
   web_app?: { url: string };
   style?: TelegramButtonStyle;
@@ -47,6 +48,7 @@ export type TelegramDroppedControl = {
   label: string;
   reason:
     | "callback_data_too_long"
+    | "copy_text_invalid"
     | "invalid_action"
     | "question_context_unavailable"
     | "web_app_unavailable";
@@ -80,6 +82,115 @@ export function appendTelegramDroppedControlFallback(
 }
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
+const TELEGRAM_COPY_TEXT_MAX_CHARACTERS = 256;
+
+/** Whether TDLib will store the exact authored scalar sequence without rewriting it. */
+export function isValidTelegramCopyText(text: string): boolean {
+  let characterCount = 0;
+  let normalized = "";
+  for (let index = 0; index < text.length;) {
+    const firstUnit = text.charCodeAt(index);
+    let character: string;
+    let codePoint: number;
+    if (firstUnit >= 0xd800 && firstUnit <= 0xdbff) {
+      if (index + 1 >= text.length) {
+        return false;
+      }
+      const secondUnit = text.charCodeAt(index + 1);
+      if (secondUnit < 0xdc00 || secondUnit > 0xdfff) {
+        return false;
+      }
+      character = text.slice(index, index + 2);
+      codePoint = 0x10000 + ((firstUnit - 0xd800) << 10) + (secondUnit - 0xdc00);
+      index += 2;
+    } else {
+      if (firstUnit >= 0xdc00 && firstUnit <= 0xdfff) {
+        return false;
+      }
+      character = text[index] ?? "";
+      codePoint = firstUnit;
+      index += 1;
+    }
+    characterCount += 1;
+    if (characterCount > TELEGRAM_COPY_TEXT_MAX_CHARACTERS) {
+      return false;
+    }
+
+    // Mirror TDLib clean_input_string so native copy_text is byte/character stable.
+    if (codePoint === 0x0d || (codePoint >= 0x2028 && codePoint <= 0x202e)) {
+      continue;
+    }
+    if (codePoint === 0x030a || codePoint === 0x0333 || codePoint === 0x033f) {
+      continue;
+    }
+    normalized +=
+      (codePoint >= 0x00 && codePoint <= 0x09) ||
+      (codePoint >= 0x0b && codePoint <= 0x0c) ||
+      (codePoint >= 0x0e && codePoint <= 0x20)
+        ? " "
+        : character;
+  }
+  if (characterCount === 0) {
+    return false;
+  }
+  normalized = normalized.replace(/[\u200e\u200f](?=[\u200e\u200f])/gu, "\u200c");
+  return normalized === text;
+}
+
+function escapedCodeUnit(codeUnit: number): string {
+  return `\\u${codeUnit.toString(16).padStart(4, "0")}`;
+}
+
+/** Render units TDLib rewrites or rejects as an inspectable manual-copy value. */
+export function escapeTelegramCopyTextFallback(text: string): string {
+  let escaped = "";
+  for (let index = 0; index < text.length;) {
+    const firstUnit = text.charCodeAt(index);
+    if (firstUnit >= 0xd800 && firstUnit <= 0xdbff) {
+      const secondUnit = text.charCodeAt(index + 1);
+      if (secondUnit >= 0xdc00 && secondUnit <= 0xdfff) {
+        escaped += text.slice(index, index + 2);
+        index += 2;
+        continue;
+      }
+      escaped += escapedCodeUnit(firstUnit);
+      index += 1;
+      continue;
+    }
+    if (firstUnit >= 0xdc00 && firstUnit <= 0xdfff) {
+      escaped += escapedCodeUnit(firstUnit);
+      index += 1;
+      continue;
+    }
+
+    if (firstUnit === 0x00) {
+      escaped += "\\0";
+    } else if (firstUnit === 0x09) {
+      escaped += "\\t";
+    } else if (firstUnit === 0x0b) {
+      escaped += "\\v";
+    } else if (firstUnit === 0x0c) {
+      escaped += "\\f";
+    } else if (firstUnit === 0x0d) {
+      escaped += "\\r";
+    } else if (
+      (firstUnit >= 0x01 && firstUnit <= 0x08) ||
+      (firstUnit >= 0x0e && firstUnit <= 0x1f) ||
+      (firstUnit >= 0x2028 && firstUnit <= 0x202e) ||
+      firstUnit === 0x030a ||
+      firstUnit === 0x0333 ||
+      firstUnit === 0x033f ||
+      firstUnit === 0x200e ||
+      firstUnit === 0x200f
+    ) {
+      escaped += escapedCodeUnit(firstUnit);
+    } else {
+      escaped += text[index] ?? "";
+    }
+    index += 1;
+  }
+  return escaped;
+}
 
 function toTelegramButtonStyle(
   style?: MessagePresentationButton["style"],
@@ -116,6 +227,11 @@ function toTelegramInlineButton(
   }
   if (action.type === "url") {
     return { text: button.label, url: action.url, style };
+  }
+  if (action.type === "copy-text") {
+    return isValidTelegramCopyText(action.text)
+      ? { text: button.label, copy_text: { text: action.text }, style }
+      : recordDroppedControl(button, options, "copy_text_invalid");
   }
   if (action.type === "web-app") {
     return options?.allowWebAppButtons === true && action.url
@@ -170,6 +286,9 @@ function toTelegramInlineButton(
     return callbackData
       ? { text: button.label, callback_data: callbackData, style }
       : recordDroppedControl(button, options, "invalid_action", nativeCandidate);
+  }
+  if (action.type !== "callback") {
+    return recordDroppedControl(button, options, "invalid_action");
   }
   // Reserve the full approval prefix, including malformed values, so legacy
   // plugin callbacks cannot be consumed by the approval handler.

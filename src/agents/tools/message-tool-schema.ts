@@ -48,6 +48,10 @@ const presentationButtonActionSchema = Type.Union([
   presentationCommandActionSchema,
   presentationCallbackActionSchema,
   Type.Object({
+    type: Type.Literal("copy-text"),
+    text: Type.String(),
+  }),
+  Type.Object({
     type: Type.Literal("url"),
     url: Type.String(),
   }),

@@ -94,6 +94,11 @@ export type MessagePresentationAction =
       type: "callback";
       value: string;
     }
+  | {
+      /** Copy text to the user's clipboard without invoking a callback. */
+      type: "copy-text";
+      text: string;
+    }
   | ModelPickerAction
   | {
       /** Resolve one durable operator approval without exposing transport callback data. */
@@ -528,6 +533,10 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
   if (type === "callback") {
     const value = normalizeOptionalString(record.value);
     return value ? { type: "callback", value } : undefined;
+  }
+  if (type === "copy-text") {
+    const text = typeof record.text === "string" ? record.text : undefined;
+    return text?.length ? { type, text } : undefined;
   }
   if (type === "model-picker") {
     return normalizeModelPickerAction(record);
@@ -1149,6 +1158,17 @@ export function renderMessagePresentationControlFallbackLabel(
   }
   if (action?.type === "command") {
     return `${control.label}: \`${action.command}\``;
+  }
+  if (action?.type === "copy-text") {
+    if (!/[\n\r\u2028\u2029`]/u.test(action.text)) {
+      return `${control.label}: \`${action.text}\``;
+    }
+    const longestBacktickRun = Math.max(
+      0,
+      ...Array.from(action.text.matchAll(/`+/gu), (match) => match[0].length),
+    );
+    const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+    return `${control.label}:\n${fence}\n${action.text}\n${fence}`;
   }
   return control.label;
 }

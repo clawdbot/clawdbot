@@ -74,6 +74,7 @@ type MessagePresentationBlock =
 type MessagePresentationAction =
   | { type: "command"; command: string }
   | { type: "callback"; value: string }
+  | { type: "copy-text"; text: string }
   | {
       type: "approval";
       approvalId: string;
@@ -144,6 +145,10 @@ Button semantics:
 - `action.type: "callback"` carries opaque plugin data through the channel's
   interaction path. Channel plugins must not reinterpret callback data as slash
   commands.
+- `action.type: "copy-text"` copies user-visible text to the clipboard without
+  invoking a command or callback. Channels must opt in through
+  `presentationCapabilities.copyTextButtons`; otherwise core renders the label
+  and copy value as visible fallback text.
 - `action.type: "approval"` identifies one durable operator approval, its
   explicit `exec` or `plugin` kind, and the requested decision. Channel plugins
   encode that action into a transport-private callback and resolve it through
@@ -304,6 +309,24 @@ Telegram Mini App button:
 }
 ```
 
+Telegram Copy Text button:
+
+```json
+{
+  "blocks": [
+    {
+      "type": "buttons",
+      "buttons": [
+        {
+          "label": "Copy token",
+          "action": { "type": "copy-text", "text": "TOKEN-7319" }
+        }
+      ]
+    }
+  ]
+}
+```
+
 Select menu:
 
 ```json
@@ -406,6 +429,7 @@ const adapter: ChannelOutboundAdapter = {
   presentationCapabilities: {
     supported: true,
     buttons: true,
+    copyTextButtons: false,
     selects: true,
     context: true,
     divider: true,
@@ -472,6 +496,7 @@ renderer:
 type ChannelPresentationCapabilities = {
   supported?: boolean;
   buttons?: boolean;
+  copyTextButtons?: boolean;
   selects?: boolean;
   context?: boolean;
   divider?: boolean;
@@ -520,7 +545,8 @@ On the canonical outbound path used by CLI and standard message actions, core:
 4. Applies generic capability limits such as action count, label length, and
    select option count when the adapter advertises them. Chart and table blocks
    become deterministic text unless the adapter explicitly advertises
-   `charts: true` or `tables: true`, respectively.
+   `charts: true` or `tables: true`, respectively. Copy-text actions become
+   visible fallback text unless the adapter advertises `copyTextButtons: true`.
 5. Calls `renderPresentation` when the adapter can render the payload. Its
    `presentation` is adapted for native limits; `sourcePresentation` retains
    the normalized original for channel-specific text fallbacks.
@@ -555,7 +581,7 @@ Fallback text includes:
 - `text` blocks as normal paragraphs
 - `context` blocks as compact context lines
 - `divider` blocks as a visual separator
-- button labels, including URLs for link buttons
+- button labels, including URLs for link buttons and values for copy-text buttons
 - select option labels
 - chart title, type, axes, categories, series, and values
 - table caption, headers, and every row value
@@ -570,6 +596,11 @@ keeping opaque callback data private:
   copy the command and run it manually in the channel input.
 - **`callback`-typed actions** and legacy **`value`** fields render as
   label-only. The opaque callback value is not exposed in fallback text.
+- **`copy-text`-typed actions** render as `` label: `text` `` so the value
+  remains visible for manual selection when native clipboard buttons are not
+  supported. Values containing backticks, LF, CR, U+2028, or U+2029 use a
+  complete code fence rather than an inline span. Monospace fallback text is
+  not guaranteed to be one-tap copyable.
 - **`approval`-typed actions** render label-only. Approval IDs and decisions are
   transport data and are not exposed through generic scalar helpers or fallback
   text.
@@ -610,7 +641,7 @@ Current bundled renderers:
 | Mattermost      | Text plus interactive props               | Selects and dividers are not supported; those blocks degrade to text.                                                                                                                                             |
 | Microsoft Teams | Adaptive Cards                            | Plain `message` text is included with the card when both are provided. Selects, styles, and disabled state are not supported.                                                                                     |
 | Slack           | Block Kit                                 | Renders `chart` as native `data_visualization` and `table` as native `data_table`; preserves legacy `channelData.slack.blocks`, but new shared sends should use `presentation`.                                   |
-| Telegram        | Text plus inline keyboards                | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                                                                                         |
+| Telegram        | Text plus inline keyboards                | Supports native copy-text buttons alongside plain or rich message bodies. Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                               |
 | Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                            |
 
 Provider-native payload compatibility is a transition affordance for existing
@@ -748,6 +779,8 @@ messages where the provider supports those operations.
 - Keep native UI libraries out of hot setup/catalog paths.
 - Declare generic capability limits on `presentationCapabilities.limits` when
   they are known.
+- Advertise `copyTextButtons: true` only when the renderer emits a native
+  clipboard action; otherwise preserve the copy value in fallback text.
 - Preserve final platform limits in the renderer and tests.
 - Add fallback tests for unsupported charts, tables, buttons, selects, URL
   buttons, title/text duplication, and mixed `message` plus `presentation`

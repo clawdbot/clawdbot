@@ -153,6 +153,9 @@ function resolveSlackActionTarget(
     const value = normalizeOptionalString(action.value);
     return value ? { kind: "callback", value } : undefined;
   }
+  if (action.type === "copy-text") {
+    return undefined;
+  }
   const command = normalizeOptionalString(action.command);
   // Command-backed approvals are a shipped legacy input with no trustworthy
   // owner field. Keep them on the kind-specific compatibility resolver.

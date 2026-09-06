@@ -98,6 +98,18 @@ function sanitizeStringArrayParam(
   return suppressionReason;
 }
 
+function clearPresentationButtonActionTargets(button: Record<string, unknown>): void {
+  // Explicit typed actions own the control. If sanitization removes the target,
+  // legacy shadow fields must not become active fallbacks during normalization.
+  delete button.action;
+  delete button.value;
+  delete button.callbackData;
+  delete button.callback_data;
+  delete button.url;
+  delete button.webApp;
+  delete button.web_app;
+}
+
 function sanitizePresentationTextFieldsResult(
   value: unknown,
   bootPrompt: string | undefined,
@@ -198,8 +210,19 @@ function sanitizePresentationTextFieldsResult(
           const action = sanitizedButton.action;
           if (action && typeof action === "object" && !Array.isArray(action)) {
             const sanitizedAction = { ...(action as Record<string, unknown>) };
+            const actionType = normalizeOptionalLowercaseString(sanitizedAction.type);
+            if (actionType === "copy-text" && typeof sanitizedAction.text === "string") {
+              const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.text, bootPrompt);
+              if (sanitized.text.length > 0) {
+                sanitizedAction.text = sanitized.text;
+                sanitizedButton.action = sanitizedAction;
+              } else {
+                clearPresentationButtonActionTargets(sanitizedButton);
+              }
+              suppressionReason ??= sanitized.suppressionReason;
+            }
             if (
-              (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
+              (actionType === "url" || actionType === "web-app") &&
               typeof sanitizedAction.url === "string"
             ) {
               const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.url, bootPrompt);
@@ -207,20 +230,14 @@ function sanitizePresentationTextFieldsResult(
                 sanitizedAction.url = sanitized.text;
                 sanitizedButton.action = sanitizedAction;
               } else if (
-                sanitizedAction.type === "web-app" &&
+                actionType === "web-app" &&
                 typeof sanitizedAction.widgetId === "string" &&
                 sanitizedAction.widgetId.trim()
               ) {
                 delete sanitizedAction.url;
                 sanitizedButton.action = sanitizedAction;
               } else {
-                // Explicit typed actions own the control. If sanitization removes
-                // the target, legacy shadow fields must not become active fallbacks.
-                delete sanitizedButton.action;
-                delete sanitizedButton.value;
-                delete sanitizedButton.url;
-                delete sanitizedButton.webApp;
-                delete sanitizedButton.web_app;
+                clearPresentationButtonActionTargets(sanitizedButton);
               }
               suppressionReason ??= sanitized.suppressionReason;
             }

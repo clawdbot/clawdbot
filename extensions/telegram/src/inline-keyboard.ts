@@ -18,6 +18,11 @@ function toInlineKeyboardButton(
       ? { text: button.text, callback_data: button.callback_data, style: button.style }
       : { text: button.text, callback_data: button.callback_data };
   }
+  if (button.copy_text?.text) {
+    return button.style
+      ? { text: button.text, copy_text: { text: button.copy_text.text }, style: button.style }
+      : { text: button.text, copy_text: { text: button.copy_text.text } };
+  }
   if (button.web_app?.url) {
     return button.style
       ? { text: button.text, web_app: { url: button.web_app.url }, style: button.style }

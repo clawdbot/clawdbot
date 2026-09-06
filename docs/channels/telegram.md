@@ -582,6 +582,32 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Mini App buttons only work in private chats between a user and the bot.
 
+    Copy Text button example:
+
+```json5
+{
+  action: "send",
+  channel: "telegram",
+  to: "123456789",
+  message: "Copy this token:",
+  presentation: {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Copy token",
+            action: { type: "copy-text", text: "TOKEN-7319" },
+          },
+        ],
+      },
+    ],
+  },
+}
+```
+
+    Native Copy Text values must contain 1–256 well-formed Unicode scalar values and must survive Telegram's input normalization unchanged. Values Telegram would rewrite or reject (for example tabs, NUL, carriage returns, U+2028–U+202E, or unpaired surrogates) are shown as escaped manual-copy fallback text instead. The button is native Telegram reply markup and works with both plain and rich message bodies. Inline code in a rich message is only monospace formatting; it is not a guaranteed one-tap copy target.
+
     Callback action values not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
 
     With durable ingress, OpenClaw sends the callback acknowledgement after storing the update, without waiting for earlier handlers in that chat's lane. Telegram clears its loading indicator when the acknowledgement succeeds; the button's action still follows normal authorization and ordered processing.

@@ -32,7 +32,11 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  adaptMessagePresentationForChannel,
+  resolveLegacyInteractiveTextFallback,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -210,6 +214,26 @@ function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): stri
     throw new Error("Feishu send supports a single media attachment.");
   }
   return urls[0];
+}
+
+function adaptFeishuDirectCopyTextButtons(presentation: MessagePresentation): MessagePresentation {
+  return {
+    ...presentation,
+    blocks: presentation.blocks.flatMap((block) => {
+      if (
+        block.type !== "buttons" ||
+        !block.buttons.some((button) => button.action?.type === "copy-text")
+      ) {
+        return [block];
+      }
+      // The direct action path predates shared presentation adaptation. Reuse
+      // that owner so unsupported clipboard actions keep their visible value.
+      return adaptMessagePresentationForChannel({
+        presentation: { blocks: [block] },
+        capabilities: FEISHU_PRESENTATION_CAPABILITIES,
+      }).blocks;
+    }),
+  };
 }
 
 function readBooleanParam(params: Record<string, unknown>, keys: string[]): boolean | undefined {
@@ -1244,7 +1268,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const textCard = readNativeFeishuCardJson(text, {
               responsePrefix: resolveFeishuMessageActionResponsePrefix(ctx),
             });
-            const { interactive, presentation } = resolveFeishuRichReply(ctx.params);
+            const { interactive, presentation: normalizedPresentation } = resolveFeishuRichReply(
+              ctx.params,
+            );
+            const presentation = normalizedPresentation
+              ? adaptFeishuDirectCopyTextButtons(normalizedPresentation)
+              : undefined;
             // Thread replies share send's validated attachment boundary so aliases
             // and unsupported payloads cannot silently become text-only delivery.
             const mediaUrl = resolveFeishuSendAttachmentMedia(ctx.params);

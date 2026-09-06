@@ -699,6 +699,41 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("keeps copy-text backticks and mentions literal in text-only edits", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Copy",
+                    action: { type: "copy-text", text: "x`<!channel> <@U1>" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const content = String(firstAction(invoke).content);
+    expect(content).toBe("- Copy [not copyable: contains backtick]: `x[backtick]<!channel> <@U1>`");
+    expect([...content.matchAll(/`([^`]*)`/gs)]).toHaveLength(1);
+    expect(content.replace(/`[^`]*`/gs, "")).not.toMatch(/<!channel>|<@U1>/);
+  });
+
   it("uses complete text-only fallback when an edit exceeds fifty blocks", async () => {
     const invoke = createInvokeSpy();
     const presentation = {

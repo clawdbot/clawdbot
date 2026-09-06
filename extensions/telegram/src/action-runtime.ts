@@ -20,6 +20,8 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  isMessagePresentationInteractiveBlock,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -44,7 +46,10 @@ import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
-import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import {
+  canonicalizeTelegramPresentationPayload,
+  resolveTelegramInteractiveTextFallback,
+} from "./interactive-fallback.js";
 import {
   resolveTelegramConversationReadChatId,
   resolveTelegramMessageMutationChatId,
@@ -248,6 +253,24 @@ function resolveTelegramButtonsFromParams(
     },
     options,
   );
+}
+
+function selectTelegramInteractivePresentation(
+  presentation: MessagePresentation | undefined,
+): MessagePresentation | undefined {
+  const blocks = presentation?.blocks.filter(isMessagePresentationInteractiveBlock) ?? [];
+  return blocks.length > 0 ? { blocks } : undefined;
+}
+
+function readTelegramPayloadButtons(
+  payload: ReplyPayload,
+): ReturnType<typeof resolveTelegramButtonsFromParams> {
+  const telegram = payload.channelData?.telegram;
+  if (!telegram || typeof telegram !== "object" || Array.isArray(telegram)) {
+    return undefined;
+  }
+  // SAFETY: The canonicalizer owns this shape and emits only TelegramInlineButtons.
+  return (telegram as { buttons?: ReturnType<typeof resolveTelegramButtonsFromParams> }).buttons;
 }
 
 function readTelegramSendContent(params: {
@@ -626,10 +649,13 @@ export async function handleTelegramAction(
     const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
     const droppedControls: TelegramDroppedControl[] = [];
-    const buttons = resolveTelegramButtonsFromParams(params, presentation, {
+    const buttonOptions: TelegramButtonBuildOptions = {
       allowWebAppButtons: resolveTelegramTargetChatType(to) === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
-    });
+    };
+    let buttons = presentation
+      ? undefined
+      : resolveTelegramButtonsFromParams(params, undefined, buttonOptions);
     const resolvedContent = readTelegramSendContent({
       args: params,
       mediaUrl: firstMediaUrl,
@@ -638,15 +664,44 @@ export async function handleTelegramAction(
       interactive: params.interactive,
       presentation,
     });
-    const content =
-      droppedControls.length > 0 && resolvedContent.hasExplicitContent
-        ? appendTelegramDroppedControlFallback(resolvedContent.content, droppedControls)
-        : resolvedContent.content;
+    let content = resolvedContent.content;
+    // Keep authored/chart fallback policy here, but route portable controls
+    // through Telegram's canonical capability and shared-budget adapter.
+    const interactivePresentation = selectTelegramInteractivePresentation(presentation);
+    const presentationControlsCanonicalized = interactivePresentation !== undefined;
+    if (interactivePresentation) {
+      const canonical = canonicalizeTelegramPresentationPayload(
+        {
+          text: content,
+          interactive: normalizeLegacyInteractiveReply(params.interactive),
+          presentation: interactivePresentation,
+        },
+        {
+          allowWebAppButtons: buttonOptions.allowWebAppButtons,
+          onDroppedControl: buttonOptions.onDroppedControl,
+        },
+      );
+      buttons = readTelegramPayloadButtons(canonical);
+      if (resolvedContent.hasExplicitContent || !content.trim()) {
+        content = canonical.text ?? content;
+      }
+    } else if (presentation) {
+      buttons = resolveTelegramButtonsFromParams(params, presentation, buttonOptions);
+    }
+    if (
+      !presentationControlsCanonicalized &&
+      droppedControls.length > 0 &&
+      resolvedContent.hasExplicitContent
+    ) {
+      content = appendTelegramDroppedControlFallback(content, droppedControls);
+    }
     const droppedControlFallback = appendTelegramDroppedControlFallback("", droppedControls);
     const hasOnlyDroppedControlFallback =
       !resolvedContent.hasExplicitContent &&
       droppedControlFallback.length > 0 &&
-      content.trim() === droppedControlFallback.trim();
+      (presentation
+        ? presentation.blocks.every(isMessagePresentationInteractiveBlock)
+        : content.trim() === droppedControlFallback.trim());
     const asVideoNote = readBooleanParam(params, "asVideoNote") ?? false;
     if (
       location &&
@@ -907,12 +962,44 @@ export async function handleTelegramAction(
       readStringParam(params, "message", { allowEmpty: false });
     // Telegram treats an explicit empty caption as a request to remove it.
     let caption = readStringParam(params, "caption", { allowEmpty: true });
+    const presentation = normalizeMessagePresentation(params.presentation);
     const droppedControls: TelegramDroppedControl[] = [];
-    const buttons = resolveTelegramButtonsFromParams(params, undefined, {
+    const buttonOptions: TelegramButtonBuildOptions = {
       allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
-    });
-    if (droppedControls.length > 0) {
+    };
+    let buttons = presentation
+      ? undefined
+      : resolveTelegramButtonsFromParams(params, undefined, buttonOptions);
+    const interactivePresentation = selectTelegramInteractivePresentation(presentation);
+    const presentationControlsCanonicalized = interactivePresentation !== undefined;
+    if (interactivePresentation) {
+      const canonical = canonicalizeTelegramPresentationPayload(
+        {
+          text: caption ?? content,
+          interactive: normalizeLegacyInteractiveReply(params.interactive),
+          presentation: interactivePresentation,
+        },
+        {
+          allowWebAppButtons: buttonOptions.allowWebAppButtons,
+          onDroppedControl: buttonOptions.onDroppedControl,
+        },
+      );
+      buttons = readTelegramPayloadButtons(canonical);
+      if (caption != null) {
+        caption = canonical.text ?? caption;
+      } else if (content != null) {
+        content = canonical.text ?? content;
+      } else if (droppedControls.some((control) => control.reason === "copy_text_invalid")) {
+        // Reply-markup-only edits cannot carry the manual-copy fallback. Promote
+        // the canonical text into a regular edit rather than silently dropping
+        // an authored copy value that Telegram cannot encode natively.
+        content = canonical.text;
+      }
+    } else if (presentation) {
+      buttons = resolveTelegramButtonsFromParams(params, presentation, buttonOptions);
+    }
+    if (!presentationControlsCanonicalized && droppedControls.length > 0) {
       if (caption != null) {
         caption = appendTelegramDroppedControlFallback(caption, droppedControls);
       } else if (content != null) {

@@ -783,6 +783,13 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
+        name: "keeps copy text buttons",
+        input: [[{ text: "Copy", copy_text: { text: "TOKEN-7319" } }]],
+        expected: {
+          inline_keyboard: [[{ text: "Copy", copy_text: { text: "TOKEN-7319" } }]],
+        },
+      },
+      {
         name: "prefers url over callback data when both are present",
         input: [[{ text: "Open", callback_data: "cmd:open", url: "https://example.com" }]],
         expected: {

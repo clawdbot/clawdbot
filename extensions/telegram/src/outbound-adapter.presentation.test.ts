@@ -1,5 +1,8 @@
 // Telegram presentation rendering tests for the outbound adapter.
-import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  adaptMessagePresentationForChannel,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
@@ -66,6 +69,74 @@ describe("telegramOutbound presentation", () => {
       messageId: "tg-presentation-buttons",
       target: { kind: "chat", id: "12345" },
     });
+  });
+
+  it("keeps copy-text buttons alongside rich-message presentation text", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-copy-text", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: { channels: { telegram: { richMessages: true } } } as never,
+      to: "12345",
+      text: "",
+      payload: {
+        presentation: {
+          blocks: [
+            { type: "text", text: "Tap to copy the token." },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy token",
+                  action: { type: "copy-text", text: "TOKEN-7319" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Tap to copy the token.");
+    expect(options.buttons).toEqual([[{ text: "Copy token", copy_text: { text: "TOKEN-7319" } }]]);
+  });
+
+  it("keeps overlong copy-text values visible when Telegram cannot encode the button", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-copy-text-fallback",
+      chatId: "12345",
+    });
+    const copyText = "x".repeat(257);
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy token",
+                  action: { type: "copy-text", text: copyText },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(
+      sendMessageTelegramMock,
+      0,
+      "12345",
+      `- Copy token: \`${copyText}\``,
+    );
+    expect(options.buttons).toBeUndefined();
   });
 
   it("renders presentation tables as native islands for payload sends on rich accounts", async () => {
@@ -307,6 +378,56 @@ describe("telegramOutbound presentation", () => {
     expect(options.buttons).toEqual([
       [{ text: "Allow Always", callback_data: `/approve ${approvalId} always` }],
     ]);
+  });
+
+  it("does not spend the core action budget on copy values Telegram rejects", async () => {
+    const invalidCopyText = "x".repeat(257);
+    const validButtons = Array.from({ length: 100 }, (_, index) => ({
+      label: `Action ${String(index)}`,
+      value: `act:${String(index)}`,
+    }));
+    const normalized = telegramOutbound.normalizePayload?.({
+      cfg: {} as never,
+      payload: {
+        text: "Pick:",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy raw",
+                  action: { type: "copy-text", text: invalidCopyText },
+                },
+                ...validButtons,
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const preparedPresentation = normalizeMessagePresentation(normalized?.presentation);
+    if (!preparedPresentation) {
+      throw new Error("expected normalized Telegram presentation");
+    }
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: preparedPresentation,
+      capabilities: telegramOutbound.presentationCapabilities,
+    });
+
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: { text: "Pick:" },
+      presentation,
+      ctx: { cfg: {} } as never,
+    });
+    const telegram = rendered?.channelData?.telegram as
+      | { buttons?: ReadonlyArray<ReadonlyArray<{ text: string }>> }
+      | undefined;
+
+    expect(telegram?.buttons?.flatMap((row) => row.map((button) => button.text))).toEqual(
+      validButtons.map((button) => button.label),
+    );
+    expect(rendered?.text).toContain(`- Copy raw: \`${invalidCopyText}\``);
   });
 
   it("leaves long presentation text for Telegram chunking", () => {

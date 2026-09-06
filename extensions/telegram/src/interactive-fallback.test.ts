@@ -324,6 +324,28 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     });
   });
 
+  it.each([
+    ["carriage return", "TOKEN\r7319", "TOKEN\\r7319"],
+    ["line separator", "TOKEN\u20287319", "TOKEN\\u20287319"],
+    ["paragraph separator", "TOKEN\u20297319", "TOKEN\\u20297319"],
+  ])("visibly escapes %s in Telegram manual-copy fallback", (_name, copyText, escaped) => {
+    const result = canonicalizeTelegramPresentationPayload({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Copy token", action: { type: "copy-text" as const, text: copyText } },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.text).toBe(`- Copy token: \`${escaped}\``);
+    expect(result.channelData?.telegram).toBeUndefined();
+  });
+
   it("uses native web_app only for a confirmed direct target", () => {
     const payload = {
       text: "Open app:",
@@ -372,6 +394,30 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     expect(result.text).toBe("Use the available action\n\n- Generic");
     expect(result.channelData?.telegram).toEqual({ buttons: nativeButtons });
     expect(result.presentation).toBeUndefined();
+  });
+
+  it("escapes invalid copy values when explicit Telegram buttons take precedence", () => {
+    const nativeButtons = [[{ text: "Native", callback_data: "native" }]];
+    const result = canonicalizeTelegramPresentationPayload({
+      text: "Use the available action",
+      channelData: { telegram: { buttons: nativeButtons } },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Copy token",
+                action: { type: "copy-text", text: "TOKEN\r7319" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.text).toBe("Use the available action\n\n- Copy token: `TOKEN\\r7319`");
+    expect(result.channelData?.telegram).toEqual({ buttons: nativeButtons });
   });
 
   it("does not duplicate an already-materialized full fallback", () => {

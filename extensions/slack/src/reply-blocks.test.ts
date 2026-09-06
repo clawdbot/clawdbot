@@ -319,6 +319,24 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     expect(fallback).not.toContain("&lt;");
   });
 
+  it("keeps copy-text backticks and mentions literal in reply fallback segments", () => {
+    const copyText = "x`<!channel> <@U1>";
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Copy", action: { type: "copy-text", text: copyText } }],
+          },
+        ],
+      },
+    });
+
+    expect(segments).toEqual([
+      { kind: "text", text: `- Copy:\n\`\`\`\n${copyText}\n\`\`\``, mrkdwn: false },
+    ]);
+  });
+
   it("recognizes authored text already carried by a fallback segment", () => {
     const title = "This chart title is too long for Slack native chart rendering";
     const text = `${title} (pie chart)\n- Open: 5`;

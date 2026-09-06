@@ -2444,6 +2444,134 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("preserves legacy interactive controls when editing with portable presentation", async () => {
+    await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Legacy", value: "legacy" }] }],
+        },
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Portable", value: "portable" }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    const call = mockCall(editMessageReplyMarkupTelegram, 0, "mixed compatibility edit");
+    expect(call[2]).toEqual([[{ text: "Legacy", callback_data: "legacy", style: undefined }]]);
+  });
+
+  it("delivers invalid copy fallback text during a markup-only edit", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Open", value: "open" },
+                { label: "Copy token", action: { type: "copy-text", text: "TOKEN\r7319" } },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(editMessageReplyMarkupTelegram).not.toHaveBeenCalled();
+    const call = mockCall(editMessageTelegram, 0, "copy fallback edit");
+    expect(call[2]).toBe("- Copy token: `TOKEN\\r7319`");
+    expect(requireRecord(call[3], "copy fallback edit options").buttons).toEqual([
+      [{ text: "Open", callback_data: "open" }],
+    ]);
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      degradedDelivery: { droppedControls: 1, fallback: "text" },
+    });
+  });
+
+  it("applies the canonical Telegram action budget to markup-only edits", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: Array.from({ length: 101 }, (_, index) => ({
+                label: `Action ${String(index)}`,
+                value: `act:${String(index)}`,
+              })),
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    const call = mockCall(editMessageReplyMarkupTelegram, 0, "budgeted reply markup edit");
+    const rows = call[2] as ReadonlyArray<ReadonlyArray<{ text: string }>>;
+    expect(rows.every((row) => row.length <= 3)).toBe(true);
+    expect(rows.flatMap((row) => row.map((button) => button.text))).toEqual(
+      Array.from({ length: 100 }, (_, index) => `Action ${String(index)}`),
+    );
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      messageId: "456",
+      chatId: "123",
+    });
+  });
+
+  it.each([
+    { description: "text", field: "content", editMode: "auto" },
+    { description: "caption", field: "caption", editMode: "caption" },
+  ])("keeps a rejected copy value readable in $description edits", async ({ field, editMode }) => {
+    const result = await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        [field]: "Updated body",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Open", value: "open" },
+                { label: "Copy token", action: { type: "copy-text", text: "TOKEN\r7319" } },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(editMessageTelegram, 0, `${field} edit`);
+    expect(call[2]).toBe("Updated body\n\n- Copy token: `TOKEN\\r7319`");
+    const opts = requireRecord(call[3], `${field} edit options`);
+    expect(opts.editMode).toBe(editMode);
+    expect(opts.buttons).toEqual([[{ text: "Open", callback_data: "open" }]]);
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      messageId: "456",
+      chatId: "123",
+      warning: "Telegram delivered 1 unencodable control as readable text.",
+      degradedDelivery: { droppedControls: 1, fallback: "text" },
+    });
+  });
+
   it("returns a recoverable result when every edited control is unencodable", async () => {
     const result = await handleTelegramAction(
       {
