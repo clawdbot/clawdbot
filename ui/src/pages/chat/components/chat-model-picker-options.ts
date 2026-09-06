@@ -103,6 +103,11 @@ export function renderChatModelPickerOption(params: {
     (params.entry.unavailableReason === "missing-auth" ||
       params.entry.unavailableReason === "auth-failed");
   const onModelSetup = needsAuth ? params.onModelSetup : undefined;
+  // A cooldown is transient (e.g. a shared local-provider profile briefly busy
+  // swapping models) — unlike a real auth failure, retrying is the normal
+  // recovery path, so the row must stay selectable instead of dead-ending
+  // like a permanently broken model with no recourse.
+  const isCooldown = params.entry.disabled && params.entry.unavailableReason === "cooldown";
   const modelMeta = needsAuth
     ? ""
     : [
@@ -136,14 +141,16 @@ export function renderChatModelPickerOption(params: {
       .filter(Boolean)
       .join(". ")}
     type="button"
-    ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup)}
+    ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup && !isCooldown)}
     data-chat-model-setup=${onModelSetup ? "true" : nothing}
     @mouseenter=${(event: MouseEvent) =>
       params.onHighlight(event.currentTarget as HTMLButtonElement)}
     @click=${(event: MouseEvent) => {
       // A sign-in-gated model must not dead-end: the row routes to Model
       // Setup instead of silently ignoring the click on a disabled button.
-      if (params.entry.disabled) {
+      // A cooldown has no setup step, so its click falls through to the
+      // normal selection path instead.
+      if (params.entry.disabled && !isCooldown) {
         event.stopPropagation();
         onModelSetup?.();
         return;
