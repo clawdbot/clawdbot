@@ -52,7 +52,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
       await params.cron.add(spec.input, {
         enabledExplicit: true,
         systemOwned: true,
-        matchesExisting: (job) => skillCollectionReviewMonitorAgentId(job) !== undefined,
+        matchesExisting: (job) => skillCollectionReviewMonitorAgentId(job) === spec.agentId,
         ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
       });
     } catch (error) {

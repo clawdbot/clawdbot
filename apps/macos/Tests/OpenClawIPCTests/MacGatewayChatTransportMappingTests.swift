@@ -6,6 +6,165 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
+    private actor RequestRecorder {
+        var payloads: [Data] = []
+
+        func append(_ data: Data) {
+            self.payloads.append(data)
+        }
+
+        func snapshot() -> [Data] {
+            self.payloads
+        }
+    }
+
+    @Test(arguments: [false, true, nil] as [Bool?])
+    func `progress requests negotiate owner scope on the connected server`(supportsOwner: Bool?) async throws {
+        let recorder = RequestRecorder()
+        let socketSession = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let id = try #require(frame["id"] as? String)
+                var payload = "{}"
+                if frame["method"] as? String == "progressCard.get" {
+                    let params = try #require(frame["params"] as? [String: Any])
+                    try await recorder.append(JSONSerialization.data(withJSONObject: params))
+                    // A released server's closed schema rejects the extra owner field.
+                    #expect(supportsOwner == true || params["agentId"] == nil)
+                    let owner = params["agentId"] as? String ??
+                        OpenClawChatSessionKey.agentID(from: params["sessionKey"] as? String) ?? "main"
+                    payload = #"{"card":{"sessionKey":"agent:\#(owner):global","revision":1,"updatedAt":10,"markdown":"\#(owner)","steps":[]}}"#
+                }
+                socket
+                    .emitReceiveSuccess(.data(Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
+                            .utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                let hello = GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["progressCard.get"],
+                    capabilities: supportsOwner == true ? ["progress-card-agent-scope-v1"] : [])
+                guard supportsOwner == nil else { return .data(hello) }
+                var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
+                var payload = try #require(frame["payload"] as? [String: Any])
+                var features = try #require(payload["features"] as? [String: Any])
+                features.removeValue(forKey: "capabilities")
+                payload["features"] = features
+                frame["payload"] = payload
+                return try .data(JSONSerialization.data(withJSONObject: frame))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: socketSession))
+        do {
+            _ = try await gateway.request(method: "health", params: nil)
+            let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "main")
+            let ordinary = try await transport.fetchProgressCard(
+                sessionKey: "agent:research:global",
+                agentID: "research")
+            #expect(ordinary?.markdown == "research")
+            if supportsOwner == true {
+                let global = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                #expect(global?.markdown == "research")
+            } else {
+                do {
+                    _ = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                    Issue.record("Unadvertised owner-scoped progress must not dispatch")
+                } catch let error as NSError {
+                    #expect(error.localizedDescription == OpenClawChatTransportUpgradeMessage.progressCardAgentScope)
+                }
+            }
+            let params = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: String])
+            }
+            #expect(params == (supportsOwner == true ? [
+                ["sessionKey": "agent:research:global"],
+                ["sessionKey": "global", "agentId": "research"],
+            ] : [["sessionKey": "agent:research:global"]]))
+            await gateway.shutdown()
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
+    @Test func `mutation lease resolves the current global agent for each request`() async throws {
+        let recorder = RequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let id = try #require(GatewayWebSocketTestSupport.requestID(from: message))
+                if GatewayWebSocketTestSupport.requestMethod(from: message)?.hasPrefix("sessions.") == true {
+                    let data: Data = switch message {
+                    case let .data(value): value
+                    case let .string(value): Data(value.utf8)
+                    @unknown default: throw URLError(.cannotParseResponse)
+                    }
+                    await recorder.append(data)
+                }
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["sessions.patch", "sessions.delete"],
+                    capabilities: ["session-unread-ack-contract"]))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        do {
+            _ = try await gateway.request(method: "health", params: nil)
+            let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "agent-a")
+            let lease = try #require(await transport.acquireSessionMutationRouteLease())
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                pinned: true,
+                archived: nil,
+                unread: nil)
+            let observerTransport = transport
+            observerTransport.updateDefaultGlobalAgentID(" Agent-B ")
+            try await lease.patchSession(
+                key: "global",
+                label: nil,
+                category: nil,
+                color: .some(nil),
+                pinned: nil,
+                archived: nil,
+                unread: nil)
+            try await lease.deleteSession(key: "agent:agent-b:work")
+
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            let methods = frames.map { $0["method"] as? String }
+            try #require(methods == ["sessions.patch", "sessions.patch", "sessions.delete"])
+            let params = try frames.map { try #require($0["params"] as? [String: Any]) }
+            #expect(params[0]["key"] as? String == "global")
+            #expect(params[0]["agentId"] as? String == "agent-a")
+            #expect(params[1]["key"] as? String == "global")
+            #expect(params[1]["agentId"] as? String == "agent-b")
+            #expect(params[1]["color"] is NSNull)
+            #expect(params[2]["key"] as? String == "agent:agent-b:work")
+            #expect(params[2]["agentId"] == nil)
+            #expect(params[2]["deleteTranscript"] as? Bool == true)
+            await gateway.shutdown()
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
     @Test func `mac chat advertises typed agent rosters and inline widgets`() {
         #expect(GatewayConnection.operatorClientCaps == [
             OpenClawGatewayClientCapability.agentKind,

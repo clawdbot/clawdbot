@@ -224,8 +224,7 @@ async function preparePendingCodexThreadResume(
     { signal: params.signal, assertCurrent },
   );
   assertCurrent();
-  const statusType = thread.status?.type;
-  if (thread.id !== binding.threadId || (statusType !== "idle" && statusType !== "notLoaded")) {
+  if (thread.id !== binding.threadId || !isCodexThreadNonRunning(thread.status)) {
     throw fail("the native thread is not idle; wait for its current run to finish");
   }
   assertCodexThreadAcceptsDirectInput(thread);
@@ -298,12 +297,20 @@ export async function prepareCodexThreadResume(
   return { ...observeCodexThreadConfiguration(params, thread, assertCurrent), assertCurrent };
 }
 
+function isCodexThreadNonRunning(
+  status: CodexThread["status"],
+): status is Exclude<NonNullable<CodexThread["status"]>, { type: "active" }> {
+  return status?.type === "idle" || status?.type === "notLoaded" || status?.type === "systemError";
+}
+
 function observeCodexThreadConfiguration(
   params: CodexStartOrResumeThreadParams,
   thread: CodexThread,
   assertCurrent: () => void,
 ) {
-  if (thread.status?.type !== "idle" && thread.status?.type !== "notLoaded") {
+  // Codex keeps systemError after a failed turn completes; it is loaded but not running.
+  // It still requires the same observed teardown before resume can change configuration.
+  if (!isCodexThreadNonRunning(thread.status)) {
     throw new CodexAdoptedThreadActiveError();
   }
   let unloaded = thread.status.type === "notLoaded";

@@ -70,12 +70,16 @@ Where does the **Gateway** run?
   Local setup reuses a compatible CLI installation or uses the bundled installer
   to install `openclaw` and Node in a private managed runtime. It does not require
   a global npm, pnpm, or bun install.
+
+Attaching to an independently managed local Gateway skips CLI installation
+and proceeds to AI checks without taking over its CLI or service installation.
+See [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup).
 </Step>
 <Step title="Connect your AI">
-  If the connected Gateway already has a configured agent model, the app
-  verifies it with a real completion before opening the normal dashboard.
-  A configured model name alone does not skip verification. Fresh or incomplete
-  Gateways continue through provider setup.
+If the connected Gateway already has a configured agent model, the app
+verifies it with a real completion before opening the normal dashboard.
+A configured model name alone does not skip verification. Fresh or incomplete
+Gateways continue through provider setup.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
@@ -135,8 +139,10 @@ Gateway's active text-inference provider plugins rather than a fixed app list,
 so another provider can opt in without adding provider-specific macOS code.
 
 The manual key/token picker uses the same provider registry. In every route,
-the provider supplies its starter model and configuration; OpenClaw verifies
-the credential with the same live test before storing its auth profile.
+the provider supplies its starter model and configuration. If the starter is an
+alias, OpenClaw tests and saves the provider's canonical model name while
+preserving existing model settings that the starter does not replace. The credential is stored only after
+that live test succeeds.
 Continuing remains locked until one backend has passed, so the first agent
 chat cannot start without working inference.
 </Step>

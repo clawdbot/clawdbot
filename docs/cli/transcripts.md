@@ -130,7 +130,8 @@ The `transcripts` tool returns both the unchanged raw `sessionId` and a canonica
 include selectors for active captures and entries awaiting finalization. Its
 model-facing text shows up to three complete selectors, prioritizing captures
 awaiting finalization and reporting any omitted count. Structured status details
-retain the full authorized list. Prefer `selector` for subsequent show, stop,
+retain the full authorized list. Bounded active-capture summaries include source
+locators and titles so the agent can identify the intended meeting. Prefer `selector` for subsequent show, stop,
 or summarize calls:
 
 ```json validate=false
@@ -243,6 +244,12 @@ If terminal persistence fails, `status` reports the ended capture under
 `pendingFinalization`, separately from active captures. Use the tool's `stop`
 action for that session to retry persistence without stopping the provider again.
 
+If the provider cannot finish cleanup and has not reported that capture ended,
+`status` keeps the capture active with `cleanupPending: true`. Existing utterances
+stay intact, and final notes wait for cleanup. Retry `stop` with the same selector
+after the provider recovers. Replacing or disabling the plugin does not transfer
+cleanup to another provider instance.
+
 A session can appear in `list` without a summary while capture is still active,
 if a provider failed during stop, or if metadata was stored before any utterances
 arrived.
@@ -339,9 +346,11 @@ that grace cancels the stop. Otherwise, OpenClaw stops capture and generates not
 Occupancy episodes use generated IDs; an entry's `sessionId` is ignored. To
 continue a meeting across a Gateway restart, OpenClaw reopens the most recent
 session for the same provider, account, guild, and channel when it stopped within
-the last 10 minutes. The session keeps its original ID and start time, and new
+the last 10 minutes. The session keeps its original ID, title, and start time, and new
 utterances append to it. A later return within that window also reuses the meeting;
 outside the window, capture gets a new ID.
+If the room is routed to a different agent, that agent starts a new capture;
+the original agent retains its stored meeting and summary permissions.
 
 The provider must report occupancy. `discord-voice` supports it; an unsupported
 provider logs a warning and skips the entry instead of capturing continuously.

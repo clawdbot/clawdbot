@@ -50,7 +50,7 @@ async function assertDoctorMaintenanceSchemasCompatible(env: NodeJS.ProcessEnv):
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
   const cfg = snapshot.sourceConfig ?? snapshot.config;
-  const schemas = preflightOpenClawDatabaseSchemas({
+  const schemas = await preflightOpenClawDatabaseSchemas({
     env,
     supportedVersions: {
       state: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -147,7 +147,7 @@ export async function beginDoctorMaintenance(params: {
       try {
         await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
       } finally {
-        recovery?.complete();
+        await recovery?.complete();
       }
     }
   };

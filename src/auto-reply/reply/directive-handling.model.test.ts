@@ -112,7 +112,7 @@ vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
   persistStickyModelSelectionBestEffort: (params: {
     agentId: string;
     model: string;
-    target?: "agent" | "defaults";
+    target: "agent" | "defaults";
   }) => stickyModelMock.persistBestEffort(params),
 }));
 
@@ -1992,7 +1992,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
-  it("preserves an authorized unscoped effective-default selection", async () => {
+  it("keeps an authorized selection session-only without a default target", async () => {
     const sessionEntry = createSessionEntry();
     const result = await runHandleCommand("/model openai/gpt-4o", {
       sessionEntry,
@@ -2001,13 +2001,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
-    expect(result?.text).toContain("Configured default update requested.");
+    expect(result?.text).toContain("for this session only; configured default unchanged.");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
-      agentId: "main",
-      model: "openai/gpt-4o",
-    });
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("preserves a compatible auth profile for a mixed model directive", async () => {

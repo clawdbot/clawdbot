@@ -4,5 +4,10 @@
   "version": "1.0.0",
   "dependencies": {
     "clawhub": "0.23.3"
+  },
+  "overrides": {
+    "clawhub@0.23.3": {
+      "undici": "7.29.1"
+    }
   }
 }

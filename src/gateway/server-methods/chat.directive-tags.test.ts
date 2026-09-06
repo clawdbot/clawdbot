@@ -65,6 +65,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
@@ -251,15 +252,16 @@ vi.mock("../session-utils.js", async () => {
           sessionFile: mockState.transcriptPath,
           ...mockState.sessionEntry,
         };
-    return {
-      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-      cfg: {
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
-        },
+    const cfg = {
+      ...mockState.config,
+      session: {
+        ...(mockState.config.session as Record<string, unknown> | undefined),
+        mainKey: mockState.mainSessionKey,
       },
+    };
+    return {
+      cfg,
+      agentId: resolveSessionStoreAgentId(cfg, rawKey, opts?.agentId),
       storePath: mockState.storePath,
       store: entry ? { [canonicalKey]: entry } : {},
       entry,

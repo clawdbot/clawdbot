@@ -411,11 +411,7 @@ export async function claimEmbeddedPendingUserInputAnswer(
     sessionKey,
     text,
     authority: resolveQuestionAuthority(canInject, authority),
-    persist: options.userTurnTranscriptRecorder
-      ? async () => {
-          await options.userTurnTranscriptRecorder?.persistApproved();
-        }
-      : undefined,
+    sourceRecorder: options.userTurnTranscriptRecorder,
   });
   return claimed;
 }

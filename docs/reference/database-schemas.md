@@ -20,6 +20,26 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### ACP replay accounting
+
+The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge
+replay history. Their `estimated_bytes` columns count the UTF-8 bytes of each
+persisted text field, plus 32 bytes per row. Session totals include their events.
+This is a retained-content estimate, not a limit on SQLite file, page, or WAL size.
+
+Older releases counted characters inconsistently, undercounting Unicode and
+allowing unchanged metadata writes to drift. The existing app-version upgrade
+repair and explicit shared-state schema repair rebuild all derived totals
+atomically, preserving event JSON text, identifiers, timestamps, and sequence.
+Repair does not prune history. The next ordinary session write applies the
+existing caps and eviction order, so corrected Unicode history may trim sooner
+and use transcript fallback when loaded.
+
+A current-app-version reopen skips this repair. Replacing code without changing
+the app version does not repair an already-open or current-version database;
+explicit schema repair remains the repair owner for that case. Accounting repair
+cannot recover history already evicted by an older writer. See [ACP CLI](/cli/acp).
+
 ### Meeting transcript tables
 
 Meeting captures use three `STRICT` tables in the shared
@@ -330,6 +350,29 @@ admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
+Session reclamation keeps its deletion transaction on a worker connection.
+Archive publication and cascading deletion remain atomic. Before COMMIT, the
+worker publishes its authorization request in shared memory and waits for the
+parent's current owner check. Synchronous writers service that request at the shared
+SQLite transaction boundary between short lock-admission attempts, in the reclamation
+owner's captured async context. This includes session entries, delivery records, and
+first-use board and Goal schema transactions. Registration uses the open connection's
+native database location, so other connections and reopened handles share admission.
+Only admission is retried; transaction callbacks and mutations are never replayed.
+The original lock-admission deadline is retained. After granting approval,
+the parent synchronously joins transaction settlement before allowing owner retirement;
+that mandatory join cannot be abandoned at the append deadline.
+
+Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
+incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
+the number of WAL frames copied. Before pruning retained archives, disk-budget
+enforcement drains the initially observed free pages in units of at most 512,
+yields between units, and reacquires the database owner after each yield. It
+preserves physical checkpointing before measuring pressure, so unreclaimed pages
+do not cause unnecessary archive deletion. Full logical deletion with resumable
+physical cleanup remains a separate design; existing deletion visibility and rollback
+semantics are unchanged.
+
 ### Preserve the data and concurrency contracts
 
 An adapter must make these contracts explicit and verify them against a real
@@ -474,6 +517,34 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 | 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
+| 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
+
+### State schema 16
+
+Schema 16 removes `workspace_dir` and `claim_released_time` from
+`skill_workshop_proposals`. It also removes `workspace_dir` and
+`idx_skill_workshop_collection_reviews_workspace_time` from collection review
+history and adds `owner_agent_id` plus its owner/time index. Proposal rows remain intact. A proposal whose claim a
+collection review had released becomes `stale` with a status reason, so the
+skill path it once created stays user-owned and Doctor never relocates it.
+
+Skill Workshop ownership is now the physical
+`<state-dir>/agents/<agentId>/agent/workshop-skills` directory. Startup and `openclaw doctor --fix`
+drop the retired columns and index in the shared schema transaction. Both then
+run the same migration to relocate applied legacy Workshop creates to the
+inferred owner agent and retarget eligible pending creates. Conflicts and ambiguous ownership become
+stale proposals and leave the legacy directories unchanged. Review history rows
+map to a unique owner agent when possible; otherwise the schema migration discards them as
+cache-class state.
+
+Skill-only workspace relocation uses the existing `migration_runs` and
+`migration_sources` tables to save pre-move directory identity, file hashes,
+and the workspace attestation timestamp. After relocation, only matching
+attestation-only state is retired; setup state, path aliases, and newer
+attestations remain intact. Interrupted migrations reuse the saved pre-move
+facts rather than inferring them from an empty directory. Workspace reset
+removes pending workspace-scoped receipts. No additional schema version or
+table is required.
 
 ### State schema 15
 
@@ -511,13 +582,21 @@ The Gateway startup preflight reads schema headers only. `openclaw database pref
 
 Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
 
+If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
+
 The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
+
+Concurrent runs normally share the cached writer for an agent database on the main thread. Workers and diagnostics can open additional connections to the same file; the connection count is operation-dependent. Canonical agent connections set SQLite's busy timeout before use. A timeout cannot resolve a worker holding a write transaction while waiting for a blocked main thread: synchronous transcript appends do not join the asynchronous session write queue. Transaction callbacks must finish synchronously, and a competing writer must not depend on the main event loop to release its lock.
+
+Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
 
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 
 Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
+
+Maintenance schema admission runs its initial full-file integrity check in a read-only Worker when that check is outside a write transaction. The connection and maintenance lease remain held until the Worker exits. Schema changes, index repairs, and compaction retain their synchronous phases.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 

@@ -14,12 +14,12 @@ import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import {
   profileTypeToAuthMode,
-  resolveDirectProviderCredentialMode,
   resolveProviderConfig,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
+import { resolveDirectProviderCredentialMode } from "../agents/model-auth-runtime-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /**

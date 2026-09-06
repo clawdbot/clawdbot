@@ -1,5 +1,3 @@
-// Proxy fetch helpers build undici proxy-aware fetch functions with managed TLS
-// options and runtime FormData normalization.
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
@@ -23,22 +21,15 @@ type ProxyFetchWithMetadata = typeof fetch & {
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const runtimeDeps = loadUndiciRuntimeDeps();
   let agent: ReturnType<typeof createHttp1ProxyAgent> | null = null;
-  const resolveAgent = (): ReturnType<typeof createHttp1ProxyAgent> => {
-    if (!agent) {
-      agent = createHttp1ProxyAgent({ uri: proxyUrl });
-    }
-    return agent;
-  };
-  const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-    fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
+  const proxyFetch: ProxyFetchWithMetadata = (input, init) => {
+    agent ??= createHttp1ProxyAgent({ uri: proxyUrl });
+    return fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
       ...init,
-      dispatcher: resolveAgent(),
-    })) as ProxyFetchWithMetadata;
+      dispatcher: agent,
+    });
+  };
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
     value: proxyUrl,
-    enumerable: false,
-    configurable: false,
-    writable: false,
   });
   return proxyFetch;
 }

@@ -12,11 +12,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
@@ -38,6 +34,7 @@ import {
   createUpdateProgressWatcher,
   type UpdateProgress,
 } from "../../app/update-confirmation.ts";
+import { canReportUpdateFailure } from "../../app/update-failure-report-controller.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -54,6 +51,10 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import {
+  GatewayPageController,
+  type GatewayPageChange,
+} from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -99,6 +100,12 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type SessionObserverModelsResult = {
+  gateway: ApplicationContext["gateway"];
+  client: GatewayBrowserClient;
+  agentId: string;
+  models: ModelCatalogEntry[];
+};
 // Keys settable through this page's setSetting helper. Whether a key syncs
 // across devices is owned by app/server-prefs.ts, not by this type.
 type ConfigPageSetting =
@@ -324,16 +331,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   });
   private configViewState: ConfigViewState = createConfigViewState();
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
-  private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
-  private systemInfoClient: GatewayBrowserClient | null = null;
   private updateStatusClient: GatewayBrowserClient | null = null;
-  private sessionObserverModelsClient: GatewayBrowserClient | null = null;
-  private sessionObserverModelsAgentId: string | null = null;
-  private sessionObserverModelsRequest: {
-    client: GatewayBrowserClient;
-    agentId: string;
-    promise: Promise<void>;
-  } | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
     SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
@@ -353,16 +351,17 @@ export class ConfigPage extends OpenClawLightDomElement {
   private readonly systemInfoTask = new Task(this, {
     autoRun: false,
     // Null is an explicit visibility/capability invalidation for the current source.
-    args: () => [this.systemInfoGatewaySource, this.systemInfoRequestClient()] as const,
+    args: () => [this.gateway.gateway, this.systemInfoRequestClient()] as const,
     task: ([gateway, client], { signal }) =>
       gateway && client
         ? client.request<SystemInfoResult>("system.info", {}, { signal })
         : initialState,
     onComplete: (systemInfo) => {
       this.systemInfo = systemInfo;
-      const client = this.systemInfoRequestClient();
-      if (client) {
-        void this.ensureSessionObserverModels(client, this.context.agentSelection.state.selectedId);
+      // Status polling must not restart a slow catalog read. Changed owners
+      // still replace pending work through the model task's reactive args.
+      if (this.sessionObserverModelsTask.status !== TaskStatus.PENDING) {
+        void this.sessionObserverModelsTask.run();
       }
     },
     onError: (error) => {
@@ -372,6 +371,40 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.systemInfoPolling.stop();
       }
     },
+  });
+  private readonly sessionObserverModelsTask: Task<
+    readonly [ApplicationContext["gateway"] | null, GatewayBrowserClient | null, string | null],
+    SessionObserverModelsResult
+  > = new Task(this, {
+    args: () =>
+      [
+        this.gateway.gateway,
+        this.systemInfo ? this.systemInfoRequestClient() : null,
+        this.context?.agentSelection.state.selectedId ?? null,
+      ] as const,
+    task: async ([gateway, client, agentId], { signal }) => {
+      if (!gateway || !client || !agentId) {
+        this.resetSessionObserverModels(!agentId);
+        return initialState;
+      }
+      const previous = this.sessionObserverModelsTask.value;
+      if (
+        previous?.gateway !== gateway ||
+        previous.client !== client ||
+        previous.agentId !== agentId
+      ) {
+        this.resetSessionObserverModels();
+      }
+      // Keep same-owner options visible during refresh; the shared store owns
+      // cache freshness/coalescing and Task fences publication after retirement.
+      const { models } = await loadModelCatalog(client, { agentId, preparedOnly: true, signal });
+      return { gateway, client, agentId, models };
+    },
+    onComplete: ({ models }) => {
+      this.sessionObserverModels = models;
+      this.sessionObserverModelsUnavailable = false;
+    },
+    onError: () => this.resetSessionObserverModels(true),
   });
   private readonly hiddenSessionCatalogLabelsTask = new Task(this, {
     args: () => {
@@ -410,6 +443,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     },
   });
   private pendingRouteTargetId: string | null = null;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => this.invalidateSystemInfoRequest(),
+    onSnapshot: (change) => this.handleGatewaySnapshot(change),
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.runtimeConfig,
@@ -425,14 +463,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       (config, notify) => config.subscribe(notify),
     )
     .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-      (gateway) => this.synchronizeSystemInfoGateway(gateway),
-    )
-    .watch(
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
-      (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
       () => this.context?.nativeDeviceSettings ?? undefined,
@@ -499,11 +531,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.mediaDeviceWatch = null;
     this.systemInfoPolling.stop();
     this.updateCountdownPolling.stop();
-    this.invalidateSystemInfoRequest();
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
-    this.systemInfoGatewaySource = null;
-    this.systemInfoClient = null;
     this.updateStatusClient = null;
     this.subscriptions.clear();
     super.disconnectedCallback();
@@ -690,52 +719,42 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
   }
 
-  private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
-    this.customThemeImportOwner.synchronizeScope(
-      gateway.connection.gatewayUrl,
-      this.context.theme.serverSelection,
-    );
-    if (gateway !== this.systemInfoGatewaySource) {
-      this.systemInfoPolling.stop();
-      this.invalidateSystemInfoRequest();
-      this.systemInfoGatewaySource = gateway;
-      this.resetConfigViewState();
-      this.systemInfoClient = null;
-      this.updateStatusClient = null;
-      this.systemInfo = null;
-      this.systemInfoUnavailable = false;
-      this.resetSessionObserverModels();
-    }
-    this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
-    this.syncUpdateStatusRefresh();
-  }
-
   private resetConfigViewState() {
     // Revealed secrets and raw caches never cross a capability/source epoch.
     this.configViewState = createConfigViewState();
   }
 
-  private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const clientChanged = snapshot.client !== this.systemInfoClient;
-    const hasSystemInfo = supportsSystemInfo(snapshot.hello);
-    this.systemInfoClient = snapshot.client;
-    if (clientChanged) {
-      this.invalidateSystemInfoRequest();
+  private handleGatewaySnapshot({
+    snapshot,
+    initial,
+    sourceChanged,
+    clientChanged,
+  }: GatewayPageChange) {
+    this.customThemeImportOwner.synchronizeScope(
+      this.context.gateway.connection.gatewayUrl,
+      this.context.theme.serverSelection,
+    );
+    if (initial || sourceChanged) {
+      this.systemInfoPolling.stop();
+      this.resetConfigViewState();
+      this.updateStatusClient = null;
+    }
+    if (initial || sourceChanged || clientChanged) {
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
       this.resetSessionObserverModels();
     } else if (snapshot.phase !== "connected") {
-      this.invalidateSystemInfoRequest();
       this.systemInfo = null;
     }
     if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !hasSystemInfo;
-      if (!hasSystemInfo) {
+      this.systemInfoUnavailable = !supportsSystemInfo(snapshot.hello);
+      if (this.systemInfoUnavailable) {
         this.invalidateSystemInfoRequest();
         this.systemInfo = null;
       }
     }
     this.syncSystemInfoPolling(clientChanged);
+    this.syncUpdateStatusRefresh();
   }
 
   private syncSystemInfoPolling(forceRefresh = false) {
@@ -758,10 +777,12 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private invalidateSystemInfoRequest() {
     void this.systemInfoTask.run([null, null]);
+    void this.sessionObserverModelsTask.run([null, null, null]);
+    this.resetSessionObserverModels();
   }
 
   private systemInfoRequestClient(): GatewayBrowserClient | null {
-    const gatewaySource = this.systemInfoGatewaySource;
+    const gatewaySource = this.gateway.gateway;
     const gateway = gatewaySource?.snapshot;
     if (
       !gatewaySource ||
@@ -778,73 +799,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     return gateway.client;
   }
 
-  private synchronizeSessionObserverAgent(agentId: string | null) {
-    if (
-      this.sessionObserverModelsAgentId === agentId &&
-      (agentId !== null || this.sessionObserverModelsUnavailable)
-    ) {
-      return;
-    }
-    this.resetSessionObserverModels(!agentId);
-    const client = this.systemInfoRequestClient();
-    if (this.systemInfo && client) {
-      void this.ensureSessionObserverModels(client, agentId);
-    }
-  }
-
-  private ensureSessionObserverModels(
-    client: GatewayBrowserClient,
-    agentId: string | null,
-  ): Promise<void> {
-    if (!agentId) {
-      this.resetSessionObserverModels(true);
-      return Promise.resolve();
-    }
-    if (
-      this.sessionObserverModelsClient === client &&
-      this.sessionObserverModelsAgentId === agentId
-    ) {
-      return Promise.resolve();
-    }
-    const existing = this.sessionObserverModelsRequest;
-    if (existing?.client === client && existing.agentId === agentId) {
-      return existing.promise;
-    }
-    const gatewaySource = this.systemInfoGatewaySource;
-    const isCurrent = () =>
-      this.isConnected &&
-      this.systemInfoGatewaySource === gatewaySource &&
-      this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId &&
-      // Agent selection can cycle A -> B -> A while the first A load is still pending.
-      this.sessionObserverModelsRequest?.promise === promise;
-    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
-      .then(({ models }) => {
-        if (isCurrent()) {
-          this.sessionObserverModels = models;
-          this.sessionObserverModelsClient = client;
-          this.sessionObserverModelsAgentId = agentId;
-          this.sessionObserverModelsUnavailable = false;
-        }
-      })
-      .catch(() => {
-        if (isCurrent()) {
-          this.resetSessionObserverModels(true);
-        }
-      })
-      .finally(() => {
-        if (this.sessionObserverModelsRequest?.promise === promise) {
-          this.sessionObserverModelsRequest = null;
-        }
-      });
-    this.sessionObserverModelsRequest = { client, agentId, promise };
-    return promise;
-  }
-
   private resetSessionObserverModels(unavailable = false) {
     this.sessionObserverModels = [];
-    this.sessionObserverModelsClient = null;
-    this.sessionObserverModelsAgentId = null;
     this.sessionObserverModelsUnavailable = unavailable;
   }
 
@@ -1089,6 +1045,9 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
+        reportableUpdateFailureId: overlaySnapshot.reportableUpdateFailureId,
+        updateFailureReportBusy: overlaySnapshot.updateFailureReportBusy,
+        updateFailureReportNotice: overlaySnapshot.updateFailureReportNotice,
         run: overlaySnapshot.updateRun,
         connected: gatewaySnapshot.phase === "connected",
         configBusy: this.isCuratedConfigMutationDisabled(),
@@ -1096,6 +1055,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
         canCheckStatus: canCallGatewayMethod(gatewaySnapshot, "update.status", "operator.admin"),
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
+        canReport: canReportUpdateFailure(gatewaySnapshot),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
         onUpdateChecksChange: (enabled) =>
@@ -1116,6 +1076,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           }),
         onHoldUpdate: () => this.context.overlays.holdUpdate(),
         onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
+        onReportFailure: (attemptId) => this.context.overlays.reportUpdateFailure(attemptId),
       });
     }
     const includeSections = this.includeSections();

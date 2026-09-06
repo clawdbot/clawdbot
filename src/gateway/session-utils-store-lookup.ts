@@ -106,7 +106,6 @@ function buildGatewaySessionStoreScanTargets(params: {
 type GatewaySessionStoreDiscovery = {
   existing: SessionStoreTarget[];
   fallback: SessionStoreTarget;
-  prepared?: true;
 };
 
 function resolveGatewaySessionStoreCandidates(
@@ -136,41 +135,6 @@ function resolveGatewaySessionStoreCandidates(
  * Keep discovery agent-scoped here or each row repeats registry probes and agent-root scans.
  */
 export type GatewaySessionStoreDiscoveryCache = Map<string, GatewaySessionStoreDiscovery>;
-
-export function createGatewaySessionStoreDiscoveryCache(params: {
-  cfg: OpenClawConfig;
-  targets: readonly SessionStoreTarget[];
-  agentIds: Iterable<string>;
-}): GatewaySessionStoreDiscoveryCache {
-  const cache: GatewaySessionStoreDiscoveryCache = new Map();
-  const prepare = (rawAgentId: string, target?: SessionStoreTarget) => {
-    const agentId = normalizeAgentId(rawAgentId);
-    const current = cache.get(agentId);
-    if (current) {
-      if (target) {
-        current.existing.push(target);
-      }
-      return;
-    }
-    const fallback = {
-      agentId,
-      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
-    };
-    const existing = target
-      ? [target]
-      : params.targets.length > 0
-        ? [...params.targets]
-        : [fallback];
-    cache.set(agentId, { existing, fallback, prepared: true });
-  };
-  for (const target of params.targets) {
-    prepare(target.agentId, target);
-  }
-  for (const agentId of params.agentIds) {
-    prepare(agentId);
-  }
-  return cache;
-}
 
 type GatewaySessionStoreLookupParams = {
   cfg: OpenClawConfig;
@@ -210,11 +174,9 @@ function prepareGatewaySessionStoreLookup(
   );
   const { existing, fallback } = discovery;
   const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
-  const candidates = discovery.prepared
-    ? existing
-    : configured
-      ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
-      : existing;
+  const candidates = configured
+    ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
+    : existing;
   if (candidates.length === 0) {
     // Retired/manual agents require an existing discovered store; lookup never creates one.
     return {
@@ -458,9 +420,8 @@ export function resolveGatewaySessionStoreTargetWithStore(
 export function resolveGatewaySessionStoreTargetsReadOnly(params: {
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
-  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): GatewaySessionStoreTargetWithStore[] {
-  const targetDiscoveryCache = params.targetDiscoveryCache ?? new Map();
+  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
   const requests = params.targets.map((target) => {
     const lookup: GatewaySessionStoreLookupParams = {
       ...target,

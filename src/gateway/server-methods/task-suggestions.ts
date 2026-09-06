@@ -13,7 +13,6 @@ import {
   validateTaskSuggestionsDismissParams,
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -262,6 +261,11 @@ async function createSuggestedTaskSession(params: {
 }): Promise<TaskSuggestionAcceptanceResult> {
   let sessionResponse: Parameters<RespondFn> | undefined;
   const { agentId } = params;
+  // Starting a follow-up authorizes the task, not a change of workspace.
+  const task =
+    params.mode === "local"
+      ? `Start by addressing this task in the current folder. If an isolated Git worktree is needed, explain why and ask the user before creating or switching to it.\n\n${params.suggestion.prompt}`
+      : params.suggestion.prompt;
   const sessionKey = buildDashboardSessionKey(agentId);
   const fail = (key: string, error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskSession({
@@ -279,7 +283,7 @@ async function createSuggestedTaskSession(params: {
         agentId,
         parentSessionKey: params.suggestion.sessionKey,
         label: params.suggestion.title,
-        ...(params.mode === "cloud" ? {} : { task: params.suggestion.prompt }),
+        ...(params.mode === "cloud" ? {} : { task }),
         ...(params.mode === "local" ? {} : { worktree: true }),
         cwd: params.suggestion.cwd,
       },
@@ -404,7 +408,7 @@ async function deliverSuggestedTaskToSourceSession(params: {
     return fail(
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "source session no longer exists; start it in a worktree instead",
+        "source session no longer exists; start it in a new session instead",
       ),
     );
   }
@@ -506,14 +510,6 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!insideGitCheckout(params.cwd)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be inside a git checkout"),
-      );
-      return;
-    }
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const sourceOwner = resolveRequestedSessionAgentId(
       context.getRuntimeConfig(),
@@ -555,6 +551,8 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Shipped RPC clients omit mode for an explicit worktree choice. Bundled
+    // clients always send local; retain this wire contract for those callers.
     const mode = params.mode ?? "worktree";
     const config = options.context.getRuntimeConfig();
     if (hasOperatorBoundary(options.client, config)) {

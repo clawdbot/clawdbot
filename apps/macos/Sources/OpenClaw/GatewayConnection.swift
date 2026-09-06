@@ -148,12 +148,9 @@ actor GatewayConnection: Observable {
         case setHeartbeats = "set-heartbeats"
         case systemEvent = "system-event"
         case health
-        case channelsStatus = "channels.status"
         case configGet = "config.get"
         case configSet = "config.set"
         case configPatch = "config.patch"
-        case configSchema = "config.schema"
-        case configSchemaLookup = "config.schema.lookup"
         case wizardStart = "wizard.start"
         case wizardNext = "wizard.next"
         case wizardCancel = "wizard.cancel"
@@ -161,9 +158,6 @@ actor GatewayConnection: Observable {
         case talkConfig = "talk.config"
         case talkMode = "talk.mode"
         case talkSpeak = "talk.speak"
-        case webLoginStart = "web.login.start"
-        case webLoginWait = "web.login.wait"
-        case channelsLogout = "channels.logout"
         case modelsList = "models.list"
         case agentsList = "agents.list"
         case agentIdentityGet = "agent.identity.get"
@@ -171,10 +165,6 @@ actor GatewayConnection: Observable {
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
         case skillsStatus = "skills.status"
-        case skillsSearch = "skills.search"
-        case skillsDetail = "skills.detail"
-        case skillsInstall = "skills.install"
-        case skillsUpdate = "skills.update"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
         case nodePairApprove = "node.pair.approve"
@@ -186,12 +176,6 @@ actor GatewayConnection: Observable {
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
-        case cronRuns = "cron.runs"
-        case cronRun = "cron.run"
-        case cronRemove = "cron.remove"
-        case cronUpdate = "cron.update"
-        case cronAdd = "cron.add"
-        case cronStatus = "cron.status"
     }
 
     private let endpointProvider: EndpointProvider
@@ -546,11 +530,18 @@ actor GatewayConnection: Observable {
             }
             throw CancellationError()
         }
-        let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        let result: Result<Data, Error>
+        do {
+            result = try await .success(client.request(method: method, params: params, timeoutMs: timeoutMs))
+        } catch {
+            result = .failure(error)
+        }
+        // A late error has the same route authority as a late payload.
+        // Revalidate before either outcome reaches a replacement owner.
         guard await self.isCurrentRoute(route), self.configuredConnection?.client === client else {
             throw CancellationError()
         }
-        return data
+        return try result.get()
     }
 
     /// Server-bound requests never reconfigure, reconnect, or cross onto a
@@ -566,15 +557,22 @@ actor GatewayConnection: Observable {
         }
         // Untagged channel cancellation can follow a send. Only the guard above
         // proves this wrapper rejected the request before dispatch.
-        let data = try await lease.client.request(
-            method: method,
-            params: params,
-            timeoutMs: timeoutMs,
-            ifCurrentConnectionGeneration: lease.socketGeneration)
+        let result: Result<Data, Error>
+        do {
+            result = try await .success(lease.client.request(
+                method: method,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentConnectionGeneration: lease.socketGeneration))
+        } catch {
+            result = .failure(error)
+        }
+        // A late error has the same route authority as a late payload.
+        // Revalidate before either outcome reaches a replacement owner.
         guard await self.isCurrentServerLease(lease) else {
             throw CancellationError()
         }
-        return data
+        return try result.get()
     }
 }
 
@@ -666,14 +664,6 @@ extension GatewayConnection {
             timeoutMs: request.timeoutMs,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
-    }
-
-    func requestRaw(
-        method: String,
-        params: [String: AnyCodable]? = nil,
-        timeoutMs: Double? = nil) async throws -> Data
-    {
-        try await self.request(method: method, params: params, timeoutMs: timeoutMs)
     }
 
     func requestDecoded<T: Decodable>(
@@ -1366,15 +1356,6 @@ extension GatewayConnection {
         return self.cachedGatewayVersion()
     }
 
-    func snapshotPaths() -> (configPath: String?, stateDir: String?) {
-        guard let snapshot = lastSnapshot else { return (nil, nil) }
-        let configPath = snapshot.snapshot.configpath?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let stateDir = snapshot.snapshot.statedir?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (
-            configPath?.isEmpty == false ? configPath : nil,
-            stateDir?.isEmpty == false ? stateDir : nil)
-    }
-
     func subscribe(bufferingNewest: Int = 100) -> AsyncStream<PushDelivery> {
         let id = UUID()
         let snapshot = self.lastSnapshot
@@ -1524,7 +1505,7 @@ extension GatewayConnection {
 
     func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
         do {
-            let data = try await requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
+            let data = try await request(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)
         } catch {
             return "main"

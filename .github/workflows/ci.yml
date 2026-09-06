@@ -613,6 +613,14 @@ jobs:
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
+              # This owner creates the harness, not candidate source. Keep strict source-status
+              # checks useful without hiding tracked edits or similarly named nested paths.
+              exclude = os.path.join(workspace, git_output(workspace, "rev-parse", "--git-path", "info/exclude").strip())
+              os.makedirs(os.path.dirname(exclude), exist_ok=True)
+              with open(exclude, "a+b") as output:
+                  output.seek(0)
+                  if output.read().splitlines()[-1:] != [b"/.ci-harness/"]:
+                      output.write(b"\n/.ci-harness/\n")
               os.makedirs(harness, exist_ok=True)
               if sha == os.environ["WORKFLOW_SHA"]:
                   # Export the workflow revision from the freshly populated index, replacing
@@ -2683,6 +2691,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # This fixture uses synthetic documents and a mocked Gateway; exclude other UI artifacts.
+      - name: Upload synthetic widget prompt failure evidence
+        if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: widget-sandbox-ci-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.png
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.webm
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Test browser extension bootstrap end-to-end
         if: matrix.task == 'browser-extension'
         run: pnpm test:e2e:browser-extension
@@ -2697,8 +2718,8 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # First-attempt same-repo runs use Blacksmith unless the backend breaker is
     # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    # This lane owns the same serial Chromium workload as checks-ui-e2e, so it
-    # follows that job's hybrid routing: Blacksmith on attempt 1, hosted on rerun.
+    # Keep the existing hybrid route for the prepared Chromium workload:
+    # Blacksmith on attempt 1, hosted on rerun.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
@@ -2721,26 +2742,42 @@ jobs:
 
       - name: Test Control UI suites with a real Gateway
         env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
           OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
-          ui/src/e2e/mcp-app-conformance.e2e.test.ts
-          ui/src/e2e/control-ui-auth-transports.e2e.test.ts
-          ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts
-          ui/src/e2e/logs-lifecycle.e2e.test.ts
-          ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
-          ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts
-          ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts
-          ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts
-          ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts
-          ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts
+        run: |
+          set -euo pipefail
+          config=test/vitest/vitest.ui-e2e-prebuilt.config.ts
+          # Old frozen targets retain their own serial config and complete test list.
+          # A present config's readiness failure must fail this invocation.
+          if [[ ! -f "$config" ]]; then
+            if [[ "$FROZEN_TARGET" != "true" ]]; then
+              echo "::error::Current target is missing $config" >&2
+              exit 1
+            fi
+            config=test/vitest/vitest.ui-e2e.config.ts
+          fi
+          node scripts/run-vitest.mjs run \
+            --config "$config" \
+            --configLoader runner \
+            ui/src/e2e/mcp-app-conformance.e2e.test.ts \
+            ui/src/e2e/control-ui-auth-transports.e2e.test.ts \
+            ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts \
+            ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
+            ui/src/e2e/logs-lifecycle.e2e.test.ts \
+            ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
+            ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
+            ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
+            ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
@@ -4822,7 +4859,8 @@ jobs:
 
       - &install_watch_rust_toolchain
         name: Install Watch Rust toolchain
-        if: env.HISTORICAL_TARGET != 'true'
+        # Frozen release sources can include Watch RTC even when they use compatibility CI.
+        if: env.HISTORICAL_TARGET != 'true' || hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
         run: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
@@ -4831,7 +4869,7 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
       - name: Test Watch RTC engine
-        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'tests' && (env.HISTORICAL_TARGET != 'true' || hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != '')
         working-directory: apps/shared/OpenClawWatchRTC
         run: |
           set -euo pipefail

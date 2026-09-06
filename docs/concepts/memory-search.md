@@ -125,7 +125,8 @@ tools or Active Memory escalation, but are never injected automatically.
 and search with keywords only. Leaving `provider` unset or set to `"auto"`
 falls back to keyword-only ranking when embedding setup or a request fails, as
 does `provider: "local"` (the GGUF/llama.cpp provider). Creation-time fallback
-still indexes text for keyword search, and `memory_search` includes the
+still indexes text for keyword search, including manual and background indexing
+before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
@@ -148,6 +149,11 @@ With the default 30-day half-life, a note from last month scores at 50% of its
 original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
 remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
 at any depth, including session-memory notes and nested dreaming reports.
+
+Session transcript hits use the source activity timestamp captured during
+indexing. Retained transcript archives use their indexed file modification
+time. Individual message timestamps remain provenance metadata and do not
+determine the source's recency weight.
 
 ### MMR (diversity)
 

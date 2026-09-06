@@ -2,6 +2,8 @@ import type {
   SkillWorkshopActionBusy,
   SkillWorkshopActionNotice,
   SkillWorkshopAppliedDiffMode,
+  SkillWorkshopInstalledSkill,
+  SkillWorkshopInstalledSelection,
   SkillWorkshopMode,
   SkillWorkshopProposal,
   SkillWorkshopProposalDecision,
@@ -17,6 +19,11 @@ export type SkillWorkshopProps = {
   error: string | null;
   inspectingKey: string | null;
   proposals: SkillWorkshopProposal[];
+  installedSkills: SkillWorkshopInstalledSkill[];
+  installedSelection: SkillWorkshopInstalledSelection;
+  onSelectInstalled: (name: string) => void;
+  onRetryInstalled: () => void;
+  onShowHistory: (skillKey: string) => void;
   selectedKey: string | null;
   appliedDiffMode: SkillWorkshopAppliedDiffMode;
   statusFilter: SkillWorkshopStatusFilter;

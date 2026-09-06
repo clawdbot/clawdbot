@@ -2174,11 +2174,10 @@ describe("activateSetupInference", () => {
 
   it.each([
     {
-      name: "auto-enables the lean surface for a verified local model",
+      name: "preserves the full tool surface for a verified local model",
       providerId: "lmstudio",
       initialConfig: {} satisfies OpenClawConfig,
-      expectedLean: true,
-      expectedAnnouncement: true,
+      expectedLean: undefined,
     },
     {
       name: "preserves an explicit localModelLean=false",
@@ -2187,14 +2186,12 @@ describe("activateSetupInference", () => {
         agents: { defaults: { experimental: { localModelLean: false } } },
       } satisfies OpenClawConfig,
       expectedLean: false,
-      expectedAnnouncement: false,
     },
     {
-      name: "stages and announces lean tools for a newly configured managed provider",
+      name: "does not persist experimental defaults for a managed provider",
       providerId: "llama-cpp",
       initialConfig: {} satisfies OpenClawConfig,
-      expectedLean: true,
-      expectedAnnouncement: true,
+      expectedLean: undefined,
     },
     ...[false, true].map((localModelLean) => ({
       name: `preserves explicit lean=${localModelLean} for a managed provider`,
@@ -2203,9 +2200,8 @@ describe("activateSetupInference", () => {
         agents: { defaults: { experimental: { localModelLean } } },
       } satisfies OpenClawConfig,
       expectedLean: localModelLean,
-      expectedAnnouncement: false,
     })),
-  ])("$name", async ({ providerId, initialConfig, expectedLean, expectedAnnouncement }) => {
+  ])("$name", async ({ providerId, initialConfig, expectedLean }) => {
     const modelRef = `${providerId}/qwen-local`;
     const managed = providerId === "llama-cpp";
     const detect = vi.fn(async () => ({ modelRef, detail: "qwen-local at localhost" }));
@@ -2296,10 +2292,7 @@ describe("activateSetupInference", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
-    expect(result.lines).toEqual([
-      `Inference verified: ${modelRef}`,
-      ...(expectedAnnouncement ? ["I enabled the lean tool surface for this local runtime."] : []),
-    ]);
+    expect(result.lines).toEqual([`Inference verified: ${modelRef}`]);
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: providerId,
@@ -2310,9 +2303,17 @@ describe("activateSetupInference", () => {
     expect(detect).not.toHaveBeenCalled();
     expect(prepare).toHaveBeenCalledOnce();
     expect(updateAuthStore).not.toHaveBeenCalled();
+    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBe(
+      expectedLean,
+    );
+    expect(configHarness.current().wizard ?? {}).not.toHaveProperty("localModelLeanAutoModel");
     expect(configHarness.current()).toMatchObject({
-      ...(expectedAnnouncement ? { wizard: { localModelLeanAutoModel: modelRef } } : {}),
-      agents: { defaults: { model: modelRef, experimental: { localModelLean: expectedLean } } },
+      agents: {
+        defaults: {
+          model: modelRef,
+          ...(expectedLean !== undefined ? { experimental: { localModelLean: expectedLean } } : {}),
+        },
+      },
       models: {
         providers: {
           [providerId]: {
@@ -2488,7 +2489,6 @@ describe("activateSetupInference", () => {
 
   it("accepts OpenAI's gpt-5.6 alias reporting Sol while preserving authored rows", async () => {
     const sourceConfig = {
-      wizard: { localModelLeanAutoModel: "lmstudio/qwen-local" },
       agents: {
         defaults: {
           model: "lmstudio/qwen-local",
@@ -2546,8 +2546,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.current().models?.providers?.openai?.models).toEqual(
       sourceConfig.models.providers.openai.models,
     );
-    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-    expect(configHarness.current().wizard?.localModelLeanAutoModel).toBeUndefined();
+    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBe(true);
   });
 
   it("rejects an existing route that changes after its live probe", async () => {
@@ -3213,6 +3212,9 @@ describe("activateSetupInference", () => {
       id: "local-test",
       label: "Local Test Provider",
       pluginId: "local-test",
+      normalizeModelId: () => {
+        throw new Error("Detected model is already canonical");
+      },
       auth: [
         {
           id: "local",
@@ -3301,21 +3303,61 @@ describe("activateSetupInference", () => {
   });
 
   it.each([
-    { name: "API-key", authKind: "api_key" as const, credentialType: "api_key" as const },
-    { name: "token", authKind: "token" as const, credentialType: "token" as const },
+    {
+      name: "API-key",
+      authKind: "api_key" as const,
+      credentialType: "api_key" as const,
+      metadata: "fresh",
+    },
+    {
+      name: "token",
+      authKind: "token" as const,
+      credentialType: "token" as const,
+      metadata: "existing",
+    },
+    {
+      name: "API-key",
+      authKind: "api_key" as const,
+      credentialType: "api_key" as const,
+      metadata: "empty starter",
+    },
   ])(
-    "uses a provider-owned $name method and persists it after a passing test",
-    async ({ authKind, credentialType }) => {
+    "uses a provider-owned $name method with $metadata metadata after a passing test",
+    async ({ authKind, credentialType, metadata }) => {
       const stateDir = await suiteTempRootTracker.make("case");
       const agentDir = path.join(stateDir, "agent");
-      const initialConfig = {
-        agents: { list: [{ id: "main", default: true, agentDir }] },
+      const selectedModel = "canonical-fixture-model";
+      const selectedModelRef = `groq/${selectedModel}`;
+      const existingDefault =
+        metadata === "fresh"
+          ? {}
+          : { streaming: true, params: { temperature: 0.7, maxTokens: 256 } };
+      const existingAgent =
+        metadata === "fresh" ? {} : { codeMode: false, params: { temperature: 0.8, topP: 0.6 } };
+      const selectedMetadata =
+        metadata === "empty starter"
+          ? {}
+          : { alias: "selected-fixture", params: { temperature: 0.2 } };
+      const selectedAgentMetadata =
+        metadata === "empty starter" ? {} : { params: { temperature: 0.3 } };
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          defaults: { models: metadata === "fresh" ? {} : { [selectedModelRef]: existingDefault } },
+          list: [
+            {
+              id: "main",
+              default: true,
+              agentDir,
+              models: metadata === "fresh" ? {} : { [selectedModelRef]: existingAgent },
+            },
+          ],
+        },
         auth: {
           profiles: {
             "groq:legacy": { provider: "groq", mode: credentialType },
           },
         },
-      } satisfies OpenClawConfig;
+      };
       // Custom agent directories must be bound to their configured owner before
       // the shared per-agent database is created.
       resolveAgentDir(initialConfig, "main");
@@ -3339,13 +3381,23 @@ describe("activateSetupInference", () => {
                 : { type: "token" as const, provider: "groq", token: ctx.opts?.token ?? "" },
           },
         ],
-        defaultModel: "groq/llama-3.3-70b-versatile",
-        configPatch: { agents: { defaults: { models: { "groq/llama-3.3-70b-versatile": {} } } } },
+        defaultModel: "groq/starter-fixture-alias",
+        configPatch: {
+          agents: {
+            defaults: { models: { "groq/starter-fixture-alias": selectedMetadata } },
+            entries: { main: { models: { "groq/starter-fixture-alias": selectedAgentMetadata } } },
+          },
+        },
       }));
       const provider: ProviderPlugin = {
         id: "groq",
         label: "Groq",
         pluginId: "groq",
+        normalizeModelId({ modelId }) {
+          return modelId === "starter-fixture-alias" && this.id === "groq"
+            ? selectedModel
+            : modelId;
+        },
         auth: [
           {
             id: "api-key",
@@ -3366,7 +3418,7 @@ describe("activateSetupInference", () => {
       }));
       const runEmbeddedAgent = vi.fn(
         async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-          successfulRun("groq", "llama-3.3-70b-versatile", params),
+          successfulRun("groq", selectedModel, params),
       );
       const configHarness = createConfigTransformHarness(initialConfig);
 
@@ -3383,7 +3435,7 @@ describe("activateSetupInference", () => {
           },
         });
 
-        expect(result).toMatchObject({ ok: true, modelRef: "groq/llama-3.3-70b-versatile" });
+        expect(result).toMatchObject({ ok: true, modelRef: selectedModelRef });
         expect(resolvePluginProviders).toHaveBeenCalledWith(
           expect.objectContaining({
             config: expect.objectContaining({
@@ -3409,7 +3461,7 @@ describe("activateSetupInference", () => {
           expect.objectContaining({
             agentId: "main",
             provider: "groq",
-            model: "llama-3.3-70b-versatile",
+            model: selectedModel,
             authProfileId: activatedProfileId,
             agentDir: expect.stringContaining("setup-inference-test-"),
             authProfileStateMode: "read-only",
@@ -3420,7 +3472,7 @@ describe("activateSetupInference", () => {
           plugins: { entries: { groq: { enabled: true } } },
           agents: {
             defaults: {
-              model: `groq/llama-3.3-70b-versatile@${activatedProfileId}`,
+              model: `${selectedModelRef}@${activatedProfileId}`,
             },
           },
           auth: {
@@ -3429,6 +3481,31 @@ describe("activateSetupInference", () => {
             },
           },
         });
+        for (const config of [
+          runEmbeddedAgent.mock.calls[0]?.[0].config,
+          configHarness.current(),
+        ]) {
+          expect({
+            defaults: config?.agents?.defaults?.models,
+            agent: config?.agents?.entries?.main?.models,
+          }).toEqual({
+            defaults: {
+              [selectedModelRef]: {
+                ...existingDefault,
+                ...selectedMetadata,
+                params: { ...existingDefault.params, ...selectedMetadata.params },
+              },
+            },
+            agent: {
+              [selectedModelRef]: {
+                ...existingAgent,
+                ...selectedAgentMetadata,
+                params: { ...existingAgent.params, ...selectedAgentMetadata.params },
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+          });
+        }
         expect(readInMemoryAuthProfileStore(agentDir).profiles[activatedProfileId]).toMatchObject(
           credentialType === "api_key"
             ? { type: "api_key", provider: "groq", key: "test-groq-key" }

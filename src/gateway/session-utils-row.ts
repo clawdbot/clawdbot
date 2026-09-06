@@ -26,7 +26,6 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -41,10 +40,8 @@ import {
   projectSessionParticipants,
 } from "./session-identity-projection.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveStoredSessionKeyForAgentStore,
-} from "./session-store-key.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
@@ -96,9 +93,10 @@ export function buildGatewaySessionRow(params: {
   storeChildSessionsByKey?: Map<string, string[]>;
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;
-  agentId?: string;
+  agentId: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
+  includeSwarmChildren?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
@@ -142,11 +140,8 @@ export function buildGatewaySessionRow(params: {
   const channelAvatarUrl = avatar
     ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
     : undefined;
-  const parsedAgent = parseAgentSessionKey(key);
   const displayName = resolveGatewaySessionDisplayName(key, entry);
-  const sessionAgentId = normalizeAgentId(
-    parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(cfg, key),
-  );
+  const sessionAgentId = params.agentId;
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const rowContext = params.rowContext;
   const {
@@ -202,22 +197,18 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(compactionCheckpoints),
   );
-  const selectedModelProvider = selectedModel.provider;
-  const selectedModelId = selectedModel.model;
-  const rowModelIdentity = lightweight
-    ? { provider: selectedModelProvider, model: selectedModelId }
-    : resolveSessionDisplayModelIdentityRefCached({
-        cfg,
-        agentId: sessionAgentId,
-        provider: selectedModelProvider,
-        model: selectedModelId,
-        rowContext: params.rowContext,
-      });
-  const rowModelProvider = rowModelIdentity.provider;
-  const rowModel = rowModelIdentity.model;
+  const rowModelProvider = selectedModel.provider;
+  const rowModel = selectedModel.model;
+  const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
+    cfg,
+    provider: rowModelProvider,
+    model: rowModel,
+    rowContext: params.rowContext,
+  });
+  // Display aliases do not change the selected route's catalog or runtime policy.
   const runtimeModels = resolveSelectedAndActiveModel({
-    selectedProvider: selectedModelProvider,
-    selectedModel: selectedModelId,
+    selectedProvider: rowModelProvider,
+    selectedModel: rowModel,
     sessionEntry: entry,
   });
   const activeFallback = resolveActiveFallbackState({
@@ -325,8 +316,8 @@ export function buildGatewaySessionRow(params: {
   });
   const fastModeState = resolveFastModeState({
     cfg,
-    provider: selectedModelProvider,
-    model: selectedModelId,
+    provider: rowModelProvider,
+    model: rowModel,
     agentId: sessionAgentId,
     sessionEntry:
       entry?.fastMode !== undefined
@@ -338,8 +329,16 @@ export function buildGatewaySessionRow(params: {
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
+  const swarm = buildSessionSwarmSummary(
+    rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
+    key,
+    sessionAgentId,
+    { includeChildren: params.includeSwarmChildren },
+  );
   return {
     key,
+    // Presence records a completed registry projection; event merges may clear only that fact.
+    ...(rowContext ? { swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
     incognito: entry?.incognito,
     spawnedBy: subagentOwner || entry?.spawnedBy,
@@ -468,8 +467,8 @@ export function buildGatewaySessionRow(params: {
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,
     }).mode,
-    modelProvider: rowModelProvider,
-    model: rowModel,
+    modelProvider: rowModelIdentity.provider,
+    model: rowModelIdentity.model,
     activeModelProvider: activeFallback.active ? runtimeModels.active.provider : undefined,
     activeModel: activeFallback.active ? runtimeModels.active.model : undefined,
     modelOverrideSource: resolveSessionModelOverrideSource(entry),

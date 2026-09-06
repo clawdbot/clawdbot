@@ -1,13 +1,12 @@
 import {
   createProgressDraftDiffStatTracker,
+  formatChannelProgressDraftDiffStat,
   type ChannelProgressDraftDiffStat,
 } from "./progress-draft-diffstat.js";
 import {
   createChannelProgressDraftEventHandlers,
   type ChannelProgressDraftEventLineBuilder,
 } from "./progress-draft-events.js";
-// Stateful progress-draft compositor for channel streaming previews.
-// It merges status, tool, reasoning, and commentary updates until the final reply replaces them.
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   formatReasoningProgressDisplayLine,
@@ -26,6 +25,7 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
+  resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingProgressCommentary,
@@ -42,12 +42,10 @@ export { createChannelProgressWorkCounter } from "./progress-work-counter.js";
 // the narrator, deliberately not re-exported through the SDK barrels.
 export const PROGRESS_STATUS_PREAMBLE_FRESH_MS = 20_000;
 
-// Composes transient channel progress drafts from tool, reasoning, and
-// commentary updates. It owns draft lifecycle state before the final reply wins.
-type ChannelProgressDraftMode = StreamingMode;
 export type ChannelProgressDraftCompositorLine = string | ChannelProgressDraftLine;
 export type ChannelProgressDraftCompositorSnapshot = Readonly<{
   lines: readonly ChannelProgressDraftCompositorLine[];
+  label?: string;
   statusHeadline?: string;
   plan?: readonly AgentPlanStep[];
   planExplanation?: string;
@@ -56,20 +54,20 @@ export type ChannelProgressDraftCompositorSnapshot = Readonly<{
 
 type ChannelProgressDraftUpdateOptions = {
   flush?: boolean;
-  lines?: readonly ChannelProgressDraftCompositorLine[];
+  lines: readonly ChannelProgressDraftCompositorLine[];
+  snapshot: ChannelProgressDraftCompositorSnapshot;
 };
 
-/** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
   /** @deprecated v2026.9.1 SDK presentation; retain until a breaking SDK release. */
   presentation?: "summary";
   entry: StreamingCompatEntry | null | undefined;
-  mode: ChannelProgressDraftMode;
+  mode: StreamingMode;
   active: boolean;
   seed: string;
   update: (
     text: string,
-    options?: ChannelProgressDraftUpdateOptions,
+    options: ChannelProgressDraftUpdateOptions,
   ) => Promise<boolean | void> | boolean | void;
   deleteCurrent?: () => Promise<void> | void;
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
@@ -196,6 +194,7 @@ export function createChannelProgressDraftCompositor(params: {
       formatLine: options?.formatted === false ? undefined : params.formatLine,
       narration,
       plan: planSteps,
+      diffStat: resolveDiffStat(),
     });
   };
 
@@ -204,8 +203,14 @@ export function createChannelProgressDraftCompositor(params: {
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
     const statusHeadline = resolveStatusText();
     const diffStat = resolveDiffStat();
+    const label = resolveChannelProgressDraftLabel({
+      entry: params.entry,
+      seed: params.seed,
+      narration: statusHeadline,
+    });
     return {
       lines: lines.map((line) => (typeof line === "string" ? line : { ...line })),
+      ...(label ? { label } : {}),
       ...(statusHeadline ? { statusHeadline } : {}),
       ...(planSteps ? { plan: planSteps.map((entry) => ({ ...entry })) } : {}),
       ...(planExplanation ? { planExplanation } : {}),
@@ -213,7 +218,7 @@ export function createChannelProgressDraftCompositor(params: {
     };
   };
 
-  const clearProgressState = (suppressed: boolean) => {
+  const clearActivityState = (suppressed: boolean) => {
     clearPreambleExpiryTimer();
     progressSuppressed = suppressed;
     lines = [];
@@ -228,10 +233,13 @@ export function createChannelProgressDraftCompositor(params: {
     preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
-    planSteps = undefined;
-    planExplanation = "";
     diffStatTracker.reset();
     lastStartRendered = false;
+  };
+  const clearProgressState = (suppressed: boolean) => {
+    clearActivityState(suppressed);
+    planSteps = undefined;
+    planExplanation = "";
   };
 
   const publish = async (options?: { flush?: boolean }): Promise<boolean> => {
@@ -244,7 +252,7 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     const observed = await settleProgressVisibilityCallbackResult(
-      params.update(text, { ...options, lines: [...lines] }),
+      params.update(text, { ...options, lines: [...lines], snapshot: getSnapshot() }),
     );
     if (!observed.visible) {
       return false;
@@ -310,15 +318,29 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const renderAfterRetraction = async (): Promise<boolean> => {
-    if (!gate.hasStarted) {
+    if (
+      !params.active ||
+      finalReplyStarted ||
+      finalReplyDelivered ||
+      (params.mode === "progress" && !gate.hasStarted)
+    ) {
       return false;
     }
-    const rendered = await render();
-    if (rendered || formatDraftText()) {
-      return rendered;
+    // Labels decorate activity; they must not keep a retracted card alive.
+    if (
+      lines.length ||
+      resolveStatusText() ||
+      planSteps?.length ||
+      formatChannelProgressDraftDiffStat(resolveDiffStat())
+    ) {
+      return await publish();
     }
+    if (!params.deleteCurrent) {
+      // Transports without deletion replace an existing preview with its neutral label.
+      return lastRenderedText ? await publish() : false;
+    }
+    await params.deleteCurrent();
     lastRenderedText = "";
-    await params.deleteCurrent?.();
     return true;
   };
 
@@ -357,16 +379,7 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     lines = nextLines;
-    if (!gate.hasStarted) {
-      return false;
-    }
-    const text = formatDraftText();
-    if (text) {
-      return await render();
-    }
-    lastRenderedText = "";
-    await params.deleteCurrent?.();
-    return true;
+    return await renderAfterRetraction();
   };
 
   const noteProgress = async (
@@ -498,7 +511,17 @@ export function createChannelProgressDraftCompositor(params: {
     reset() {
       clearProgressState(false);
     },
-    resetReasoningProgress() {
+    resetActivity(options?: { suppressed?: boolean }) {
+      clearActivityState(options?.suppressed === true);
+    },
+    beginAssistantMessage() {
+      // Model messages delimit cumulative text, not the task's card or tool history.
+      if (progressSuppressed) {
+        clearActivityState(false);
+      }
+      reasoningRawText = "";
+    },
+    resetReasoningProgress(this: void) {
       reasoningRawText = "";
     },
     mergeReasoningProgress,
@@ -547,13 +570,10 @@ export function createChannelProgressDraftCompositor(params: {
       steps?: AgentPlanStep[],
       options?: { explanation?: string },
     ): Promise<boolean> {
-      if (
-        !params.active ||
-        params.mode !== "progress" ||
-        progressSuppressed ||
-        finalReplyStarted ||
-        finalReplyDelivered
-      ) {
+      if (!params.active || progressSuppressed || finalReplyStarted || finalReplyDelivered) {
+        return false;
+      }
+      if (params.mode !== "progress" && !previewToolProgressEnabled) {
         return false;
       }
       planSteps = steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
@@ -561,7 +581,7 @@ export function createChannelProgressDraftCompositor(params: {
       if (!planSteps && !planExplanation) {
         return await renderAfterRetraction();
       }
-      return await startAndRender();
+      return params.mode === "progress" ? await startAndRender() : await publish({ flush: true });
     },
     async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {

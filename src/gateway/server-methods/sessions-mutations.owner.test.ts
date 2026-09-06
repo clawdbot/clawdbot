@@ -97,6 +97,59 @@ async function invoke(params: {
 }
 
 describe("sessions.patch", () => {
+  it.each(["thinking", "context", "both"] as const)(
+    "persists %s preference clears with an agent model rollback marker",
+    async (field) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const sessionKey = "agent:main:rollback-preferences";
+        const scope = { agentId: "main", env: state.env, sessionKey };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "rollback-preferences",
+          updatedAt: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+          thinkingLevel: "high",
+          contextWindow: "extended",
+          modelFallback: {
+            prevProvider: "openai",
+            prevModel: "gpt-5.4",
+            prevThinkingLevel: "high",
+            prevContextWindow: "extended",
+            ts: 1,
+            source: "agent-patch",
+          },
+        });
+        const respond = vi.fn();
+        await sessionMutationHandlers["sessions.patch"]!({
+          params: {
+            key: sessionKey,
+            ...(field !== "context" ? { thinkingLevel: null } : {}),
+            ...(field !== "thinking" ? { contextWindow: null } : {}),
+          },
+          client: client(),
+          context: context({}),
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+        const entry = loadSessionEntry(scope);
+        expect(entry?.thinkingLevel).toBe(field === "context" ? "high" : undefined);
+        expect(entry?.contextWindow).toBe(field === "thinking" ? "extended" : undefined);
+        expect(entry?.modelFallback).toMatchObject({
+          prevProvider: "openai",
+          prevModel: "gpt-5.4",
+          ts: 1,
+          source: "agent-patch",
+        });
+        expect(entry?.modelFallback?.prevThinkingLevel).toBe(
+          field === "context" ? "high" : undefined,
+        );
+        expect(entry?.modelFallback?.prevContextWindow).toBe(
+          field === "thinking" ? "extended" : undefined,
+        );
+      });
+    },
+  );
+
   it("publishes saved settings when applying permissions to the active run fails", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:failed-permission-update";

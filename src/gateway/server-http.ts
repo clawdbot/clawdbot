@@ -34,6 +34,7 @@ import {
   isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
+import { isControlUiSharePath } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
@@ -556,7 +557,10 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
+      addRequestStage(
+        approvalDocument || isControlUiSharePath(scopedRequestPath, controlUiRouteBasePath),
+        handleStandaloneControlUiRequest,
+      );
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({

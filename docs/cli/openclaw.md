@@ -184,6 +184,11 @@ Discovery and read-only operations are not included. Secrets never appear in
 change history; config journal records contain changed paths rather than config
 values, and value comparison uses protected fingerprints.
 
+Config-write records retain the writer's origin label when supplied. Automatic
+startup config repairs record `origin: "doctor"` even when console output and
+runtime snapshot refresh are suppressed. Existing unlabeled records are not
+backfilled.
+
 Channel, web-search, and local Gateway setup can run as hosted conversations
 until they reach a secret. The local OpenClaw TUI does not accept sensitive wizard answers
 because terminal chat input is visible. It offers `open channel wizard`
@@ -263,6 +268,9 @@ supervision opt-outs remain untouched during inference setup.
 ## AI conversation
 
 Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+
+A failed or timed-out turn ends that setup conversation with a visible error.
+Retrying starts a fresh conversation and live-checks the inference route again.
 
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my

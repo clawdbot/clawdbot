@@ -1311,41 +1311,47 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it("discovers trusted external channel plugins from the default agent workspace", () => {
-    const workspaceDir = makePluginLoaderTempDir();
-    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "external-chat-plugin");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const { fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
-      pluginDir,
-      pluginId: "external-chat-plugin",
-      channelId: "external-chat",
-    });
-    const plugins = listReadOnlyChannelPluginsForConfig(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
+  it.each(["trusted", "untrusted", "denied", "unconfigured"] as const)(
+    "scopes external workspace setup imports by current policy (%s)",
+    (policy) => {
+      vi.stubEnv("EXTERNAL_CHAT_TOKEN", undefined);
+      const workspaceDir = makePluginLoaderTempDir();
+      const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "external-chat-plugin");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      const { fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+        pluginDir,
+        pluginId: "external-chat-plugin",
+        channelId: "external-chat",
+      });
+      const plugins = listReadOnlyChannelPluginsForConfig(
+        {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
           },
+          ...(policy === "unconfigured"
+            ? {}
+            : { channels: { "external-chat": { token: "configured" } } }),
+          plugins: {
+            allow: policy === "untrusted" ? [] : ["external-chat-plugin"],
+            deny: policy === "denied" ? ["external-chat-plugin"] : [],
+          },
+        } as never,
+        {
+          env: { ...process.env },
+          includePersistedAuthState: false,
+          includeSetupFallbackPlugins: true,
         },
-        channels: {
-          "external-chat": { token: "configured" },
-        },
-        plugins: {
-          allow: ["external-chat-plugin"],
-        },
-      } as never,
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
-      },
-    );
+      );
 
-    const plugin = plugins.find((entry) => entry.id === "external-chat");
-    expect(plugin?.meta.blurb).toBe("setup entry");
-    expect(fs.existsSync(setupMarker)).toBe(true);
-    expect(fs.existsSync(fullMarker)).toBe(false);
-  });
+      const plugin = plugins.find((entry) => entry.id === "external-chat");
+      const accepted = policy === "trusted";
+      expect(plugin?.meta.blurb).toBe(accepted ? "setup entry" : undefined);
+      expect(fs.existsSync(setupMarker)).toBe(accepted);
+      expect(fs.existsSync(fullMarker)).toBe(false);
+    },
+  );
 
   it("ignores external setup plugins that export an unrequested channel id", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({

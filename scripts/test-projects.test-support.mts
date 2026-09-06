@@ -10,6 +10,7 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
   isAgentsCoreIsolatedTestFile,
+  isAgentsSpawnProductionBoundaryTestFile,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
@@ -27,40 +28,9 @@ import {
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
 } from "../test/vitest/vitest.contracts-paths.mjs";
-import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
-import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
-import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
-import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
-import {
-  codexExtensionTestRoots,
-  isCodexExtensionRoot,
-} from "../test/vitest/vitest.extension-codex-paths.mjs";
-import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
-import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
-import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
-import {
-  isMatrixExtensionRoot,
-  matrixExtensionTestRoots,
-} from "../test/vitest/vitest.extension-matrix-paths.mjs";
-import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
-import { isMediaExtensionRoot } from "../test/vitest/vitest.extension-media-paths.mjs";
-import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
-import { isMessagingExtensionRoot } from "../test/vitest/vitest.extension-messaging-paths.mjs";
-import { isMiscExtensionRoot } from "../test/vitest/vitest.extension-misc-paths.mjs";
-import { isMsTeamsExtensionRoot } from "../test/vitest/vitest.extension-msteams-paths.mjs";
-import {
-  isProviderExtensionRoot,
-  isProviderOpenAiExtensionRoot,
-} from "../test/vitest/vitest.extension-provider-paths.mjs";
-import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
-import {
-  isTelegramExtensionRoot,
-  telegramExtensionTestRoots,
-} from "../test/vitest/vitest.extension-telegram-paths.mjs";
-import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
-import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
-import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
-import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
+import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
+import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
+import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -93,7 +63,6 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
-  unitTestIncludePatterns,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -105,6 +74,7 @@ import {
   GIT_LS_FILES_MAX_BUFFER_BYTES,
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
+  resolveExtensionTestConfig,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
@@ -167,7 +137,16 @@ type ChangedTestTargetPlan = {
 };
 
 type ImportGraphOptions = { tooling?: boolean };
-type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
+type VitestSpecShape = Pick<VitestRunSpec, "config" | "env"> & {
+  cacheAssignment?: VitestCacheAssignment;
+};
+export type VitestCacheAssignment =
+  | { kind: "scheduler"; root: string; leased?: true }
+  | { kind: "caller" };
+type CacheAssignedSpec<T> = Omit<T, "env"> & {
+  env: NodeJS.ProcessEnv;
+  cacheAssignment?: VitestCacheAssignment;
+};
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
   reverseImports: Map<string, string[]>;
@@ -187,6 +166,8 @@ type UnmatchedExplicitTestTarget = {
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_EMBEDDED_AGENT_TEST_ROOT = agentVitestProjectOwners.embedded.root;
+const AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG =
+  agentVitestProjectOwners.spawnProductionBoundary.config;
 const AGENTS_CORE_ISOLATED_VITEST_CONFIG = agentVitestProjectOwners.coreIsolated.config;
 const AGENTS_CORE_VITEST_CONFIG = agentVitestProjectOwners.core.config;
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = agentVitestProjectOwners.embedded.config;
@@ -526,6 +507,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentsSpawnProductionBoundary: AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG,
   agentsCoreIsolated: AGENTS_CORE_ISOLATED_VITEST_CONFIG,
   agentsCore: AGENTS_CORE_VITEST_CONFIG,
   agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
@@ -581,17 +563,21 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   [
-    "patches/vitest@4.1.11.patch",
+    "patches/vitest@5.0.0.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
       "test/scripts/vitest-fork-shutdown.test.ts",
+      "test/scripts/vitest-runner-task-updates.test.ts",
     ],
   ],
   ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
+  ...["clock", "runner"].map<[string, string[]]>((part) => [
+    `test/fixtures/vitest-runner-task-updates.${part}.mjs`,
+    ["test/scripts/vitest-runner-task-updates.test.ts"],
+  ]),
   ...[
     "src/system-agent/setup-inference-persist.ts",
-    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,
@@ -1034,7 +1020,10 @@ function listUnitFastFullSuiteTestTargets() {
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd: string) {
-  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
+  const isolatedTests = new Set([
+    ...agentVitestProjectOwners.spawnProductionBoundary.include,
+    ...agentVitestProjectOwners.coreIsolated.include,
+  ]);
   const agentsDir = path.join(cwd, "src/agents");
   if (!fs.existsSync(agentsDir)) {
     return [];
@@ -3495,6 +3484,9 @@ function classifyTarget(arg: string, cwd: string) {
   if (isAgentsCoreIsolatedTestFile(relative)) {
     return agentVitestProjectOwners.coreIsolated.kind;
   }
+  if (isAgentsSpawnProductionBoundaryTestFile(relative)) {
+    return agentVitestProjectOwners.spawnProductionBoundary.kind;
+  }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
@@ -3554,71 +3546,7 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (getChangedPathFacts(relative).surface === "extension") {
     const extensionRoot = relative.split("/").slice(0, 2).join("/");
-    const splitChannelShard = resolveSplitChannelExtensionShard(extensionRoot);
-    if (splitChannelShard) {
-      return splitChannelShard.kind;
-    }
-    if (isProviderOpenAiExtensionRoot(extensionRoot)) {
-      return "extensionProviderOpenAi";
-    }
-    if (isQaExtensionRoot(extensionRoot)) {
-      return "extensionQa";
-    }
-    if (isAcpxExtensionRoot(extensionRoot)) {
-      return "extensionAcpx";
-    }
-    if (isActiveMemoryExtensionRoot(extensionRoot)) {
-      return "extensionActiveMemory";
-    }
-    if (isCodexExtensionRoot(extensionRoot)) {
-      return "extensionCodex";
-    }
-    if (isDiffsExtensionRoot(extensionRoot)) {
-      return "extensionDiffs";
-    }
-    if (isBrowserExtensionRoot(extensionRoot)) {
-      return "extensionBrowser";
-    }
-    if (isFeishuExtensionRoot(extensionRoot)) {
-      return "extensionFeishu";
-    }
-    if (isIrcExtensionRoot(extensionRoot)) {
-      return "extensionIrc";
-    }
-    if (isMattermostExtensionRoot(extensionRoot)) {
-      return "extensionMattermost";
-    }
-    if (isTelegramExtensionRoot(extensionRoot)) {
-      return "extensionTelegram";
-    }
-    if (isVoiceCallExtensionRoot(extensionRoot)) {
-      return "extensionVoiceCall";
-    }
-    if (isWhatsAppExtensionRoot(extensionRoot)) {
-      return "extensionWhatsApp";
-    }
-    if (isZaloExtensionRoot(extensionRoot)) {
-      return "extensionZalo";
-    }
-    if (isMatrixExtensionRoot(extensionRoot)) {
-      return "extensionMatrix";
-    }
-    if (isMediaExtensionRoot(extensionRoot)) {
-      return "extensionMedia";
-    }
-    if (isMemoryExtensionRoot(extensionRoot)) {
-      return "extensionMemory";
-    }
-    if (isMsTeamsExtensionRoot(extensionRoot)) {
-      return "extensionMsTeams";
-    }
-    if (isMessagingExtensionRoot(extensionRoot)) {
-      return "extensionMessaging";
-    }
-    if (isMiscExtensionRoot(extensionRoot)) {
-      return "extensionMisc";
-    }
-    return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
+    return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(resolveExtensionTestConfig(extensionRoot))!;
   }
   if (isChannelSurfaceTestFile(relative)) {
     return "channel";
@@ -4088,20 +4016,14 @@ export function buildVitestRunPlans(
       kind === "default" &&
       useCliTargetArgs &&
       !watchMode &&
-      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim()
-        ? narrowIncludePatternsForCli(unitTestIncludePatterns, [
-            "node",
-            "vitest",
-            ...forwardedPlanArgs,
-          ])
+      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim() &&
+      grouped.every((targetArg) => !path.isAbsolute(targetArg))
+        ? uniqueOrdered(grouped.map((targetArg) => toRepoRelativeTarget(targetArg, cwd)))
         : null;
     // CI needs explicit selection metadata. Keep the CLI filters too: the unit
     // config and runner use them for exclude and empty-selection policy.
     const scopedUnitIncludes =
       unitCliIncludes?.length &&
-      grouped.every((targetArg) =>
-        unitCliIncludes.includes(toRepoRelativeTarget(targetArg, cwd)),
-      ) &&
       unitCliIncludes.every(
         (file) =>
           !isGlobTarget(file) && isUnitConfigTestFile(file) && isExistingFileTarget(file, cwd),
@@ -4379,7 +4301,7 @@ function sanitizeVitestCachePathSegment(value: string) {
 export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   const baseEnv = params.env ?? process.env;
   const cwd = params.cwd ?? process.cwd();
   const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
@@ -4389,11 +4311,12 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   return specs.map((spec, index) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
     if (specCachePath && specCachePath !== configuredCacheRoot) {
-      return spec;
+      return { ...spec, cacheAssignment: spec.cacheAssignment ?? { kind: "caller" } };
     }
     const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
     return {
       ...spec,
+      cacheAssignment: { kind: "scheduler", root: cacheRoot },
       env: {
         ...spec.env,
         [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
@@ -4405,7 +4328,7 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
 export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
     return specs;
   }
@@ -4553,7 +4476,7 @@ function filterPlansForContractIncludeFile(plans: VitestRunPlan[], env: NodeJS.P
 
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {
   const candidateFiles = includePatterns.some(isGlobTarget)
-    ? listExplicitTestTargetFilesForCwd(cwd)
+    ? listExplicitTestTargetFilesForCwd(cwd).toSorted()
     : [];
   return uniqueOrdered(
     includePatterns.flatMap((pattern) => {

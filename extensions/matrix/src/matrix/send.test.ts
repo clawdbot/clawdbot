@@ -1213,7 +1213,7 @@ describe("sendMessageMatrix threads", () => {
     expect(content["m.relates_to"]).not.toHaveProperty("m.in_reply_to");
   });
 
-  it("includes thread fallback metadata only with an explicit reply target", async () => {
+  it("preserves an explicit reply target inside its thread", async () => {
     const { client, sendMessage } = makeClient();
 
     await sendMessageMatrix("room:!room:example", "hello thread", {
@@ -1235,7 +1235,6 @@ describe("sendMessageMatrix threads", () => {
     expect(content["m.relates_to"]).toEqual({
       rel_type: "m.thread",
       event_id: "$thread",
-      is_falling_back: true,
       "m.in_reply_to": { event_id: "$reply" },
     });
   });

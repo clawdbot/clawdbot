@@ -84,6 +84,26 @@ function createMultiAccountHealthSummary(
 }
 
 describe("formatHealthChannelLines", () => {
+  it.each([false, true])("keeps the named startup error with terminal controls=%s", (controls) => {
+    const error = "Legacy exec approvals exist at /tmp/synthetic/exec-approvals.json.";
+    const summary = createHealthSummary({
+      channels: {
+        telegram: {
+          accountId: "default",
+          configured: true,
+          running: false,
+          healthState: "not-running",
+          lastError: controls ? `\u001b[31m${error}\u001b[0m\n` : error,
+        },
+      },
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+    });
+    expect(formatHealthChannelLines(summary)).toEqual([
+      `Telegram: not-running (${error}${controls ? "\\n" : ""})`,
+    ]);
+  });
+
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {

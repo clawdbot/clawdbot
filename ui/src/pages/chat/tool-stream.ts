@@ -514,8 +514,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     phase !== "start" && entry?.name && entry.name !== "tool"
       ? entry.name
       : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
-  if (phase === "start" && payload.runId === host.chatRunId) {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
+  if (payload.runId === host.chatRunId) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
   const args = phase === "start" ? data.args : undefined;
   const output =

@@ -7,7 +7,7 @@ import {
   validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import {
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunHandleSessionId,
@@ -184,7 +184,14 @@ async function handleChatHistoryRequest({
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
+  const {
+    cfg,
+    agentId: sessionAgentId,
+    storePath,
+    store,
+    entry,
+    canonicalKey,
+  } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
       loadGatewaySessionEntryReadOnly(sessionKey, {
@@ -208,11 +215,6 @@ async function handleChatHistoryRequest({
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
     return;
   }
-  const sessionAgentId = resolveSessionAgentId({
-    sessionKey,
-    config: cfg,
-    agentId: selectedAgent.agentId,
-  });
   if (requestedSessionId) {
     const transcriptSessionKey = resolveTranscriptSessionKeyBySessionId({
       agentId: sessionAgentId,
@@ -411,7 +413,7 @@ async function handleChatHistoryRequest({
         store,
         key: canonicalKey,
         entry,
-        agentId: selectedAgent.agentId,
+        agentId: sessionAgentId,
         modelCatalog: sessionModelCatalog,
       }),
     {
@@ -422,7 +424,7 @@ async function handleChatHistoryRequest({
       },
     },
   );
-  const activeRunAgentId = selectedAgent.agentId;
+  const activeRunAgentId = sessionAgentId;
   const activeRunState = resolveVisibleActiveSessionRunState({
     context,
     requestedKey: sessionKey,
@@ -468,7 +470,6 @@ async function handleChatHistoryRequest({
             providerPolicySource: "active",
           }),
           modelSelectionTarget: resolveGatewayModelSelectionPolicy({
-            agentId: sessionAgentId,
             callerScopes: client?.connect?.scopes ?? [],
             cfg,
           }).target,

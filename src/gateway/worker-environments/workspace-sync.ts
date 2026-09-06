@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
 import type {
@@ -241,7 +241,7 @@ export function createWorkerWorkspaceActions(
       runTask,
     });
     const temporaryDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-sync-"),
     );
     try {
       const receiverContext = {
@@ -459,7 +459,7 @@ export function createWorkerWorkspaceActions(
       "Worker tunnel did not reconnect within the workspace reconciliation timeout",
     );
     const temporaryDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-worker-workspace-reconcile-"),
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-reconcile-"),
     );
     const stagingRoot = path.join(temporaryDirectory, "staging");
     const manifestRoot = path.join(temporaryDirectory, "manifests");

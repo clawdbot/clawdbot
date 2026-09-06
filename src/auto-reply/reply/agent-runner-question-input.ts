@@ -78,11 +78,7 @@ export async function runReplyQuestionInput(
       text,
       caller,
       assertSourceCurrent,
-      persist: followupRun.userTurnTranscriptRecorder
-        ? async () => {
-            await followupRun.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
+      sourceRecorder: followupRun.userTurnTranscriptRecorder,
     });
     if (!claimed) {
       return { handled: false };

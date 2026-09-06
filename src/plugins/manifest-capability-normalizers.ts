@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "../../packages/normalization-core/src/s
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
+import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
@@ -350,37 +351,12 @@ export function normalizeManifestCatalog(value: unknown): PluginManifestCatalog 
   };
 }
 
-const MANIFEST_CONTRACT_KEYS = [
-  "embeddedExtensionFactories",
-  "agentToolResultMiddleware",
-  "trustedToolPolicies",
-  "externalAuthProviders",
-  "embeddingProviders",
-  "speechProviders",
-  "realtimeTranscriptionProviders",
-  "realtimeVoiceProviders",
-  "mediaUnderstandingProviders",
-  "transcriptSourceProviders",
-  "documentExtractors",
-  "imageGenerationProviders",
-  "videoGenerationProviders",
-  "musicGenerationProviders",
-  "webContentExtractors",
-  "webFetchProviders",
-  "webSearchProviders",
-  "workerProviders",
-  "usageProviders",
-  "migrationProviders",
-  "gatewayMethodDispatch",
-  "tools",
-] as const satisfies readonly (keyof PluginManifestContracts)[];
-
 export function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const contracts: PluginManifestContracts = {};
-  for (const key of MANIFEST_CONTRACT_KEYS) {
+  for (const key of PLUGIN_MANIFEST_CONTRACT_KEYS) {
     const entries = normalizeTrimmedStringList(value[key]);
     if (entries.length > 0) {
       contracts[key] = entries;

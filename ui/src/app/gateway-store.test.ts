@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import {
@@ -10,13 +11,15 @@ import {
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
+import type { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "./user-profile.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
-  scheduleStaleChunkReloadMock: vi.fn(async () => true),
+  scheduleStaleChunkReloadMock: vi.fn<typeof scheduleStaleChunkReload>(async () => true),
 }));
 
-vi.mock("./stale-chunk-reload.ts", () => ({
+vi.mock("./stale-chunk-reload.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stale-chunk-reload.ts")>()),
   scheduleStaleChunkReload: scheduleStaleChunkReloadMock,
 }));
 
@@ -106,6 +109,69 @@ describe("createApplicationGateway connection phase", () => {
 
     expect(current().opts).toMatchObject(clientOptions);
   });
+
+  it("retires a completed native handoff while keeping stale hello operations fenced", () => {
+    const { gateway, current } = createStore({
+      clientOptions: { clientName: "openclaw-ios", mode: "ui" },
+    });
+    gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
+
+    current().opts.onHello?.({
+      ...HELLO,
+      server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/hello" },
+    });
+
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBeNull();
+    expect(current().request).not.toHaveBeenCalled();
+    gateway.connect();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+    expect(current().opts.bootstrapProfile).toBeUndefined();
+    gateway.stop();
+  });
+
+  it.each(["snapshot", "probe"])(
+    "does not reload a native stale hello after its %s replaces the connection",
+    async (stage) => {
+      const actual =
+        await vi.importActual<typeof import("./stale-chunk-reload.ts")>("./stale-chunk-reload.ts");
+      scheduleStaleChunkReloadMock.mockImplementationOnce(actual.scheduleStaleChunkReload);
+      const probe = createDeferred<Response>();
+      const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
+      vi.stubGlobal("fetch", fetchMock);
+      const replace = vi.fn();
+      const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
+      vi.stubGlobal("window", { location });
+      const { gateway, current } = createStore({
+        clientOptions: { clientName: "openclaw-ios", mode: "ui" },
+      });
+      gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
+      if (stage === "snapshot") {
+        gateway.subscribe((snapshot) => {
+          if (snapshot.phase === "reconnecting") {
+            gateway.connect();
+          }
+        });
+      }
+      current().opts.onHello?.({
+        ...HELLO,
+        server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
+      });
+      if (stage === "probe") {
+        gateway.connect();
+      }
+      probe.resolve(new Response(null, { status: 200 }));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(stage === "probe" ? 1 : 0);
+      expect(replace).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+      gateway.stop();
+    },
+  );
 
   it("keeps legacy version fallback on reconnect instead of first admission", () => {
     const { gateway, current } = createStore();
@@ -541,9 +607,9 @@ describe("createApplicationGateway connection phase", () => {
       willRetry: false,
     });
 
-    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
-      buildId: "replacement-build",
-    });
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ buildId: "replacement-build" }),
+    );
     expect(gateway.snapshot.phase).toBe("reload-required");
   });
 
@@ -568,9 +634,9 @@ describe("createApplicationGateway connection phase", () => {
       willRetry: true,
     });
 
-    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
-      buildId: "replacement-build",
-    });
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ buildId: "replacement-build" }),
+    );
     expect(gateway.snapshot.phase).toBe("reload-required");
     expect(gateway.snapshot.lastError).toContain("Control UI updated");
     expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);

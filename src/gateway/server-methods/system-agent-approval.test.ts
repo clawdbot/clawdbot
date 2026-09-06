@@ -88,7 +88,7 @@ describe("Full Access delegated chat", () => {
   });
 
   async function createDelegatedChatFixture(
-    source: "typed" | "model tool" | "planner" = "typed",
+    source: "typed" | "model tool" = "typed",
     previousRun = "live",
   ) {
     const stateDir = systemAgentTempDirs.make("openclaw-full-access-change-");
@@ -125,9 +125,6 @@ describe("Full Access delegated chat", () => {
         if (source === "typed" || proposed) {
           return { text: "Config verified." };
         }
-        if (source === "planner") {
-          return null;
-        }
         proposed = true;
         const tool = createSystemAgentTool({
           surface: params.surface,
@@ -141,10 +138,6 @@ describe("Full Access delegated chat", () => {
           value: "debug",
         });
         return { text: "Change proposed." };
-      },
-      planWithAssistant: async () => {
-        proposed = true;
-        return { reply: "Change proposed.", command: "config set logging.level debug" };
       },
     });
     vi.spyOn(engine, "loadOverview").mockResolvedValue({
@@ -420,7 +413,7 @@ describe("Full Access delegated chat", () => {
   );
 
   it.each([
-    ...(["typed", "model tool", "planner"] as const).flatMap((source) =>
+    ...(["typed", "model tool"] as const).flatMap((source) =>
       (["closed", "live", "live-restricted"] as const).map((previousRun) => ({
         source,
         previousRun,

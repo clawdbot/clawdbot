@@ -1,5 +1,6 @@
 // Tlon tests cover sse client plugin behavior.
 import { Readable } from "node:stream";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureUrbitChannelOpen } from "./channel-ops.js";
@@ -17,14 +18,6 @@ vi.mock("./channel-ops.js", () => ({
   pokeUrbitChannel: vi.fn().mockResolvedValue(undefined),
   scryUrbitPath: vi.fn().mockResolvedValue({}),
 }));
-
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`Expected ${label} call`);
-  }
-  return call;
-}
 
 describe("UrbitSSEClient", () => {
   beforeEach(() => {
@@ -56,9 +49,7 @@ describe("UrbitSSEClient", () => {
       });
 
       expect(mockUrbitFetch).toHaveBeenCalledTimes(1);
-      const callArgs = requireFirstMockCall(mockUrbitFetch.mock.calls, "urbit fetch")[0] as
-        | Parameters<typeof urbitFetch>[0]
-        | undefined;
+      const [callArgs] = expectDefined(mockUrbitFetch.mock.calls.at(0), "urbit fetch call");
       if (!callArgs) {
         throw new Error("Expected urbit fetch arguments");
       }
@@ -233,14 +224,6 @@ describe("UrbitSSEClient", () => {
       expect(client.autoReconnect).toBe(false);
     });
 
-    it("stores onReconnect callback", () => {
-      const onReconnect = vi.fn();
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        onReconnect,
-      });
-      expect(client.onReconnect).toBe(onReconnect);
-    });
-
     it("clamps oversized reconnect delays", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
         reconnectDelay: Number.MAX_SAFE_INTEGER,
@@ -303,9 +286,7 @@ describe("UrbitSSEClient", () => {
 
       expect(client.channelId).toBe(channelId);
       expect(onReconnect).toHaveBeenCalledOnce();
-      const callArgs = requireFirstMockCall(mockUrbitFetch.mock.calls, "stream reconnect")[0] as
-        | Parameters<typeof urbitFetch>[0]
-        | undefined;
+      const [callArgs] = expectDefined(mockUrbitFetch.mock.calls.at(0), "stream reconnect call");
       expect(callArgs?.path).toBe(`/~/channel/${channelId}`);
       expect(callArgs?.init?.method).toBe("GET");
       expect(client.reconnectAttempts).toBe(0);
@@ -574,59 +555,37 @@ describe("UrbitSSEClient", () => {
       expect(JSON.parse(body)).toEqual([{ id: expect.any(Number), action: "ack", "event-id": 20 }]);
     });
 
-    it("does not advance the ack watermark when the ack request fails", async () => {
+    it("retries a failed ack when the unacknowledged event replays", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch.mockResolvedValue({
-        response: { ok: false, status: 503 } as unknown as Response,
+        response: { ok: true, status: 204 } as unknown as Response,
         finalUrl: "https://example.com",
         release: vi.fn().mockResolvedValue(undefined),
       });
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
       client.eventHandlers.set(1, { event: vi.fn() });
 
-      await expect(
-        client.processEvent('id: 20\ndata: {"id":1,"json":{"ok":true}}'),
-      ).rejects.toThrow("Ack failed with status 503");
-      expect(
-        (client as unknown as { lastAcknowledgedEventId: number }).lastAcknowledgedEventId,
-      ).toBe(-1);
-    });
+      // A success stub makes an eager ACK fail at the no-call assertion, not in transport.
+      await client.processEvent('id: 1\ndata: {"id":1,"json":{"ok":true}}');
+      expect(mockUrbitFetch).not.toHaveBeenCalled();
 
-    it("retries a failed ack when the unacknowledged event replays", async () => {
-      const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch
-        .mockResolvedValueOnce({
-          response: { ok: false, status: 503 } as unknown as Response,
-          finalUrl: "https://example.com",
-          release: vi.fn().mockResolvedValue(undefined),
-        })
-        .mockResolvedValueOnce({
-          response: { ok: true, status: 204 } as unknown as Response,
-          finalUrl: "https://example.com",
-          release: vi.fn().mockResolvedValue(undefined),
-        });
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-      client.eventHandlers.set(1, { event: vi.fn() });
+      mockUrbitFetch.mockResolvedValueOnce({
+        response: { ok: false, status: 503 } as unknown as Response,
+        finalUrl: "https://example.com",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
       const event = 'id: 20\ndata: {"id":1,"json":{"ok":true}}';
 
       await expect(client.processEvent(event)).rejects.toThrow("Ack failed with status 503");
+      expect(
+        (client as unknown as { lastAcknowledgedEventId: number }).lastAcknowledgedEventId,
+      ).toBe(-1);
       await expect(client.processEvent(event)).resolves.toBeUndefined();
 
       expect(mockUrbitFetch).toHaveBeenCalledTimes(2);
       expect(
         (client as unknown as { lastAcknowledgedEventId: number }).lastAcknowledgedEventId,
       ).toBe(20);
-    });
-
-    it("tracks lastHeardEventId and ackThreshold", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-
-      // Access private properties for testing
-      const lastHeardEventId = (client as unknown as { lastHeardEventId: number }).lastHeardEventId;
-      const ackThreshold = (client as unknown as { ackThreshold: number }).ackThreshold;
-
-      expect(lastHeardEventId).toBe(-1);
-      expect(ackThreshold).toBeGreaterThan(0);
     });
   });
 

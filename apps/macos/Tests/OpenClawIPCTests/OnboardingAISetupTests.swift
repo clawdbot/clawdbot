@@ -6,6 +6,7 @@ import Foundation
 import ObjectiveC
 import Observation
 import OpenClawChatUI
+import OpenClawDiscovery
 import OpenClawProtocol
 import SwiftUI
 import Testing
@@ -790,6 +791,59 @@ private func setupAdmissionBusyResponse(id: String, confirmed: Bool = true) -> D
         """.utf8)
 }
 
+private enum OnboardingEntryError: Error {
+    case timedOut(String)
+}
+
+@MainActor
+private final class OnboardingEntryEvents {
+    var persistenceCalls = 0
+    var missingReplies = 0
+    var sawSnapshot = false
+    var healthFinished = false
+}
+
+@MainActor
+private func waitForOnboardingEntry(
+    _ description: String,
+    until condition: () async throws -> Bool) async throws
+{
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    while clock.now < deadline {
+        try Task.checkCancellation()
+        if try await condition() { return }
+        // Poll a concrete event/UI predicate; elapsed time is never ordering proof.
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    throw OnboardingEntryError.timedOut(description)
+}
+
+@MainActor
+private func pressOnboardingEntryButton(_ title: String, in root: NSView) async throws {
+    _ = try await inspectAISetupAccessibility(root)
+    var matches: [AnyObject] = []
+    var visited = Set<ObjectIdentifier>()
+    func visit(_ element: AnyObject) {
+        guard visited.insert(ObjectIdentifier(element)).inserted else { return }
+        let text = [element.accessibilityLabel?(), element.accessibilityTitle?()]
+            .compactMap(\.self)
+        if element.accessibilityRole?() == .button,
+           element.isAccessibilityEnabled?() == true,
+           text.contains(where: { $0 == title || (title == "API Keys" && $0.contains(title)) })
+        {
+            matches.append(element)
+        }
+        for child in element.accessibilityChildren?() ?? [] {
+            visit(child as AnyObject)
+        }
+    }
+    visit(root)
+    try #require(matches.count == 1, "Expected one enabled mounted button: \(title)")
+    let button = try #require(matches.first)
+    try #require(button.accessibilityPerformPress?() == true, "AX press failed: \(title)")
+}
+
 private enum AISetupAccessibilityError: Error {
     case requestFailed(code: Int32)
     case missingGetter(String)
@@ -1051,6 +1105,8 @@ struct OnboardingAISetupTests {
         [false, true])
     func `activation consent uses shared wizard`(decision: String, manual: Bool) async throws {
         let recorder = AISetupRequestRecorder()
+        let settlementGate = AISetupConfigReadGate()
+        let gateSettlement = decision == "rejected-unavailable"
         let activationAttempts = AISetupSocketGeneration()
         let cancellationFails = LockIsolated(true)
         let rejectionStatus: String? = if decision == "rejected-replaced" {
@@ -1109,6 +1165,11 @@ struct OnboardingAISetupTests {
                     case "consent":
                         let accepted = try #require(answer?["value"] as? Bool)
                         #expect(accepted == accepts)
+                        if gateSettlement {
+                            // Pass the transport's post-response check, then hold the
+                            // activation owner's final lease validation after the sheet closes.
+                            await settlementGate.armNextRead(afterReads: 1)
+                        }
                         payload = if terminalError {
                             ["done": true, "status": "error", "error": failureDetail]
                         } else if decision == "malformed-success" {
@@ -1184,25 +1245,31 @@ struct OnboardingAISetupTests {
                     methods: ["openclaw.setup.activate", "openclaw.setup.activate.start"],
                     capabilities: ["openclaw-setup-model-ref"]))
             })
-        let gateway = try makeAISetupGateway(url: #require(URL(string: "ws://example.invalid")), session: session)
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: {
+                let token = await settlementGate.snapshotToken()
+                return (url: url, token: token, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
         var handoffs = 0
         model.onConnected = { handoffs += 1 }
+        var activationSettled = false
         let activation = Task {
             await model.detectConnections()
             if manual {
                 model.manualProviderID = "openai-api-key"
                 model.manualKey = "fixture-key"
-                model.submitManualKey()
+                await model.submitManualKey()?.value
             }
+            activationSettled = true
         }
         defer {
             model.resetForGatewayChange()
             activation.cancel()
         }
-        for _ in 0..<400 where model.authStep == nil {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await waitForAISetupState { model.authStep != nil }
         #expect(model.authStep?.title == "Plugin capabilities")
         #expect(model.activeAuthOption?.label == (manual ? "OpenAI API key" : "Codex CLI"))
         #expect(model.activeAuthOption?.brandId == "openai")
@@ -1216,9 +1283,7 @@ struct OnboardingAISetupTests {
         }
         #expect(!model.connected)
         model.continueProviderAuth()
-        for _ in 0..<400 where model.authStep?.id != "consent" {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await waitForAISetupState { model.authStep?.id == "consent" }
         #expect(model.authStep.map(wizardStepType) == "confirm")
         #expect(!model.authConfirmation)
         let originalOwner = try #require(storedActivationOwner(defaults))
@@ -1236,9 +1301,7 @@ struct OnboardingAISetupTests {
         }
         if decision == "retry-cancel" {
             model.cancelProviderAuth()
-            for _ in 0..<400 where model.authError == nil {
-                try await Task.sleep(nanoseconds: 5_000_000)
-            }
+            await waitForAISetupState { model.authError != nil }
             #expect(model.authError != nil)
             #expect(model.authBusy)
             let retrySheet = await inspectAISetupSheet(model)
@@ -1253,11 +1316,17 @@ struct OnboardingAISetupTests {
             model.authConfirmation = accepts
             model.continueProviderAuth()
         }
-        for _ in 0..<400 where model.activeAuthOption != nil {
-            try await Task.sleep(nanoseconds: 5_000_000)
+        if gateSettlement {
+            await settlementGate.waitUntilBlocked()
+            #expect(model.activeAuthOption == nil)
+            #expect(!activationSettled)
+            if manual {
+                #expect(model.manualTesting)
+                #expect(model.manualError == nil)
+            }
+            await settlementGate.release()
         }
         await activation.value
-        await settleQueuedAISetupTasks()
         let ambiguous = ownerReplaced || decision == "malformed-success" || decision == "retry-cancel" ||
             (terminalError && rejectionStatus == nil)
         #expect(model.connected == (decision == "accept"))
@@ -1345,13 +1414,11 @@ struct OnboardingAISetupTests {
         try #require(!model.isBusy)
         if manual {
             model.manualKey = "corrected-fixture-key"
-            model.submitManualKey()
+            await model.submitManualKey()?.value
         } else {
             model.userSelect(kind: rejectionStatus == "billing" ? "claude-cli" : "codex-cli")
         }
-        for _ in 0..<400 where !model.connected {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await waitForAISetupState { model.connected }
         #expect(model.connected)
         #expect(handoffs == 1)
         #expect(pendingState(defaults) == .completed)
@@ -2844,6 +2911,219 @@ struct OnboardingAISetupTests {
         #expect(!model.pendingActivationVerification)
         #expect(model.selectedKind == "existing-model")
         #expect(OnboardingController.shared.busyReason == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        "attach-only", "external-service", "unreadable",
+    ])
+    func `first mounted AI entry respects local installation ownership`(_ scenario: String) async throws {
+        try #require(!AppProfile.current.isActive, "Run this fixture in an unprofiled disposable test process")
+        let root = try makeTempDirForTests().resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await TestIsolation.withIsolatedState(env: [
+            "HOME": root.path,
+            "CFFIXED_USER_HOME": root.path,
+            "OPENCLAW_STATE_DIR": root.appendingPathComponent("state").path,
+            "OPENCLAW_CONFIG_PATH": root.appendingPathComponent("openclaw.json").path,
+        ]) {
+            try #require(FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath() == root)
+            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingEntry"))
+            let oldGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+            let oldRouteBinding = GatewayDiscoveryPreferences.preferredRouteBinding()
+            GatewayDiscoveryPreferences.setPreferredStableID(nil)
+            let marker = root.appendingPathComponent("disable-launchagent")
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            defer {
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().allSatisfy {
+                    $0.first == "status"
+                })
+                GatewayDiscoveryPreferences.setPreferredStableID(oldGatewayID, routeBinding: oldRouteBinding)
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            if scenario == "attach-only" { try Data().write(to: marker) }
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: AppProfile(environment: [:]))
+            if scenario == "external-service" || scenario == "unreadable" {
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                let data = scenario == "unreadable" ? Data("not a plist".utf8) : try PropertyListSerialization.data(
+                    fromPropertyList: ["ProgramArguments": ["/opt/fixture-openclaw/bin/openclaw", "gateway"]],
+                    format: .xml, options: 0)
+                try data.write(to: plist)
+            }
+            let blocked = scenario == "unreadable"
+            // Explicit artifacts take precedence over remembered ownership; leave the singleton untouched.
+            try #require(GatewayProcessManager.shared.installation == (blocked ? .unreadable : .external))
+            let artifacts = try [marker, plist].map { url in
+                try (url: url, data: FileManager.default.fileExists(atPath: url.path) ? Data(contentsOf: url) : nil)
+            }
+            defer {
+                for artifact in artifacts {
+                    #expect(FileManager.default.fileExists(atPath: artifact.url.path) == (artifact.data != nil))
+                    if let data = artifact.data {
+                        #expect((try? Data(contentsOf: artifact.url)) == data)
+                    }
+                }
+            }
+            let events = OnboardingEntryEvents()
+            let url = try #require(URL(string: "ws://127.0.0.1:49152"))
+            let harness = AISetupHarness(url: url) { task, request, _ in
+                switch request.method {
+                case "agents.list":
+                    task.emitReceiveSuccess(.data(missingConfiguredModelResponse(id: request.id)))
+                    await MainActor.run { events.missingReplies += 1 }
+                    return nil
+                case "openclaw.setup.detect":
+                    // Keep the existing provider fixture; remove automatic and prepare paths.
+                    let data = detectedSetupResponse(id: request.id, kind: "fixture", modelRef: "fixture/model")
+                    var response = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                    var payload = try #require(response["payload"] as? [String: Any])
+                    payload["candidates"] = [] as [Any]
+                    payload["prepareOptions"] = [] as [Any]
+                    response["payload"] = payload
+                    return try JSONSerialization.data(withJSONObject: response)
+                default:
+                    Issue.record("Unexpected onboarding request: \(request.method)")
+                    return unavailableGatewayResponse(id: request.id)
+                }
+            }
+            // Consume the one physical hello BEFORE mounting. The view subsequently
+            // receives its ordinary replay; no fixture reconnect or retry occurs.
+            let pushes = await harness.gateway.subscribe()
+            let snapshotTask = Task { @MainActor in
+                for await delivery in pushes {
+                    guard !Task.isCancelled else { return }
+                    if delivery.isCurrent, case .snapshot = delivery.push {
+                        events.sawSnapshot = true
+                        return
+                    }
+                }
+            }
+            let warmup = Task { @MainActor in
+                defer { events.healthFinished = true }
+                _ = try await harness.gateway.request(
+                    method: "health", params: nil, timeoutMs: 1000, retryTransportFailures: false)
+            }
+            let state = AppState(preview: true)
+            state.onboardingSeen = false
+            state.connectionMode = .local
+            let view = harness.view(
+                state: state, defaults: defaults, routeIdentityProvider: { "local" },
+                configuredGatewayProbeTimeoutMs: 1000,
+                gatewaySelectionPersister: {
+                    events.persistenceCalls += 1
+                    return true
+                })
+            // These are reference objects, not later reads through an unmounted @State copy.
+            let model = view.aiSetup
+            let finishState = view.finishState
+            let probe = view.configuredGatewayProbe
+            let discovery = view.gatewayDiscovery
+            _ = AppKitTestSupport.application
+            var appeared = false
+            var disappeared = false
+            let hosting = NSHostingView(rootView: AnyView(EmptyView()))
+            hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 900)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            @MainActor
+            func cleanup() async {
+                // Cleanup only: invalidate unstructured owner work before restoring fixtures.
+                probe.invalidate()
+                model.resetForGatewayChange(clearPendingHandoff: false)
+                hosting.rootView = AnyView(EmptyView())
+                hosting.layoutSubtreeIfNeeded()
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+                do {
+                    try await waitForOnboardingEntry("mounted view disappeared") { !appeared || disappeared }
+                } catch {
+                    Issue.record(error)
+                }
+                discovery.stop()
+                warmup.cancel()
+                snapshotTask.cancel()
+                await harness.gateway.shutdown()
+                _ = await warmup.result
+                await snapshotTask.value
+            }
+            do {
+                try await waitForOnboardingEntry("connected physical hello") {
+                    events.healthFinished && events.sawSnapshot
+                }
+                try await warmup.value
+                try #require(harness.session.snapshotMakeCount() == 1)
+                hosting.rootView = AnyView(view
+                    .onAppear { appeared = true }
+                    .onDisappear { disappeared = true })
+                window.contentView = hosting
+                window.orderFront(nil)
+                hosting.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                try await waitForOnboardingEntry("appearance and initial snapshot invoked, missing reply emitted") {
+                    events.persistenceCalls == 2 && events.missingReplies >= 1
+                }
+                try #require(appeared)
+                // Finish a read-only inspection before navigation. Its generation retires
+                // any late startup response that could otherwise mask the page-entry gate.
+                let inspection = try #require(view.probeConfiguredGatewayForDashboard(
+                    intent: .inspectOnly,
+                    knownVisible: true))
+                await inspection.value
+                try #require(events.persistenceCalls == 3)
+                try #require(await harness.recorder.snapshot().methods.allSatisfy { $0 == "agents.list" })
+                try #require(!isPending(defaults))
+                try #require(!model.connected && model.phase == .idle)
+                try await pressOnboardingEntryButton("Next", in: hosting)
+                try await waitForOnboardingEntry("connection page navigation committed") {
+                    let ax = try await inspectAISetupAccessibility(hosting)
+                    return ax.actions["Back"] == true && ax.actions["Next"] == true
+                }
+                try #require(events.persistenceCalls == 3)
+                try #require(await harness.recorder.snapshot().methods.allSatisfy { $0 == "agents.list" })
+                try await pressOnboardingEntryButton("Next", in: hosting)
+                if blocked {
+                    try await waitForOnboardingEntry("unreadable ownership retains CLI gate") {
+                        let ax = try await inspectAISetupAccessibility(hosting)
+                        return ax.actions["Next"] == false && ax.actions["Finish"] == nil &&
+                            ax.labels.contains(GatewayProcessManager.Installation.ownershipFailure)
+                    }
+                    #expect(events.persistenceCalls == 3)
+                } else {
+                    try await waitForOnboardingEntry("first AI entry emits openclaw.setup.detect") {
+                        await harness.recorder.snapshot().methods.contains("openclaw.setup.detect")
+                    }
+                    try await waitForOnboardingEntry("AI entry renders enabled manual setup with Finish gated") {
+                        let ax = try await inspectAISetupAccessibility(hosting)
+                        return ax.actions["Finish"] == false &&
+                            ax.actions.contains { $0.key.contains("API Keys") && $0.value }
+                    }
+                    try await pressOnboardingEntryButton("API Keys", in: hosting)
+                    try await waitForOnboardingEntry("API key provider form is actionable") {
+                        let ax = try await inspectAISetupAccessibility(hosting)
+                        return model.showManualEntry && ax.labels.contains("OpenAI API key") &&
+                            ax.actions["Finish"] == false
+                    }
+                    #expect(events.persistenceCalls == 4)
+                }
+                let methods = await harness.recorder.snapshot().methods
+                #expect(methods.filter { $0 == "openclaw.setup.detect" }.count == (blocked ? 0 : 1))
+                #expect(methods.allSatisfy { $0 == "agents.list" || $0 == "openclaw.setup.detect" })
+                #expect(harness.session.snapshotMakeCount() == 1)
+                #expect(!model.connected)
+                #expect(!finishState.didFinish)
+                #expect(!isPending(defaults))
+            } catch {
+                await cleanup()
+                throw error
+            }
+            await cleanup()
+        }
     }
 
     @Test func `implicit model label falls through verification to automatic setup`() async throws {
@@ -4523,10 +4803,7 @@ struct OnboardingAISetupTests {
         await model.detectConnections()
         if entry == "manual" {
             model.manualKey = "test-key-placeholder"
-            model.submitManualKey()
-            for _ in 0..<200 where model.manualTesting {
-                try await Task.sleep(for: .milliseconds(5))
-            }
+            await model.submitManualKey()?.value
         } else if entry == "selected" {
             await model.activate(kind: "codex-cli")
         }
@@ -4925,14 +5202,14 @@ struct OnboardingAISetupTests {
         model.manualProviderID = "openai-api-key"
         model.manualKey = "old-route-secret"
 
-        model.submitManualKey()
+        let activation = model.submitManualKey()
         #expect(model.manualTesting)
         #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
         model.resetForGatewayChange()
         #expect(OnboardingController.shared.busyReason == nil)
         config.setToken("route-b-token")
         routeIdentity.set("remote:id:gateway-b")
-        await settleQueuedAISetupTasks()
+        await activation?.value
 
         let requests = await recorder.snapshot()
         #expect(requests.methods == ["openclaw.setup.detect"])
@@ -4984,11 +5261,7 @@ struct OnboardingAISetupTests {
         model.manualKey = "must-not-send"
         config.switchToken(to: "token-b", afterReads: 2)
 
-        model.submitManualKey()
-        for _ in 0..<200 {
-            guard model.manualTesting else { break }
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await model.submitManualKey()?.value
 
         let requests = await recorder.snapshot()
         #expect(requests.methods == ["openclaw.setup.detect"])
@@ -5549,14 +5822,7 @@ struct OnboardingAISetupTests {
             scheduledDeadlines.append((deadline, routeIdentity))
         }
 
-        model.submitManualKey()
-        // The full suite can starve MainActor work; wait for state instead of a one-second budget.
-        for _ in 0..<2000 {
-            if !model.manualTesting, model.waitingForPendingActivationDeadline {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await model.submitManualKey()?.value
 
         #expect(await (recorder.snapshot()).methods == [
             "openclaw.setup.detect",

@@ -384,6 +384,8 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
 
+If the app cannot prepare a file or open the share sheet, it shows **Could not share file** and keeps the preview open so you can retry or go back.
+
 ## Review command approvals
 
 An operator connection with `operator.admin`, or a paired

@@ -66,6 +66,11 @@ views to switch between.
 
 ## Build a dashboard by asking
 
+For a pinned data summary, ask for a **native report** with text, metrics, tables,
+charts, or links. Reports render directly on the dashboard without an iframe or
+inline preview. The agent updates the report's data when you ask; use an HTML
+widget when you need custom interactivity. See [Native dashboard reports](/tools/show-widget#native-dashboard-reports).
+
 Watch Patrick Erichsen build an OpenClaw 2.0 release dashboard from one prompt:
 
 <iframe
@@ -83,8 +88,8 @@ Ask your agent for what you want to see:
 > revenue. Add "Bars" and "Trend" buttons that switch views. Pin it to my
 > dashboard.
 
-The agent renders the widget inline in the chat first, so you can look at it
-before it goes anywhere. From there:
+For this interactive HTML widget, the agent renders an inline chat preview first.
+From there:
 
 - **You pin it**: hover an inline widget and choose **Pin to dashboard**.
 - **Or the agent pins it** directly when you ask, and updates it later by
@@ -118,8 +123,9 @@ never needs the agent.
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with
   `set_presentation` and `presentation: "split"` or `"expanded"`. The `show_widget` tool
-  creates or refreshes custom HTML and registered-source widgets; updating an
-  existing widget uses `pin: true`, the same `name`, and new `widget_code`.
+  creates or refreshes native reports, custom HTML, and registered-source widgets.
+  An update uses `pin: true`, the same `name`, and new `widget_code` for HTML or
+  registered source, or a new `report` object for a native report.
   Board snapshots identify each widget's `contentOwner` and, when applicable,
   `registeredContentKind`; remove a widget before replacing its content owner
   or registered source kind.

@@ -238,6 +238,8 @@ describe("SQLite session entry cache", () => {
   ])("preserves list parsing for %s rows", (_name, entryJson, readable) => {
     const scope = createSessionScope("raw-list-projection");
     const database = openOpenClawAgentDatabase(scope);
+    // Raw runtime writes follow canonical admission; this case isolates subsequent JSON decoding.
+    listSessionEntriesCore(scope);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
@@ -357,6 +359,7 @@ describe("SQLite session entry cache", () => {
     const primary = openOpenClawAgentDatabase(scope);
     const first = listSessionEntriesCore({ ...scope, clone: false });
     const alternate = new DatabaseSync(primary.path, { readOnly: true });
+    const parse = vi.spyOn(JSON, "parse");
 
     try {
       parseSessionEntryCalls.mockClear();
@@ -366,7 +369,9 @@ describe("SQLite session entry cache", () => {
       );
       expect(alternateSnapshot.entries.get(scope.sessionKey)?.label).toBe("connection-identity");
       const alternateEntry = alternateSnapshot.entries.get(scope.sessionKey);
-      expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
+      expect(
+        parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
+      ).toHaveLength(1);
 
       parseSessionEntryCalls.mockClear();
       const second = listSessionEntriesCore({ ...scope, clone: false });
@@ -382,7 +387,11 @@ describe("SQLite session entry cache", () => {
 
       expect(alternateAgain.entries.get(scope.sessionKey)).toBe(alternateEntry);
       expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+      expect(
+        parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
+      ).toHaveLength(1);
     } finally {
+      parse.mockRestore();
       clearNodeSqliteKyselyCacheForDatabase(alternate);
       alternate.close();
     }
