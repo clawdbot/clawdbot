@@ -334,6 +334,54 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("No sessions found");
   });
 
+  it("selects a trajectory target without decoding unrelated saved prompts", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        type: "tool.result",
+        ts: "2026-05-18T12:04:21.000Z",
+        data: { name: "selected", success: true },
+      }),
+    ]);
+    for (let index = 0; index < 100; index += 1) {
+      await writeSessionEntry(`agent:main:unrelated:${index}`, {
+        sessionId: `unrelated-${index}`,
+        skillsSnapshot: {
+          prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`,
+          skills: [],
+        },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: 1,
+          workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
+          systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 0, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
+        },
+      });
+    }
+
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      await sessionsTailCommand(
+        { agent: "main", store: storePath, sessionKey, tail: "1" },
+        runtime,
+      );
+
+      expect(
+        parse.mock.calls.filter(
+          ([value]) => typeof value === "string" && value.includes("UNRELATED_TAIL_PAYLOAD_"),
+        ),
+      ).toHaveLength(0);
+      expect(runtimeOutput(runtime)).toContain("selected ok");
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("isolates trajectory rows by session id", async () => {
     const runtime = makeRuntime();
     await writeSessionEntry();

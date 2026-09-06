@@ -299,6 +299,7 @@ export async function sessionsTailCommand(
     for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: target.agentId,
       storePath: target.storePath,
+      projection: "list",
     })) {
       const selection = buildTailSelection({
         agentId: target.agentId,
