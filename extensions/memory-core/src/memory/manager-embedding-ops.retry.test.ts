@@ -141,6 +141,12 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       () =>
         '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
     ],
+    // Zhipu names the bound on the input array itself, with no adjacent
+    // `embeddings` token, under its generic 1214 invalid-parameter code.
+    [
+      "an explicit input array item cap",
+      () => '{"error":{"code":"1214","message":"input array max 10"}}',
+    ],
   ])(
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {

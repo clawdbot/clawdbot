@@ -215,6 +215,8 @@ describe("memory embedding policy", () => {
       "Embeddings API input limit exceeded: max 10, got 33. Request id: fixture-000597000",
       "embeddings max input length is 16",
       'HTTP 400: {"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
+      // Zhipu embedding-3 caps `input` at 64 items under its generic 1214 code.
+      'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"1214","message":"input array max 64"}}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
       expect(isRetryableMemoryEmbeddingError(message)).toBe(false);
@@ -229,6 +231,9 @@ describe("memory embedding policy", () => {
       "batch size is invalid, it should not be larger than unknown; request id 12345",
       "batch size is invalid, it should not be smaller than 20",
       "input size is invalid, it should not be larger than 20",
+      // Code 1214 alone, an item index, or a bare limit phrase without a number stay terminal.
+      'HTTP 400: {"error":{"code":"1214","message":"input array element 3 must be a string"}}',
+      'HTTP 400: {"error":{"code":"1214","message":"input array exceeds the maximum length"}}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(false);
     }
