@@ -240,6 +240,88 @@ describe("LINE accounts", () => {
       expect(account.tokenSource).toBe("file");
     });
 
+    it("reports an unresolved channel-level SecretRef as configured but unavailable", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            channelAccessToken: { source: "store", provider: "default", id: "LINE_TOKEN" },
+            channelSecret: { source: "store", provider: "default", id: "LINE_SECRET" },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.channelAccessToken).toBe("");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.tokenSource).toBe("config");
+      expect(account.signingSecretStatus).toBe("configured_unavailable");
+      expect(account.credentialDiagnostics).toBeUndefined();
+    });
+
+    it("reads a SecretRef the runtime already resolved in place", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            channelAccessToken: "resolved-token",
+            channelSecret: "resolved-secret",
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.channelAccessToken).toBe("resolved-token");
+      expect(account.tokenStatus).toBe("available");
+      expect(account.tokenSource).toBe("config");
+    });
+
+    it("does not fall back to a credential file or the environment for an unresolved SecretRef", () => {
+      vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
+      const tokenFile = createSecretFile("token.txt", "file-token");
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            channelAccessToken: { source: "store", provider: "default", id: "LINE_TOKEN" },
+            tokenFile,
+            channelSecret: "test-secret",
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.channelAccessToken).toBe("");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.tokenSource).toBe("config");
+    });
+
+    it("resolves an account SecretRef before falling back to channel-level credentials", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            channelAccessToken: "base-token",
+            channelSecret: "base-secret",
+            accounts: {
+              default: {
+                channelAccessToken: { source: "store", provider: "default", id: "LINE_TOKEN" },
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.channelAccessToken).toBe("");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.channelSecret).toBe("base-secret");
+    });
+
     it("resolves default account credentials from accounts.default", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -399,6 +481,18 @@ describe("LINE accounts", () => {
   describe("listLineAccountIds", () => {
     it("keeps unconfigured channels empty", () => {
       expect(listLineAccountIds({})).toEqual([]);
+    });
+
+    it("lists the default account when the channel token is a SecretRef", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            channelAccessToken: { source: "store", provider: "default", id: "LINE_TOKEN" },
+          },
+        },
+      };
+
+      expect(listLineAccountIds(cfg)).toEqual([DEFAULT_ACCOUNT_ID]);
     });
 
     it("preserves configured named-account insertion order", () => {

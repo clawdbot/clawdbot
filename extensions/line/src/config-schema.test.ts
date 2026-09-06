@@ -66,4 +66,30 @@ describe("LineConfigSchema", () => {
       'channels.line.dmPolicy="open" requires channels.line.allowFrom to include "*"',
     );
   });
+
+  it("accepts SecretRef credentials on the channel and account surfaces", () => {
+    const result = LineConfigSchema.safeParse({
+      channelAccessToken: { source: "store", provider: "default", id: "LINE_TOKEN" },
+      channelSecret: { source: "file", provider: "vault", id: "/line/secret" },
+      accounts: {
+        work: {
+          channelAccessToken: { source: "env", provider: "default", id: "WORK_LINE_TOKEN" },
+          channelSecret: "work-secret",
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a SecretRef whose provider alias is not a valid alias", () => {
+    const result = LineConfigSchema.safeParse({
+      channelAccessToken: { source: "store", provider: "Not An Alias", id: "LINE_TOKEN" },
+    });
+
+    if (result.success) {
+      throw new Error("Expected credential validation to fail");
+    }
+    expect(result.error.issues[0]?.path).toEqual(["channelAccessToken", "provider"]);
+  });
 });

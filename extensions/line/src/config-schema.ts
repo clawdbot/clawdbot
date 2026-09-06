@@ -8,7 +8,13 @@ import {
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
+import {
+  buildSecretInputSchema,
+  registerSensitiveConfigSchema,
+} from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
+
+const SecretInputSchema = buildSecretInputSchema();
 
 const ThreadBindingsSchema = z
   .object({
@@ -25,8 +31,8 @@ const LineCommonConfigSchemaBase = z.object({
   configWrites: z.boolean().optional(),
   joinIntro: z.boolean().optional(),
   historyLimit: z.number().int().min(0).optional(),
-  channelAccessToken: z.string().optional(),
-  channelSecret: z.string().optional(),
+  channelAccessToken: registerSensitiveConfigSchema(SecretInputSchema.optional()),
+  channelSecret: registerSensitiveConfigSchema(SecretInputSchema.optional()),
   tokenFile: z.string().optional(),
   secretFile: z.string().optional(),
   name: z.string().optional(),

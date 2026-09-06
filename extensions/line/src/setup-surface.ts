@@ -1,5 +1,6 @@
 // Line plugin module implements setup surface behavior.
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAllowFromSection,
   createPromptParsedAllowFromForAccount,
@@ -117,10 +118,8 @@ function createLineTokenCredential(params: {
         normalizeOptionalString(account.channelSecret),
       ),
     hasConfiguredValue: (account) =>
-      Boolean(
-        normalizeOptionalString(account.config[params.configKey]) ??
-        normalizeOptionalString(account.config[params.fileKey]),
-      ),
+      hasConfiguredSecretInput(account.config[params.configKey]) ||
+      Boolean(normalizeOptionalString(account.config[params.fileKey])),
     resolvedValue: (account) => normalizeOptionalString(account[params.configKey]),
     envValue: ({ accountId }) =>
       accountId === DEFAULT_ACCOUNT_ID

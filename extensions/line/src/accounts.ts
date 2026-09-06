@@ -10,7 +10,12 @@ import {
   resolveListedDefaultAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { SecretDefaults } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  hasConfiguredSecretInput,
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import type {
   LineAccountConfig,
   LineConfig,
@@ -40,19 +45,30 @@ function resolveLineCredential(params: {
   credentialKey: "channelAccessToken" | "channelSecret";
   fileKey: "tokenFile" | "secretFile";
   envKey: "LINE_CHANNEL_ACCESS_TOKEN" | "LINE_CHANNEL_SECRET";
+  secretDefaults?: SecretDefaults;
 }): ResolvedCredential {
   const { accountId, baseConfig, accountConfig, credentialKey, fileKey, envKey } = params;
   const candidates =
     accountId === DEFAULT_ACCOUNT_ID ? [accountConfig, baseConfig] : [accountConfig];
 
   for (const [index, config] of candidates.entries()) {
-    const credential = config?.[credentialKey]?.trim();
-    if (credential) {
-      return { value: credential, source: "config", status: "available" };
+    const scope = index === 0 ? `accounts.${accountId}.` : "";
+    const credential = resolveSecretInputString({
+      value: config?.[credentialKey],
+      path: `channels.line.${scope}${credentialKey}`,
+      defaults: params.secretDefaults,
+      mode: "inspect",
+    });
+    if (credential.status === "available") {
+      return { value: credential.value, source: "config", status: "available" };
+    }
+    // A configured reference owns this credential even while the runtime has not resolved it:
+    // falling through would authenticate with a different credential than the operator named.
+    if (credential.status === "configured_unavailable") {
+      return { value: "", source: "config", status: "configured_unavailable" };
     }
     const file = config?.[fileKey];
     if (file?.trim()) {
-      const scope = index === 0 ? `accounts.${accountId}.` : "";
       const result = tryReadSecretFileSync(
         file,
         "LINE credential file",
@@ -87,6 +103,8 @@ export function resolveLineAccount(params: {
   const accounts = lineConfig?.accounts;
   const accountConfig = resolveAccountEntry(accounts, accountId);
 
+  const secretDefaults = cfg.secrets?.defaults;
+
   const token = resolveLineCredential({
     accountId,
     baseConfig: lineConfig,
@@ -94,6 +112,7 @@ export function resolveLineAccount(params: {
     credentialKey: "channelAccessToken",
     fileKey: "tokenFile",
     envKey: "LINE_CHANNEL_ACCESS_TOKEN",
+    secretDefaults,
   });
 
   const secret = resolveLineCredential({
@@ -103,6 +122,7 @@ export function resolveLineAccount(params: {
     credentialKey: "channelSecret",
     fileKey: "secretFile",
     envKey: "LINE_CHANNEL_SECRET",
+    secretDefaults,
   });
 
   const mergedConfig: LineConfig & LineAccountConfig = resolveMergedLineAccountConfig(
@@ -144,7 +164,7 @@ export function listLineAccountIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
 
   if (
-    lineConfig?.channelAccessToken?.trim() ||
+    hasConfiguredSecretInput(lineConfig?.channelAccessToken, cfg.secrets?.defaults) ||
     lineConfig?.tokenFile ||
     process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()
   ) {
