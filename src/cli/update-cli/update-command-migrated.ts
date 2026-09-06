@@ -217,9 +217,15 @@ export async function continueMigratedUpdateInFreshProcess(
     if (response.result.status !== "ok") {
       await windowsRecovery?.complete(false);
     }
-    await params.packageTransaction?.complete().catch((error: unknown) => {
-      defaultRuntime.error(`Update backup cleanup failed: ${String(error)}`);
-    });
+    const retained = await params.packageTransaction
+      ?.complete({ activationVerified: response.result.status === "ok" })
+      .catch((error: unknown) => {
+        defaultRuntime.error(`Update backup cleanup failed: ${String(error)}`);
+      });
+    if (retained) {
+      response.result.steps.push(retained);
+      defaultRuntime.error(retained.stderrTail);
+    }
     return { result: response.result, exitCode: response.exitCode };
   } catch (error) {
     await windowsRecovery?.complete(false);

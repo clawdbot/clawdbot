@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -520,6 +523,48 @@ describe("failed package update recovery safety", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+  });
+
+  it("retains and reports the recovery backup after an older-target backup move partially fails", async () => {
+    const base = tempDirs.make("update-older-target-backup-");
+    const { result, transaction, packageRoot } = await createRetainedPackageSwap(base, true);
+    const backupRuntime = path.join(transaction.backupRoot, "dist", "index.js");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(base, "state") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    expect(result.activePackageRoot).toBeNull();
+    await expect(fs.readFile(backupRuntime, "utf8")).resolves.toBe("export {};\n");
+
+    const failure = await finishFailedUpdate(
+      {
+        status: "error",
+        mode: "npm",
+        reason: result.step.name,
+        root: result.activePackageRoot ?? undefined,
+        before: { version: "1.0.0" },
+        steps: [result.step],
+        durationMs: 1,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      },
+      {
+        run,
+        originalRoot: packageRoot,
+        packageTransaction: transaction,
+        schemaVersions: undefined,
+        stopped: false,
+      },
+    );
+
+    await expect(fs.readFile(backupRuntime, "utf8")).resolves.toBe("export {};\n");
+    expect(failure.result.root).toBeUndefined();
+    expect(failure.result.recovery?.serviceRestartSafe).toBe(false);
+    expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
+    expect(failure.result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stderrTail: expect.stringContaining(transaction.backupRoot) }),
+      ]),
+    );
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restartCandidate).not.toHaveBeenCalled();
   });
 
   it("restores the managed install root and keeps its backup until rolled-back is durable", async () => {

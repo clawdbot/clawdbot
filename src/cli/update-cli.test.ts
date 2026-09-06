@@ -6530,7 +6530,7 @@ describe("update-cli", () => {
     await expect(fs.readFile(packageEntry, "utf8")).resolves.toBe("candidate package entry\n");
     const rollback = await retained.rollback();
     expect(rollback.exitCode).toBe(0);
-    await retained.complete();
+    await retained.complete({ activationVerified: false });
     const doctorStep = result.steps.find((step) => step.name === "openclaw doctor");
     expect(doctorStep?.exitCode).toBe(1);
     expect(doctorStep?.advisory).toBeUndefined();

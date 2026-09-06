@@ -435,8 +435,11 @@ activation window, runs the required full Doctor migration pass under exclusive
 maintenance, then restarts and verifies the final snapshot. Unchanged plugins
 use read-only validation and readiness checks without another full Doctor pass.
 
-The previous package tree remains available until the run is terminal. Automatic
-rollback requires that retained package, its pre-update verification, unchanged
+The previous package tree remains available until activation or package restoration
+is verified. If activation fails before a working package is confirmed and rollback
+cannot be verified, finalization retains the backup and reports its location. Keep
+that backup and repair the installation before restarting, including for older
+targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
 configuration content, and unchanged shared and affected per-agent SQLite
 `user_version` values. The updater restores the previous generation and verifies
 it running before finishing `rolled-back`, preserving the failing check as its

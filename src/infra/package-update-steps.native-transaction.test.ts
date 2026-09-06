@@ -108,21 +108,21 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           }
           return originalRename(...args);
         });
-        const backupUnlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+        const backupUnlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (entryPath) => {
           if (
             rollbackFailure === "backup-cleanup" &&
-            String(target) === path.join(packageRoot, "dist", "index.js")
+            String(entryPath) === path.join(packageRoot, "dist", "index.js")
           ) {
             await fs.rm(path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH), {
               force: true,
             });
-            await originalUnlink(target);
+            await originalUnlink(entryPath);
             cleanupRejected = true;
             throw Object.assign(new Error("source cleanup failed after commit"), {
               code: "EACCES",
             });
           }
-          return originalUnlink(target);
+          return originalUnlink(entryPath);
         });
         const update = runGlobalPackageUpdateSteps({
           installTarget: target,
@@ -295,7 +295,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             exitCode: 0,
             activePackageRoot: packageRoot,
           });
-          await retained?.complete();
+          await retained?.complete({ activationVerified: false });
           expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
             '"version":"1.0.0"',
           );
@@ -305,7 +305,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         if (siblingChange === "before") {
           // Exercise normal confirmation too: a stale project swap must not hide
           // the sibling in a backup that successful cleanup subsequently deletes.
-          await retained?.complete();
+          await retained?.complete({ activationVerified: false });
           await expect(fs.readFile(siblingEntry, "utf8")).resolves.toBe(
             "concurrent sibling package\n",
           );
@@ -367,7 +367,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           });
           expect(rollback.stderrTail).toContain("sibling");
           expect(rollback.stderrTail).not.toContain(base);
-          await retained.complete();
+          await retained.complete({ activationVerified: false });
           if (siblingChange === "after") {
             await expect(fs.readFile(lateSiblingEntry, "utf8")).resolves.toBe(
               "late sibling package\n",
@@ -417,7 +417,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           renameSpy.mockRestore();
         }
         if (rollbackFailure !== "none") {
-          await retained.complete();
+          await retained.complete({ activationVerified: false });
           if (rollbackFailure === "package") {
             await expect(fs.stat(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
             await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
@@ -429,7 +429,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           }
           return;
         }
-        await retained.complete();
+        await retained.complete({ activationVerified: false });
         await expect(
           fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
         ).resolves.toContain('"version":"1.0.0"');

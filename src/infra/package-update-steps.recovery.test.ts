@@ -265,8 +265,8 @@ describe("package update recovery safety", () => {
             expect(await transaction.rollback()).toEqual(restored);
             await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
           }
-          await transaction.complete();
-          await transaction.complete();
+          await transaction.complete({ activationVerified: outcome === "confirm" });
+          await transaction.complete({ activationVerified: outcome === "confirm" });
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain(`"version":"${outcome === "confirm" ? "2.0.0" : "1.0.0"}"`);

@@ -30,7 +30,7 @@ export type PackageUpdateTransaction = {
   rollback: () => Promise<
     UpdateStepResult & { activePackageRoot: string | null; reason?: "rollback-project-changed" }
   >;
-  complete: () => Promise<void>;
+  complete: (outcome: { activationVerified: boolean }) => Promise<UpdateStepResult | void>;
 };
 
 // Service suspension and cancellation belong to the caller. Carry their exact
@@ -435,13 +435,24 @@ export async function swapStagedPackageInstall(params: {
           })();
           return rollbackResult;
         },
-        complete: async () => {
-          if (
-            completed ||
-            rollbackRefused ||
-            (rollbackResult && (await rollbackResult).exitCode !== 0)
-          ) {
+        complete: async ({ activationVerified }): Promise<UpdateStepResult | void> => {
+          if (completed) {
             return;
+          }
+          // Retire backups only after verified activation or restoration. A failed
+          // backup move can leave its published copy as the only intact installation.
+          const outcomeVerified = rollbackResult
+            ? (await rollbackResult).exitCode === 0 && packageRollbackVerified
+            : projectActivated && activationVerified;
+          if (rollbackRefused || !outcomeVerified) {
+            return {
+              ...step(
+                1,
+                null,
+                `Installation recovery is unverified; inspect the installation and backups in ${backupRoot} before restarting.`,
+              ),
+              name: "global install backup retention",
+            };
           }
           completed = true;
           if (hadPackage) {

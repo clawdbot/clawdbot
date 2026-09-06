@@ -248,6 +248,14 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         rollbackStopState ?? params.preManagedServiceStop
       )?.windowsTaskAutoStartRecovery?.complete(false);
     }
+    const retireBackup =
+      finalResult.status === "ok" || finalResult.recovery?.packageRollbackVerified === true;
+    if (params.packageTransaction && !retireBackup) {
+      const retained = await params.packageTransaction.complete({ activationVerified: false });
+      if (retained) {
+        finalResult.steps = [...finalResult.steps, retained];
+      }
+    }
     recordNextAction(finalResult);
     if (notify) {
       await writeControlPlaneUpdateRestartSentinelBestEffort({
@@ -291,9 +299,13 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     const reportedResult = printFinalResult(
       recoverService ? completedResult(finalResult) : finalResult,
     );
-    await params.packageTransaction?.complete().catch((error: unknown) => {
-      defaultRuntime.error(`Update backup cleanup failed: ${formatErrorMessage(error)}`);
-    });
+    if (retireBackup) {
+      await params.packageTransaction
+        ?.complete({ activationVerified: finalResult.status === "ok" })
+        .catch((error: unknown) => {
+          defaultRuntime.error(`Update backup cleanup failed: ${formatErrorMessage(error)}`);
+        });
+    }
     if (restoreFailure) {
       // Persist the unsafe outcome before unwinding. Keep both failures for
       // recovery diagnostics, with the failed compensation as the primary cause.
