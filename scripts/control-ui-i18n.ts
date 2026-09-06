@@ -121,6 +121,7 @@ function usage(): never {
       "Usage:",
       "  node --import tsx scripts/control-ui-i18n.ts check",
       "  node --import tsx scripts/control-ui-i18n.ts sync [--write] [--locale <code>] [--force]",
+      "  node --import tsx scripts/control-ui-i18n.ts sync --write --locale <code> --refresh-key <key> [--refresh-key <key> ...]",
     ].join("\n"),
   );
   process.exit(2);
@@ -135,6 +136,7 @@ function parseArgs(argv: string[]) {
   let localeFilter: string | null = null;
   let write = false;
   let force = false;
+  const refreshKeys = new Set<string>();
 
   for (let index = 0; index < rest.length; index += 1) {
     const part = rest[index];
@@ -149,6 +151,18 @@ function parseArgs(argv: string[]) {
       case "--force":
         force = true;
         break;
+      case "--refresh-key": {
+        const key = rest[index + 1];
+        if (!key || key.startsWith("--")) {
+          throw new Error("--refresh-key requires a catalog key");
+        }
+        refreshKeys.add(key);
+        if (refreshKeys.size > 64) {
+          throw new Error("--refresh-key accepts at most 64 distinct keys");
+        }
+        index += 1;
+        break;
+      }
       default:
         usage();
     }
@@ -157,11 +171,17 @@ function parseArgs(argv: string[]) {
   if (command === "check" && write) {
     usage();
   }
+  if (refreshKeys.size > 0 && (command !== "sync" || !write || !localeFilter || force)) {
+    throw new Error(
+      "--refresh-key requires sync --write --locale and cannot be combined with --force",
+    );
+  }
 
   return {
     command,
     force,
     localeFilter,
+    refreshKeys,
     write,
   };
 }
@@ -1158,7 +1178,13 @@ export function assertNoControlUiFallbacks(
 
 async function syncLocale(
   entry: LocaleEntry,
-  options: { allowTranslate: boolean; checkOnly: boolean; force: boolean; write: boolean },
+  options: {
+    allowTranslate: boolean;
+    checkOnly: boolean;
+    force: boolean;
+    write: boolean;
+    refreshKeys: ReadonlySet<string>;
+  },
   context: LocaleRunContext,
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
@@ -1183,12 +1209,16 @@ async function syncLocale(
     entry,
     existingFlat: reusableExistingFlat,
     force: options.force,
+    refreshKeys: options.refreshKeys,
     hashText: hashControlUiTranslationText,
     previousMeta,
     sourceFlat,
     sourceHash,
     translationMemory: tm,
   });
+  if (options.refreshKeys.size > 0 && !allowTranslate) {
+    throw new Error("--refresh-key requires a configured translation provider");
+  }
 
   // Writing NEW English fallbacks trips the shipped-fallback CI gate
   // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
@@ -1228,7 +1258,11 @@ async function syncLocale(
       }
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      if (isProviderAuthOptional() && isProviderAuthError(failure)) {
+      if (
+        options.refreshKeys.size === 0 &&
+        isProviderAuthOptional() &&
+        isProviderAuthError(failure)
+      ) {
         logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
         return {
           changed: false,
@@ -1354,6 +1388,7 @@ async function main() {
         allowTranslate,
         checkOnly: args.command === "check",
         force: args.force,
+        refreshKeys: args.refreshKeys,
         write: args.write,
       },
       {
