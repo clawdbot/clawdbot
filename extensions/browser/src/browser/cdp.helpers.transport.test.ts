@@ -63,9 +63,11 @@ async function startAuthenticatedCdpServer(params: {
     sockets,
     authorizations,
     close: async () => {
-      server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
     },
   };

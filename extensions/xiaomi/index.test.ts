@@ -274,7 +274,7 @@ describe("xiaomi provider plugin", () => {
   });
 
   it("exposes Token Plan v2.5 catalog rows only after a provider config selects a region", async () => {
-    const response = Response.json({ data: [] });
+    const response = Response.json({ data: [{ id: "mimo-v2.5" }, { id: "mimo-v2.5-pro" }] });
     const release = vi.fn(async () => undefined);
     const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
       response,
@@ -323,8 +323,8 @@ describe("xiaomi provider plugin", () => {
       expect(configured.provider.baseUrl).toBe("https://token-plan-cn.xiaomimimo.com/v1");
       expect(configured.provider.api).toBe("openai-completions");
       expect(configured.provider.models?.map((model) => model.id)).toEqual([
-        "mimo-v2.5-pro",
         "mimo-v2.5",
+        "mimo-v2.5-pro",
       ]);
       expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
         "text",

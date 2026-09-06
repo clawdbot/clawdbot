@@ -7,7 +7,6 @@ import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
-  type UpdateChannel,
 } from "../../../infra/update-channels.js";
 import {
   resolveDefaultPluginExtensionsDir,
@@ -120,7 +119,6 @@ export async function resolveConfiguredPluginInstallContext(params: {
       installRecords: records,
       configuredPluginIds: params.configuredPluginIds,
       currentVersion,
-      updateChannel,
     });
   const installedPluginIdsWithRepairablePackages = new Set([
     ...installedPluginIdsWithRepairablePackageDiagnostics,
@@ -201,9 +199,6 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "extension entry unreadable",
   "requires compiled runtime output",
 ] as const;
-const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[1-9]\d*$/;
-const OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE =
-  /^(\d{4}\.[1-9]\d?\.[1-9]\d?)(?:-beta\.[1-9]\d*)?$/;
 
 function setDownloadableInstallCandidate(params: {
   candidates: Map<string, DownloadableInstallCandidate>;
@@ -529,31 +524,12 @@ function resolveInstalledRuntimePackageVersion(params: {
 function installedRuntimePackageVersionIsStale(params: {
   installedVersion: string | undefined;
   currentVersion: string;
-  updateChannel: UpdateChannel;
 }): boolean {
   if (!params.installedVersion) {
     return false;
   }
-  if (
-    params.updateChannel === "beta" &&
-    betaCompanionMatchesCurrentStableVersion({
-      installedVersion: params.installedVersion,
-      currentVersion: params.currentVersion,
-    })
-  ) {
-    return false;
-  }
   const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
   return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
-}
-
-function betaCompanionMatchesCurrentStableVersion(params: {
-  installedVersion: string;
-  currentVersion: string;
-}): boolean {
-  const installedBase = OPENCLAW_BETA_COMPANION_VERSION_RE.exec(params.installedVersion)?.[1];
-  const currentBase = OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(params.currentVersion)?.[1];
-  return Boolean(installedBase && currentBase && installedBase === currentBase);
 }
 
 function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
@@ -561,7 +537,6 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   installRecords: Record<string, PluginInstallRecord>;
   configuredPluginIds: ReadonlySet<string>;
   currentVersion: string;
-  updateChannel: UpdateChannel;
 }): Set<string> {
   const pluginIds = new Set<string>();
   const currentVersion = normalizeOptionalLowercaseString(params.currentVersion);
@@ -588,7 +563,6 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
       installedRuntimePackageVersionIsStale({
         installedVersion,
         currentVersion,
-        updateChannel: params.updateChannel,
       })
     ) {
       pluginIds.add(candidate.pluginId);

@@ -29,7 +29,7 @@ function isSummaryRole(role: unknown): boolean {
 }
 
 /** Returns whether a message has content worth preserving as conversation. */
-export function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+function hasMeaningfulConversationContent(message: AgentMessage): boolean {
   if ("excludeFromContext" in message && message.excludeFromContext === true) {
     return false;
   }

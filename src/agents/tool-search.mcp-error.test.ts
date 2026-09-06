@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { runAgentLoop, type AgentEvent, type AgentMessage } from "./runtime/index.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
 import {
   applyToolSearchCatalog,
@@ -34,14 +35,7 @@ const model: Model = {
   maxTokens: 1000,
 };
 
-const testUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const testUsage = createZeroUsageFixture();
 
 function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
   const tool = {

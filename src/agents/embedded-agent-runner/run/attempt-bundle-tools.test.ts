@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
@@ -41,6 +42,7 @@ vi.mock("../effective-tool-policy.js", () => ({
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
@@ -68,9 +70,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runtimePlan: {},
         sessionId: "session",
       },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
+      setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
@@ -81,7 +81,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         toolsEnabled: true,
         toolsRaw,
       },
-      sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
 
@@ -192,7 +191,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       config: input.attempt.config,
       manifestRegistry: registry,
     });
-    input.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
+    input.setup.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
     mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "chrome-dev__click" }, { name: "chrome-dev-2__click" }],
@@ -421,53 +420,44 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     ]);
   });
 
-  it("disposes prepared bundle runtimes when later policy setup fails", async () => {
-    const disposeMcp = vi.fn(async () => {});
-    const disposeLsp = vi.fn(async () => {});
-    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [],
-      dispose: disposeMcp,
-    });
-    mocks.createBundleLspToolRuntime.mockResolvedValue({
-      tools: [],
-      dispose: disposeLsp,
-    });
-    mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => {
-      throw new Error("bundle policy failed");
-    });
+  it.each([undefined, "MCP", "LSP"])(
+    "disposes prepared runtimes after policy failure and retains %s cleanup failure",
+    async (failedCleanup) => {
+      const disposeMcp = vi.fn(async () => {
+        if (failedCleanup === "MCP") {
+          throw new Error("MCP disposal failed");
+        }
+      });
+      const disposeLsp = vi.fn(async () => {
+        if (failedCleanup === "LSP") {
+          throw new Error("LSP disposal failed");
+        }
+      });
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [],
+        dispose: disposeMcp,
+      });
+      mocks.createBundleLspToolRuntime.mockResolvedValue({
+        tools: [],
+        dispose: disposeLsp,
+      });
+      mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => {
+        throw new Error("bundle policy failed");
+      });
 
-    const input = {
-      agentDir: "/tmp/agent",
-      attempt: {
-        config: {},
-        model: {},
-        modelId: "model",
-        provider: "provider",
-        runId: "run",
-        runtimePlan: {},
-        sessionId: "session",
-      },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
-      isRawModelRun: false,
-      preparedToolBase: {
-        cronCreatorToolAllowlist: [],
-        effectiveToolsAllow: undefined,
-        localModelLeanPreserveToolNames: [],
-        runtimeCapabilityProfile: undefined,
-        toolsEnabled: true,
-        toolsRaw: [],
-      },
-      sessionAgentId: "main",
-    } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
+      const input = createInput([], []);
 
-    await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
-    expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
-    );
-    expect(disposeMcp).toHaveBeenCalledOnce();
-    expect(disposeLsp).toHaveBeenCalledOnce();
-  });
+      const cleanupScope = createAgentCleanupScope();
+      await expect(
+        cleanupScope.run(() => prepareEmbeddedAttemptBundleTools(input)),
+      ).rejects.toThrow("bundle policy failed");
+      expect(cleanupScope.outcome).toBe(failedCleanup ? "uncertain" : "closed");
+      expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+      );
+      expect(disposeMcp).toHaveBeenCalledOnce();
+      expect(disposeLsp).toHaveBeenCalledOnce();
+    },
+  );
 });

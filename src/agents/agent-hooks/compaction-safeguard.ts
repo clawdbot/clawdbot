@@ -27,10 +27,7 @@ import {
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { computeAdaptiveChunkRatioWithWorker } from "../compaction-planning-worker.js";
 import { buildHistoryPrunePlan } from "../compaction-planning.js";
-import {
-  hasMeaningfulConversationContent,
-  isRealConversationMessage,
-} from "../compaction-real-conversation.js";
+import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -1468,8 +1465,6 @@ const testing = {
   formatFileOperations,
   computeAdaptiveChunkRatio,
   readWorkspaceContextForSummary,
-  hasMeaningfulConversationContent,
-  isRealConversationMessage,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,

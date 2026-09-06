@@ -351,20 +351,29 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {
+  it("emits dynamic tool summaries and full output once across native notifications", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       onAgentEvent,
       onToolResult,
     });
 
-    projector.recordDynamicToolCall({
-      callId: "call-browser-1",
+    const item = {
+      type: "dynamicToolCall",
+      id: "call-browser-1",
       tool: "browser",
       arguments: { action: "open", url: "http://127.0.0.1:3000" },
+      status: "inProgress",
+    };
+    await projector.handleNotification(forCurrentTurn("item/started", { item }));
+    expect(onToolResult).not.toHaveBeenCalled();
+    projector.recordDynamicToolCall({
+      callId: item.id,
+      tool: item.tool,
+      arguments: item.arguments,
     });
 
     const toolEvents = onAgentEvent.mock.calls.filter(([event]) => {
@@ -375,6 +384,27 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(onToolResult).toHaveBeenCalledTimes(1);
     const payload = mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string };
     expect(payload.text).toContain("Browser");
+
+    const result = {
+      callId: item.id,
+      tool: item.tool,
+      success: true,
+      contentItems: [{ type: "inputText" as const, text: "Browser opened" }],
+    };
+    projector.recordDynamicToolResult(result);
+    projector.recordDynamicToolResult(result);
+    const completedItem = {
+      ...item,
+      status: "completed",
+      success: true,
+      contentItems: result.contentItems,
+    };
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: completedItem }));
+    await projector.handleNotification(turnCompleted([completedItem]));
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(onToolResult).toHaveBeenLastCalledWith({
+      text: expect.stringContaining("Browser opened"),
+    });
   });
 
   it("does not replay transcript summaries when only tool output is enabled", async () => {

@@ -171,6 +171,8 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   };
 }
 
+export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
+
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
@@ -495,12 +497,10 @@ export function installEmbeddedAttemptContextGuards(input: {
   };
 }
 
-type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
-
 export function prepareEmbeddedAttemptSkills(params: {
   attempt: EmbeddedRunAttemptParams;
   effectiveWorkspace: string;
-  sandbox: AttemptSetup["sandbox"];
+  sandbox: EmbeddedAttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
   const executionAllow = params.attempt.toolExecutionAllow;

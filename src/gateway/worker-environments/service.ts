@@ -1,10 +1,3 @@
-import type {
-  WorkerPortalParams,
-  WorkerSessionsSendParams,
-  WorkerSessionsSpawnParams,
-  WorkerSessionToolResult,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
@@ -12,7 +5,6 @@ import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import type { WorkerConnectionIdentity } from "./admission.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
@@ -97,33 +89,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   executeInference: WorkerInferenceExecutor;
   inferenceStore?: WorkerInferenceStore;
   placementStore?: WorkerSessionPlacementGate;
-  executeSessionTool?: (
-    params:
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "skill_workshop";
-          request: WorkerSkillWorkshopParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "sessions_spawn";
-          request: WorkerSessionsSpawnParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "sessions_send";
-          request: WorkerSessionsSendParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "portal";
-          request: WorkerPortalParams;
-          signal?: AbortSignal;
-        },
-  ) => Promise<WorkerSessionToolResult>;
+  executeSessionTool?: Parameters<typeof createWorkerTurnRpc>[0]["executeSessionTool"];
 };
 
 export type WorkerEnvironmentReconcileCore = (
@@ -293,13 +259,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const credentialBroker = createWorkerCredentialBroker({
+    ...options,
     store,
     prepareInstallation,
     tunnelManager: tunnelLifecycle,
-    workerCredentialTtlMs: options.workerCredentialTtlMs,
-    generateWorkerCredential: options.generateWorkerCredential,
-    liveEvents: options.liveEvents,
-    placementStore: options.placementStore,
     now,
     isStopping: () => stopping,
     cancelInferenceEnvironment: (environmentId) => inference.cancelEnvironment(environmentId),
@@ -310,22 +273,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   });
 
   const providerLifecycle = createWorkerProviderLifecycle({
+    ...options,
     store,
-    getConfig: options.getConfig,
-    resolveProvider: options.resolveProvider,
     prepareInstallation,
-    bootstrapWorker: options.bootstrapWorker,
-    resolveSshIdentity: options.resolveSshIdentity,
-    ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
-    prepareNodeBootstrap: options.prepareNodeBootstrap,
-    projectNamespace: options.projectNamespace,
-    prepareNodeRuntime: options.prepareNodeRuntime,
-    closeNodeRuntime: options.closeNodeRuntime,
-    prepareNodeEnrollment: options.prepareNodeEnrollment,
-    closeNodeEnrollment: options.closeNodeEnrollment,
-    retireNodeEnrollment: options.retireNodeEnrollment,
-    placementStore: options.placementStore,
-    providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,
     callBootstrap,
@@ -341,12 +291,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   });
 
   const environmentAccess = createWorkerEnvironmentAccess({
+    ...options,
     store,
-    getConfig: options.getConfig,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
-    tunnelManager: options.tunnelManager,
-    nodeTunnelManager: options.nodeTunnelManager,
-    nodeDesktopCarrier: options.nodeDesktopCarrier,
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
     inState,
@@ -357,13 +304,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   });
 
   const turnRpc = createWorkerTurnRpc({
+    ...options,
     store,
     prepareInstallation,
-    applyTranscriptCommit: options.applyTranscriptCommit,
-    liveEvents: options.liveEvents,
-    placementStore: options.placementStore,
-    executeSessionTool: options.executeSessionTool,
-    executeComputer: options.executeComputer,
     inference,
     isStopping: () => stopping,
     now,
