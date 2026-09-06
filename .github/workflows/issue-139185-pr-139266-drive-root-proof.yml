@@ -1,0 +1,49 @@
+name: Issue 139185 PR 139266 drive-root proof
+
+on:
+  push:
+    branches: [maint/proof-139266-drive-root]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+        id: msys
+        with:
+          msystem: MSYS
+          update: true
+          install: git
+      - name: Compare MSYS2 and native Git drive-root output
+        shell: pwsh
+        env:
+          MSYS_ROOT: ${{ steps.msys.outputs.msys2-location }}
+        run: |
+          $nativeGit = (Get-Command git.exe).Source
+          $probeRoot = Join-Path $env:RUNNER_TEMP "openclaw-drive-root-probe"
+          New-Item -ItemType Directory -Path $probeRoot | Out-Null
+          subst R: $probeRoot
+          try {
+            Push-Location R:\
+            try {
+              & "$env:MSYS_ROOT\usr\bin\git.exe" init --quiet .
+              $msysTop = (& "$env:MSYS_ROOT\usr\bin\git.exe" rev-parse --show-toplevel).Trim()
+              $nativeTop = (& $nativeGit rev-parse --show-toplevel).Trim()
+              "MSYS_DRIVE_ROOT_OUTPUT=$msysTop"
+              "NATIVE_DRIVE_ROOT_OUTPUT=$nativeTop"
+              if ($msysTop -notin @("/r", "/r/")) {
+                throw "Unexpected MSYS2 drive-root output"
+              }
+              if ($nativeTop -notmatch "^R:[/\\]?$") {
+                throw "Unexpected native Git drive-root output"
+              }
+            } finally {
+              Pop-Location
+            }
+          } finally {
+            subst R: /d
+          }
