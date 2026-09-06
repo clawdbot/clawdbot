@@ -29,6 +29,7 @@ import {
   requiresMcpCodexToolApproval,
   resolveProjectedMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
+import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type RequesterScopedHarnessMcpTools = {
@@ -185,7 +186,9 @@ function notConnectedToolResult(serverName: string, toolName: string) {
 
 function applyHarnessToolPolicy(
   tools: AnyAgentTool[],
-  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams & {
+    onFilter?: (event: ToolPolicyFilterEvent) => void;
+  },
 ): AnyAgentTool[] {
   if (tools.length === 0) {
     return tools;
@@ -209,6 +212,7 @@ function applyHarnessToolPolicy(
     config: params.policyContext?.config ?? params.cfg,
     conversationCapabilityProfile: profile,
     warn: params.warn ?? (() => undefined),
+    onFilter: params.onFilter,
   });
 }
 
@@ -281,12 +285,22 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     throw error;
   }
   try {
-    const policyWarnings: string[] = [];
+    // Conversation-policy notes (for example a dropped caller-provided groupId) describe the
+    // policy inputs, not MCP availability; they only join the blocker notice when the final
+    // policy pass actually removed a configured tool. Approval omissions always join it.
+    const policyNotes: string[] = [];
+    const omittedTools: string[] = [];
+    let policyDroppedTools = false;
     const policyParams = {
       ...params,
       warn: (message: string) => {
-        policyWarnings.push(message);
+        policyNotes.push(message);
         params.warn?.(message);
+      },
+      onFilter: (event: ToolPolicyFilterEvent) => {
+        if (event.after.length < event.before.length) {
+          policyDroppedTools = true;
+        }
       },
     };
     const fullPermission = params.autoApproveCodexAppServerApprovals === true;
@@ -300,7 +314,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
       ...(params.requestInteractiveCodexApproval
         ? { requestApproval: params.requestInteractiveCodexApproval }
         : {}),
-      onOmitted: (message) => policyWarnings.push(message),
+      onOmitted: (message) => omittedTools.push(message),
     });
     // App views outlive this attempt, so bind their callable surface to the
     // same complete catalog and final policy before any model tool can mint one.
@@ -312,7 +326,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
           ...projectedApproval,
           ...(params.requestInteractiveCodexApproval
             ? {}
-            : { onOmitted: (message: string) => policyWarnings.push(message) }),
+            : { onOmitted: (message: string) => omittedTools.push(message) }),
         },
       ),
     );
@@ -321,7 +335,8 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         ...(liveRuntime.diagnostics ?? []).map(
           (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
         ),
-        ...policyWarnings,
+        ...omittedTools,
+        ...(policyDroppedTools ? policyNotes : []),
       ],
       params.requestInteractiveCodexApproval ? "this run" : "this scheduled run",
     );

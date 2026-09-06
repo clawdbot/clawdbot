@@ -586,6 +586,73 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     await result.dispose();
   });
 
+  it("does not report incomplete MCP for a policy note that removed no tool", async () => {
+    const runtime = makeRuntime({ sessionId: "scheduled-group-note", requesterSenderId: "unused" });
+    delete runtime.requesterScope;
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
+    const warnings: string[] = [];
+
+    // Isolated heartbeat session key with a caller-provided Telegram group id: the final
+    // policy pass drops the group id (and says so) but keeps every configured tool.
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-group-note",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      autoApproveCodexAppServerApprovals: true,
+      policyContext: {
+        config: { agents: { entries: { demo: {} } } },
+        agentId: "demo",
+        sessionKey: "agent:demo:main:heartbeat",
+        groupId: "-1000000000001",
+        messageProvider: "telegram",
+        modelProvider: "openai",
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
+    expect(warnings).toContain(
+      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+    );
+    expect(result.diagnosticNotice).toBeUndefined();
+    await result.dispose();
+  });
+
+  it("keeps policy notes in the notice when the final policy pass removed tools", async () => {
+    const runtime = makeRuntime({ sessionId: "scheduled-group-deny", requesterSenderId: "unused" });
+    delete runtime.requesterScope;
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-group-deny",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      autoApproveCodexAppServerApprovals: true,
+      policyContext: {
+        config: { agents: { entries: { demo: {} } } },
+        agentId: "demo",
+        sessionKey: "agent:demo:main:heartbeat",
+        groupId: "-1000000000001",
+        messageProvider: "telegram",
+        modelProvider: "openai",
+        conversationToolPolicy: { deny: ["user-mail__inbox"] },
+      },
+    });
+
+    expect(result.tools).toEqual([]);
+    expect(result.diagnosticNotice).toContain(
+      "Configured MCP is incomplete for this scheduled run",
+    );
+    expect(result.diagnosticNotice).toContain("dropping caller-provided groupId");
+    await result.dispose();
+  });
+
   it("omits prompt-approved MCP tools from unattended execution", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-prompt", requesterSenderId: "unused" });
     delete runtime.requesterScope;
