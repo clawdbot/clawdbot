@@ -98,6 +98,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
+    const placement = selectedSession?.placement;
     const visibleWorkspaceConflict =
       workspaceConflict &&
       this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
@@ -306,7 +307,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
         personalReady:
           !hasAbortableSessionRun(state) &&
-          !isCloudWorkerPlacementState(selectedSession?.placement?.state) &&
+          !isCloudWorkerPlacementState(placement?.state) &&
           !workspaceConflict,
         isPresented: () => this.presented,
         isCurrent: () => {
@@ -655,8 +656,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       currentAgentId,
       ...chatProps,
       onAgentChange: (agentId) => {
-        const nextSessionKey = buildAgentMainSessionKey({ agentId });
-        this.onPaneSessionChange?.(this.paneId, nextSessionKey);
+        this.onPaneSessionChange?.(this.paneId, buildAgentMainSessionKey({ agentId }));
       },
       onSessionSelect: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);
