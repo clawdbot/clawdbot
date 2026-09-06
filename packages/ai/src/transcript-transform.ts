@@ -130,7 +130,9 @@ export function transformMessages<TApi extends Api>(
         }
       }
     } else if (message.role === "toolResult") {
-      const id = message.toolCallId.trim();
+      // SAFETY: toolCallId is statically required, but runtime toolResult messages
+      // may omit it; guard the trim so a missing id does not crash (#137729).
+      const id = (message.toolCallId ?? "").trim();
       const owner = asyncOwners.get(id);
       if (owner) {
         const results = relocated.get(owner) ?? [];
@@ -204,7 +206,8 @@ export function transformMessages<TApi extends Api>(
         };
       }
       if (message.role === "toolResult") {
-        const trimmedId = message.toolCallId.trim();
+        // SAFETY: same guard as the first pass — runtime toolResult may omit toolCallId (#137729).
+        const trimmedId = (message.toolCallId ?? "").trim();
         const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
         if (toolCallId !== message.toolCallId) {
           message = { ...message, toolCallId };
