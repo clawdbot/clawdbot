@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -111,16 +112,15 @@ afterEach(() => {
 
 describe("MemoryImportPage", () => {
   it("settles a failed roster load until Refresh retries it", async () => {
-    const roster = Promise.withResolvers<unknown>();
+    const roster = createDeferredCore<unknown>();
     const request = vi.fn((method: string) =>
       method === "agents.list" ? roster.promise : Promise.resolve(createPlan()),
     );
     const context = createContext(request);
     const agents = createAgentCapability(context.gateway);
-    context.agents = agents;
     // The application shell owns the initial shared roster request.
     const initial = agents.ensureList();
-    const page = await mountPage(context);
+    const page = await mountPage({ ...context, agents });
     try {
       roster.reject(new Error("Agent roster unavailable"));
       request.mockImplementation((method: string) =>
