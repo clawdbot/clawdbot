@@ -8,7 +8,7 @@ import {
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
-import { reapOwnedChildZombiesAfterTreeKill } from "../../scoped-child-reaper.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "../../scoped-child-reaper.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
@@ -405,22 +405,21 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   // gateway's process group regardless of intent, so the kill must avoid
   // group-kill. (#71662 follow-up — caught by Greptile review)
   const childIsDetached = useDetached && !spawned.usedFallback;
+  const scheduleAdoptedReapForChild = () => {
+    // Reap after Node exit/adoption — not at signal time — and never waitpid
+    // the tracked root (libuv owns that ChildProcess).
+    scheduleAdoptedChildZombieReapAfterExit(child, childIsDetached);
+  };
   const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
     signalProcessTree(pid, signal, { detached: childIsDetached });
-    reapOwnedChildZombiesAfterTreeKill({
-      rootPid: pid,
-      usedProcessGroup: childIsDetached,
-    });
+    scheduleAdoptedReapForChild();
   };
   const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
     new Promise<void>((resolve) => {
       signalProcessTree(pid, signal, {
         detached: childIsDetached,
         onComplete: () => {
-          reapOwnedChildZombiesAfterTreeKill({
-            rootPid: pid,
-            usedProcessGroup: childIsDetached,
-          });
+          scheduleAdoptedReapForChild();
           resolve();
         },
       });

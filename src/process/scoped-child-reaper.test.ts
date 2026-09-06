@@ -1,10 +1,15 @@
 // Scoped child reaper: external-observer proof for owned zombie cleanup (#97616).
-import { spawn as spawnChild, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn as spawnChild,
+  type ChildProcess,
+} from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { afterEach, describe, expect, it } from "vitest";
+import { signalChildProcessTree } from "./child-process-tree.js";
 import {
   reapOwnedChildZombies,
+  reapOwnedChildZombiesAfterTreeKill,
   setOwnedChildWaitPidBindingsForTests,
 } from "./scoped-child-reaper.js";
 
@@ -82,14 +87,15 @@ function forkUntrackedZombie(): { pid: number } {
 }
 
 describe("scoped-child-reaper", () => {
-  const activeForeign: ChildProcessWithoutNullStreams[] = [];
+  // spawn with stderr:"inherit" yields stderr:null — keep a wide ChildProcess list.
+  const activeForeign: ChildProcess[] = [];
 
   afterEach(async () => {
     setOwnedChildWaitPidBindingsForTests(undefined);
     await Promise.all(
       activeForeign.splice(0).map(async (child) => {
         if (child.exitCode === null && child.signalCode === null) {
-          child.stdin.write("\n");
+          child.stdin?.write("\n");
           await new Promise<void>((resolve) => child.once("close", () => resolve()));
         }
       }),
@@ -107,6 +113,32 @@ describe("scoped-child-reaper", () => {
     expect(reapOwnedChildZombies({ pids: [1] })).toEqual({ reaped: [], pending: [] });
   });
 
+  it("tree-kill helper is a no-op without process-group scope", () => {
+    expect(
+      reapOwnedChildZombiesAfterTreeKill({ rootPid: 42, usedProcessGroup: false }),
+    ).toEqual({ reaped: [], pending: [] });
+  });
+
+  it("never waitpids PIDs listed in excludeTrackedPids", () => {
+    const waited: number[] = [];
+    setOwnedChildWaitPidBindingsForTests({
+      waitpid: (pid, _status, _options) => {
+        waited.push(pid);
+        return pid;
+      },
+      errno: () => 0,
+    });
+    // Without real /proc zombies this is a filter-path unit on Linux only when
+    // combined with a live zombie; on all platforms the empty-candidate path
+    // still must not invent waits. Exercise the exclude filter with a live
+    // zombie below (linuxIt).
+    expect(reapOwnedChildZombies({ pids: [1], excludeTrackedPids: [1] })).toEqual({
+      reaped: [],
+      pending: [],
+    });
+    expect(waited).toEqual([]);
+  });
+
   linuxIt("red/control: external observer detects an intentional unreaped zombie", async () => {
     const { pid } = forkUntrackedZombie();
     await waitFor(() => readProcRow(pid)?.state.startsWith("Z") === true, 5_000, "zombie state");
@@ -118,6 +150,33 @@ describe("scoped-child-reaper", () => {
     const result = reapOwnedChildZombies({ pids: [pid] });
     expect(result.reaped).toContain(pid);
     await waitFor(() => readProcRow(pid) === undefined, 5_000, "zombie disappearance");
+  });
+
+  linuxIt("skips waitpid for excludeTrackedPids even when they match scope", async () => {
+    const owned = forkUntrackedZombie();
+    await waitFor(
+      () => readProcRow(owned.pid)?.state.startsWith("Z") === true,
+      5_000,
+      "excluded zombie",
+    );
+    const waited: number[] = [];
+    setOwnedChildWaitPidBindingsForTests({
+      waitpid: (pid, _status, _options) => {
+        waited.push(pid);
+        return 0;
+      },
+      errno: () => 0,
+    });
+    const result = reapOwnedChildZombies({
+      pids: [owned.pid],
+      excludeTrackedPids: [owned.pid],
+    });
+    expect(result.reaped).toEqual([]);
+    expect(waited).toEqual([]);
+    expect(readProcRow(owned.pid)?.state.startsWith("Z")).toBe(true);
+    setOwnedChildWaitPidBindingsForTests(undefined);
+    expect(reapOwnedChildZombies({ pids: [owned.pid] }).reaped).toContain(owned.pid);
+    await waitFor(() => readProcRow(owned.pid) === undefined, 5_000, "cleanup excluded");
   });
 
   linuxIt("reaps only owned zombies and leaves foreign parent zombies alone", async () => {
@@ -148,7 +207,7 @@ describe("scoped-child-reaper", () => {
     activeForeign.push(foreign);
     const foreignPid = await new Promise<number>((resolve, reject) => {
       foreign.once("error", reject);
-      foreign.stdout.once("data", (chunk) => {
+      foreign.stdout!.once("data", (chunk) => {
         resolve(Number.parseInt(String(chunk).trim(), 10));
       });
     });
@@ -187,4 +246,55 @@ describe("scoped-child-reaper", () => {
     expect(result.reaped).toContain(owned.pid);
     await waitFor(() => readProcRow(owned.pid) === undefined, 5_000, "pgid reap");
   });
+
+  linuxIt(
+    "production path: signalChildProcessTree keeps Node close and reaps after exit",
+    async () => {
+      // Detached root sleeps; an untracked sibling zombie shares our ppid but
+      // not the root pgid — must stay untouched. An adopted-style zombie in the
+      // root's pgid is created after fork+setpgid simulation via untracked fork
+      // then we only assert: Node close fires, root is never natively waited by
+      // the reaper (excludeTrackedPids), and an unrelated same-parent zombie survives.
+      const unrelated = forkUntrackedZombie();
+      await waitFor(
+        () => readProcRow(unrelated.pid)?.state.startsWith("Z") === true,
+        5_000,
+        "unrelated zombie",
+      );
+
+      const child = spawnChild(
+        "python3",
+        ["-c", "import time; time.sleep(30)"],
+        {
+          detached: true,
+          stdio: ["ignore", "ignore", "ignore"],
+        },
+      );
+      expect(typeof child.pid).toBe("number");
+      const rootPid = child.pid!;
+
+      const closePromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          child.once("close", (code, signal) => resolve({ code, signal }));
+        },
+      );
+
+      signalChildProcessTree(child, "SIGKILL");
+      const close = await closePromise;
+      expect(close.signal === "SIGKILL" || close.code !== 0 || close.code === null).toBe(true);
+
+      // Give the scheduled setImmediate reap a tick.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Unrelated same-parent zombie must remain (scoped pgid reap only).
+      expect(readProcRow(unrelated.pid)?.state.startsWith("Z")).toBe(true);
+      // Root must not linger as our zombie — Node/libuv consumed it via close.
+      expect(readProcRow(rootPid)?.state.startsWith("Z") ?? false).toBe(false);
+
+      // Cleanup unrelated.
+      expect(reapOwnedChildZombies({ pids: [unrelated.pid] }).reaped).toContain(unrelated.pid);
+      await waitFor(() => readProcRow(unrelated.pid) === undefined, 5_000, "unrelated cleanup");
+    },
+  );
 });

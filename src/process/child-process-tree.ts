@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { signalProcessTree } from "./kill-tree.js";
-import { reapOwnedChildZombiesAfterTreeKill } from "./scoped-child-reaper.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 
 export function shouldDetachChildForProcessTree(): boolean {
   return process.platform !== "win32";
@@ -20,7 +20,7 @@ export function isChildProcessTreeAlive(child: Pick<ChildProcess, "pid">): boole
 }
 
 export function signalChildProcessTree(
-  child: Pick<ChildProcess, "kill" | "pid">,
+  child: Pick<ChildProcess, "kill" | "pid" | "exitCode" | "signalCode" | "once">,
   signal: "SIGTERM" | "SIGKILL",
 ): void {
   if (typeof child.pid === "number" && child.pid > 0) {
@@ -29,17 +29,18 @@ export function signalChildProcessTree(
       detached: usedProcessGroup,
     });
     // Tree kills can leave already-exited descendants reparented to us as
-    // untracked zombies (#97616). Reap only this root/pgid scope — never -1.
-    reapOwnedChildZombiesAfterTreeKill({
-      rootPid: child.pid,
-      usedProcessGroup,
-    });
+    // untracked zombies (#97616). Reap after the Node-tracked root exits so
+    // libuv keeps ownership of its wait status — never waitpid the root, and
+    // never waitpid(-1).
+    scheduleAdoptedChildZombieReapAfterExit(child, usedProcessGroup);
     return;
   }
 
   child.kill(signal);
 }
 
-export function forceKillChildProcessTree(child: Pick<ChildProcess, "kill" | "pid">): void {
+export function forceKillChildProcessTree(
+  child: Pick<ChildProcess, "kill" | "pid" | "exitCode" | "signalCode" | "once">,
+): void {
   signalChildProcessTree(child, "SIGKILL");
 }

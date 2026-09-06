@@ -20,6 +20,11 @@ export type OwnedChildReapScope = {
   pids?: readonly number[];
   /** Process groups this spawner signaled (typically the detached root PGID). */
   pgids?: readonly number[];
+  /**
+   * Node-tracked ChildProcess PIDs. Never waitpid these — libuv owns their
+   * exit status; stealing it yields ECHILD and skipped completion handlers.
+   */
+  excludeTrackedPids?: readonly number[];
 };
 
 export type OwnedChildReapResult = {
@@ -148,6 +153,7 @@ export function reapOwnedChildZombies(scope: OwnedChildReapScope): OwnedChildRea
   }
   const ownedPids = normalizeIdSet(scope.pids);
   const ownedPgids = normalizeIdSet(scope.pgids);
+  const excludedTracked = normalizeIdSet(scope.excludeTrackedPids);
   if (ownedPids.size === 0 && ownedPgids.size === 0) {
     return { reaped, pending };
   }
@@ -159,7 +165,9 @@ export function reapOwnedChildZombies(scope: OwnedChildReapScope): OwnedChildRea
 
   const selfPid = process.pid;
   const candidates = readDirectZombieChildren(selfPid).filter(
-    (row) => ownedPids.has(row.pid) || ownedPgids.has(row.pgid) || ownedPgids.has(row.pid),
+    (row) =>
+      !excludedTracked.has(row.pid) &&
+      (ownedPids.has(row.pid) || ownedPgids.has(row.pgid) || ownedPgids.has(row.pid)),
   );
 
   const status = [0];
@@ -184,14 +192,56 @@ export function reapOwnedChildZombies(scope: OwnedChildReapScope): OwnedChildRea
 }
 
 /**
- * After a POSIX process-tree signal, reap owned zombies that may have been
- * reparented to this process. Root PID is always in scope; when the kill used a
- * process group, pass that PGID as well.
+ * After a POSIX process-tree kill + Node-tracked root exit, reap adopted
+ * zombies that match the root's process group. Never waitpids the Node-tracked
+ * root — libuv owns that ChildProcess. Without a process-group kill, this is a
+ * no-op (cannot safely identify adopted children without waiting the root).
  */
 export function reapOwnedChildZombiesAfterTreeKill(params: {
   rootPid: number;
   usedProcessGroup: boolean;
+  /** Defaults to [rootPid]. Extra Node-tracked PIDs may be listed. */
+  excludeTrackedPids?: readonly number[];
 }): OwnedChildReapResult {
-  const pgids = params.usedProcessGroup ? [params.rootPid] : [];
-  return reapOwnedChildZombies({ pids: [params.rootPid], pgids });
+  if (!params.usedProcessGroup) {
+    return { reaped: [], pending: [] };
+  }
+  const excludeTrackedPids = params.excludeTrackedPids ?? [params.rootPid];
+  return reapOwnedChildZombies({
+    pgids: [params.rootPid],
+    excludeTrackedPids,
+  });
+}
+
+/**
+ * Schedule a scoped adopted-zombie reap after the Node-tracked child exits so
+ * libuv can consume the root's status first. Safe to call at signal time.
+ */
+export function scheduleAdoptedChildZombieReapAfterExit(
+  child: {
+    pid?: number | undefined;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    once: (event: "exit", listener: () => void) => unknown;
+  },
+  usedProcessGroup: boolean,
+): void {
+  const rootPid = child.pid;
+  if (typeof rootPid !== "number" || rootPid <= 0 || !usedProcessGroup) {
+    return;
+  }
+  const run = () => {
+    reapOwnedChildZombiesAfterTreeKill({
+      rootPid,
+      usedProcessGroup: true,
+      excludeTrackedPids: [rootPid],
+    });
+  };
+  if (child.exitCode !== null || child.signalCode !== null) {
+    setImmediate(run);
+    return;
+  }
+  child.once("exit", () => {
+    setImmediate(run);
+  });
 }
