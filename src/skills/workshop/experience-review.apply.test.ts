@@ -752,25 +752,27 @@ describe("experience review maintenance", () => {
     const config: OpenClawConfig = {
       skills: { workshop: { autonomous: { mode: "propose" } } },
     };
-    runEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
-      const tool = createSkillWorkshopTool({
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-        origin: params.skillWorkshopOrigin,
-        proposalOnly: params.skillWorkshopProposalOnly,
-        autonomousCapture: params.skillWorkshopAutonomousCapture,
-        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
-      });
-      await tool.execute("review-create", {
-        action: "create",
-        name: "deployment-preflight",
-        description: "Check deployment prerequisites before retrying.",
-        proposal_content: "# Deployment Preflight\n\nVerify prerequisites before deploy.\n",
-      });
-      config.skills = { workshop: { autonomous: { mode: "auto" } } };
-      return { meta: { durationMs: 1 } };
-    });
+    runEmbeddedAgent.mockImplementation(
+      async (params: RunEmbeddedAgentParams & { config: OpenClawConfig; agentId: string }) => {
+        const tool = createSkillWorkshopTool({
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          agentId: params.agentId,
+          origin: params.skillWorkshopOrigin,
+          proposalOnly: params.skillWorkshopProposalOnly,
+          autonomousCapture: params.skillWorkshopAutonomousCapture,
+          proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+        });
+        await tool.execute("review-create", {
+          action: "create",
+          name: "deployment-preflight",
+          description: "Check deployment prerequisites before retrying.",
+          proposal_content: "# Deployment Preflight\n\nVerify prerequisites before deploy.\n",
+        });
+        config.skills = { workshop: { autonomous: { mode: "auto" } } };
+        return { meta: { durationMs: 1 } };
+      },
+    );
     await runSkillExperienceReview({
       ctx: {
         runId: "foreground-run",
