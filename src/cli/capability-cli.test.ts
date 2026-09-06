@@ -2422,6 +2422,40 @@ describe("capability cli", () => {
     });
   });
 
+  it("passes repeatable reference files through to image generation runtime", async () => {
+    primeGeneratedImage("gpt-image-2", "provider-output.png");
+    const inputDir = tempDirs.make("openclaw-image-generate-reference-");
+    const stylePath = path.join(inputDir, "style.png");
+    const layoutPath = path.join(inputDir, "layout.png");
+    const inputPaths = [stylePath, layoutPath];
+    await Promise.all(
+      inputPaths.map((inputPath) => fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"))),
+    );
+
+    await runCapability(
+      "image",
+      "generate",
+      "--file",
+      stylePath,
+      "--file",
+      layoutPath,
+      "--prompt",
+      "use these references",
+      "--model",
+      "openai/gpt-image-2",
+      "--json",
+    );
+
+    const generationCall = firstImageGenerationCall();
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(generationCall?.prompt).toBe("use these references");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-2");
+    expect(inputImages).toHaveLength(2);
+    expect(inputImages.map((image) => image.fileName)).toEqual(["style.png", "layout.png"]);
+    expect(inputImages.map((image) => image.mimeType)).toEqual(["image/png", "image/png"]);
+    expect(firstJsonOutput()?.capability).toBe("image.generate");
+  });
+
   it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
     primeGeneratedImage("gpt-image-1.5", "transparent-edit.png");
     const inputPath = path.join(os.tmpdir(), `openclaw-image-edit-${Date.now()}.png`);
@@ -2650,6 +2684,7 @@ describe("capability cli", () => {
 
     expect(firstJsonOutput()?.id).toBe("image.generate");
     expect(firstJsonOutput()?.flags).toEqual([
+      "--file",
       "--prompt",
       "--model",
       "--count",
