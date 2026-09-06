@@ -617,6 +617,19 @@ extension OpenClawChatViewModel {
         self.gatewayConfirmedActiveRunSessionKeys.insert(session.key)
     }
 
+    /// Applies a successful `sessions.list` result and reconciles latches
+    /// against that same result, so the two cannot drift apart. The list is
+    /// authoritative for the rows it returned and silent about any session it
+    /// omitted, which therefore keeps its latch. A failed refresh never reaches
+    /// here, so it keeps every Gateway-confirmed active run latched.
+    func applyListedSessions(_ listed: [OpenClawChatSessionEntry]) {
+        self.sessions = self.applyingLocalUnreadOverrides(to: listed)
+        self.reconcileGatewayConfirmedActiveRuns(
+            observing: listed.map {
+                GatewaySessionLivenessObservation(sessionKey: $0.key, hasActiveRun: $0.hasActiveRun)
+            })
+    }
+
     /// Drops latches the server has since contradicted. Call this only right
     /// after applying server-authoritative session liveness, and pass the
     /// observation itself instead of rescanning `sessions`: a single-row
