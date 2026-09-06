@@ -49,6 +49,7 @@ import {
   buildEmbeddedExtensionFactoriesMock,
   buildAgentRuntimePlanMock,
   buildEmbeddedSystemPromptMock,
+  resolveBootstrapContextForRunMock,
   contextEngineCompactMock,
   createAgentSessionMock,
   createPreparedEmbeddedAgentSettingsManagerMock,
@@ -1265,6 +1266,128 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         nativeCommandGuidanceLines: ["Subagent compact command guidance."],
       }),
     );
+  });
+
+  it("threads the aggregate bootstrap-truncation notice into the compaction prompt when the budget omits a later file", async () => {
+    // Two valid bootstrap files; only the first is admitted into context, so the
+    // second is fully omitted with no per-file inline marker. The aggregate
+    // budget chain must surface the canonical partial-context notice.
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(100), missing: false },
+        { name: "IDENTITY.md", path: "/ws/IDENTITY.md", content: "b".repeat(100), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(100) }],
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapTruncationNotice: expect.stringContaining("Treat Project Context as partial"),
+      }),
+    );
+  });
+
+  it("omits the bootstrap-truncation notice when the budget admits every file", async () => {
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(10), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(10) }],
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapTruncationNotice: undefined,
+      }),
+    );
+  });
+
+  it("delivers a real render of the bootstrap-truncation notice to the compaction session when the aggregate budget omits a later file", async () => {
+    // End-to-end proof: drive the real prepared-compaction owner
+    // (buildPreparedCompactionRuntime) through compactEmbeddedAgentSessionDirect
+    // with the real buildEmbeddedSystemPrompt renderer (not the "" mock), inject a
+    // real aggregate-exhaustion bootstrap result, and assert the notice survives
+    // into the actual prompt text delivered to the session via
+    // applySystemPromptToSession -> setBaseSystemPrompt.
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(100), missing: false },
+        { name: "IDENTITY.md", path: "/ws/IDENTITY.md", content: "b".repeat(100), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(100) }],
+    });
+    const actualSystemPrompt =
+      await vi.importActual<typeof import("./system-prompt.js")>("./system-prompt.js");
+    buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+      actualSystemPrompt.buildEmbeddedSystemPrompt(params),
+    );
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    const createdSession = (await createAgentSessionMock.mock.results[0]?.value) as {
+      session: {
+        agent: { state: { systemPrompt?: string } };
+        setBaseSystemPrompt: Mock;
+      };
+    };
+    const deliveredPrompt = createdSession.session.agent.state.systemPrompt ?? "";
+
+    // The real owner computed the notice and the real renderer embedded it in the
+    // prompt text that compaction delivered to the session.
+    expect(deliveredPrompt).toContain("## Bootstrap Context Notice");
+    expect(deliveredPrompt).toContain("Treat Project Context as partial");
+    expect(createdSession.session.setBaseSystemPrompt).toHaveBeenCalledWith(deliveredPrompt);
+  });
+
+  it("delivers a real render with no bootstrap-truncation notice to the compaction session when the budget admits every file", async () => {
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(10), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(10) }],
+    });
+    const actualSystemPrompt =
+      await vi.importActual<typeof import("./system-prompt.js")>("./system-prompt.js");
+    buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+      actualSystemPrompt.buildEmbeddedSystemPrompt(params),
+    );
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    const createdSession = (await createAgentSessionMock.mock.results[0]?.value) as {
+      session: {
+        agent: { state: { systemPrompt?: string } };
+        setBaseSystemPrompt: Mock;
+      };
+    };
+    const deliveredPrompt = createdSession.session.agent.state.systemPrompt ?? "";
+
+    expect(deliveredPrompt).not.toContain("## Bootstrap Context Notice");
+    expect(deliveredPrompt).not.toContain("Treat Project Context as partial");
   });
 
   it("uses ACP prompt surface and guidance for compacted ACP prompt rebuilds", async () => {

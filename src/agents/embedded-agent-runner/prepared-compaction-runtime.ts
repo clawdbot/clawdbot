@@ -6,11 +6,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {
-  buildBootstrapBudgetState,
-  buildBootstrapInjectionStats,
-  buildBootstrapPromptWarningNotice,
-} from "../../bootstrap-budget.js";
-import {
   formatActiveNodeContextLabel,
   getCurrentActiveNodeContext,
 } from "../../infra/active-node-context.js";
@@ -30,6 +25,11 @@ import { createOpenClawCodingTools } from "../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
+import {
+  buildBootstrapBudgetState,
+  buildBootstrapInjectionStats,
+  buildBootstrapPromptWarningNotice,
+} from "../bootstrap-budget.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
