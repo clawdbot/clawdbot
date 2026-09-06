@@ -48,6 +48,7 @@ describe("PluginsPage", () => {
       );
 
       if (delayed) {
+        page.surface = "settings";
         expect(page.querySelector("h1")?.textContent).toBe("Plugins");
         expect(request).not.toHaveBeenCalled();
         harness.emit(client, false);

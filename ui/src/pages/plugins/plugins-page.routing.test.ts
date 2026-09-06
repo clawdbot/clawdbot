@@ -42,7 +42,9 @@ describe("PluginsPage routing", () => {
   afterEach(resetPluginsPageTestState);
 
   it("switches between the Plugins and Skills workspace without reviving catalog tabs", async () => {
-    const { client } = createClient(async () => createResult());
+    const { client } = createClient(async (method) =>
+      method === "plugins.catalog.browse" ? { items: [] } : createResult(),
+    );
     const harness = createGateway(client);
     const context = createContext(harness.gateway);
     const routeData = createPluginsRouteData(

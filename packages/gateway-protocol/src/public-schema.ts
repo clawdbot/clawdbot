@@ -4,6 +4,7 @@ export * from "./schema/human-mentions.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
+export * from "./public-schema-plugins.js";
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,

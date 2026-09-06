@@ -7,6 +7,7 @@ import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
+  PluginDiscoveryResult,
   PluginListResult,
   PluginMutationResult,
   PluginsInspectResult,
@@ -30,10 +31,35 @@ const pluginMethods = [
   "plugins.list",
   "plugins.inspect",
   "plugins.search",
+  "plugins.catalog.browse",
   "plugins.install",
   "plugins.setEnabled",
   "plugins.uninstall",
 ];
+
+const discoveryResult = {
+  items: [
+    {
+      id: "ch_bWVtb3J5LXBsdXM",
+      catalog: {
+        name: "Memory Plus",
+        summary: "Long-term memory for people and projects.",
+        family: "code-plugin",
+        author: "alice",
+        official: false,
+        categories: ["memory"],
+        downloads: 1240,
+      },
+      local: {
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
+      },
+    },
+  ],
+} satisfies PluginDiscoveryResult;
 
 const workboardDisabled = {
   id: "workboard",
@@ -337,6 +363,7 @@ function pluginMethodResponses() {
         },
       ],
     },
+    "plugins.catalog.browse": discoveryResult,
     "plugins.install": {
       cases: [
         {
@@ -402,6 +429,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}plugins`);
       await page.getByRole("heading", { name: "Installed plugins", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "Explore plugins", exact: true }).waitFor();
+      const marketplaceRow = page.locator(".plugin-catalog-result", { hasText: "Memory Plus" });
+      await marketplaceRow.waitFor();
+      expect(await marketplaceRow.textContent()).toContain("@alice");
+      expect(await marketplaceRow.textContent()).toContain("1,240 downloads");
       const cards = page.locator(".installed-plugins-card");
       expect(await cards.count()).toBe(12);
       expect(
@@ -457,10 +489,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.setViewportSize(desktopViewport);
       await page.evaluate(
         () =>
-          new Promise((resolve) => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(resolve);
-            });
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
       await captureScreenshot(page, "12-installed-plugins-desktop.png");
@@ -537,8 +567,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         .toBe(true);
       await page.evaluate(
         () =>
-          new Promise((resolve) => {
-            requestAnimationFrame(resolve);
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
           }),
       );
       const settingsAfterSearch = await settingsButton.boundingBox();
@@ -629,6 +659,91 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await gateway.getRequests("plugins.setEnabled")).toEqual([]);
       await discoveryWorkboardCard.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/workboard");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps installed inventory usable while ClawHub discovery retries", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.catalog.browse": {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message: "Plugin discovery is unavailable. Retry to reconnect to ClawHub.",
+          },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      await page.locator('[data-plugin-id="workboard"]').waitFor();
+      const discoveryError = page.locator('.plugin-catalog-results [role="alert"]');
+      await discoveryError.waitFor();
+      expect(await discoveryError.textContent()).toContain("Plugin discovery is unavailable");
+      await gateway.setMethodResponse("plugins.catalog.browse", discoveryResult);
+      await discoveryError.getByRole("button", { name: "Try again" }).click();
+      await page.locator(".plugin-catalog-result", { hasText: "Memory Plus" }).waitFor();
+      expect(await page.locator('[data-plugin-id="workboard"]').isVisible()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("explains a successful empty ClawHub response", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.catalog.browse": { items: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      await page.getByText("No ClawHub plugins match this view.", { exact: true }).waitFor();
+      expect(await page.locator(".plugin-catalog-result").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reloads ClawHub discovery after the Gateway reconnects", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: pluginMethodResponses(),
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      await page.locator(".plugin-catalog-result", { hasText: "Memory Plus" }).waitFor();
+      const requestsBeforeReconnect = (await gateway.getRequests("plugins.catalog.browse")).length;
+      const discoveryPlugin = discoveryResult.items.at(0);
+      if (!discoveryPlugin) {
+        throw new Error("Expected the discovery fixture to contain a plugin.");
+      }
+      await gateway.setMethodResponse("plugins.catalog.browse", {
+        items: [
+          {
+            ...discoveryPlugin,
+            catalog: { ...discoveryPlugin.catalog, name: "Memory Reconnected" },
+          },
+        ],
+      });
+
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("plugins.catalog.browse", { after: requestsBeforeReconnect });
+      await page.locator(".plugin-catalog-result", { hasText: "Memory Reconnected" }).waitFor();
     } finally {
       await context.close();
     }

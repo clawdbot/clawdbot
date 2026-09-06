@@ -14,6 +14,8 @@ import {
   validatePluginsListParams,
   validatePluginsRefreshParams,
   validatePluginsSearchParams,
+  validatePluginsCatalogBrowseParams,
+  validatePluginsCatalogGetParams,
   validatePluginsSetEnabledParams,
   validatePluginsUninstallParams,
   type InstallPolicyWarningErrorDetails,
@@ -147,6 +149,26 @@ describe("plugin lifecycle protocol validators", () => {
   it("validates bounded plugin search requests", () => {
     expect(validatePluginsSearchParams({ query: "memory", limit: 20 })).toBe(true);
     expect(validatePluginsSearchParams({ query: "memory", limit: 101 })).toBe(false);
+  });
+
+  it("validates bounded plugin catalog browse requests", () => {
+    expect(
+      validatePluginsCatalogBrowseParams({
+        query: "memory",
+        intent: "official",
+        category: "memory",
+        cursor: "opaque-cursor",
+        pageSize: 20,
+      }),
+    ).toBe(true);
+    expect(validatePluginsCatalogBrowseParams({ pageSize: 101 })).toBe(false);
+    expect(validatePluginsCatalogBrowseParams({ cursor: "x".repeat(4097) })).toBe(false);
+    expect(validatePluginsCatalogBrowseParams({ intent: "popular" })).toBe(false);
+  });
+
+  it("accepts only URL-safe plugin discovery ids", () => {
+    expect(validatePluginsCatalogGetParams({ id: "ch_c2FtcGxl" })).toBe(true);
+    expect(validatePluginsCatalogGetParams({ id: "publisher/plugin" })).toBe(false);
   });
 
   it("keeps official and ClawHub install requests distinct", () => {

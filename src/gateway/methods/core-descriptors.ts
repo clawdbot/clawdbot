@@ -634,20 +634,23 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.list", "transcripts", "operator.read", "2026.8"],
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
-  ["canvas.document.view", "canvas", "operator.read", "2026.8"],
-  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.8"],
+  ["canvas.document.view", "canvas", "operator.read", "2026.9"],
+  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.9"],
   [
     "plugins.controlUi.reload",
     "plugins-control-ui",
     "operator.admin",
-    "2026.8",
+    "2026.9",
     CONTROL_PLANE_WRITE,
   ],
-  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
-  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
+  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.9"],
+  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.9"],
   ["update.runs.get", "update", "operator.admin", "2026.9"],
   ["update.runs.list", "update", "operator.admin", "2026.9"],
   ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["plugins.catalog.browse", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.categories", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.get", "plugins", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

@@ -17,6 +17,11 @@ const managementMocks = vi.hoisted(() => ({
   uninstall: vi.fn(),
 }));
 const searchMock = vi.hoisted(() => vi.fn());
+const catalogMocks = vi.hoisted(() => ({
+  browse: vi.fn(),
+  categories: vi.fn(),
+  detail: vi.fn(),
+}));
 
 vi.mock("../../plugins/management-service.js", () => ({
   inspectManagedPlugin: (...args: unknown[]) => managementMocks.inspect(...args),
@@ -32,6 +37,12 @@ vi.mock("../../plugins/management-mutations.js", () => ({
 
 vi.mock("../../plugins/catalog-search.js", () => ({
   searchInstallablePluginPackages: (...args: unknown[]) => searchMock(...args),
+}));
+
+vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
+  fetchClawHubPluginCatalog: (...args: unknown[]) => catalogMocks.browse(...args),
+  fetchClawHubPluginCategories: (...args: unknown[]) => catalogMocks.categories(...args),
+  fetchClawHubPluginDetail: (...args: unknown[]) => catalogMocks.detail(...args),
 }));
 
 const { pluginsHandlers: pluginReadHandlers } = await import("./plugins.js");
@@ -98,6 +109,9 @@ describe("plugin management Gateway handlers", () => {
     managementMocks.setEnabled.mockReset();
     managementMocks.uninstall.mockReset();
     searchMock.mockReset();
+    catalogMocks.browse.mockReset();
+    catalogMocks.categories.mockReset();
+    catalogMocks.detail.mockReset();
   });
 
   it("signals that refreshed plugin metadata requires a Gateway restart", async () => {
@@ -330,6 +344,147 @@ describe("plugin management Gateway handlers", () => {
           },
         },
       ],
+    });
+  });
+
+  it("joins ClawHub browse metadata to Gateway-owned local state", async () => {
+    catalogMocks.browse.mockResolvedValue({
+      items: [
+        {
+          packageName: "memory-plus",
+          displayName: "Memory Plus",
+          family: "code-plugin",
+          summary: "Long-term memory",
+          ownerHandle: "alice",
+          isOfficial: false,
+          categories: ["memory"],
+          latestVersion: "1.2.3",
+          runtimeId: "workboard",
+          downloads: 42,
+        },
+      ],
+      nextCursor: "opaque-next",
+    });
+    managementMocks.list.mockResolvedValue({
+      plugins: [{ ...workboard, installed: true, enabled: true, state: "enabled" }],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const result = await callHandler("plugins.catalog.browse", {
+      intent: "all",
+      category: "memory",
+      pageSize: 12,
+    });
+
+    expect(catalogMocks.browse).toHaveBeenCalledWith({
+      query: undefined,
+      intent: "all",
+      category: "memory",
+      cursor: undefined,
+      limit: 12,
+    });
+    expect(result).toEqual({
+      ok: true,
+      response: {
+        items: [
+          {
+            id: "ch_bWVtb3J5LXBsdXM",
+            catalog: {
+              name: "Memory Plus",
+              summary: "Long-term memory",
+              family: "code-plugin",
+              author: "alice",
+              official: false,
+              categories: ["memory"],
+              latestVersion: "1.2.3",
+              downloads: 42,
+            },
+            local: {
+              present: true,
+              installed: true,
+              enabled: true,
+              state: "enabled",
+              pluginId: "workboard",
+              action: "manage",
+            },
+          },
+        ],
+        nextCursor: "opaque-next",
+      },
+      error: undefined,
+    });
+  });
+
+  it("rejects search cursors before contacting ClawHub", async () => {
+    const result = await callHandler("plugins.catalog.browse", {
+      query: "memory",
+      cursor: "browse-only",
+    });
+
+    expect(catalogMocks.browse).not.toHaveBeenCalled();
+    expect(result.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Plugin search does not accept a browse cursor.",
+    });
+  });
+
+  it("returns canonical ClawHub categories unchanged", async () => {
+    const categories = [
+      {
+        slug: "channels",
+        label: "Channels",
+        description: "Messaging integrations.",
+        icon: "message-circle",
+        order: 0,
+      },
+    ];
+    catalogMocks.categories.mockResolvedValue(categories);
+
+    const result = await callHandler("plugins.catalog.categories", {});
+
+    expect(result).toEqual({ ok: true, response: { categories }, error: undefined });
+  });
+
+  it("resolves opaque discovery identity for detail reads", async () => {
+    catalogMocks.detail.mockResolvedValue({
+      packageName: "memory-plus",
+      displayName: "Memory Plus",
+      family: "code-plugin",
+      isOfficial: false,
+      categories: ["memory"],
+    });
+    managementMocks.list.mockResolvedValue({
+      plugins: [],
+      diagnostics: [],
+      mutationAllowed: false,
+    });
+
+    const result = await callHandler("plugins.catalog.get", { id: "ch_bWVtb3J5LXBsdXM" });
+
+    expect(catalogMocks.detail).toHaveBeenCalledWith({ packageName: "memory-plus" });
+    expect(result.response).toMatchObject({
+      plugin: {
+        id: "ch_bWVtb3J5LXBsdXM",
+        local: { present: false, action: "unavailable" },
+      },
+    });
+  });
+
+  it("projects ClawHub browse failure into a retryable discovery-only error", async () => {
+    catalogMocks.browse.mockRejectedValue(new Error("service unavailable"));
+    managementMocks.list.mockResolvedValue({
+      plugins: [workboard],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const result = await callHandler("plugins.catalog.browse", {});
+
+    expect(result.error).toMatchObject({
+      code: "UNAVAILABLE",
+      message:
+        "Plugin discovery is unavailable: service unavailable. Retry to reconnect to ClawHub.",
     });
   });
 

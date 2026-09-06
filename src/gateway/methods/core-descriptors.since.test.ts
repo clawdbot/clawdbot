@@ -81,13 +81,8 @@ const TRAIN_2026_7_METHODS = [
 ] as const;
 
 const TRAIN_2026_8_METHODS = [
-  "canvas.document.view",
   "diagnostics.lanes",
   "plugins.inspect",
-  "plugins.controlUi.list",
-  "plugins.controlUi.reload",
-  "plugins.controlUi.report",
-  "plugins.controlUi.status",
   "device.pair.setupStatus",
   "openclaw.setup.activate.start",
   "exec.approval.grants.list",
@@ -189,7 +184,15 @@ describe("core gateway method release trains", () => {
         .map((method) => method.name)
         .toSorted(),
     ).toEqual(TRAIN_2026_8_METHODS.toSorted());
-    for (const method of ["update.runs.get", "update.runs.list"]) {
+    for (const method of [
+      "canvas.document.view",
+      "plugins.controlUi.list",
+      "plugins.controlUi.reload",
+      "plugins.controlUi.report",
+      "plugins.controlUi.status",
+      "update.runs.get",
+      "update.runs.list",
+    ]) {
       expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.9");
     }
     expect(methods.find((method) => method.name === "update.hold")?.since).toBe("2026.8");

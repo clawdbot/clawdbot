@@ -302,6 +302,115 @@ a.installed-plugins-card {
   }
 }
 
+/* ---------- ClawHub catalog tracer ---------- */
+
+.plugin-catalog-results {
+  display: grid;
+  gap: var(--space-4);
+  padding-top: var(--space-2);
+}
+
+.plugin-catalog-results__header h2,
+.plugin-catalog-results__header p,
+.plugin-catalog-result h3,
+.plugin-catalog-result p {
+  margin: 0;
+}
+
+.plugin-catalog-results__header {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.plugin-catalog-results__header h2 {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+}
+
+.plugin-catalog-results__header p,
+.plugin-catalog-results__empty {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugin-catalog-results__list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.plugin-catalog-result {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.plugin-catalog-result + .plugin-catalog-result {
+  border-top: 1px solid var(--border);
+}
+
+.plugin-catalog-result__icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.plugin-catalog-result__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.plugin-catalog-result__identity {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.plugin-catalog-result__identity h3 {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+}
+
+.plugin-catalog-result__identity p {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-catalog-result__meta {
+  display: flex;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugin-catalog-result__state {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+@media (max-width: 640px) {
+  .plugin-catalog-result {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .plugin-catalog-result__state {
+    grid-column: 2;
+  }
+}
+
 /* ---------- toolbar ---------- */
 
 .plugins-toolbar {

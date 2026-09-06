@@ -21724,6 +21724,132 @@ public struct PluginInstallTrust: Codable, Sendable {
     }
 }
 
+public struct PluginDiscoveryCategory: Codable, Sendable {
+    public let slug: String
+    public let label: String
+    public let description: String
+    public let icon: String
+    public let order: Int
+
+    public init(
+        slug: String,
+        label: String,
+        description: String,
+        icon: String,
+        order: Int)
+    {
+        self.slug = slug
+        self.label = label
+        self.description = description
+        self.icon = icon
+        self.order = order
+    }
+}
+
+public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
+    public let name: String
+    public let summary: String?
+    public let family: AnyCodable
+    public let author: String?
+    public let official: Bool
+    public let categories: [String]
+    public let icon: String?
+    public let latestversion: String?
+    public let downloads: Double?
+    public let installs: Double?
+    public let verificationtier: String?
+
+    public init(
+        name: String,
+        summary: String? = nil,
+        family: AnyCodable,
+        author: String? = nil,
+        official: Bool,
+        categories: [String],
+        icon: String? = nil,
+        latestversion: String? = nil,
+        downloads: Double? = nil,
+        installs: Double? = nil,
+        verificationtier: String? = nil)
+    {
+        self.name = name
+        self.summary = summary
+        self.family = family
+        self.author = author
+        self.official = official
+        self.categories = categories
+        self.icon = icon
+        self.latestversion = latestversion
+        self.downloads = downloads
+        self.installs = installs
+        self.verificationtier = verificationtier
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case summary
+        case family
+        case author
+        case official
+        case categories
+        case icon
+        case latestversion = "latestVersion"
+        case downloads
+        case installs
+        case verificationtier = "verificationTier"
+    }
+}
+
+public struct PluginDiscoveryLocalFacts: Codable, Sendable {
+    public let present: Bool
+    public let installed: Bool
+    public let enabled: Bool
+    public let state: AnyCodable
+    public let pluginid: String?
+    public let action: AnyCodable
+
+    public init(
+        present: Bool,
+        installed: Bool,
+        enabled: Bool,
+        state: AnyCodable,
+        pluginid: String? = nil,
+        action: AnyCodable)
+    {
+        self.present = present
+        self.installed = installed
+        self.enabled = enabled
+        self.state = state
+        self.pluginid = pluginid
+        self.action = action
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case present
+        case installed
+        case enabled
+        case state
+        case pluginid = "pluginId"
+        case action
+    }
+}
+
+public struct PluginDiscoveryEntry: Codable, Sendable {
+    public let id: String
+    public let catalog: PluginDiscoveryCatalogFacts
+    public let local: PluginDiscoveryLocalFacts
+
+    public init(
+        id: String,
+        catalog: PluginDiscoveryCatalogFacts,
+        local: PluginDiscoveryLocalFacts)
+    {
+        self.id = id
+        self.catalog = catalog
+        self.local = local
+    }
+}
+
 public struct PluginOperatorGrants: Codable, Sendable {
     public let hooks: [String: AnyCodable]
     public let llm: [String: AnyCodable]?
@@ -21937,6 +22063,86 @@ public struct PluginsSearchResult: Codable, Sendable {
         results: [PluginSearchResultEntry])
     {
         self.results = results
+    }
+}
+
+public struct PluginsCatalogBrowseParams: Codable, Sendable {
+    public let query: String?
+    public let intent: AnyCodable?
+    public let category: String?
+    public let cursor: String?
+    public let pagesize: Int?
+
+    public init(
+        query: String? = nil,
+        intent: AnyCodable? = nil,
+        category: String? = nil,
+        cursor: String? = nil,
+        pagesize: Int? = nil)
+    {
+        self.query = query
+        self.intent = intent
+        self.category = category
+        self.cursor = cursor
+        self.pagesize = pagesize
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case intent
+        case category
+        case cursor
+        case pagesize = "pageSize"
+    }
+}
+
+public struct PluginsCatalogBrowseResult: Codable, Sendable {
+    public let items: [PluginDiscoveryEntry]
+    public let nextcursor: String?
+
+    public init(
+        items: [PluginDiscoveryEntry],
+        nextcursor: String? = nil)
+    {
+        self.items = items
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextcursor = "nextCursor"
+    }
+}
+
+public struct PluginsCatalogCategoriesParams: Codable, Sendable {}
+
+public struct PluginsCatalogCategoriesResult: Codable, Sendable {
+    public let categories: [PluginDiscoveryCategory]
+
+    public init(
+        categories: [PluginDiscoveryCategory])
+    {
+        self.categories = categories
+    }
+}
+
+public struct PluginsCatalogGetParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+}
+
+public struct PluginsCatalogGetResult: Codable, Sendable {
+    public let plugin: PluginDiscoveryEntry
+
+    public init(
+        plugin: PluginDiscoveryEntry)
+    {
+        self.plugin = plugin
     }
 }
 

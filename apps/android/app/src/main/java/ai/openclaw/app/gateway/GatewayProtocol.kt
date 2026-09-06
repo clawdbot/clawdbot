@@ -919,6 +919,9 @@ enum class GatewayMethod(
   UpdateRunsGet("update.runs.get"),
   UpdateRunsList("update.runs.list"),
   GatewaySuspendHandoff("gateway.suspend.handoff"),
+  PluginsCatalogBrowse("plugins.catalog.browse"),
+  PluginsCatalogCategories("plugins.catalog.categories"),
+  PluginsCatalogGet("plugins.catalog.get"),
 }
 
 enum class GatewayEvent(

@@ -340,6 +340,94 @@ export const PluginsSearchResultSchema = closedObject({
   results: Type.Array(PluginSearchResultEntrySchema),
 });
 
+const PluginDiscoveryIntentSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("trending"),
+  Type.Literal("official"),
+]);
+
+const PluginDiscoveryIconKeySchema = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+});
+
+export const PluginDiscoveryCategorySchema = closedObject({
+  slug: NonEmptyString,
+  label: NonEmptyString,
+  description: NonEmptyString,
+  icon: PluginDiscoveryIconKeySchema,
+  order: Type.Integer({ minimum: 0 }),
+});
+
+export const PluginDiscoveryCatalogFactsSchema = closedObject({
+  name: NonEmptyString,
+  summary: Type.Optional(Type.String()),
+  family: Type.Union([Type.Literal("code-plugin"), Type.Literal("bundle-plugin")]),
+  author: Type.Optional(NonEmptyString),
+  official: Type.Boolean(),
+  categories: Type.Array(NonEmptyString),
+  icon: Type.Optional(PluginDiscoveryIconKeySchema),
+  latestVersion: Type.Optional(NonEmptyString),
+  downloads: Type.Optional(Type.Number({ minimum: 0 })),
+  installs: Type.Optional(Type.Number({ minimum: 0 })),
+  verificationTier: Type.Optional(NonEmptyString),
+});
+
+export const PluginDiscoveryLocalFactsSchema = closedObject({
+  present: Type.Boolean(),
+  installed: Type.Boolean(),
+  enabled: Type.Boolean(),
+  state: Type.Union([
+    Type.Literal("enabled"),
+    Type.Literal("disabled"),
+    Type.Literal("needs-setup"),
+    Type.Literal("not-installed"),
+    Type.Literal("error"),
+  ]),
+  pluginId: Type.Optional(NonEmptyString),
+  action: Type.Union([
+    Type.Literal("install"),
+    Type.Literal("manage"),
+    Type.Literal("unavailable"),
+  ]),
+});
+
+export const PluginDiscoveryEntrySchema = closedObject({
+  id: Type.String({ minLength: 1, maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" }),
+  catalog: PluginDiscoveryCatalogFactsSchema,
+  local: PluginDiscoveryLocalFactsSchema,
+});
+
+export const PluginsCatalogBrowseParamsSchema = closedObject({
+  query: Type.Optional(Type.String({ maxLength: 200 })),
+  intent: Type.Optional(PluginDiscoveryIntentSchema),
+  category: Type.Optional(
+    Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z][a-z0-9-]*$" }),
+  ),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+  pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+});
+
+export const PluginsCatalogBrowseResultSchema = closedObject({
+  items: Type.Array(PluginDiscoveryEntrySchema),
+  nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+});
+
+export const PluginsCatalogCategoriesParamsSchema = closedObject({});
+
+export const PluginsCatalogCategoriesResultSchema = closedObject({
+  categories: Type.Array(PluginDiscoveryCategorySchema),
+});
+
+export const PluginsCatalogGetParamsSchema = closedObject({
+  id: Type.String({ minLength: 1, maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" }),
+});
+
+export const PluginsCatalogGetResultSchema = closedObject({
+  plugin: PluginDiscoveryEntrySchema,
+});
+
 /** Trusted official-catalog or acknowledged ClawHub install request. */
 export const PluginsInstallParamsSchema = Type.Union([
   closedObject({
@@ -414,6 +502,16 @@ export type PluginOperatorGrants = Static<typeof PluginOperatorGrantsSchema>;
 export type PluginInstallTrust = Static<typeof PluginInstallTrustSchema>;
 export type PluginsSearchParams = Static<typeof PluginsSearchParamsSchema>;
 export type PluginsSearchResult = Static<typeof PluginsSearchResultSchema>;
+export type PluginDiscoveryCategory = Static<typeof PluginDiscoveryCategorySchema>;
+export type PluginDiscoveryCatalogFacts = Static<typeof PluginDiscoveryCatalogFactsSchema>;
+export type PluginDiscoveryLocalFacts = Static<typeof PluginDiscoveryLocalFactsSchema>;
+export type PluginDiscoveryEntry = Static<typeof PluginDiscoveryEntrySchema>;
+export type PluginsCatalogBrowseParams = Static<typeof PluginsCatalogBrowseParamsSchema>;
+export type PluginsCatalogBrowseResult = Static<typeof PluginsCatalogBrowseResultSchema>;
+export type PluginsCatalogCategoriesParams = Static<typeof PluginsCatalogCategoriesParamsSchema>;
+export type PluginsCatalogCategoriesResult = Static<typeof PluginsCatalogCategoriesResultSchema>;
+export type PluginsCatalogGetParams = Static<typeof PluginsCatalogGetParamsSchema>;
+export type PluginsCatalogGetResult = Static<typeof PluginsCatalogGetResultSchema>;
 export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;
 export type PluginsInstallResult = Static<typeof PluginsInstallResultSchema>;
 export type PluginsRefreshParams = Static<typeof PluginsRefreshParamsSchema>;
