@@ -309,6 +309,7 @@ export function installDoctorUpdateTestHooks(): void {
       runtime: { status: "running" },
       staleGatewayPids: [],
       gatewayVersion: "2026.4.24",
+      gatewayBootId: "doctor-boot",
     });
     mocks.waitForHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
     mocks.verifyUpdateServing.mockReset().mockImplementation(async (params) => ({

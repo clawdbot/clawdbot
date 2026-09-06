@@ -52,6 +52,7 @@ describe("Doctor update run lifecycle", () => {
           env: run.env,
           expectedVersion: "2026.4.24",
           expectedBuildId: "candidate-build",
+          expectedBootId: "doctor-boot",
         }),
       );
       expect(mocks.completeUpdateCommandRun).toHaveBeenCalledWith(
