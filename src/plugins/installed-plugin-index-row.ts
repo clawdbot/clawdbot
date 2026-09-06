@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -22,11 +24,12 @@ export function readPersistedInstalledPluginIndexRowSync(
     if (!tableExists(db, "config_machine_state")) {
       return undefined;
     }
-    return (
-      db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
-        .get(INSTALLED_PLUGIN_INDEX_STATE_KEY) as { value_json: string } | undefined
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
     );
   };
   const databaseOptions = resolveInstalledPluginIndexStateDatabaseOptions(options);

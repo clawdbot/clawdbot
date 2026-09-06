@@ -24,6 +24,7 @@ import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
+import { captureLegacyStateSnapshotIdentityInProcess } from "./state-migrations.snapshot.worker.js";
 import type {
   LegacyStateMigrationPlan,
   LegacyStateMigrationStepReceipt,
@@ -369,12 +370,17 @@ describe("legacy state migration read-only refusals", () => {
       CREATE TABLE marker (value TEXT NOT NULL);
       INSERT INTO marker(value) VALUES ('pending');
     `);
+    const walBytes = fs.readFileSync(`${databasePath}-wal`);
+    const sharedMemoryBytes = fs.readFileSync(sharedMemoryPath);
+    database.close();
+    fs.writeFileSync(`${databasePath}-wal`, walBytes);
+    fs.writeFileSync(sharedMemoryPath, sharedMemoryBytes);
     const realOpen = fs.promises.open.bind(fs.promises);
     let sharedMemoryOpenCount = 0;
     const openSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
       if (path.resolve(String(args[0])) === sharedMemoryPath) {
         sharedMemoryOpenCount += 1;
-        if (sharedMemoryOpenCount > 2) {
+        if (sharedMemoryOpenCount > 1) {
           throw new Error("verified shared memory pathname was reopened");
         }
       }
@@ -382,22 +388,15 @@ describe("legacy state migration read-only refusals", () => {
     });
 
     try {
-      const plan = await planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: candidateAt(fixture.root),
-        snapshot: {
-          homeDir: fixture.homeDir,
-          configPath: fixture.configPath,
-          stateDir: fixture.stateDir,
-        },
-        env: fixture.env,
+      const identity = await captureLegacyStateSnapshotIdentityInProcess({
+        configPath: fixture.configPath,
+        stateDir: fixture.stateDir,
       });
-      expect(plan.snapshot.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
-      expect(plan.warnings).toEqual([]);
-      expect(sharedMemoryOpenCount).toBe(2);
+      expect(identity.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+      expect(identity.warnings).toEqual([]);
+      expect(sharedMemoryOpenCount).toBe(1);
     } finally {
       openSpy.mockRestore();
-      database.close();
     }
   });
 
@@ -620,11 +619,7 @@ module.exports = { stateMigrations: [{
       );
       const stateProbePath = path.join(fixture.stateDir, "identity-probe.json");
       fs.writeFileSync(stateProbePath, "{}\n");
-      const stateLstat = vi.spyOn(fs.promises, "lstat");
-      const probeInspectionCount = () =>
-        stateLstat.mock.calls.filter(
-          ([pathname]) => path.resolve(String(pathname)) === stateProbePath,
-        ).length;
+      const discoverTargets = vi.spyOn(sessionTargets, "resolveConfiguredAgentDatabaseTargets");
       const linkedStateDir = path.join(fixture.root, "linked-state");
       fs.symlinkSync(fixture.stateDir, linkedStateDir, "dir");
 
@@ -647,7 +642,7 @@ module.exports = { stateMigrations: [{
         steps: [],
       });
       expect(plan.snapshot.stateDigest).toBeUndefined();
-      expect(probeInspectionCount()).toBe(0);
+      expect(discoverTargets).not.toHaveBeenCalled();
 
       const authorizedPlan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
@@ -660,7 +655,7 @@ module.exports = { stateMigrations: [{
         env: fixture.env,
       });
       expect(authorizedPlan.steps.find((step) => step.id === "migration-detection")).toBeDefined();
-      expect(probeInspectionCount()).toBeGreaterThan(0);
+      expect(discoverTargets).toHaveBeenCalled();
     },
   );
 

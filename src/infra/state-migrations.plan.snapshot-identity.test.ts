@@ -1,8 +1,20 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import {
+  registerSealedRuntimeProcessEntrypoint,
+  resolveRuntimeProcessEntrypointUrl,
+} from "./runtime-process-url.js";
 import { planLegacyStateMigrationsReadOnly } from "./state-migrations.doctor.js";
+import {
+  captureLegacyStateSnapshotIdentity,
+  readLegacyStateMigrationPlanConfig,
+} from "./state-migrations.plan.js";
+import { captureLegacyStateSnapshotIdentityInProcess } from "./state-migrations.snapshot.worker.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -42,6 +54,69 @@ afterEach(async () => {
 });
 
 describe("legacy state migration snapshot identity", () => {
+  it("captures accepted config include identities larger than OS argument limits", async () => {
+    const fixture = await makeFixture();
+    const includeDir = path.join(fixture.root, "a".repeat(180), "b".repeat(180), "c".repeat(180));
+    fs.mkdirSync(includeDir, { recursive: true });
+    const paths = Array.from({ length: 2300 }, (_, index) =>
+      path.join(includeDir, `${index}.json`),
+    );
+    for (const pathname of paths) {
+      fs.writeFileSync(pathname, "{}\n");
+    }
+    fs.writeFileSync(
+      fixture.configPath,
+      JSON.stringify({ $include: paths.map((pathname) => path.relative(fixture.root, pathname)) }),
+    );
+    const config = await readLegacyStateMigrationPlanConfig(fixture);
+    expect(config.warnings).toEqual([]);
+    expect(config.configInputHashes?.includes).toHaveLength(paths.length);
+    const params = {
+      configPath: fixture.configPath,
+      stateDir: fixture.stateDir,
+      configInputHashes: config.configInputHashes,
+    };
+    expect(Buffer.byteLength(JSON.stringify(params))).toBeGreaterThan(1024 * 1024);
+
+    const identity = await captureLegacyStateSnapshotIdentity(params);
+
+    expect(identity.warnings).toEqual([]);
+    expect(identity.configDigest).toBe(config.rootDigest);
+    expect(identity.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    fs.writeFileSync(
+      path.join(includeDir, "0.json"),
+      '{"agents":{"defaults":{"workspace":"./changed"}}}\n',
+    );
+    const changed = await captureLegacyStateSnapshotIdentity(params);
+    expect(changed.configDigest).toBeUndefined();
+    expect(changed.warnings).toEqual([
+      expect.stringContaining("Snapshot config input changed while planning:"),
+    ]);
+  });
+
+  it("refuses unavailable snapshot workers without falling back to caller-process hashing", async () => {
+    const fixture = await makeFixture();
+    const original = resolveRuntimeProcessEntrypointUrl("stateMigrationSnapshot");
+    registerSealedRuntimeProcessEntrypoint(
+      "stateMigrationSnapshot",
+      pathToFileURL(path.join(fixture.root, "missing-worker.js")),
+    );
+    try {
+      const refused = await planFixture(fixture);
+      expect(refused.refusal?.code).toBe("snapshot-identity-unavailable");
+      expect(refused.snapshot.stateDigest).toBeUndefined();
+      expect(refused.steps).toEqual([]);
+      expect(refused.warnings).toEqual([
+        expect.stringContaining("Could not bind copied snapshot:"),
+      ]);
+    } finally {
+      registerSealedRuntimeProcessEntrypoint("stateMigrationSnapshot", original);
+    }
+    const restored = await planFixture(fixture);
+    expect(restored.refusal?.code).toBe("candidate-artifact-digest-required");
+    expect(restored.snapshot.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  });
+
   it.each([
     "file-content",
     "file-replacement",
@@ -52,7 +127,7 @@ describe("legacy state migration snapshot identity", () => {
     "included-config",
     "included-unchanged",
   ] as const)(
-    "revalidates earlier entries after the final capture traversal: %s",
+    "revalidates earlier entries at the snapshot worker's final traversal: %s",
     async (mutation) => {
       const fixture = await makeFixture();
       const earlyDirectory = path.join(fixture.stateDir, "a-directory");
@@ -66,12 +141,13 @@ describe("legacy state migration snapshot identity", () => {
         fs.writeFileSync(fixture.configPath, '{"$include":"./planner-input.json"}\n');
         fs.writeFileSync(includedPath, "{}\n");
       }
+      const config = await readLegacyStateMigrationPlanConfig(fixture);
+      expect(config.configInputHashes).toBeDefined();
       const realOpen = fs.promises.open.bind(fs.promises);
-      let lateFileOpens = 0;
       let finalCaptureReached = false;
       vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
         const handle = await realOpen(...args);
-        if (path.resolve(String(args[0])) === lateFile && ++lateFileOpens === 2) {
+        if (path.resolve(String(args[0])) === lateFile) {
           finalCaptureReached = true;
           if (mutation === "file-content") {
             fs.writeFileSync(earlyFile, '{"value":"changed"}\n');
@@ -95,17 +171,22 @@ describe("legacy state migration snapshot identity", () => {
         return handle;
       });
 
-      const plan = await planFixture(fixture);
+      const identity = await captureLegacyStateSnapshotIdentityInProcess({
+        ...fixture,
+        configInputHashes: config.configInputHashes,
+      });
 
       expect(finalCaptureReached).toBe(true);
-      expect(plan.refusal?.code).toBe(
-        mutation === "unchanged" || mutation === "included-unchanged"
-          ? "candidate-artifact-digest-required"
-          : "snapshot-identity-unavailable",
-      );
       if (mutation === "unchanged" || mutation === "included-unchanged") {
-        expect(plan.snapshot.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+        expect(identity.warnings).toEqual([]);
+        expect(identity.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
         expect(fs.readFileSync(earlyFile, "utf8")).toBe('{"value":"original"}\n');
+      } else {
+        expect(identity.configDigest).toBeUndefined();
+        expect(identity.stateDigest).toBeUndefined();
+        expect(identity.warnings).toEqual([
+          expect.stringContaining("Snapshot entry changed while hashing:"),
+        ]);
       }
     },
   );
@@ -127,10 +208,10 @@ describe("legacy state migration snapshot identity", () => {
     });
 
     try {
-      const plan = await planFixture(fixture);
+      const identity = await captureLegacyStateSnapshotIdentityInProcess(fixture);
       expect(replacementTriggered).toBe(true);
-      expect(plan.snapshot.stateDigest).toBeUndefined();
-      expect(plan.warnings).toEqual([
+      expect(identity.stateDigest).toBeUndefined();
+      expect(identity.warnings).toEqual([
         expect.stringContaining(`Snapshot file changed while opening: ${probePath}`),
       ]);
     } finally {
@@ -140,6 +221,70 @@ describe("legacy state migration snapshot identity", () => {
       }
     }
   });
+
+  it.each(["DELETE", "WAL"])(
+    "preserves a caller-held %s read transaction through the complete planner",
+    async (journalMode) => {
+      const fixture = await makeFixture();
+      const databasePath = path.join(fixture.stateDir, "held.sqlite");
+      const database = new DatabaseSync(databasePath);
+      const compete = () => {
+        const child = spawnSync(
+          process.execPath,
+          [
+            "-e",
+            `const { DatabaseSync } = require('node:sqlite');
+             const database = new DatabaseSync(process.argv[1]);
+             try {
+               database.exec('PRAGMA busy_timeout=0;');
+               if (process.argv[2] === 'WAL') {
+                 console.log(JSON.stringify({ blocked: database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get().busy === 1 }));
+               } else {
+                 database.exec('BEGIN EXCLUSIVE; ROLLBACK;');
+                 console.log(JSON.stringify({ blocked: false }));
+               }
+             } catch (error) {
+               if (error.errcode !== 5) throw error;
+               console.log(JSON.stringify({ blocked: true }));
+             } finally { database.close(); }`,
+            databasePath,
+            journalMode,
+          ],
+          { encoding: "utf8" },
+        );
+        expect(child.error).toBeUndefined();
+        expect(child.signal).toBeNull();
+        expect(child.status, child.stderr).toBe(0);
+        return JSON.parse(child.stdout);
+      };
+      try {
+        database.exec(
+          `PRAGMA journal_mode=${journalMode}; PRAGMA wal_autocheckpoint=0;
+           CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original'); BEGIN;`,
+        );
+        expect(database.prepare("SELECT value FROM held").all()).toEqual([{ value: "original" }]);
+        if (journalMode === "WAL") {
+          const writer = new DatabaseSync(databasePath);
+          try {
+            writer.exec("INSERT INTO held VALUES ('later');");
+          } finally {
+            writer.close();
+          }
+        }
+        expect(compete()).toEqual({ blocked: true });
+
+        const plan = await planFixture(fixture);
+
+        expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
+        expect(plan.snapshot.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+        expect(compete()).toEqual({ blocked: true });
+        expect(database.prepare("SELECT value FROM held").all()).toEqual([{ value: "original" }]);
+      } finally {
+        database.close();
+      }
+      expect(compete()).toEqual({ blocked: false });
+    },
+  );
 
   it("binds in-snapshot hard-link topology", async () => {
     const fixture = await makeFixture();

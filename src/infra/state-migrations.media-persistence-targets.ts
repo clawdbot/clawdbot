@@ -156,7 +156,10 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     }
     if (!realPath) {
       discard(candidate);
-      warnings.push(`Skipped agent database ${pathname}; its filesystem boundary is unresolved.`);
+      failure(
+        pathname,
+        `Skipped agent database ${pathname}; its filesystem boundary is unresolved.`,
+      );
       continue;
     }
     if (seenRealPaths.has(realPath)) {
@@ -175,14 +178,16 @@ export function resolveAgentDatabaseMigrationTargets(params: {
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   env: NodeJS.ProcessEnv;
   warnings: string[];
-}): AgentDatabaseMigrationTarget[] {
+}): { targets: AgentDatabaseMigrationTarget[]; recoverableWarningCount: number } {
   let registeredAgentDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases> = [];
+  let registryReadFailed = false;
   try {
     registeredAgentDatabases = listOpenClawRegisteredAgentDatabases({
       env: params.env,
       includeIncompatibleSchemaVersions: true,
     });
   } catch (error) {
+    registryReadFailed = true;
     params.warnings.push(
       `Failed enumerating registered agent databases for state migration: ${String(error)}`,
     );
@@ -195,7 +200,13 @@ export function resolveAgentDatabaseMigrationTargets(params: {
     }
   }
   params.warnings.push(...discovery.warnings);
-  return discovery.targets;
+  // Deliberate registry omissions are reported without blocking authorized stores.
+  // Failed discovery never grants that disposition, even if it also omitted a foreign entry.
+  return {
+    targets: discovery.targets,
+    recoverableWarningCount:
+      registryReadFailed || discovery.failures.length > 0 ? 0 : discovery.warnings.length,
+  };
 }
 
 export function listTranscriptArchives(directory: string): string[] {
