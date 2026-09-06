@@ -9,6 +9,7 @@ import { createDiscordOpusPlaybackStream } from "./audio.js";
 import { type DiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
+import type { DiscordVoiceSegmentOutcome } from "./recording-types.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import { logVoiceVerbose, PLAYBACK_READY_TIMEOUT_MS, type VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
@@ -41,12 +42,6 @@ type DiscordVoiceSegmentParams = Pick<DiscordVoiceResponseParams, "entry" | "use
     speaker: Promise<{ label: string }>;
   };
 };
-
-export type DiscordVoiceSegmentOutcome =
-  | { status: "transcribed"; text: string; conversationAuthorized: Promise<boolean> }
-  | { status: "excluded" }
-  | { status: "unavailable" }
-  | { status: "empty"; conversationAuthorized: Promise<boolean> };
 
 export async function processDiscordVoiceSegment(
   params: DiscordVoiceSegmentParams,

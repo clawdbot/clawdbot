@@ -1,9 +1,8 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
-import type { DiscordVoiceSegmentOutcome } from "./segment.js";
+import type { DiscordVoiceAudioReceipt, DiscordVoiceSegmentOutcome } from "./recording-types.js";
 import type { VoiceRealtimeSpeakerTurn } from "./session.js";
-import type { DiscordVoiceAudioReceipt } from "./voice-recording.js";
 
 const MAX_PENDING_CONVERSATIONS = 8;
 // Encoded packet limits do not bound the decoded audio waiting for authorization.

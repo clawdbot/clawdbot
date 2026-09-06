@@ -4,7 +4,8 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { VOICE_WAV_HEADER_BYTES, writeVoiceWavFile } from "./audio.js";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
-import { processDiscordVoiceSegment, type DiscordVoiceSegmentOutcome } from "./segment.js";
+import type { DiscordVoiceAudioReceipt, DiscordVoiceSegmentOutcome } from "./recording-types.js";
+import { processDiscordVoiceSegment } from "./segment.js";
 import type { VoiceSessionEntry } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -31,11 +32,6 @@ function reserveRecordingWav(bytes: number): () => void {
     pendingRecordingBytes -= bytes;
   };
 }
-
-export type DiscordVoiceAudioReceipt = {
-  capture: VoiceSessionEntry["transcripts"];
-  startedAt: number;
-};
 
 export class DiscordVoiceRecording {
   private readonly segmentBytes: number;

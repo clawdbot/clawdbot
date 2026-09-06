@@ -31,6 +31,7 @@ import {
   recoverDaveZeroTransition as tryRecoverDaveZeroTransition,
   resetVoiceReceiveRecoveryState,
 } from "./receive-recovery.js";
+import type { DiscordVoiceAudioReceipt } from "./recording-types.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import { respondToDiscordVoiceTranscript } from "./segment.js";
 import {
@@ -43,7 +44,7 @@ import {
   type VoiceSessionEntry,
 } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
-import { DiscordVoiceRecording, type DiscordVoiceAudioReceipt } from "./voice-recording.js";
+import { DiscordVoiceRecording } from "./voice-recording.js";
 
 const logger = createSubsystemLogger("discord/voice");
 // UDP cannot apply backpressure; bound pending packets as well as their encoded bytes.

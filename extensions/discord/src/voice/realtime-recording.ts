@@ -1,8 +1,10 @@
-import type { DiscordVoiceSegmentOutcome } from "./segment.js";
-import type { VoiceSessionEntry } from "./session.js";
-import type { DiscordVoiceAudioReceipt } from "./voice-recording.js";
+import type {
+  DiscordVoiceSegmentOutcome,
+  DiscordVoiceAudioReceipt,
+  DiscordVoiceTranscriptCapture,
+} from "./recording-types.js";
 
-type Capture = VoiceSessionEntry["transcripts"];
+type Capture = DiscordVoiceTranscriptCapture | undefined;
 const MAX_REALTIME_RECORDING_BYTES = 1024 * 1024;
 const MAX_REALTIME_RECORDING_FINALS = 1_000;
 
@@ -107,7 +109,7 @@ export class DiscordRealtimeRecording {
 
   constructor(
     private readonly params: {
-      entry: VoiceSessionEntry;
+      entry: { guildId: string; channelId: string; voiceSessionKey: string };
       isCurrent: () => boolean;
       warn: (message: string) => void;
     },

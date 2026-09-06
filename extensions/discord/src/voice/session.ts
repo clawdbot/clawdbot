@@ -3,12 +3,11 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { TranscriptUtterance } from "openclaw/plugin-sdk/transcripts";
 import { ChannelType } from "../internal/discord.js";
 import type { VoiceCaptureState } from "./capture-state.js";
 import type { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
 import type { VoiceReceiveRecoveryState } from "./receive-recovery.js";
-import type { DiscordVoiceAudioReceipt } from "./voice-recording.js";
+import type { DiscordVoiceAudioReceipt, DiscordVoiceTranscriptCapture } from "./recording-types.js";
 
 export const MIN_SEGMENT_SECONDS = 0.35;
 export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
@@ -119,13 +118,7 @@ export type VoiceSessionEntry = {
   ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
   realtimeLifecycle: VoiceRealtimeLifecycle;
-  transcripts?: {
-    sessionId: string;
-    warning?: string;
-    isCurrent: () => boolean;
-    onBatchUnavailable?: () => void;
-    onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
-  };
+  transcripts?: DiscordVoiceTranscriptCapture;
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: (reason?: string) => void;
 };
