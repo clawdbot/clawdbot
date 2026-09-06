@@ -10,12 +10,15 @@ describe("parseGatewayPortOption", () => {
 
   it("treats absent values as no override", () => {
     expect(parseGatewayPortOption(undefined)).toBeUndefined();
-    expect(parseGatewayPortOption("")).toBeUndefined();
+    expect(parseGatewayPortOption(null)).toBeUndefined();
   });
 
-  it.each(["0", "65536", "1e4", "18789ms"])("rejects invalid port value %s", (value) => {
-    expect(() => parseGatewayPortOption(value)).toThrow(
-      "--port must be an integer between 1 and 65535.",
-    );
-  });
+  it.each(["", " \t ", "0", "65536", "1e4", "18789ms"])(
+    "rejects invalid port value %j",
+    (value) => {
+      expect(() => parseGatewayPortOption(value)).toThrow(
+        "--port must be an integer between 1 and 65535.",
+      );
+    },
+  );
 });
