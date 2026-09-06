@@ -539,7 +539,7 @@ export async function discoverBedrockModels(params: {
         }),
         fetchInferenceProfileSummaries(client, (input) =>
           sdk.createListInferenceProfilesCommand(input),
-        ).catch((error) => {
+        ).catch((error: unknown) => {
           if (params.discoveryMode === "strict") {
             throw error;
           }
@@ -603,7 +603,7 @@ export async function discoverBedrockModels(params: {
       // Discovery owns the short-lived control-plane client and its socket agents.
       client.destroy();
     }
-  })().catch((error) => {
+  })().catch((error: unknown) => {
     discoveryCache.delete(cacheKey);
     if (params.discoveryMode === "strict") {
       throw error;
