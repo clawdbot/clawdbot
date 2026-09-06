@@ -57,7 +57,7 @@ export const testGitContext: GitContext = {
 let cacheEvictionEpoch = 0;
 
 // The module-level branch cache would leak entries across tests; flooding it
-// past CACHE_LIMIT evicts everything a test created.
+// past the unobserved-entry limit evicts everything a test created.
 export async function evictPullRequestCache(): Promise<void> {
   const epoch = (cacheEvictionEpoch += 1);
   await Promise.all(

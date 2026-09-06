@@ -100,13 +100,16 @@ describe("worker workspace recovery transcript reporting", () => {
         ]);
         const handlers = createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
         expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual(
-          navigation === "reset" ? undefined : conflict,
+          navigation === "reset" ? { kind: "absent" } : { kind: "conflict", conflict },
         );
         await handlers.reportWorkspaceResultConflict({ ...IDENTITY, ...conflict });
-        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual(conflict);
+        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({
+          kind: "conflict",
+          conflict,
+        });
         await handlers.reportWorkspaceResultConflict({ ...IDENTITY, cleared: true });
         await handlers.reportWorkspaceResultConflict({ ...IDENTITY, cleared: true });
-        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toBeUndefined();
+        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({ kind: "absent" });
         const reports = (await loadTranscriptEvents(IDENTITY)).filter(
           (event) => isRecord(event) && event.type === "custom_message",
         );
@@ -118,6 +121,58 @@ describe("worker workspace recovery transcript reporting", () => {
       });
     },
   );
+  it.each([
+    { label: "invalid staged ref", paths: ["edited.ts"], stagedResultRef: "refs/heads/main" },
+    { label: "empty paths", paths: [], stagedResultRef: "refs/openclaw/worker-results/result-1" },
+  ])(
+    "reports $label as unknown instead of treating a retained conflict as absent",
+    async (details) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
+        await replaceTranscriptEvents(IDENTITY, [
+          { type: "session", id: IDENTITY.sessionId, version: CURRENT_SESSION_VERSION },
+          {
+            type: "custom_message",
+            id: "malformed-conflict",
+            parentId: null,
+            customType: WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+            content: "Conflict",
+            display: true,
+            details: {
+              paths: details.paths,
+              stagedResultRef: details.stagedResultRef,
+              totalCount: 1,
+            },
+          },
+        ]);
+        const handlers = createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
+        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({
+          kind: "unknown",
+          reason: "malformed-report",
+        });
+      });
+    },
+  );
+
+  it.each(["missing", "rebound"])(
+    "reports a %s session as unavailable instead of treating its conflict as absent",
+    async (sessionState) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        if (sessionState === "rebound") {
+          await upsertSessionEntryCore(IDENTITY, {
+            sessionId: "replacement-workspace-session",
+            updatedAt: 1,
+          });
+        }
+        const handlers = createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
+        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({
+          kind: "unknown",
+          reason: "session-unavailable",
+        });
+      });
+    },
+  );
+
   it("records historical recovery failures while preserving the live pending-result owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await upsertSessionEntryCore(REQUEST, { sessionId: REQUEST.sessionId, updatedAt: 1 });

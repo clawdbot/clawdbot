@@ -80,6 +80,12 @@ struct RemoteAddress {
 #[derive(Default)]
 pub struct OpenClawRTC {
     rtc: Option<Rtc>,
+    // Retiring a failed engine must leave its description and borrowed buffers owned.
+    state: RtcSessionState,
+}
+
+#[derive(Default)]
+struct RtcSessionState {
     pending: Option<SdpPendingOffer>,
     mid: Option<Mid>,
     description: Vec<u8>,
@@ -90,19 +96,19 @@ pub struct OpenClawRTC {
 // A panic must not cross the C ABI. A failed engine is discarded, never reused.
 unsafe fn operate(
     pointer: *mut OpenClawRTC,
-    operation: impl FnOnce(&mut OpenClawRTC) -> Result<(), i32>,
+    operation: impl FnOnce(&mut Rtc, &mut RtcSessionState) -> Result<(), i32>,
 ) -> i32 {
-    let Some(state) = (unsafe { pointer.as_mut() }) else {
+    let Some(owner) = (unsafe { pointer.as_mut() }) else {
         return -1;
     };
-    if state.rtc.is_none() {
+    let Some(rtc) = owner.rtc.as_mut() else {
         return -1;
-    }
-    match catch_unwind(AssertUnwindSafe(|| operation(state))) {
+    };
+    match catch_unwind(AssertUnwindSafe(|| operation(rtc, &mut owner.state))) {
         Ok(Ok(())) => 0,
         Ok(Err(code)) => code,
         Err(_) => {
-            state.rtc = None;
+            owner.rtc = None;
             -1
         }
     }
@@ -163,9 +169,9 @@ pub unsafe extern "C" fn openclaw_rtc_add_candidate(
     address: OpenClawRTCAddress,
 ) -> i32 {
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, _| {
             let candidate = Candidate::host(address.socket()?, Protocol::Udp).map_err(|_| -2)?;
-            state.rtc.as_mut().ok_or(-1)?.add_local_candidate(candidate);
+            rtc.add_local_candidate(candidate);
             Ok(())
         })
     }
@@ -174,11 +180,11 @@ pub unsafe extern "C" fn openclaw_rtc_add_candidate(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn openclaw_rtc_offer(pointer: *mut OpenClawRTC) -> i32 {
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, state| {
             if state.pending.is_some() || state.mid.is_some() {
                 return Err(-1);
             }
-            let mut changes = state.rtc.as_mut().ok_or(-1)?.sdp_api();
+            let mut changes = rtc.sdp_api();
             state.mid =
                 Some(changes.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None));
             let (offer, pending) = changes.apply().ok_or(-1)?;
@@ -195,16 +201,11 @@ pub unsafe extern "C" fn openclaw_rtc_remove_candidate(
     address: OpenClawRTCAddress,
 ) -> i32 {
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, _| {
             let candidate = Candidate::host(address.socket()?, Protocol::Udp).map_err(|_| -2)?;
             // Only retire ICE state after our one SDP exchange; no later SDP offer
             // is generated from direct-API mutations.
-            state
-                .rtc
-                .as_mut()
-                .ok_or(-1)?
-                .direct_api()
-                .invalidate_candidate(&candidate);
+            rtc.direct_api().invalidate_candidate(&candidate);
             Ok(())
         })
     }
@@ -217,14 +218,14 @@ pub unsafe extern "C" fn openclaw_rtc_remote_address(
     index: usize,
     address: *mut OpenClawRTCAddress,
 ) -> i32 {
-    let (Some(state), Some(address)) = (unsafe { pointer.as_ref() }, unsafe { address.as_mut() })
+    let (Some(owner), Some(address)) = (unsafe { pointer.as_ref() }, unsafe { address.as_mut() })
     else {
         return -1;
     };
-    if state.rtc.is_none() {
+    if owner.rtc.is_none() {
         return -1;
     }
-    let Some(value) = state.remote_addresses.get(index) else {
+    let Some(value) = owner.state.remote_addresses.get(index) else {
         return 1;
     };
     *address = value.address.into();
@@ -249,7 +250,7 @@ pub unsafe extern "C" fn openclaw_rtc_resolve_remote_address(
     address: OpenClawRTCAddress,
 ) -> i32 {
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, state| {
             let address = address.socket()?;
             let remote = state.remote_addresses.get(index).ok_or(-2)?;
             if !remote.address.is_ipv4()
@@ -276,7 +277,6 @@ pub unsafe extern "C" fn openclaw_rtc_resolve_remote_address(
                 .iter()
                 .map(|candidate| resolved_candidate(candidate, address))
                 .collect::<Result<Vec<_>, _>>()?;
-            let rtc = state.rtc.as_mut().ok_or(-1)?;
             for candidate in candidates {
                 rtc.add_remote_candidate(candidate);
             }
@@ -291,12 +291,12 @@ pub unsafe extern "C" fn openclaw_rtc_description(
     pointer: *const OpenClawRTC,
     length: *mut usize,
 ) -> *const u8 {
-    let (Some(state), Some(length)) = (unsafe { pointer.as_ref() }, unsafe { length.as_mut() })
+    let (Some(owner), Some(length)) = (unsafe { pointer.as_ref() }, unsafe { length.as_mut() })
     else {
         return ptr::null();
     };
-    *length = state.description.len();
-    state.description.as_ptr()
+    *length = owner.state.description.len();
+    owner.state.description.as_ptr()
 }
 
 #[unsafe(no_mangle)]
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn openclaw_rtc_answer(
     length: usize,
 ) -> i32 {
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, state| {
             let text = std::str::from_utf8(input(bytes, length, 65_536)?).map_err(|_| -2)?;
             let answer = SdpAnswer::from_sdp_string(text).map_err(|_| -2)?;
             // RFC 8838 Appendix B permits discovering our candidates through checks only
@@ -363,11 +363,7 @@ pub unsafe extern "C" fn openclaw_rtc_answer(
                 return Err(-4);
             }
             let pending = state.pending.take().ok_or(-1)?;
-            state
-                .rtc
-                .as_mut()
-                .ok_or(-1)?
-                .sdp_api()
+            rtc.sdp_api()
                 .accept_answer(pending, answer)
                 .map_err(|_| -1)?;
             state.remote_addresses = remote_addresses;
@@ -385,7 +381,7 @@ pub unsafe extern "C" fn openclaw_rtc_receive(
     length: usize,
 ) -> i32 {
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, _| {
             let bytes = input(bytes, length, 2_000)?;
             let Ok(receive) = Receive::new(
                 Protocol::Udp,
@@ -395,7 +391,6 @@ pub unsafe extern "C" fn openclaw_rtc_receive(
             ) else {
                 return Ok(()); // Unrelated/invalid UDP is not a session failure.
             };
-            let rtc = state.rtc.as_mut().ok_or(-1)?;
             let input = Input::Receive(Instant::now(), receive);
             if rtc.accepts(&input) {
                 rtc.handle_input(input).map_err(|_| -1)?;
@@ -413,9 +408,8 @@ pub unsafe extern "C" fn openclaw_rtc_send_opus(
     timestamp: u64,
 ) -> i32 {
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, state| {
             let bytes = input(bytes, length, 1_275)?;
-            let rtc = state.rtc.as_mut().ok_or(-1)?;
             if !rtc.is_connected() {
                 return Ok(());
             }
@@ -440,12 +434,8 @@ pub unsafe extern "C" fn openclaw_rtc_send_opus(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn openclaw_rtc_timeout(pointer: *mut OpenClawRTC) -> i32 {
     unsafe {
-        operate(pointer, |state| {
-            state
-                .rtc
-                .as_mut()
-                .ok_or(-1)?
-                .handle_input(Input::Timeout(Instant::now()))
+        operate(pointer, |rtc, _| {
+            rtc.handle_input(Input::Timeout(Instant::now()))
                 .map_err(|_| -1)
         })
     }
@@ -460,16 +450,10 @@ pub unsafe extern "C" fn openclaw_rtc_poll(
         return -2;
     };
     unsafe {
-        operate(pointer, |state| {
+        operate(pointer, |rtc, state| {
             *output = OpenClawRTCOutput::default();
             loop {
-                match state
-                    .rtc
-                    .as_mut()
-                    .ok_or(-1)?
-                    .poll_output()
-                    .map_err(|_| -1)?
-                {
+                match rtc.poll_output().map_err(|_| -1)? {
                     Output::Timeout(deadline) => {
                         output.time = deadline
                             .saturating_duration_since(Instant::now())

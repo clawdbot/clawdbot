@@ -254,13 +254,6 @@ async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const authorizeToolCall = boundClientGrant?.isCurrent;
-        const skillWorkshop =
-          requestContext.skillWorkshop || boundClientGrant?.skillLibraryAuthoring
-            ? {
-                ...requestContext.skillWorkshop,
-                libraryAuthoring: boundClientGrant?.skillLibraryAuthoring,
-              }
-            : undefined;
         const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
           ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
           : undefined;
@@ -294,7 +287,7 @@ async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
           boundClientGrant?.questionAnswerAuthority,
           () =>
             toolCache.resolve({
-              ...requestContext,
+              context: requestContext,
               cfg,
               signal: requestAbort.signal,
               ...(boundClientGrant?.toolAuth
@@ -308,7 +301,9 @@ async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
               ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
               yieldContextCacheKey: yieldContext?.cacheKey,
               onYield: yieldContext?.onYield,
-              ...(skillWorkshop ? { skillWorkshop } : {}),
+              ...(boundClientGrant?.skillLibraryAuthoring
+                ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
+                : {}),
             }),
         );
 

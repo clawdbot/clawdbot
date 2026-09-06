@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
@@ -21,13 +22,17 @@ import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   readyRecoveryHealth,
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
-import { registerInstallRootTransitionTests } from "./update-command-service-transition.test-support.js";
+import {
+  registerInstallRootTransitionTests,
+  registerRestartOutcomeTests,
+} from "./update-command-service-transition.test-support.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -49,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   call: vi.fn<(opts: import("../../gateway/call.js").CallGatewayOptions) => Promise<unknown>>(),
   signal: vi.fn(),
   events: [] as string[],
+  stopAllowances: [] as Array<string | undefined>,
   command: vi.fn<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>(),
   restart: vi.fn(async () => {
     mocks.events.push("native restart");
@@ -63,7 +69,9 @@ const mocks = vi.hoisted(() => ({
   doctor: vi.fn(),
   configSnapshot: vi.fn<() => Promise<void>>(),
   error: vi.fn(),
+  exit: vi.fn(),
   log: vi.fn(),
+  writeJson: vi.fn(),
   capability:
     vi.fn<
       typeof import("../../daemon/systemd-definition-mutation.js").readSystemdDefinitionMutationCapability
@@ -119,6 +127,7 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   findInstalledSystemdGatewayScope: async () => null,
   isSystemdUserServiceAvailable: async () => true,
   stopSystemdService: async () => {
+    mocks.stopAllowances.push(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS);
     mocks.events.push("native stop");
     mocks.running = false;
   },
@@ -148,11 +157,25 @@ vi.mock("./update-command-config-snapshot.js", () => ({
 }));
 vi.mock("./restart-helper.js", () => ({ runRestartScript: mocks.script }));
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: { log: mocks.log, error: mocks.error, exit: vi.fn(), writeJson: vi.fn() },
+  defaultRuntime: {
+    log: mocks.log,
+    error: mocks.error,
+    exit: mocks.exit,
+    writeJson: mocks.writeJson,
+  },
 }));
 vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: mocks.health,
+  waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
+}));
+vi.mock("./update-command-inference.js", () => ({
+  runUpdateInferenceProbe: async () => true,
+}));
+vi.mock("./update-command-convergence.js", () => ({
+  convergeUpdatePlugins: async (params: { result: unknown }) => ({
+    resultWithPostUpdate: params.result,
+  }),
 }));
 vi.mock("../daemon-cli/lifecycle-audit.js", () => ({
   appendServiceLifecycleRepairAudit: vi.fn(),
@@ -167,6 +190,7 @@ const writeConfig = (version: string) => writeRecoveryConfig(configPath, version
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.exit.mockReset();
   mockProcessPlatform("linux");
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")));
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
@@ -183,6 +207,7 @@ beforeEach(async () => {
     "OPENCLAW_SYSTEMD_UNIT",
     "OPENCLAW_LAUNCHD_LABEL",
     "OPENCLAW_UPDATE_IN_PROGRESS",
+    "OPENCLAW_UPDATE_RUN_HANDOFF",
     "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
     "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
   ];
@@ -200,9 +225,15 @@ beforeEach(async () => {
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION }),
+    JSON.stringify({ name: "openclaw", version: VERSION, type: "module" }),
   );
   await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+  const worker = "dist/infra/update-candidate-state.worker.js";
+  await fs.mkdir(path.dirname(path.join(root, worker)), { recursive: true });
+  await fs.writeFile(
+    path.join(root, worker),
+    `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+  );
   await writeConfig(VERSION);
   mocks.ports.mockImplementation(async (port) => ({
     port,
@@ -219,6 +250,7 @@ beforeEach(async () => {
   });
   mocks.handoff.mockReturnValue({ ok: true, value: Promise.resolve(true) });
   mocks.events = [];
+  mocks.stopAllowances = [];
   mocks.capability.mockResolvedValue({ kind: "sealed", reason: "foreign-owner" });
   mocks.command.mockResolvedValue({
     programArguments: [
@@ -237,7 +269,14 @@ beforeEach(async () => {
     }
     mocks.events.push("fresh CLI restart");
     mocks.running = true;
-    return { code: 0, stdout: "", stderr: "", signal: null, killed: false, termination: "exit" };
+    return {
+      code: 0,
+      stdout: JSON.stringify({ action: "restart", ok: true, result: "restarted" }),
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    };
   });
   mocks.health.mockImplementation(async ({ port }) => readyRecoveryHealth(port, mocks.running));
   mocks.configSnapshot
@@ -253,6 +292,8 @@ afterEach(async () => {
 });
 
 describe("preserved update activation with real version guards", () => {
+  registerRestartOutcomeTests(() => ({ root, mocks }));
+
   it.each([
     ...(
       [
@@ -264,7 +305,7 @@ describe("preserved update activation with real version guards", () => {
       mode,
       outcome,
       denial: "sealed" as const,
-      channel: "stable" as const,
+      json: true,
       phase: "initial",
     })),
     ...(["git", "npm", "pnpm", "bun"] as const).flatMap((mode) =>
@@ -276,7 +317,7 @@ describe("preserved update activation with real version guards", () => {
           mode,
           denial,
           outcome,
-          channel: "stable" as const,
+          json: outcome === "json denial",
           phase: "late",
         })),
       ),
@@ -287,14 +328,14 @@ describe("preserved update activation with real version guards", () => {
           mode: "git" as const,
           denial,
           outcome,
-          channel: "dev" as const,
+          json: false,
           phase,
         })),
       ),
     ),
   ])(
-    "handles $phase $denial denial for $channel $mode activation ($outcome)",
-    async ({ mode, denial, outcome, channel, phase }) => {
+    "handles $phase $denial denial for $mode activation ($outcome; json=$json)",
+    async ({ mode, denial, outcome, json, phase }) => {
       let nowMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => nowMs);
       vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
@@ -360,7 +401,7 @@ describe("preserved update activation with real version guards", () => {
         await program.parseAsync(args.slice(2), { from: "user" });
         return {
           code: 0,
-          stdout: "",
+          stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]),
           stderr: "",
           signal: null,
           killed: false,
@@ -403,7 +444,6 @@ describe("preserved update activation with real version guards", () => {
         return await waitForGatewayHealthyRestart(params);
       });
       const activated = await maybeRestartService({
-        channel,
         shouldRestart: true,
         result: {
           status: "ok",
@@ -414,7 +454,7 @@ describe("preserved update activation with real version guards", () => {
           before: { version: "2026.1.1" },
           after: { version: VERSION, buildId: "new-build" },
         },
-        opts: { json: outcome === "json denial" || (!late && channel === "stable") },
+        opts: { json },
         refreshServiceEnv: late,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
         serviceEnv: before.serviceEnv,
@@ -425,21 +465,18 @@ describe("preserved update activation with real version guards", () => {
       });
       const allowed = !["uninspectable", "foreign"].includes(outcome);
       const buildMismatch = ["stale build", "missing build"].includes(outcome);
-      expect(activated).toBe(allowed && !buildMismatch);
+      expect(activated).toBe(!allowed ? "failed" : buildMismatch ? "restart-health-failed" : "ok");
       const restarts = mocks.child.mock.calls.filter(([args]) => args.includes("restart"));
       expect(restarts).toHaveLength(allowed ? (retried ? 2 : 1) : 0);
       for (const [args, options] of restarts) {
         expect(args).toContain("--preserve-definition");
         expect(typeof options === "object" && options.env?.MANAGED_VALUE).toBe("revalidated");
-        if (!late && channel === "stable") {
-          expect(args).toContain("--json");
-        }
+        expect(args).toContain("--json");
       }
       expect(mocks.start).not.toHaveBeenCalled();
       expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(
         late ? 1 : 0,
       );
-      expect(mocks.restart).toHaveBeenCalledTimes(restarts.length);
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
       if (retried) {
         expect(mocks.terminateStale).toHaveBeenCalledWith([4242]);
@@ -451,11 +488,7 @@ describe("preserved update activation with real version guards", () => {
         );
         expect(verification.length).toBe(retried ? 2 : 1);
         expect(verification.every(([args]) => args.requireRunningService === true)).toBe(true);
-        expect(
-          verification.every(
-            ([args]) => args.expectedBuildId === (channel === "dev" ? "new-build" : undefined),
-          ),
-        ).toBe(true);
+        expect(verification.every(([args]) => args.expectedBuildId === "new-build")).toBe(true);
         expect(mocks.call).toHaveBeenCalled();
         expect(
           mocks.call.mock.calls.every(
@@ -533,7 +566,6 @@ describe("preserved update activation with real version guards", () => {
       }
     });
     const activated = await maybeRestartService({
-      channel: "stable",
       shouldRestart: true,
       result: {
         status: "ok",
@@ -552,7 +584,7 @@ describe("preserved update activation with real version guards", () => {
       timeoutMs: 1000,
     });
     expect(repair).not.toHaveBeenCalled();
-    expect(activated).toBe(false);
+    expect(activated).toBe("failed");
     expect(mocks.error.mock.calls.flat().join("\n")).toContain("unknown option");
     expect(mocks.error.mock.calls.flat().join("\n")).toContain("stopped");
     expect(mocks.restart).not.toHaveBeenCalled();
@@ -560,6 +592,8 @@ describe("preserved update activation with real version guards", () => {
   });
 
   registerRecoveryTests({ root: () => root, configPath: () => configPath, mocks });
+
+  registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 
   registerInstallRootTransitionTests(() => ({ root, mocks }));
 
@@ -658,7 +692,6 @@ describe("preserved update activation with real version guards", () => {
       });
 
       const activated = await maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: {
           status: "ok",
@@ -678,7 +711,7 @@ describe("preserved update activation with real version guards", () => {
         timeoutMs: 1000,
       });
 
-      expect(activated, mocks.log.mock.calls.flat().join("\n")).toBe(true);
+      expect(activated, mocks.log.mock.calls.flat().join("\n")).toBe("ok");
       expect(mocks.events).toEqual([
         "native stop",
         "core updated",
@@ -691,6 +724,7 @@ describe("preserved update activation with real version guards", () => {
         "gateway",
         "restart",
         "--preserve-definition",
+        "--json",
       ]);
       expect(mocks.health.mock.calls[0]?.[0]).toMatchObject({
         port: 19305,
@@ -772,10 +806,11 @@ describe("preserved update activation with real version guards", () => {
     "handoff",
     "bootstrap denied",
     "parent unhealthy",
+    "parent recovery refusal",
     "parent late sealed",
     "parent late unknown",
     "stale retry",
-  ])("preserves actual LaunchAgent artifacts during %s activation", async (scenario) => {
+  ])("checks actual LaunchAgent artifacts during %s activation", async (scenario) => {
     mockProcessPlatform("darwin");
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(process.env);
@@ -829,7 +864,7 @@ describe("preserved update activation with real version guards", () => {
     let nativeRunning = loaded;
     mocks.launchctl.mockImplementation(async (args) => {
       if (args[0] === "bootstrap") {
-        if (scenario === "bootstrap denied") {
+        if (scenario === "bootstrap denied" || scenario === "parent recovery refusal") {
           return { code: 13, stdout: "", stderr: "permission denied", termination: "exit" };
         }
         loaded = true;
@@ -865,11 +900,14 @@ describe("preserved update activation with real version guards", () => {
         portUsage: { port: 19305, status: "busy", listeners: [], hints: [] },
       });
     }
-    let result: boolean;
+    let result: boolean | Awaited<ReturnType<typeof maybeRestartService>>;
     if (scenario === "start demand") {
       await resolveGatewayService().start({ env: process.env, stdout: process.stdout });
       result = nativeRunning;
     } else if (scenario.startsWith("parent")) {
+      if (scenario === "parent recovery refusal") {
+        mocks.configSnapshot.mockResolvedValueOnce(undefined);
+      }
       const lateDenial = scenario.startsWith("parent late");
       const verdict = lateDenial
         ? await revalidateManagedGatewayServiceAfterUpdate({
@@ -878,7 +916,9 @@ describe("preserved update activation with real version guards", () => {
             }),
             root,
           })
-        : { kind: "unresolved" as const, root, fingerprint: "fixture" };
+        : scenario === "parent recovery refusal"
+          ? { kind: "owned" as const, root, fingerprint: "fixture", refreshDefinition: true }
+          : { kind: "unresolved" as const, root, fingerprint: "fixture" };
       if (lateDenial) {
         expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: true });
         mocks.child.mockResolvedValueOnce({
@@ -897,7 +937,6 @@ describe("preserved update activation with real version guards", () => {
         portUsage: { port, status: "free", listeners: [], hints: [] },
       }));
       result = await maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: {
           status: "ok",
@@ -912,7 +951,8 @@ describe("preserved update activation with real version guards", () => {
         serviceUpdateVerdict: verdict,
         serviceEnv: process.env,
         gatewayPort: lateDenial ? 19001 : 19305,
-        restartScriptPath: "/fixture/prepared-restart.sh",
+        restartScriptPath:
+          scenario === "parent recovery refusal" ? null : "/fixture/prepared-restart.sh",
         requireRunningServiceAfterRestart: true,
         timeoutMs: 1000,
       });
@@ -923,12 +963,26 @@ describe("preserved update activation with real version guards", () => {
     } else {
       result = await runDaemonRestart({ json: true, preserveDefinition: true });
     }
-    expect(result).toBe(scenario !== "bootstrap denied" && !scenario.startsWith("parent"));
-    expect(await snapshot()).toEqual(before);
-    expect(mocks.configSnapshot).not.toHaveBeenCalled();
-    expect(writeFile).not.toHaveBeenCalled();
-    expect(chmod).not.toHaveBeenCalled();
-    expect(rename).not.toHaveBeenCalled();
+    expect(result).toBe(
+      scenario === "parent recovery refusal"
+        ? "failed"
+        : scenario.startsWith("parent")
+          ? "restart-health-failed"
+          : scenario !== "bootstrap denied",
+    );
+    if (scenario === "parent recovery refusal") {
+      // Writable recovery migrates legacy service metadata before native bootstrap.
+      expect((await snapshot()).at(-1)).toEqual(before.at(-1));
+      expect(writeFile).toHaveBeenCalled();
+    } else {
+      expect(await snapshot()).toEqual(before);
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(chmod).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+    }
+    expect(mocks.configSnapshot).toHaveBeenCalledTimes(
+      scenario === "parent recovery refusal" ? 1 : 0,
+    );
     if (demandOnly || scenario === "unloaded") {
       const calls = mocks.launchctl.mock.calls.map(([args]) => args);
       const afterBootstrap = calls.slice(calls.findIndex((args) => args[0] === "bootstrap") + 1);
@@ -943,7 +997,10 @@ describe("preserved update activation with real version guards", () => {
       );
       expect(mocks.health).toHaveBeenCalledTimes(2);
     }
-    if (scenario.startsWith("parent")) {
+    if (scenario === "parent recovery refusal") {
+      expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(true);
+      expect(mocks.child).toHaveBeenCalledOnce();
+    } else if (scenario.startsWith("parent")) {
       expect(mocks.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
     } else if (scenario === "handoff") {
       expect(mocks.handoff).toHaveBeenCalledWith(expect.objectContaining({ mode: "kickstart" }));

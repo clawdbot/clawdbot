@@ -2,7 +2,30 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as payloads from "../attachment-payload-store.ts";
-import { ChatAttachmentReadLifecycle, handleChatAttachmentPaste } from "./chat-attachments.ts";
+import {
+  chatAttachmentFromDataUrl,
+  ChatAttachmentReadLifecycle,
+  handleChatAttachmentPaste,
+} from "./chat-attachments.ts";
+
+it("admits same-name image payloads with independent identities", () => {
+  const sources = ["data:image/png;base64,YmVmb3Jl", "data:image/png;base64,YWZ0ZXIh"];
+  const attachments = sources.map((source) => {
+    const attachment = expectDefined(
+      chatAttachmentFromDataUrl(source, "capture.png"),
+      "admitted image attachment",
+    );
+    onTestFinished(() => payloads.releaseChatAttachmentPayload(attachment.id));
+    return attachment;
+  });
+
+  expect(attachments[0]?.id).not.toBe(attachments[1]?.id);
+  expect(attachments.map(({ fileName, sizeBytes }) => ({ fileName, sizeBytes }))).toEqual([
+    { fileName: "capture.png", sizeBytes: 6 },
+    { fileName: "capture.png", sizeBytes: 6 },
+  ]);
+  expect(attachments.map(payloads.getChatAttachmentDataUrl)).toEqual(sources);
+});
 
 class StubFileReader {
   static failNames = new Set<string>();

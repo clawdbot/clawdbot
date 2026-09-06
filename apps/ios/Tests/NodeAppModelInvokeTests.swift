@@ -7432,7 +7432,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
     }
 
-    @Test @MainActor func `operator gateway resolved event waits for canonical readback`() async throws {
+    @Test @MainActor func `resolved operator event after disconnect preserves approval state`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let notificationCenter = MockBootstrapNotificationCenter()
@@ -7446,6 +7446,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 ],
             ])]
         let appModel = NodeAppModel(notificationCenter: notificationCenter)
+        let gatewayStableID = "test-gateway"
+        appModel.connectedGatewayID = gatewayStableID
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
             "approval-event-resolved",
             gatewayDeviceId: "gateway-device-a")
@@ -7453,16 +7455,45 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-event-resolved",
+                    gatewayStableID: gatewayStableID,
                     commandText: "echo clear",
                     agentId: nil,
                     expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
-        await appModel.handleOperatorGatewayServerEvent(EventFrame(
-            type: "event",
-            event: ExecApprovalNotificationBridge.resolvedKind,
-            payload: AnyCodable(["id": "approval-event-resolved"]),
-            seq: nil,
-            stateversion: nil))
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        options.deviceAuthGatewayID = gatewayStableID
+        let operatorSession = appModel.operatorSession
+        let eventRoute: GatewayNodeSessionRoute
+        do {
+            try await operatorSession.connect(
+                url: #require(URL(string: "ws://approval-event-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession()),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            eventRoute = try #require(await operatorSession.currentRoute())
+            await operatorSession.disconnect()
+        } catch {
+            await operatorSession.disconnect()
+            throw error
+        }
+        #expect(await operatorSession.currentRoute() == nil)
+        #expect(!appModel.isOperatorGatewayConnected)
+        #expect(appModel.pendingExecApprovalResolvedPushes.isEmpty)
+
+        // The event subscriber captures its route before delivery; a late event
+        // must retain approval state after that route disconnects, without reconnecting.
+        await appModel.handleOperatorGatewayServerEvent(
+            EventFrame(
+                type: "event",
+                event: ExecApprovalNotificationBridge.resolvedKind,
+                payload: AnyCodable(["id": "approval-event-resolved"]),
+                seq: nil,
+                stateversion: nil),
+            expectedOperatorRoute: eventRoute)
 
         #expect(appModel.pendingExecApprovalPrompt?.id == "approval-event-resolved")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-event-resolved"])
@@ -7480,6 +7511,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = "gateway-a"
+        appModel._test_setExecApprovalPromptFetchFailure("gateway unavailable")
         let gatewayA = ExecApprovalNotificationPrompt(
             approvalId: "shared-approval-id",
             gatewayDeviceId: "gateway-device-a")

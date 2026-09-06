@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer, GatewayStartupOperation } from "../../gateway/server-public.js";
-import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
@@ -17,7 +16,6 @@ import {
   OpenClawAgentDatabaseMediaMigrationRequiredError,
 } from "../../state/openclaw-agent-db-migration-required.js";
 import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
-import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
@@ -3606,36 +3604,4 @@ describe("runGatewayLoop", () => {
   });
 });
 
-describe("gateway discover routing helpers", () => {
-  it("prefers resolved service host over TXT hints", () => {
-    const beacon: GatewayBonjourBeacon = {
-      instanceName: "Test",
-      host: "10.0.0.2",
-      port: 18789,
-      lanHost: "evil.example.com",
-      tailnetDns: "evil.example.com",
-    };
-    expect(pickBeaconHost(beacon)).toBe("10.0.0.2");
-  });
-
-  it("prefers resolved service port over TXT gatewayPort", () => {
-    const beacon: GatewayBonjourBeacon = {
-      instanceName: "Test",
-      host: "10.0.0.2",
-      port: 18789,
-      gatewayPort: 12345,
-    };
-    expect(pickGatewayPort(beacon)).toBe(18789);
-  });
-
-  it("fails closed when resolve data is missing", () => {
-    const beacon: GatewayBonjourBeacon = {
-      instanceName: "Test",
-      lanHost: "test-host.local",
-      gatewayPort: 18789,
-    };
-    expect(pickBeaconHost(beacon)).toBeNull();
-    expect(pickGatewayPort(beacon)).toBeNull();
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

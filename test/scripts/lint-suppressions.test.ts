@@ -208,6 +208,8 @@ describe("production lint suppressions", () => {
         // JSON parser causes can quote reflected credentials from authenticated provider responses.
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
+        // Context preparation owns the mapped descriptor array until rendering.
+        "src/agents/system-prompt.ts|unicorn/no-array-sort|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
@@ -220,6 +222,8 @@ describe("production lint suppressions", () => {
         "src/commands/backup-restore.ts|preserve-caught-error|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
+        // Both list callers sort their own freshly filtered arrays.
+        "src/cron/service/list-page-sort.ts|unicorn/no-array-sort|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",

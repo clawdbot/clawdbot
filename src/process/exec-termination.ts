@@ -1,3 +1,4 @@
+import { constants as osConstants } from "node:os";
 import process from "node:process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -36,40 +37,34 @@ export function createCommandTerminationController(params: {
 
   const isDirectChildAlive = () =>
     !params.isChildExited() && params.child.exitCode == null && params.child.signalCode == null;
-  const spawnTaskkill = (args: string[]) => {
+  const spawnTaskkill = async (args: string[]) => {
     try {
-      return spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
+      await spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
         baseEnv: params.baseEnv,
         env: params.env,
         forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
         reject: false,
         stdio: "ignore",
         timeout: WINDOWS_TASKKILL_TIMEOUT_MS,
-      }).catch(() => undefined);
+      });
     } catch {
-      return undefined;
+      // Best-effort Windows cleanup still joins every attempted helper.
     }
   };
   const startWindowsTermination = (childPid: number, graceful: boolean): void => {
     const taskkills: Promise<unknown>[] = [];
-    const startTaskkill = (args: string[]) => {
-      const taskkill = spawnTaskkill(args);
-      if (taskkill) {
-        taskkills.push(taskkill);
-      }
-    };
     windowsTerminationPromise = (async () => {
       if (graceful) {
-        startTaskkill(["/PID", String(childPid), "/T"]);
+        taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, params.killGraceMs);
           timer.unref();
         });
         if (isDirectChildAlive()) {
-          startTaskkill(["/PID", String(childPid), "/T", "/F"]);
+          taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
         }
       } else {
-        startTaskkill(["/PID", String(childPid), "/T", "/F"]);
+        taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
       }
       // Failed helpers still join here before root cancellation; a sibling taskkill
       // may still be enumerating descendants through that live PID.
@@ -89,18 +84,16 @@ export function createCommandTerminationController(params: {
       return false;
     }
     if (params.processTree && typeof childPid === "number") {
-      const force = params.processTree.mode === "force";
       if (process.platform === "win32") {
-        startWindowsTermination(childPid, !force);
+        startWindowsTermination(childPid, params.processTree.mode !== "force");
         return true;
       }
-      if (force) {
-        cleanup = "forced";
-        terminateProcessTree(childPid, { force: true, detached: true });
-        return false;
-      }
+      const force =
+        params.processTree.mode === "force" ||
+        params.killSignal === "SIGKILL" ||
+        params.killSignal === osConstants.signals.SIGKILL;
       if (processTreeSettlement) {
-        return true;
+        return !force;
       }
       cleanup = "cooperative";
       const groupAlive = () => {
@@ -112,6 +105,35 @@ export function createCommandTerminationController(params: {
           return (error as NodeJS.ErrnoException).code !== "ESRCH";
         }
       };
+      const forceAndObserve = async () => {
+        const start = getFileLockProcessStartTime(childPid);
+        if (start !== null && start !== originalStart) {
+          cleanup = "uncertain";
+          if (isDirectChildAlive()) {
+            params.cancelController.abort();
+          }
+          return;
+        }
+        cleanup = "forced";
+        terminateProcessTree(childPid, { force: true, detached: true });
+        const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
+        // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
+        while (groupAlive()) {
+          const currentStart = getFileLockProcessStartTime(childPid);
+          const remaining = deadline - Date.now();
+          if ((currentStart !== null && currentStart !== originalStart) || remaining <= 0) {
+            cleanup = "uncertain";
+            return;
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, Math.min(25, remaining));
+          });
+        }
+      };
+      if (force) {
+        processTreeSettlement = forceAndObserve();
+        return false;
+      }
       try {
         process.kill(-childPid, params.killSignal ?? "SIGTERM");
       } catch (error) {
@@ -131,20 +153,7 @@ export function createCommandTerminationController(params: {
             setTimeout(check, Math.min(25, deadline - Date.now()));
             return;
           }
-          // Never signal a recycled group leader. A forced fallback cannot certify
-          // cleanup of independently detached descendants of this invocation.
-          const start = getFileLockProcessStartTime(childPid);
-          if (start !== null && start !== originalStart) {
-            cleanup = "uncertain";
-            if (isDirectChildAlive()) {
-              params.cancelController.abort();
-            }
-            resolve();
-            return;
-          }
-          cleanup = "forced";
-          terminateProcessTree(childPid, { force: true, detached: true });
-          resolve();
+          void forceAndObserve().then(resolve);
         };
         check();
       });

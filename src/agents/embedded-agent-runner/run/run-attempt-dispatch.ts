@@ -389,6 +389,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
     // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
     githubPublicationAvailable: params.githubPublicationAvailable,
@@ -583,6 +584,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
     cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
     cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
@@ -609,6 +611,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     onContextAccountingEvent: params.onContextAccountingEvent,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
+    oneShotCliRun: params.oneShotCliRun,
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
@@ -629,12 +632,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     beforeAgentFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+    assistantErrorTranscript: params.assistantErrorTranscript,
     onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: () => {
       sessionPromptState.activePrompt.persisted = false;
     },
-    onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({

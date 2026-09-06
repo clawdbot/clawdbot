@@ -61,7 +61,7 @@ describe("message tool queued gateway delivery", () => {
         status: "delivery_queued",
         delivered: false,
         message:
-          "Message not delivered: connect ECONNREFUSED. The gateway queued it and will retry automatically. Do not resend it.",
+          "Delivery is pending: connect ECONNREFUSED. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.",
       },
     });
 
@@ -83,4 +83,27 @@ describe("message tool queued gateway delivery", () => {
       tool.execute("ordinary-failure", { action: "send", message: "hello" }),
     ).rejects.toBe(error);
   });
+});
+
+describe("message tool prompt-cache contract", () => {
+  it.each([false, true])(
+    "preserves the serialized definition across delivery modes with sourceReplyOnly=%s",
+    (sourceReplyOnly) => {
+      const definitions = (["automatic", "message_tool_only", "automatic"] as const).map(
+        (sourceReplyDeliveryMode) => {
+          const tool = createMessageTool({
+            config: {},
+            preparedMessageToolCatalog: EMPTY_CATALOG,
+            currentChannelProvider: "telegram",
+            sourceReplyOnly,
+            sourceReplyDeliveryMode,
+          });
+          return JSON.stringify({ description: tool.description, parameters: tool.parameters });
+        },
+      );
+
+      expect(definitions[1]).toBe(definitions[0]);
+      expect(definitions[2]).toBe(definitions[0]);
+    },
+  );
 });

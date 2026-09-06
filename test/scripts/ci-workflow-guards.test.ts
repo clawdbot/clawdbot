@@ -32,6 +32,7 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
@@ -190,6 +191,7 @@ function evaluateWorkflowExpression(
       value.replace(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)])),
     hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
     startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
+    toJson: (value: unknown) => JSON.stringify(value),
     github: {
       event_name: context.eventName,
       repository: context.repository,
@@ -401,6 +403,7 @@ function runCiChangedScopeFixture(changedPaths: string[]): Record<string, string
 function runCiManifestFixture(options: {
   bundledPlanner: boolean;
   nodeTestShards?: Record<string, unknown>[];
+  nodeTestGroupsCodec?: boolean;
   changedPlannerSource?: string | null;
   changedPaths?: string[] | null;
   changedCoreTestSupport?: boolean;
@@ -436,6 +439,14 @@ function runCiManifestFixture(options: {
   try {
     const scriptsDir = path.join(root, "scripts", "lib");
     mkdirSync(scriptsDir, { recursive: true });
+    // The manifest packs grouped Node rows through the target's codec and the
+    // shard runner unpacks them; targets that predate the codec omit it.
+    if (options.nodeTestGroupsCodec ?? true) {
+      writeFileSync(
+        path.join(scriptsDir, "ci-node-test-groups-codec.mts"),
+        readFileSync("scripts/lib/ci-node-test-groups-codec.mts"),
+      );
+    }
     writeFileSync(
       path.join(scriptsDir, "ci-node-test-plan.mts"),
       options.nodeTestShards
@@ -787,6 +798,7 @@ function runCiManifestFixture(options: {
     );
     return {
       output: `${run.stdout}${run.stderr}`,
+      outputChars: readFileSync(outputPath, "utf8").length,
       outputs,
       status: run.status,
       summary: readFileSync(summaryPath, "utf8"),
@@ -12535,10 +12547,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
     expect(helperPrivateServerFiles.toSorted()).toEqual([
+      "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
+      "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
       "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
@@ -14076,6 +14091,177 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]);
   });
 
+  it("packs grouped Node matrix rows and unpacks them in the shard runner", () => {
+    const groups = [
+      {
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        env: undefined,
+        includePatterns: ["src/a.test.ts", "src/b.test.ts"],
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shard_name: "core-unit-fast-1",
+        timing_key: "core-unit-fast-1#include-2-abcd",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shard_name: "core-runtime-infra-misc",
+      },
+    ];
+    const projectedGroups = groups.map(
+      ({ configs, env, includePatterns, shard_name, timing_key }) => ({
+        configs,
+        env,
+        includePatterns,
+        shard_name,
+        timing_key,
+      }),
+    );
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      nodeTestShards: [
+        {
+          checkName: "checks-node-compact-small-1",
+          groups,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "compact-small-1",
+        },
+      ],
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const [row] = JSON.parse(
+      expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "packed Node matrix"),
+    ).include;
+    expect(row).toMatchObject({
+      check_name: "checks-node-compact-small-1",
+      groups_gzip_base64: expect.any(String),
+      requires_go: false,
+    });
+    expect(row).not.toHaveProperty("groups");
+    const runStep = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run Node test shard",
+    );
+    const context = {
+      eventName: "pull_request" as const,
+      matrix: row,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    };
+    const packedEnv = evaluateWorkflowExpression(
+      runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64,
+      context,
+    );
+    const legacyEnv = evaluateWorkflowExpression(
+      runStep.env.OPENCLAW_NODE_TEST_GROUPS_JSON,
+      context,
+    );
+    expect(legacyEnv).toBe("");
+    expect(
+      resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: String(packedEnv) }).map((plan) =>
+        plan.kind === "group" ? plan.plan : plan,
+      ),
+    ).toEqual(projectedGroups);
+  });
+
+  it.each(["github", "hybrid", "blacksmith"] as const)(
+    "keeps the complete %s manifest output below the safety budget",
+    (runnerProfile) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        changedPaths: ["src/auto-reply/full-plan.ts"],
+        eventName: "pull_request",
+        nodeTestShards: createNodeTestShardBundles({
+          compactMode: "pull-request",
+          includeReleaseOnlyPluginShards: false,
+          runnerBackend: runnerProfile,
+        }),
+        runnerProfile,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputChars, runnerProfile).toBeLessThan(262_144);
+    },
+  );
+
+  it("uses projected legacy groups for historical targets without the codec", () => {
+    const groups = [
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        env: { OPENCLAW_CI_TEST_GROUP: "legacy" },
+        includePatterns: ["src/legacy.test.ts"],
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shard_name: "core-legacy",
+        timing_key: "core-legacy#include-1-abcd",
+      },
+    ];
+    const ungrouped = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      nodeTestGroupsCodec: false,
+    });
+    expect(ungrouped.status, ungrouped.output).toBe(0);
+    expect(ungrouped.outputs.frozen_target).toBe("true");
+    expect(ungrouped.outputs.compatibility_target).toBe("false");
+    const rows = JSON.parse(
+      expectDefined(ungrouped.outputs.checks_node_core_nondist_matrix, "manual target matrix"),
+    ).include;
+    expect(rows).toEqual([expect.objectContaining({ check_name: "bundled-node-plan" })]);
+    expect(rows[0]).not.toHaveProperty("groups_gzip_base64");
+
+    const grouped = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: true,
+      nodeTestGroupsCodec: false,
+      nodeTestShards: [
+        {
+          checkName: "checks-node-compact-small-1",
+          groups,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "compact-small-1",
+        },
+      ],
+    });
+    expect(grouped.status, grouped.output).toBe(0);
+    const [row] = JSON.parse(
+      expectDefined(grouped.outputs.checks_node_core_nondist_matrix, "legacy Node matrix"),
+    ).include;
+    expect(row).not.toHaveProperty("groups_gzip_base64");
+    expect(Object.keys(row.groups[0]).toSorted()).toEqual([
+      "configs",
+      "env",
+      "includePatterns",
+      "shard_name",
+      "timing_key",
+    ]);
+    const runStep = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run Node test shard",
+    );
+    const context = {
+      eventName: "workflow_dispatch" as const,
+      matrix: row,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    };
+    const packedEnv = evaluateWorkflowExpression(
+      runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64,
+      context,
+    );
+    const legacyEnv = evaluateWorkflowExpression(
+      runStep.env.OPENCLAW_NODE_TEST_GROUPS_JSON,
+      context,
+    );
+    expect(packedEnv).toBe("");
+    expect(
+      resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: String(legacyEnv) }).map((plan) =>
+        plan.kind === "group" ? plan.plan : plan,
+      ),
+    ).toEqual(row.groups);
+  });
+
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const preflightJob = workflow.jobs.preflight;
@@ -14104,6 +14290,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(
+      "${{ matrix.groups_gzip_base64 || '' }}",
+    );
+    expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_JSON).toBe(
+      "${{ matrix.groups && toJson(matrix.groups) || '' }}",
+    );
     expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=600000\"]' || '[]' }}",
     );
@@ -16929,8 +17121,21 @@ it("pins simple release admission owners before selected checkout and preserves 
     "Linux bundle build step",
   );
   expect(buildLinuxBundles["working-directory"]).toBe("apps/linux/src-tauri");
+  expect(buildLinuxBundles.env?.LDAI_RUNTIME_FILE).toBe(
+    "${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64",
+  );
   expect(buildLinuxBundles.run).toContain('\\"createUpdaterArtifacts\\":false');
   expect(buildLinuxBundles.run).toContain('\\"useLocalToolsDir\\":false');
+  const stageLinuxBundles = expectDefined(
+    linuxBuildSteps.find(({ name }) => name === "Verify and stage unsigned Linux bundles"),
+    "Linux unsigned bundle staging",
+  );
+  expect(stageLinuxBundles.run).toContain(
+    'cp "${debs[0]}" "dist/linux-app/release/OpenClaw-${version}-amd64.deb"',
+  );
+  expect(stageLinuxBundles.run).toContain(
+    'cp "${appimages[0]}" "dist/linux-app/unsigned/OpenClaw-${version}-amd64.AppImage"',
+  );
   const buildLinuxJson = JSON.stringify(linux.jobs.build_linux);
   expect(buildLinuxJson).not.toContain("${{ secrets.");
   for (const name of tauriSigningEnvNames) {
@@ -17037,6 +17242,9 @@ it("pins simple release admission owners before selected checkout and preserves 
   );
   expect(signAppImage.run).toContain(
     'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign"',
+  );
+  expect(signAppImage.run).toContain(
+    'appimage="dist/signing-input/OpenClaw-${version}-amd64.AppImage"',
   );
   expect(signAppImage.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"');
   expect(signAppImage.run).toContain(
@@ -17243,12 +17451,21 @@ it("pins simple release admission owners before selected checkout and preserves 
     'linux_signature=$(cat "dist/input/linux/signatures/OpenClaw-${version}-amd64.AppImage.sig")',
   );
   expect(publishLinuxBundles.run).toContain(
+    '--arg linux_url "${url_base}/OpenClaw-${version}-amd64.AppImage"',
+  );
+  expect(publishLinuxBundles.run).toContain(
     '"linux-x86_64": {signature: $linux_signature, url: $linux_url}',
   );
   const appImageToolsPath = "apps/linux/scripts/tauri-appimage-tools.sh";
-  const appImageToolsManifestPath = "apps/linux/scripts/tauri-appimage-tools-x86_64.tsv";
   const appImageTools = readFileSync(appImageToolsPath, "utf8");
-  const appImageToolsManifest = readFileSync(appImageToolsManifestPath, "utf8");
+  const appImageToolsManifest = readFileSync(
+    "apps/linux/scripts/tauri-appimage-tools-x86_64.tsv",
+    "utf8",
+  );
+  const aarch64AppImageToolsManifest = readFileSync(
+    "apps/linux/scripts/tauri-appimage-tools-aarch64.tsv",
+    "utf8",
+  );
   expect(appImageTools).toContain("prepare)");
   expect(appImageTools).toContain('verify_directory "$tools_dir" "$2"');
   expect(appImageTools).toContain("--proto '=https' --tlsv1.2");
@@ -17256,7 +17473,6 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(appImageTools).toContain("--retry 3 --retry-all-errors");
   expect(appImageTools).toContain('mv -Tn -- "$staging_dir" "$tools_dir"');
   expect(appImageTools).toContain('fail "refusing existing Tauri tool cache: $tools_dir"');
-  expect(appImageTools).toContain('runtime_name=".appimage-runtime-x86_64"');
   expect(appImageTools).toContain('offset=$("$plugin" --appimage-offset)');
   expect(appImageTools).toContain('cmp --silent --bytes="$offset" -- "$plugin" "$runtime"');
   expect(appImageToolsManifest.trim().split("\n")).toEqual([
@@ -17296,9 +17512,49 @@ it("pins simple release admission owners before selected checkout and preserves 
       "0555",
     ].join("\t"),
   ]);
+  expect(aarch64AppImageToolsManifest.trim().split("\n")).toEqual([
+    [
+      "AppRun-aarch64",
+      "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-aarch64",
+      "072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578",
+      "072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-aarch64.AppImage",
+      "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-aarch64.AppImage",
+      "b12b5cc57bd0921e1f98d73f58aa364503bc1a27f54b7a69fd2870bce7fa2f55",
+      "a4335edd7c91b99fa9fbb2339d8e5611efbc4fd243ad07b9980ddc961b77d632",
+      "0755",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-gtk.sh",
+      "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/b5eb8d05b4c0ed40107fe2158c5d8527f94568ef/linuxdeploy-plugin-gtk.sh",
+      "cb379f9b0733e9ad9f8bd78f8c2fa038aef2478523bb7d4c8e64ff6a1ea3501a",
+      "cb379f9b0733e9ad9f8bd78f8c2fa038aef2478523bb7d4c8e64ff6a1ea3501a",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-gstreamer.sh",
+      "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/linuxdeploy-plugin-gstreamer.sh",
+      "c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94",
+      "c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-appimage.AppImage",
+      "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-aarch64.AppImage",
+      "ce574719bcf9cc1fb12728d60b17e48cc87d9b6c40f6f48b04cff7d273b5eb24",
+      "ce574719bcf9cc1fb12728d60b17e48cc87d9b6c40f6f48b04cff7d273b5eb24",
+      "0555",
+    ].join("\t"),
+  ]);
   expect(appImageTools).toMatch(/continuous[\s\S]*digest-pinned/u);
 
   const prLinux = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  expect(prLinux.jobs.build["runs-on"]).toBe("ubuntu-22.04");
+  expect(prLinux.jobs.build.strategy).toBeUndefined();
+  expect(prLinux.on.workflow_dispatch?.inputs).toBeUndefined();
   const abiScannerTest = expectDefined(
     (prLinux.jobs.build.steps as WorkflowStep[]).find(
       ({ name }) => name === "Test packaged runtime ABI scanner",
@@ -17332,9 +17588,6 @@ it("pins simple release admission owners before selected checkout and preserves 
         "${{ runner.temp }}/openclaw-tauri-cache",
       );
     }
-    expect(steps[buildIndex]?.env?.LDAI_RUNTIME_FILE, `${contract.label} runtime path`).toBe(
-      "${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64",
-    );
     expect(steps[prepareIndex]?.run, contract.label).toContain(`${contract.helper} prepare`);
     expect(steps[prepareIndex]?.run, contract.label).toContain(
       `${contract.helper} verify pre-build`,
@@ -17346,6 +17599,25 @@ it("pins simple release admission owners before selected checkout and preserves 
     );
     expect(JSON.stringify(contract.job), contract.label).not.toContain("${{ secrets.");
   }
+  const prPrepare = expectDefined(
+    (prLinux.jobs.build.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Prepare pinned AppImage tools",
+    ),
+    "pull request AppImage tool preparation",
+  );
+  expect(prPrepare.run).toContain(
+    "runtime_file=$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)",
+  );
+  expect(prPrepare.run).toContain(
+    'printf \'LDAI_RUNTIME_FILE=%s\\n\' "$runtime_file" >> "$GITHUB_ENV"',
+  );
+  expect(
+    (prLinux.jobs.build.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Build Linux companion bundles",
+    )?.env,
+  ).not.toHaveProperty("LDAI_RUNTIME_FILE");
+  expect(linux.jobs.build_linux["runs-on"]).toBe("ubuntu-22.04");
+  expect(linux.jobs.build_linux.strategy).toBeUndefined();
   const finalizerSource = readFileSync("apps/linux/scripts/finalize-appimage.sh", "utf8");
   const postBuildVerifications =
     finalizerSource.match(/"\$tools_helper" verify post-build/gu) ?? [];
@@ -17357,6 +17629,64 @@ it("pins simple release admission owners before selected checkout and preserves 
     finalizerSource.indexOf('"$plugin" --appdir "$appdir"'),
   );
   expect(finalizerSource).toContain('LDAI_RUNTIME_FILE="$runtime"');
+  const architectureRoot = tempDirs.make("openclaw-appimage-architecture-");
+  const architectureBin = path.join(architectureRoot, "bin");
+  const architectureCache = path.join(architectureRoot, "cache");
+  mkdirSync(architectureBin);
+  writeExecutable(path.join(architectureBin, "uname"), [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'case "$1" in',
+    '  -s) printf "%s\\n" "${SYNTHETIC_UNAME_SYSTEM:?}" ;;',
+    '  -m) printf "%s\\n" "${SYNTHETIC_UNAME_MACHINE:?}" ;;',
+    "  *) exit 64 ;;",
+    "esac",
+  ]);
+  const architectureEnv = (system: string, machine: string, cache = architectureCache) => ({
+    ...process.env,
+    PATH: `${architectureBin}${path.delimiter}${process.env.PATH ?? ""}`,
+    SYNTHETIC_UNAME_MACHINE: machine,
+    SYNTHETIC_UNAME_SYSTEM: system,
+    XDG_CACHE_HOME: cache,
+  });
+  for (const [machine, expected] of [
+    ["x86_64", "x86_64"],
+    ["amd64", "x86_64"],
+    ["aarch64", "aarch64"],
+    ["arm64", "aarch64"],
+  ] as const) {
+    const result = spawnSync(path.resolve(appImageToolsPath), ["architecture"], {
+      encoding: "utf8",
+      env: architectureEnv("Linux", machine),
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.stdout).toBe(`${expected}\n`);
+    expect(existsSync(architectureCache)).toBe(false);
+  }
+  const runtimePath = spawnSync(path.resolve(appImageToolsPath), ["runtime-path"], {
+    encoding: "utf8",
+    env: architectureEnv("Linux", "arm64"),
+  });
+  expect(runtimePath.status, `${runtimePath.stdout}${runtimePath.stderr}`).toBe(0);
+  expect(runtimePath.stdout).toBe(`${architectureCache}/tauri/.appimage-runtime-aarch64\n`);
+  expect(existsSync(architectureCache)).toBe(false);
+  const relativeRuntimePath = spawnSync(path.resolve(appImageToolsPath), ["runtime-path"], {
+    encoding: "utf8",
+    env: architectureEnv("Linux", "x86_64", "relative-cache"),
+  });
+  expect(relativeRuntimePath.status).not.toBe(0);
+  for (const [system, machine] of [
+    ["Darwin", "arm64"],
+    ["Linux", "riscv64"],
+  ] as const) {
+    const rejectedCache = path.join(architectureRoot, `${system}-${machine}`);
+    const result = spawnSync(path.resolve(appImageToolsPath), ["prepare"], {
+      encoding: "utf8",
+      env: architectureEnv(system, machine, rejectedCache),
+    });
+    expect(result.status).not.toBe(0);
+    expect(existsSync(rejectedCache)).toBe(false);
+  }
   if (process.platform === "linux") {
     const selectedTagRoot = tempDirs.make("openclaw-linux-release-v2026.8.2-");
     const trustedTools = path.join(
@@ -17366,6 +17696,10 @@ it("pins simple release admission owners before selected checkout and preserves 
     const trustedToolsManifest = path.join(
       selectedTagRoot,
       ".release-tooling/apps/linux/scripts/tauri-appimage-tools-x86_64.tsv",
+    );
+    const trustedArmToolsManifest = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/scripts/tauri-appimage-tools-aarch64.tsv",
     );
     const trustedFinalizer = path.join(
       selectedTagRoot,
@@ -17421,6 +17755,7 @@ it("pins simple release admission owners before selected checkout and preserves 
                 "  exit 0",
                 "fi",
                 '[[ "$1" == "--appdir" && -d "$2" ]]',
+                '[[ "${ARCH:?}" == "${EXPECTED_ARCH:?}" ]]',
                 '[[ -f "${LDAI_RUNTIME_FILE:?}" ]]',
                 'printf "executed\\n" > "$PLUGIN_SENTINEL"',
                 'cat "$LDAI_RUNTIME_FILE" > "$LDAI_OUTPUT"',
@@ -17486,9 +17821,14 @@ it("pins simple release admission owners before selected checkout and preserves 
       ].join("\n"),
       { mode: 0o755 },
     );
+    copyFileSync(path.join(architectureBin, "uname"), path.join(fakeBin, "uname"));
+    chmodSync(path.join(fakeBin, "uname"), 0o755);
     const toolEnv = {
       ...process.env,
+      EXPECTED_ARCH: "x86_64",
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+      SYNTHETIC_UNAME_MACHINE: "x86_64",
+      SYNTHETIC_UNAME_SYSTEM: "Linux",
       TOOL_SOURCE_DIR: toolSourceDir,
       XDG_CACHE_HOME: cacheRoot,
     };
@@ -17664,6 +18004,92 @@ it("pins simple release admission owners before selected checkout and preserves 
       { cwd: selectedTagRoot, encoding: "utf8" },
     );
     expect(smokeChild.status, `${smokeChild.stdout}${smokeChild.stderr}`).toBe(0);
+
+    const armToolNames = [
+      "AppRun-aarch64",
+      "linuxdeploy-aarch64.AppImage",
+      "linuxdeploy-plugin-gtk.sh",
+      "linuxdeploy-plugin-gstreamer.sh",
+      "linuxdeploy-plugin-appimage.AppImage",
+    ] as const;
+    const armToolSourceDir = path.join(selectedTagRoot, "arm-tool-sources");
+    const armCacheRoot = path.join(selectedTagRoot, ".arm-cache");
+    const armBundleDir = path.join(selectedTagRoot, "arm-bundle");
+    const armAppDir = path.join(armBundleDir, "OpenClaw.AppDir");
+    const armAppImage = path.join(armBundleDir, "OpenClaw_2026.8.2_arm64.AppImage");
+    const armPluginSentinel = path.join(selectedTagRoot, "arm-plugin-executed");
+    mkdirSync(armToolSourceDir);
+    const armToolSources = new Map<string, Buffer>();
+    for (const toolName of armToolNames) {
+      const contents =
+        toolName === "linuxdeploy-plugin-appimage.AppImage"
+          ? expectDefined(toolSources.get(toolName), `${toolName} source`)
+          : Buffer.from(`#!/bin/sh\n# synthetic ${toolName}\nexit 0\n`);
+      armToolSources.set(toolName, contents);
+      writeFileSync(path.join(armToolSourceDir, toolName), contents, { mode: 0o755 });
+    }
+    const armPostBuildLinuxdeploy = Buffer.from(
+      expectDefined(armToolSources.get("linuxdeploy-aarch64.AppImage"), "ARM linuxdeploy source"),
+    );
+    armPostBuildLinuxdeploy.fill(0, 8, 11);
+    writeFileSync(
+      trustedArmToolsManifest,
+      armToolNames
+        .map((toolName) => {
+          const contents = expectDefined(armToolSources.get(toolName), `${toolName} source`);
+          return [
+            toolName,
+            `https://example.invalid/${toolName}`,
+            digest(contents),
+            toolName === "linuxdeploy-aarch64.AppImage"
+              ? digest(armPostBuildLinuxdeploy)
+              : digest(contents),
+            toolName === "linuxdeploy-aarch64.AppImage" ? "0755" : "0555",
+          ].join("\t");
+        })
+        .join("\n") + "\n",
+    );
+    const armToolEnv = {
+      ...toolEnv,
+      EXPECTED_ARCH: "aarch64",
+      SYNTHETIC_UNAME_MACHINE: "arm64",
+      TOOL_SOURCE_DIR: armToolSourceDir,
+      XDG_CACHE_HOME: armCacheRoot,
+    };
+    const armPrepared = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: armToolEnv,
+    });
+    expect(armPrepared.status, `${armPrepared.stdout}${armPrepared.stderr}`).toBe(0);
+    const armRuntimePath = spawnSync(trustedTools, ["runtime-path"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: armToolEnv,
+    });
+    expect(armRuntimePath.status, `${armRuntimePath.stdout}${armRuntimePath.stderr}`).toBe(0);
+    expect(armRuntimePath.stdout).toBe(`${armCacheRoot}/tauri/.appimage-runtime-aarch64\n`);
+    const armToolsDir = path.join(armCacheRoot, "tauri");
+    const armLinuxdeploy = path.join(armToolsDir, "linuxdeploy-aarch64.AppImage");
+    writeFileSync(armLinuxdeploy, armPostBuildLinuxdeploy);
+    chmodSync(armLinuxdeploy, 0o755);
+    mkdirSync(path.join(armAppDir, "usr/lib"), { recursive: true });
+    writeFileSync(path.join(armAppDir, "usr/lib/libwayland-client.so.0"), "host-incompatible");
+    writeFileSync(armAppImage, "pre-finalized", { mode: 0o755 });
+    writeFileSync(`${armAppImage}.sig`, "stale-signature");
+    const armFinalized = spawnSync(trustedFinalizer, [armBundleDir], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: {
+        ...armToolEnv,
+        PLUGIN_SENTINEL: armPluginSentinel,
+      },
+    });
+    expect(armFinalized.status, `${armFinalized.stdout}${armFinalized.stderr}`).toBe(0);
+    expect(readFileSync(armAppImage).subarray(0, 16)).toEqual(appImagePlugin.subarray(0, 16));
+    expect(existsSync(`${armAppImage}.sig`)).toBe(false);
+    expect(existsSync(path.join(armAppDir, "usr/lib/libwayland-client.so.0"))).toBe(false);
+    expect(readFileSync(armPluginSentinel, "utf8")).toBe("executed\n");
 
     const writeSigningToolFixtures = (root: string) => {
       const bin = path.join(root, "bin");

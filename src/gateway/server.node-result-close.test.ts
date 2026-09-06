@@ -392,7 +392,12 @@ test("publishes one runner-availability edge before the socket-close refresh", a
         if (event.event !== "node.invoke.request" || !event.payload || !node) {
           return;
         }
-        const frame = event.payload as { id: string; nodeId: string; command: string };
+        const frame = event.payload as {
+          id: string;
+          nodeId: string;
+          command: string;
+          paramsJSON: string;
+        };
         const reply = respondToNodeShutdown(node, frame);
         if (!reply) {
           throw new Error(`unexpected node cleanup command: ${frame.command}`);

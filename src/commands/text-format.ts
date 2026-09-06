@@ -22,9 +22,9 @@ export function formatTextCell(text: string, width: number): string {
   // Whole-cluster raw bounds also catch invisible runs and oversized single graphemes.
   const overflow = graphemeSegmenter.segment(text).containing(width * 7);
   const bounded = overflow ? `${text.slice(0, overflow.index)}…` : text;
+  const boundedWidth = terminalAnsi.visibleWidth(bounded);
   const fitted =
-    terminalAnsi.visibleWidth(bounded) > width
-      ? `${terminalAnsi.truncateToVisibleWidth(bounded, width - 1)}…`
-      : bounded;
-  return `${fitted}${" ".repeat(width - terminalAnsi.visibleWidth(fitted))}`;
+    boundedWidth > width ? `${terminalAnsi.truncateToVisibleWidth(bounded, width - 1)}…` : bounded;
+  const fittedWidth = fitted === bounded ? boundedWidth : terminalAnsi.visibleWidth(fitted);
+  return `${fitted}${" ".repeat(width - fittedWidth)}`;
 }

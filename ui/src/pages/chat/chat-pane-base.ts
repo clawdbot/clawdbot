@@ -361,6 +361,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerPlacementRestartingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
+  protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
   @litState() protected resetConfirmationOpen = false;
   protected deferredSessionHydrationRequestVersion = 0;
@@ -615,7 +616,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       );
   }
 
-  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): boolean;
   protected abstract commitSidebarLayout(layout: SidebarLayout): void;
   protected abstract refreshSwarmRoster(): void;
   protected abstract resolveBoardProvider(): BoardProvider;

@@ -56,6 +56,7 @@ describe("resolveModelEntries", () => {
       tools: {
         media: {
           models: [
+            { type: "cli", command: "unused-media-fixture" },
             { provider: "openai", model: "gpt-5.4-mini", capabilities: ["image"] },
             { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
           ],
@@ -73,6 +74,10 @@ describe("resolveModelEntries", () => {
     expect(imageEntries).toHaveLength(2);
     expect(imageEntries[0]).toMatchObject({
       entry: { model: "gpt-5.4" },
+      secretOwnerId: "media-model:shared:2",
+    });
+    expect(imageEntries[1]).toMatchObject({
+      entry: { model: "gpt-5.4-mini" },
       secretOwnerId: "media-model:shared:1",
     });
   });

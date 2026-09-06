@@ -30,6 +30,7 @@ import { createHarness } from "./worker-environments/placement-dispatch-test-har
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
+import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 const REQUEST = {
   ...FIXTURE_REQUEST,
@@ -70,6 +71,7 @@ describe("dispatch Stop before provider allocation", () => {
       target,
       entry,
       worktree,
+      workspace: { kind: "local", path: worktree.path },
     });
   });
 
@@ -460,9 +462,9 @@ describe("dispatch Stop before provider allocation", () => {
             pause(() =>
               options.runRecoveryBarrier({
                 ...request,
-                run: async (path: string) => {
+                run: async (recoveryWorkspace: WorkerSessionWorkspace) => {
                   events.push("phase-started");
-                  await request.run(path);
+                  await request.run(recoveryWorkspace);
                 },
               }),
             ),

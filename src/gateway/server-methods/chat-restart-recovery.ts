@@ -131,11 +131,7 @@ export function createRestartSafeChatRequest(params: {
     return undefined;
   }
   return {
-    fingerprint: fingerprintRestartSafeChatRequest({
-      message: params.message,
-      mentions: params.mentions,
-      senderIsOwner: params.senderIsOwner,
-    }),
+    fingerprint: fingerprintRestartSafeChatRequest(params),
   };
 }
 

@@ -8,6 +8,7 @@ import { emitJsonl } from "../jsonl/emit.js";
 import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
+import { REDACTED_SENTINEL } from "../sentinel.js";
 import { resolveOcPath, setOcPath } from "../universal.js";
 import { parseYaml } from "../yaml/parse.js";
 
@@ -344,40 +345,59 @@ describe("setOcPath — jsonl leaf", () => {
 });
 
 describe("setOcPath — md insertion", () => {
-  it("appends item to section with `+`", () => {
-    const md = parseMd("## Tools\n\n- gh: GitHub CLI\n").ast;
-    const r = setOcPath(md, parseOcPath("oc://X.md/tools/+"), "docker: container CLI");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const out = emitMd(r.ast as Parameters<typeof emitMd>[0]);
-      expect(out).toContain("- gh: GitHub CLI");
-      expect(out).toContain("- docker: container CLI");
+  it.each([
+    ["oc://X.md/[frontmatter]/+note", "---\nname: x\n---\n"],
+    ["oc://X.md/tools/+", "## Tools\n- keep: stable\n"],
+    ["oc://X.md/+", "## Existing\n"],
+  ])("refuses sentinel-bearing Markdown insertion values at %s", (uri, raw) => {
+    const md = parseMd(raw).ast;
+    const before = structuredClone(md);
+    for (const value of [REDACTED_SENTINEL, `before${REDACTED_SENTINEL}after`]) {
+      expect(() => setOcPath(md, parseOcPath(uri), value)).toThrow(
+        expect.objectContaining({ code: "OC_EMIT_SENTINEL", path: uri }),
+      );
+      expect(md).toEqual(before);
     }
   });
 
-  it("appends new section at file root with `+`", () => {
-    const md = parseMd("## Existing\n").ast;
-    const r = setOcPath(md, parseOcPath("oc://X.md/+"), "New Section");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const out = emitMd(r.ast as Parameters<typeof emitMd>[0]);
-      expect(out).toContain("## Existing");
-      expect(out).toContain("## New Section");
-    }
-  });
-
-  it("adds new frontmatter key with +key", () => {
+  it("keeps the insertion-value guard separate from new frontmatter keys", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
-    const r = setOcPath(
+    const result = setOcPath(
       md,
-      parseOcPath("oc://X.md/[frontmatter]/+description"),
-      "a new description",
+      parseOcPath(`oc://X.md/[frontmatter]/+${REDACTED_SENTINEL}`),
+      "safe",
     );
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const out = emitMd(r.ast as Parameters<typeof emitMd>[0]);
-      expect(out).toContain("description: a new description");
+    expect(result).toMatchObject({
+      ok: true,
+      ast: { raw: `---\nname: x\n${REDACTED_SENTINEL}: safe\n---` },
+    });
+  });
+
+  it.each([
+    [
+      "item",
+      "## Tools\n\n- gh: __OPENCLAW_REDACTED__\n",
+      "oc://X.md/tools/+",
+      "docker: container CLI",
+      "## Tools\n\n- gh: __OPENCLAW_REDACTED__\n- docker: container CLI",
+    ],
+    ["section", "## Existing\n", "oc://X.md/+", "New Section", "## Existing\n\n## New Section"],
+    [
+      "frontmatter key",
+      "---\nname: x\n---\n",
+      "oc://X.md/[frontmatter]/+description",
+      "has: colon",
+      '---\nname: x\ndescription: "has: colon"\n---',
+    ],
+  ])("preserves output and input AST when inserting a %s", (_kind, raw, path, value, expected) => {
+    const md = parseMd(raw).ast;
+    const before = structuredClone(md);
+    const result = setOcPath(md, parseOcPath(path), value);
+    if (!result.ok || result.ast.kind !== "md") {
+      throw new Error("expected a successful Markdown insertion");
     }
+    expect(emitMd(result.ast)).toBe(expected);
+    expect(md).toEqual(before);
   });
 
   it("rejects duplicate frontmatter key on insertion", () => {

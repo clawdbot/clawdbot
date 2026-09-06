@@ -623,18 +623,20 @@ export async function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  let recoverableWarningCount = 0;
   try {
     await withAgentDatabaseMaintenanceLease({ env }, async () => {
-      const targets = resolveAgentDatabaseMigrationTargets({
+      const discovery = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
         env,
         warnings,
       });
+      recoverableWarningCount = discovery.recoverableWarningCount;
       const seenPaths = new Set<string>();
       let databaseMigrationFailed = false;
       const archiveDirectories = new Set<string>();
-      for (const entry of targets) {
+      for (const entry of discovery.targets) {
         const pathname = entry.path;
         archiveDirectories.add(
           resolveSqliteTranscriptArchiveDirectory({
@@ -718,5 +720,11 @@ export async function migrateLegacyMediaPersistence(
   } catch (error) {
     warnings.push(`Agent database maintenance deferred: ${formatErrorMessage(error)}`);
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && warnings.length === recoverableWarningCount
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }

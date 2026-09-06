@@ -132,7 +132,6 @@ const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(a
   suppressed: false,
 }));
 const mockRecoveryRuntime = {
-  abortAgent: vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({ aborted: true })),
   dispatchAgent: async <T>(
     params: Record<string, unknown>,
     timeoutMs?: number,
@@ -141,6 +140,10 @@ const mockRecoveryRuntime = {
     const result = (await callGateway({ method: "agent", params, timeoutMs })) as T;
     const status = (result as { status?: unknown } | undefined)?.status;
     if (status === undefined) {
+      options?.onStartOwner?.({
+        observe: () => ({ executionStarted: true, expiresAtMs: Date.now() + 60_000 }),
+        abort: () => false,
+      });
       options?.onAccepted?.(result);
       options?.onExecutionStarted?.();
     }
@@ -4373,6 +4376,10 @@ describe("main-session-restart-recovery", () => {
         options: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
       ) => {
         options?.onAccepted?.({ runId: "recovery-main", status: "accepted" });
+        options?.onStartOwner?.({
+          observe: () => ({ executionStarted: true, expiresAtMs: Date.now() + 60_000 }),
+          abort: () => false,
+        });
         options?.onExecutionStarted?.();
         return await new Promise<never>(() => {});
       },
@@ -4386,7 +4393,6 @@ describe("main-session-restart-recovery", () => {
       sessionKey: "agent:main:main",
       storePath,
       gatewayRuntime: {
-        abortAgent: vi.fn(),
         dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
         waitForAgent: vi.fn(),
         sendRecoveryNotice: vi.fn(),
@@ -4412,16 +4418,20 @@ describe("main-session-restart-recovery", () => {
   it("aborts an exact recovery accepted after the execution-start deadline", async () => {
     vi.useFakeTimers();
     let accept: (() => void) | undefined;
-    const abortAgent = vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({
-      aborted: true,
-    }));
+    const abort = vi.fn(() => true);
     const dispatchAgent = vi.fn(
       async (
         _request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
         _timeoutMs: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[1],
         options: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
       ) => {
-        accept = () => options?.onAccepted?.({ runId: "recovery-main", status: "accepted" });
+        accept = () => {
+          options?.onStartOwner?.({
+            observe: () => ({ executionStarted: false, expiresAtMs: Date.now() + 60_000 }),
+            abort,
+          });
+          options?.onAccepted?.({ runId: "recovery-main", status: "accepted" });
+        };
         return await new Promise<never>((_resolve, reject) => {
           options?.signal?.addEventListener(
             "abort",
@@ -4434,7 +4444,6 @@ describe("main-session-restart-recovery", () => {
 
     try {
       const outcome = dispatchRestartRecoveryUntilStarted({
-        agentId: "main",
         agentParams: {
           agentId: "main",
           idempotencyKey: "recovery-main",
@@ -4442,28 +4451,17 @@ describe("main-session-restart-recovery", () => {
           sessionKey: "agent:main:main",
         },
         gatewayRuntime: {
-          abortAgent,
           dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
           sendRecoveryNotice: vi.fn(),
           waitForAgent: vi.fn(),
         },
-        recoveryRunId: "recovery-main",
-        sessionKey: "agent:main:main",
       });
 
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(outcome).resolves.toMatchObject({ kind: "failed" });
       expect(accept).toBeTypeOf("function");
       accept?.();
-      await vi.waitFor(() => expect(abortAgent).toHaveBeenCalledTimes(1));
-      expect(abortAgent).toHaveBeenCalledWith(
-        {
-          agentId: "main",
-          runId: "recovery-main",
-          sessionKey: "agent:main:main",
-        },
-        2_000,
-      );
+      expect(abort).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -4510,7 +4508,6 @@ describe("main-session-restart-recovery", () => {
         sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: {
-          abortAgent: vi.fn(),
           dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
           waitForAgent: vi.fn(async () => ({
             runId: "recovery-main",
@@ -4584,7 +4581,7 @@ describe("main-session-restart-recovery", () => {
         .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
         .mockImplementation(() => {});
       const accepted = createDeferred();
-      const abortAgent = vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({ aborted }));
+      const abort = vi.fn(() => aborted);
       const dispatchAgent = vi.fn(
         async (
           request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
@@ -4592,6 +4589,11 @@ describe("main-session-restart-recovery", () => {
           options: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
         ) => {
           const runId = request.idempotencyKey!;
+          const expiresAtMs = Date.now() + 10_000;
+          options?.onStartOwner?.({
+            observe: () => ({ executionStarted: false, expiresAtMs }),
+            abort,
+          });
           await commitMainSessionRecovery({
             command: {
               kind: "admit_recovery",
@@ -4644,7 +4646,6 @@ describe("main-session-restart-recovery", () => {
           sessionKey: "agent:main:main",
           storePath,
           gatewayRuntime: {
-            abortAgent,
             dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
             waitForAgent: vi.fn(async () => ({
               runId: "recovery-main",
@@ -4659,14 +4660,7 @@ describe("main-session-restart-recovery", () => {
         await accepted.promise;
         await vi.advanceTimersByTimeAsync(10_000);
         await expect(recovery).resolves.toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
-        expect(abortAgent).toHaveBeenCalledWith(
-          {
-            agentId: "main",
-            runId: "recovery-main",
-            sessionKey: "agent:main:main",
-          },
-          2_000,
-        );
+        expect(abort).toHaveBeenCalledOnce();
         expect(scheduleSpy).toHaveBeenCalledTimes(expectedScheduleCount);
         expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
           status: "running",

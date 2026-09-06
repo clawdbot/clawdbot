@@ -3,7 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
-import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
+import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   worktreeRoot: "Worktree Root",
@@ -51,7 +51,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.checkOnStart": "Update Check on Start",
   "update.auto.enabled": "Auto Update Enabled",
   telemetry: "Telemetry",
-  ...projectTelemetryFieldMetadata("label"),
+  ...TELEMETRY_FIELD_LABELS,
   surfaces: "Surface Policies",
   "surfaces.*.silentReply": "Surface Silent Reply Policy",
   "diagnostics.enabled": "Diagnostics Enabled",

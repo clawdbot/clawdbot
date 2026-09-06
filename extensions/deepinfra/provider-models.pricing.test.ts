@@ -1,5 +1,6 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDeepInfraProvider } from "./api.js";
 import { DEEPINFRA_MODEL_CATALOG, discoverDeepInfraModels } from "./provider-models.js";
 
 const DEEPINFRA_MODELS_URL =
@@ -27,16 +28,56 @@ afterEach(() => {
 });
 
 async function withFetchPathTest(mockFetch: ReturnType<typeof vi.fn>, run: () => Promise<void>) {
-  vi.stubEnv("NODE_ENV", undefined);
-  vi.stubEnv("VITEST", undefined);
   vi.stubGlobal("fetch", mockFetch);
   await run();
 }
 
 describe("DeepInfra native runtime prices", () => {
-  it("keeps native prices with static metadata when metadata discovery fails", async () => {
+  it.each([
+    { metadata: 503, pricing: 503, empty: false },
+    { metadata: 503, pricing: 200, empty: false },
+    { metadata: 200, pricing: 503, empty: false },
+    { metadata: 200, pricing: 200, empty: true },
+  ])("keeps the public builder advisory for $metadata/$pricing empty=$empty", async (scenario) => {
+    const mockFetch = vi.fn(async (url: string) => {
+      const metadata = url === DEEPINFRA_MODELS_URL;
+      const status = metadata ? scenario.metadata : scenario.pricing;
+      if (status !== 200) {
+        return new Response("unavailable", { status });
+      }
+      return jsonResponse(
+        metadata
+          ? { data: scenario.empty ? [] : [makeAgentModelEntry({ id: "fixture/public-model" })] }
+          : [
+              {
+                model_name: "fixture/public-model",
+                pricing: {
+                  type: "tokens",
+                  cents_per_input_token: 0.0002,
+                  cents_per_output_token: 0.001,
+                },
+              },
+            ],
+      );
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      const provider = await buildDeepInfraProvider({ hasApiKey: true });
+      expect(provider.models.map((model) => model.id)).toEqual(
+        expect.arrayContaining(DEEPINFRA_MODEL_CATALOG.map((model) => model.id)),
+      );
+      if (scenario.metadata === 200 && !scenario.empty) {
+        expect(provider.models.find((model) => model.id === "fixture/public-model")?.cost).toEqual({
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        });
+      }
+    });
+  });
+
+  it("rejects failed metadata even when native pricing succeeds", async () => {
     const seedId = DEEPINFRA_MODEL_CATALOG[0]!.id;
-    const nativeCost = { input: 1, output: 5, cacheRead: 0.2, cacheWrite: 0 };
     const mockFetch = vi.fn(async (url: string) => {
       if (url === DEEPINFRA_MODELS_URL) {
         return new Response("unavailable", { status: 503 });
@@ -56,23 +97,15 @@ describe("DeepInfra native runtime prices", () => {
       );
     });
     await withFetchPathTest(mockFetch, async () => {
-      const offline = await discoverDeepInfraModels({ hasApiKey: false });
+      await discoverDeepInfraModels({ hasApiKey: false });
       expect(mockFetch).not.toHaveBeenCalled();
-      const models = await discoverDeepInfraModels({ hasApiKey: true });
-      expect(models.map((model) => model.id)).toEqual(offline.map((model) => model.id));
-      expect(models[0]?.cost).toEqual(nativeCost);
-      for (const [index, model] of models.entries()) {
-        expect(model).toEqual({
-          ...offline[index],
-          cost: index === 0 ? nativeCost : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        });
-      }
+      await expect(discoverDeepInfraModels({ hasApiKey: true })).rejects.toThrow("HTTP 503");
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 
   it.each(["unavailable", "malformed", "absent"])(
-    "keeps metadata with unknown costs when native pricing is %s and recovers without refetching metadata",
+    "rejects %s native pricing and recovers without refetching metadata",
     async (failure) => {
       let nativeCalls = 0;
       const mockFetch = vi.fn(async (url: string) => {
@@ -111,18 +144,14 @@ describe("DeepInfra native runtime prices", () => {
         ]);
       });
       await withFetchPathTest(mockFetch, async () => {
-        const unknown = await discoverDeepInfraModels({ hasApiKey: true });
-        expect(unknown[0]).toMatchObject({
-          id: "fixture/recovered",
-          contextWindow: 131072,
-          maxTokens: 65536,
-        });
-        expect(
-          unknown.every((model) => Object.values(model.cost).every((rate) => rate === 0)),
-        ).toBe(true);
+        await expect(discoverDeepInfraModels({ hasApiKey: true })).rejects.toThrow(
+          failure === "unavailable"
+            ? "HTTP 503"
+            : "Native DeepInfra pricing is malformed or has no usable schedules",
+        );
         const recovered = await discoverDeepInfraModels({ hasApiKey: true });
         expect(recovered[0]?.cost).toEqual({ input: 2, output: 10, cacheRead: 0, cacheWrite: 0 });
-        expect(recovered.map((model) => model.id)).toEqual(unknown.map((model) => model.id));
+        expect(recovered.map((model) => model.id)).toEqual(["fixture/recovered"]);
         expect(await discoverDeepInfraModels({ hasApiKey: true })).toEqual(recovered);
         expect(mockFetch).toHaveBeenCalledTimes(3);
       });

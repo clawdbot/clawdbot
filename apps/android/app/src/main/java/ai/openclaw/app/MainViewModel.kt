@@ -680,10 +680,8 @@ class MainViewModel private constructor(
 
   internal suspend fun clearChatReaderPosition(binding: ChatReaderPositionBinding) = ensureRuntime().clearChatReaderPosition(binding)
 
-  val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
-  val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
-  val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
-  val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = runtimeState(initial = null) { it.execApprovalsNotice }
+  internal val execApprovalInbox: StateFlow<GatewayExecApprovalInboxState> =
+    runtimeState(initial = GatewayExecApprovalInboxState()) { it.execApprovalInbox }
 
   /**
    * Attaches Activity-owned permission and lifecycle seams after runtime initialization.
@@ -1386,8 +1384,8 @@ class MainViewModel private constructor(
     ensureRuntime().refreshModelCatalog()
   }
 
-  fun refreshProviderModels() {
-    ensureRuntime().refreshProviderModels()
+  fun refreshProviderModels(refresh: Boolean = false) {
+    ensureRuntime().refreshProviderModels(refresh)
   }
 
   fun refreshTalkSetupReadiness() {

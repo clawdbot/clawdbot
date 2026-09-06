@@ -18,10 +18,8 @@ import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-import {
-  resolvePersistedAuthProfileOwnerAgentDir,
-  updateAuthProfileStoreWithLock,
-} from "./store.js";
+import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCooldownClassification,
@@ -34,6 +32,7 @@ import {
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
   isModelScopedCooldownReason,
+  resetAuthProfileFailureState,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -847,43 +846,6 @@ export function resolveProfileUnusableUntilForDisplay(
   return resolveProfileUnusableUntil(stats);
 }
 
-export function resolveInlineProviderApiKeyUnusableUntil(
-  store: AuthProfileStore,
-  provider: string,
-): number | null {
-  if (isAuthCooldownBypassedForProvider(provider)) {
-    return null;
-  }
-  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
-  if (!stats) {
-    return null;
-  }
-  return resolveProfileUnusableUntil(stats);
-}
-
-function resetUsageStats(
-  existing: ProfileUsageStats | undefined,
-  overrides?: Partial<ProfileUsageStats>,
-): ProfileUsageStats {
-  return {
-    ...existing,
-    errorCount: 0,
-    blockedUntil: undefined,
-    blockedReason: undefined,
-    blockedSource: undefined,
-    blockedModel: undefined,
-    blockedScope: undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-    disabledUntil: undefined,
-    disabledReason: undefined,
-    failureCounts: undefined,
-    ...overrides,
-  };
-}
-
 function updateUsageStatsEntry(
   store: AuthProfileStore,
   profileId: string,
@@ -1336,11 +1298,12 @@ export async function clearAuthProfileCooldown(params: {
   const updated = await updateOwnedAuthProfileUsage(store, profileId, {
     agentDir,
     updater: (freshStore) => {
-      if (!freshStore.usageStats?.[profileId]) {
+      const existing = freshStore.usageStats?.[profileId];
+      if (!existing) {
         return false;
       }
 
-      updateUsageStatsEntry(freshStore, profileId, (existing) => resetUsageStats(existing));
+      updateUsageStatsEntry(freshStore, profileId, () => resetAuthProfileFailureState(existing));
       return true;
     },
   });

@@ -1,7 +1,10 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionMetaForEntry,
+  resolveSessionStorePathForAcp,
+} from "../acp/runtime/session-meta.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -163,12 +166,17 @@ function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
 
 function isRunningSession(selection: TailSelection): boolean {
   const cfg = getRuntimeConfig();
-  const acpMeta = readAcpSessionMeta({
-    sessionKey: resolveStoredSessionKeyForAgentStore({
-      cfg,
-      agentId: selection.agentId,
-      sessionKey: selection.key,
-    }),
+  const sessionKey = resolveStoredSessionKeyForAgentStore({
+    cfg,
+    agentId: selection.agentId,
+    sessionKey: selection.key,
+  });
+  const { agentId } = resolveSessionStorePathForAcp({ cfg, sessionKey });
+  const acpMeta = readAcpSessionMetaForEntry({
+    cfg,
+    sessionKey,
+    agentId,
+    entry: selection.entry,
   });
   return selection.entry.status === "running" || acpMeta?.state === "running";
 }
@@ -299,6 +307,7 @@ export async function sessionsTailCommand(
     for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: target.agentId,
       storePath: target.storePath,
+      projection: "list",
     })) {
       const selection = buildTailSelection({
         agentId: target.agentId,

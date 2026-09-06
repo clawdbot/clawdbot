@@ -72,7 +72,7 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
     // Ensure first row is non-selected so description styling path is exercised.
-    list.setSelectedIndex(1);
+    list.handleInput("\x1b[B");
     const output = list.render(width).join("\n");
     if (shouldContainDescription) {
       expect(output).toContain("(desc)");
@@ -155,8 +155,6 @@ describe("SearchableSelectList", () => {
       { value: "other", label: "other", description: "Other description" },
     ];
     const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
-    list.setSelectedIndex(1); // make first row non-selected so description styling is applied
-
     typeInput(list, "provider");
 
     const width = 80;
@@ -335,7 +333,7 @@ describe("SearchableSelectList", () => {
     expect(output).toContain("*gpt*");
   });
 
-  it("renders the current query during selection callbacks after clearing and replacing it", () => {
+  it("renders the current query after clearing and replacing it", () => {
     const list = new SearchableSelectList(
       [{ value: "match", label: "alpha beta", description: "alpha beta description" }],
       5,
@@ -343,16 +341,14 @@ describe("SearchableSelectList", () => {
     );
     list.handleInput("alpha");
     list.render(80);
-    const frames: string[] = [];
-    list.onSelectionChange = () => frames.push(list.render(80).join("\n"));
-
     list.handleInput("\u0015");
+    const cleared = list.render(80).join("\n");
     list.handleInput("beta");
+    const replaced = list.render(80).join("\n");
 
-    expect(frames).toHaveLength(2);
-    expect(frames[0]).not.toContain("\u001b[31m");
-    expect(frames[1]?.split("alpha \u001b[31mbeta\u001b[0m")).toHaveLength(3);
-    expect(list.render(80).join("\n")).toBe(frames[1]);
+    expect(cleared).not.toContain("\u001b[31m");
+    expect(replaced.split("alpha \u001b[31mbeta\u001b[0m")).toHaveLength(3);
+    expect(list.render(80).join("\n")).toBe(replaced);
   });
 
   it("shows no match message when filter yields no results", () => {

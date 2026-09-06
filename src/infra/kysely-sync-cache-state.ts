@@ -135,6 +135,10 @@ function queryFitsStatementCache(sql: string, parameters: readonly SQLInputValue
   }
   for (const parameter of parameters) {
     if (typeof parameter === "string") {
+      // UTF-8 is never shorter than UTF-16 code units; skip an already oversized value.
+      if (parameter.length > statementCacheEntryBytes - bytes) {
+        return false;
+      }
       bytes += Buffer.byteLength(parameter);
     } else if (ArrayBuffer.isView(parameter)) {
       bytes += parameter.byteLength;

@@ -32,6 +32,7 @@ import {
 import { loadSetupInferencePluginGeneration } from "./revalidate-inference-owner.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
+  createSetupInferenceCandidateStager,
   persistActivatedSetupInference,
   type SetupInferenceActivationPersistenceState,
 } from "./setup-inference-activate-persist.js";
@@ -47,7 +48,10 @@ import {
   resolveSetupInferenceWorkspace,
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
-import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
+import {
+  revalidateStableSetupInferenceOwner,
+  validateSetupInferenceOwnerEvidence,
+} from "./setup-inference-owner.js";
 import {
   cleanupSetupInferenceTempDir,
   persistManualAuthProfiles,
@@ -56,12 +60,19 @@ import {
 } from "./setup-inference-persist.js";
 import {
   configureCodexCliPreparedAuth,
+  parseRef,
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
 import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import {
+  applySetupNativeSessionCatalogPreference,
+  requiresSetupNativeSessionCatalogConsent,
+  listSetupNativeSessionCatalogs,
+  resolveSetupNativeSessionCatalogPreference,
+} from "./setup-native-session-catalogs.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   type SystemAgentOwnerPluginArtifactSnapshot,
@@ -160,13 +171,11 @@ async function activateSetupInferenceUnredacted(
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
   let codexMetadataNeedsRestore = false;
   let verificationProgress: WizardProgress | undefined;
-  let codexProbePluginGeneration: ReturnType<typeof loadSetupInferencePluginGeneration> | undefined;
+  let probePluginGeneration: ReturnType<typeof loadSetupInferencePluginGeneration> | undefined;
   const withProbePluginGeneration = <T>(run: () => T): T =>
-    codexProbePluginGeneration
-      ? withPluginRuntimeGenerationScope(codexProbePluginGeneration, run)
-      : run();
+    probePluginGeneration ? withPluginRuntimeGenerationScope(probePluginGeneration, run) : run();
   try {
-    const plan = await buildTestPlan({
+    const builtPlan = await buildTestPlan({
       kind: params.kind,
       ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
       ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
@@ -182,24 +191,53 @@ async function activateSetupInferenceUnredacted(
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isCancelled ? { isCancelled: params.isCancelled } : {}),
       ...(params.kind === "provider-auth"
-        ? { isRemoteProviderAuth: params.surface === "gateway" }
+        ? { isRemoteProviderAuth: params.isRemoteProviderAuth ?? params.surface === "gateway" }
         : {}),
       ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
       routeAgentId,
     });
-    if ("error" in plan) {
+    if ("error" in builtPlan) {
       return {
         ok: false,
-        status: plan.status ?? "unavailable",
-        error: plan.error,
+        status: builtPlan.status ?? "unavailable",
+        error: builtPlan.error,
+      };
+    }
+    let plan = builtPlan;
+    const catalogConsentRequired = requiresSetupNativeSessionCatalogConsent({
+      configExists: snapshot.exists,
+      config: sourceCfg,
+      catalogs: listSetupNativeSessionCatalogs({ config: sourceCfg, workspaceDir: workspace }),
+    });
+    const catalogPreference = resolveSetupNativeSessionCatalogPreference({
+      consentRequired: catalogConsentRequired,
+      ...(params.nativeSessionCatalogsEnabled !== undefined
+        ? { requested: params.nativeSessionCatalogsEnabled }
+        : {}),
+    });
+    if (catalogPreference !== undefined) {
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: plan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
       };
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
     let testPlan = plan;
     if (plan.persistModelRef) {
-      const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
+      const agentRuntimeId = plan.selectedAgentRuntimeId ?? resolveSetupAgentRuntimeId(params.kind);
       const stagedConfig = await applySystemAgentModelSelection({
         config: testPlan.config,
         model: plan.persistModelRef,
@@ -254,6 +292,7 @@ async function activateSetupInferenceUnredacted(
             prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
             runtime: params.runtime,
             workspaceDir: tempDir,
+            reviewOfficialArtifacts: true,
             beforePersistentEffect,
           });
           if (!ensured.ok) {
@@ -329,7 +368,7 @@ async function activateSetupInferenceUnredacted(
             logger: { warn: (message) => (registryRefreshWarning = message) },
           });
           try {
-            codexProbePluginGeneration = loadSetupInferencePluginGeneration({
+            probePluginGeneration = loadSetupInferencePluginGeneration({
               config: testPlan.config,
               workspaceDir: workspace,
               selection: {
@@ -355,9 +394,55 @@ async function activateSetupInferenceUnredacted(
         return preparationFailure;
       }
     }
+    if (catalogPreference !== undefined) {
+      // A managed runtime can add its manifest after the first setup snapshot.
+      // Re-resolve declarations before the probe so a newly installed catalog
+      // receives the same explicit fresh-install preference.
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: testPlan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      testPlan = { ...testPlan, config: preferenceConfig };
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
+      };
+    }
+    if (
+      !probePluginGeneration &&
+      plan.pendingPluginInstalls &&
+      Object.keys(plan.pendingPluginInstalls).length > 0
+    ) {
+      await withPluginLifecycleLease({ signal: params.signal }, async () => {
+        probePluginGeneration = loadSetupInferencePluginGeneration({
+          config: testPlan.config,
+          workspaceDir: workspace,
+          selection: {
+            provider: parseRef(testPlan.modelRef).provider,
+            modelId: testPlan.model,
+            runtime:
+              testPlan.runner === "cli"
+                ? testPlan.provider
+                : (testPlan.selectedAgentRuntimeId ??
+                  testPlan.agentHarnessRuntimeOverride ??
+                  "openclaw"),
+            agentId: testPlan.routeAgentId,
+          },
+          pendingPluginInstalls: plan.pendingPluginInstalls,
+          resolvePluginMetadataSnapshot: resolveRouteMetadata,
+        });
+      });
+    }
     const metadataWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
     const routeMetadataSnapshot =
-      codexProbePluginGeneration?.metadataSnapshot ??
+      probePluginGeneration?.metadataSnapshot ??
       resolveRouteMetadata({
         config: testPlan.config,
         env: process.env,
@@ -365,8 +450,23 @@ async function activateSetupInferenceUnredacted(
       });
     const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
     const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
-    const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps);
-    const verifiedRoute = await projectInferenceRoute(testPlan.config, requestedAgentId, routeDeps);
+    const agentRuntimeId = plan.selectedAgentRuntimeId ?? resolveSetupAgentRuntimeId(params.kind);
+    const stageCandidate = await createSetupInferenceCandidateStager({
+      plan,
+      ...(requestedAgentId ? { targetAgentId: requestedAgentId } : {}),
+      ...(agentRuntimeId ? { agentRuntimeId } : {}),
+      codexPluginPatch,
+      pendingCodexInstall,
+      ...(deps.enablePluginInConfig ? { enablePlugin: deps.enablePluginInConfig } : {}),
+    });
+    const verifiedSourceConfig = stageCandidate(sourceCfg, sourceCfg);
+    const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps, sourceCfg);
+    const verifiedRoute = await projectInferenceRoute(
+      testPlan.config,
+      requestedAgentId,
+      routeDeps,
+      verifiedSourceConfig,
+    );
     const stagedRoute = verifiedRoute.route;
     const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
       testPlan.config,
@@ -446,6 +546,7 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
+    params.onPreparationComplete?.();
     if (params.signal?.aborted || params.isCancelled?.()) {
       return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
     }
@@ -491,60 +592,13 @@ async function activateSetupInferenceUnredacted(
       plan.manualAuth !== undefined ||
       codexPluginPatch !== undefined ||
       pendingCodexInstall !== undefined;
-    if (
-      !test.auth.authFingerprint &&
-      (!test.auth.runtimeOwnerFingerprint ||
-        !test.auth.runtimeOwnerKind ||
-        !test.auth.runtimeOwnerId?.trim())
-    ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse. No model or credential route was saved.",
-      };
-    }
-    if (
-      testPlan.runner === "cli" &&
-      (!test.auth.runtimeArtifactFingerprint || !test.auth.runtimeArtifactId?.trim())
-    ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its CLI executable/package artifact could not be safely reused. No model or credential route was saved.",
-      };
-    }
-    if (testPlan.runner === "embedded") {
-      const successfulHarnessId = test.auth.agentHarnessId?.trim();
-      const configuredHarnessId = testPlan.agentHarnessRuntimeOverride?.trim();
-      if (
-        !successfulHarnessId ||
-        (configuredHarnessId !== undefined &&
-          configuredHarnessId !== "auto" &&
-          successfulHarnessId !== configuredHarnessId)
-      ) {
-        return {
-          ok: false,
-          status: "unknown",
-          error:
-            "Inference succeeded, but its exact agent harness could not be safely reused. No model or credential route was saved.",
-        };
-      }
-      if (
-        successfulHarnessId !== "openclaw" &&
-        (test.auth.runtimeOwnerKind !== "plugin-harness" ||
-          test.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
-          !test.auth.runtimeArtifactFingerprint ||
-          !test.auth.runtimeArtifactId?.trim())
-      ) {
-        return {
-          ok: false,
-          status: "unknown",
-          error:
-            "Inference succeeded, but its agent harness artifact could not be safely reused. No model or credential route was saved.",
-        };
-      }
+    const ownerEvidenceFailure = validateSetupInferenceOwnerEvidence({
+      runner: testPlan.runner,
+      configuredHarnessId: testPlan.agentHarnessRuntimeOverride,
+      auth: test.auth,
+    });
+    if (ownerEvidenceFailure) {
+      return ownerEvidenceFailure;
     }
     let gatewayRestartRequired = false;
     if (!needsPersistence) {
@@ -554,7 +608,12 @@ async function activateSetupInferenceUnredacted(
           ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
           : undefined;
       const latestRoute = latestRuntime
-        ? await projectInferenceRoute(latestRuntime, requestedAgentId, routeDeps)
+        ? await projectInferenceRoute(
+            latestRuntime,
+            requestedAgentId,
+            routeDeps,
+            latestSnapshot.sourceConfig,
+          )
         : undefined;
       if (!latestRoute || !sameDefaultInferenceRoute(latestRoute, verifiedRoute)) {
         return {
@@ -595,9 +654,9 @@ async function activateSetupInferenceUnredacted(
         params,
         deps,
         plan,
-        testPlan,
+        stageCandidate,
+        ...(requestedAgentId ? { targetAgentId: requestedAgentId } : {}),
         test,
-        codexPluginPatch,
         pendingCodexInstall,
         cfg,
         sourceCfg,

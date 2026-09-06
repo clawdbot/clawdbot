@@ -101,7 +101,6 @@ setCliRunnerExecuteTestDeps({
         activeRuns.get(runId)?.cancel(reason);
       }),
       cancelScope: vi.fn(),
-      getRecord: vi.fn(),
     };
   },
   enqueueSystemEvent: (
@@ -144,11 +143,25 @@ export function createManagedRun(
   pid = 1234,
 ): ManagedRunMock & Awaited<ReturnType<SupervisorSpawnFn>> {
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: "run-supervisor",
     pid,
     startedAtMs: Date.now(),
     stdin: undefined,
     wait: vi.fn().mockResolvedValue(exit),
     cancel: vi.fn(),
+  };
+}
+
+export function createSuccessfulProcessExit(): MockRunExit {
+  return {
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 50,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
   };
 }

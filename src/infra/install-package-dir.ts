@@ -231,14 +231,14 @@ export function resolvePackageDirInstallTransaction(
 }
 
 /**
- * Publishes a package directory into an install target via a staged copy.
+ * Publishes a copied package or a privately prepared package directory into its install target.
  * Update mode backs up the existing target, runs optional validation hooks,
  * and rolls back when copy, dependency install, or validation fails.
  */
 export async function installPackageDir<
   TAfterInstallFailure extends InstallPackageDirFailure = InstallPackageDirFailure,
 >(params: {
-  sourceDir: string;
+  sourceDir?: string;
   targetDir: string;
   mode: "install" | "update";
   timeoutMs: number;
@@ -336,13 +336,15 @@ export async function installPackageDir<
       candidatePaths: [canonicalTargetDir],
     });
     stageDir = await fs.mkdtemp(path.join(installBaseRealPath, ".openclaw-install-stage-"));
-    await fs.cp(params.sourceDir, stageDir, {
-      recursive: true,
-      // Keep relative symlinks relative to the staged copy. Node's default
-      // rewrites them toward the source tree, which makes valid vendored
-      // package links look like install-root escapes during post-copy scans.
-      verbatimSymlinks: true,
-    });
+    if (params.sourceDir !== undefined) {
+      await fs.cp(params.sourceDir, stageDir, {
+        recursive: true,
+        // Keep relative symlinks relative to the staged copy. Node's default
+        // rewrites them toward the source tree, which makes valid vendored
+        // package links look like install-root escapes during post-copy scans.
+        verbatimSymlinks: true,
+      });
+    }
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
   }

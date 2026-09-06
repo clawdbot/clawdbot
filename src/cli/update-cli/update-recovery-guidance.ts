@@ -27,6 +27,9 @@ export function resolveUpdateResultNextAction(params: {
 }): string | undefined {
   const { result, env } = params;
   if (result.status === "error") {
+    if (result.reason === "rollback-project-changed") {
+      return `Other global packages changed after staging; automatic rollback was refused to preserve them. Keep the candidate installed if its gateway is reachable; otherwise keep the gateway stopped. ${resolveUnsafeUpdateRecoveryGuidance(undefined, env)}`;
+    }
     const reason =
       result.recovery?.serviceRestartSafe === false ? result.recovery.reason : undefined;
     const state = reason

@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
@@ -605,8 +606,8 @@ class GatewayBootstrapAuthTest {
 
       runtime.acceptGatewayTrustPrompt()
 
-      assertEquals("ab".repeat(32), prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "nodeSession"))
+      assertEquals("ab".repeat(32), prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("ab".repeat(32), runtime.gatewayControlPage.value?.tlsFingerprintSha256)
       assertNull(desiredBootstrapToken(runtime, "operatorSession"))
     }
@@ -633,6 +634,7 @@ class GatewayBootstrapAuthTest {
       assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
 
       runtime.declineGatewayTrustPrompt()
+      withTimeout(500) { runtime.pendingGatewayTrust.first { it == null } }
 
       assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
 
@@ -643,6 +645,9 @@ class GatewayBootstrapAuthTest {
       waitForGatewayTrustPrompt(runtime)
       runtime.acceptGatewayTrustPrompt()
 
+      val desired = waitForDesiredConnection(runtime, "nodeSession")
+      val tls = readField<GatewayTlsParams>(desired, "tls")
+      assertEquals(newFingerprint, tls.expectedFingerprint)
       assertEquals(newFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
     }
 
@@ -1409,6 +1414,9 @@ class GatewayBootstrapAuthTest {
     val prefs = testPrefs(app)
     val runtime = trackRuntime(NodeRuntime(app, prefs))
     neutralizeColdStartAutoConnect(runtime)
+    // Store startup has a separate IO scope. Finish it before arming a saved endpoint so
+    // lifecycle assertions do not race the real database-readiness gate added to connect.
+    runBlocking { readField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase() }
     return runtime to prefs
   }
 
@@ -1603,6 +1611,7 @@ class GatewayBootstrapAuthTest {
       agentId: String,
       sessionKey: String,
       messages: List<ChatMessage>,
+      sessionInfo: ChatSessionEntry?,
       sessionId: String?,
     ) = Unit
 

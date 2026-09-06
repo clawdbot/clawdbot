@@ -607,9 +607,9 @@ export async function completeGatewayClose(
       warnings,
     });
   } finally {
-    // Grace lets independent teardown advance; pending plugin cleanup still owns
-    // shared state. Its rejection was reported by the disposal policy above.
-    await pluginServicesCleanup?.catch(() => {});
+    // Grace lets independent teardown advance; failed plugin cleanup still owns
+    // shared state and must prevent a new Gateway lifecycle from starting.
+    await pluginServicesCleanup;
     await params.finishRequestEntries?.();
     if (mediaCleanupStopResult === "drained") {
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);

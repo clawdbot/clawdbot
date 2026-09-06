@@ -6,7 +6,11 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import type { TerminationReason } from "../process/supervisor/types.js";
+import type {
+  ManagedRunStdin,
+  ProcessRunActivity,
+  TerminationReason,
+} from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
@@ -29,18 +33,6 @@ let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_
 
 /** Lifecycle status recorded for background process sessions. */
 type ProcessStatus = "running" | "completed" | "failed" | "killed";
-
-/** Writable stdin surface prepared by the supervisor for child and PTY sessions. */
-type SessionStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
-  end: () => void;
-  // Child and PTY wrappers both expose destroy today; keep it optional for alternate backends.
-  destroy?: () => void;
-  destroyed?: boolean;
-  writable?: boolean;
-  writableEnded?: boolean;
-  writableFinished?: boolean;
-};
 
 /** Removes one queued notify-on-exit event, if it is still pending. */
 type NotifyOnExitRemoval = () => boolean;
@@ -77,7 +69,9 @@ export interface ProcessSession {
   // ProcessSupervisor owns raw processes. Remove when the public Plugin SDK closure no
   // longer reaches registry types, or at the next compatible boundary change.
   child?: ChildProcessWithoutNullStreams;
-  stdin?: SessionStdin;
+  /** Retain the exact process producer while backend finalization is pending. */
+  processActivity?: ProcessRunActivity;
+  stdin?: ManagedRunStdin;
   pid?: number;
   startedAt: number;
   /** Set only on admission to completed retention; survives index removal. */
@@ -295,6 +289,7 @@ export function markExited(
   // blocked until the process owner reports the actual terminal transition.
   session.terminalStatus = status;
   session.exited = true;
+  delete session.processActivity;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;

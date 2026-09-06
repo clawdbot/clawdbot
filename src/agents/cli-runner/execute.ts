@@ -28,10 +28,11 @@ import {
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { runCliCleanup } from "./cleanup.js";
 import {
   acceptsCliLiveSession,
   buildCliLiveOwnerKey,
-  closeCliLiveSession,
+  restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
@@ -341,7 +342,9 @@ export async function executePreparedCliRun(
   };
   const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
     try {
-      await cleanup?.();
+      await runCliCleanup(params, "cli-outer-resource", async () => {
+        await cleanup?.();
+      });
     } catch (error) {
       if (completedOutput?.didSendViaMessagingTool) {
         cliBackendLog.warn(
@@ -601,12 +604,16 @@ export async function executePreparedCliRun(
       });
       toolTracking.finalizeCapture(events.finalizeParsedTools);
       try {
-        await cleanupMcpCaptureAttempt?.();
+        await runCliCleanup(params, "cli-mcp-capture", async () => {
+          await cleanupMcpCaptureAttempt?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
       try {
-        restoreSkillEnv?.();
+        await runCliCleanup(params, "cli-skill-env", async () => {
+          restoreSkillEnv?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
@@ -639,7 +646,7 @@ export async function executePreparedCliRun(
         }
         // The fork argument only applies at process startup; a cached warm child
         // would run inside the source session. Force a fresh spawn.
-        await closeCliLiveSession(context, "restart");
+        await restartCliLiveSession(context);
       }
       return await executeAttempt();
     });

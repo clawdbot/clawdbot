@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  checkZaloAuthenticatedMock,
   listZaloFriendsMatchingMock,
   startZaloQrLoginMock,
   waitForZaloQrLoginMock,
@@ -18,6 +19,7 @@ import {
   zalouserResolverAdapter,
   zalouserSecurityAdapter,
 } from "./channel.adapters.js";
+import { zalouserPlugin } from "./channel.js";
 
 describe("zalouser target classification", () => {
   it("distinguishes users from groups", () => {
@@ -568,5 +570,53 @@ describe("zalouser account resolution", () => {
       profile: "work-profile",
       timeoutMs: 180_000,
     });
+  });
+});
+
+describe("zalouserPlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      zalouser: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: { profile: "alpha-profile" },
+          beta: { profile: "beta-profile" },
+        },
+      },
+    },
+  };
+
+  beforeEach(() => {
+    checkZaloAuthenticatedMock.mockClear();
+    checkZaloAuthenticatedMock.mockResolvedValue(true);
+    mockSendMessage.mockClear();
+  });
+
+  it.each([
+    { name: "the approved account", accountId: "beta", profile: "beta-profile" },
+    {
+      name: "the default account when no account was approved",
+      accountId: undefined,
+      profile: "alpha-profile",
+    },
+  ])("sends the approval from $name", async ({ accountId, profile }) => {
+    const notifyApproval = zalouserPlugin.pairing?.notifyApproval;
+    if (!notifyApproval) {
+      throw new Error("zalouser pairing.notifyApproval unavailable");
+    }
+
+    await notifyApproval({
+      cfg: pairingCfg,
+      id: "paired-user",
+      ...(accountId ? { accountId } : {}),
+    });
+
+    expect(checkZaloAuthenticatedMock).toHaveBeenCalledTimes(1);
+    expect(checkZaloAuthenticatedMock.mock.calls[0]?.[0]).toBe(profile);
+    expect(mockSendMessage).toHaveBeenCalledExactlyOnceWith(
+      "paired-user",
+      expect.any(String),
+      expect.objectContaining({ profile }),
+    );
   });
 });

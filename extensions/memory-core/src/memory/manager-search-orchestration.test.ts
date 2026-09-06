@@ -9,7 +9,6 @@ import { forgetMemoryEntries } from "../memory-forget.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import * as knnSubprocess from "./manager-search-knn-subprocess.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const { MemoryIndexManager } = await import("./manager.js");
@@ -55,85 +54,58 @@ describe("memory index", () => {
     },
   );
 
-  it("keeps one search generation while a concurrent reindex waits to publish", async () => {
+  it("keeps a dirty status manager read-only while searching published results", async () => {
+    const cfg = createCfg({ provider: "none", minScore: 0 });
+    const writer = await getFreshManager(cfg, "cli");
+    await writer.sync({ reason: "baseline", force: true });
+    const manager = await getFreshManager(cfg, "status");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "pending.md"),
+      "unpublished maintenance marker",
+    );
+    Reflect.set(manager, "dirty", true);
+
+    const results = await manager.search("zebra", { minScore: 0 });
+    expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    expect(manager.status().dirty).toBe(true);
+    expect(await manager.search("unpublished maintenance marker")).toEqual([]);
+  });
+
+  it("invalidates keyword snapshots before changing the fallback provider", async () => {
     const manager = await getPersistentManager(
-      createCfg({
-        vectorEnabled: true,
-        minScore: 0,
-      }),
+      createCfg({ fallback: "fallback-provider", minScore: 0 }),
     );
     await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      db: DatabaseSync;
-      provider: EmbeddingProvider;
-      syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-    };
-    const queryStarted = createDeferred<void>();
-    const releaseQuery = createDeferred<void>();
-    const shadowReady = createDeferred<void>();
-    const releaseReindex = createDeferred<void>();
-    const childReady = createDeferred<void>();
-    const releaseChild = createDeferred<void>();
-    const publishedDb = fields.db;
-    const publishedChunks = manager.status().chunks;
-    let shadowDb: DatabaseSync | undefined;
-    const syncMemoryFiles = fields.syncMemoryFiles.bind(manager);
-    const runKnn = knnSubprocess.runVectorKnnInSubprocess;
+    const fields = manager as unknown as { provider: EmbeddingProvider };
+    const fallbackGate = createDeferred<void>();
+    const queryEntered = createDeferred<void>();
+    const failQuery = createDeferred<void>();
+    providerFixture.providerInitGate = fallbackGate.promise;
     const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
-      queryStarted.resolve();
-      await releaseQuery.promise;
-      return [1, 0, 0, 0];
+      queryEntered.resolve();
+      await failQuery.promise;
+      throw new Error("embedding provider failed");
     });
-    const syncSpy = vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (params) => {
-      shadowDb = fields.db;
-      expect(manager.status().chunks).toBe(publishedChunks);
-      const lexical = await manager.search("zebra", { lexicalOnly: true, minScore: 0 });
-      expect(lexical.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      const result = await syncMemoryFiles(params);
-      shadowReady.resolve();
-      await releaseReindex.promise;
-      return result;
+    const snapshots: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+    const search = manager.search("zebra", {
+      maxResults: 1,
+      minScore: 0,
+      onPartialResults: (results) => snapshots.push(results),
     });
-    const childSpy = vi
-      .spyOn(knnSubprocess, "runVectorKnnInSubprocess")
-      .mockImplementation(async (params) => {
-        const result = await runKnn(params);
-        expect(result.rows.length).toBeGreaterThan(0);
-        childReady.resolve();
-        await releaseChild.promise;
-        return result;
-      });
-    let search: ReturnType<typeof manager.search> | undefined;
-    let reindex: ReturnType<typeof manager.sync> | undefined;
     try {
-      search = manager.search("semantic needle without lexical overlap");
-      await queryStarted.promise;
-      reindex = manager.sync({ reason: "test", force: true });
-      await shadowReady.promise;
-      expect(fields.db).toBe(publishedDb);
-      releaseQuery.resolve();
-      await childReady.promise;
-      releaseReindex.resolve();
-      let reindexSettled = false;
-      void reindex.then(() => {
-        reindexSettled = true;
+      await queryEntered.promise;
+      expect(snapshots).toEqual([[expect.objectContaining({ path: "memory/2026-01-12.md" })]]);
+      failQuery.resolve();
+      await vi.waitFor(() => {
+        expect(providerFixture.providerCalls.at(-1)?.provider).toBe("fallback-provider");
       });
-      await Promise.resolve();
-      expect(reindexSettled).toBe(false);
-
-      releaseChild.resolve();
-      const results = await search;
-      expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      await reindex;
-      expect(shadowDb?.isOpen).toBe(false);
+      expect(snapshots.at(-1)).toBeNull();
     } finally {
-      releaseQuery.resolve();
-      releaseReindex.resolve();
-      releaseChild.resolve();
-      await Promise.allSettled([search, reindex]);
-      childSpy.mockRestore();
-      syncSpy.mockRestore();
+      failQuery.resolve();
+      fallbackGate.resolve();
+      await search.catch(() => undefined);
       querySpy.mockRestore();
+      providerFixture.providerInitGate = null;
     }
   });
 
