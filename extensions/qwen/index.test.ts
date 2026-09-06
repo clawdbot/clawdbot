@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QWEN_36_FLASH_MODEL_ID,
   QWEN_36_PLUS_MODEL_ID,
@@ -40,6 +40,14 @@ async function registerQwenProvider() {
 }
 
 describe("qwen provider plugin", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: [{ id: "qwen3.8-max" }, { id: "qwen3.8-flash" }] })),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
     const provider = await registerQwenProvider();
 

@@ -49,6 +49,7 @@ import {
   hasRawDiscordUserMention,
   isBoundThreadBotSystemMessage,
   isDiscordThreadChannelMessage,
+  matchesActiveDiscordMentionPatterns,
   resolveDiscordMentionState,
   resolveInjectedBoundThreadLookupRecord,
   resolvePreflightMentionRequirement,
@@ -71,7 +72,11 @@ import type {
 } from "./message-handler.preflight.types.js";
 import { resolveDiscordPreflightRoute } from "./message-handler.routing-preflight.js";
 import { resolveForwardedMediaList, resolveMediaList } from "./message-media.js";
-import { resolveDiscordMessageText } from "./message-text.js";
+import {
+  resolveDiscordMessageBatch,
+  resolveDiscordMessageMentionDocuments,
+  resolveDiscordMessageText,
+} from "./message-text.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -241,15 +246,24 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const hydration = await hydrateDiscordMessageIfNeeded({
-    client: params.client,
-    message,
-    messageChannelId,
-  });
-  message = hydration.message;
-  if (params.abortSignal?.aborted) {
-    return null;
+  const hydratedSources: Awaited<ReturnType<typeof hydrateDiscordMessageIfNeeded>>[] = [];
+  // The admitted event stays last so batch IDs and reply references do not change.
+  for (const source of [...(params.precedingMessages ?? []), message]) {
+    hydratedSources.push(
+      await hydrateDiscordMessageIfNeeded({
+        client: params.client,
+        message: source,
+        messageChannelId,
+      }),
+    );
+    if (params.abortSignal?.aborted) {
+      return null;
+    }
   }
+  message = resolveDiscordMessageBatch(
+    hydratedSources.at(-1)!.message,
+    hydratedSources.slice(0, -1).map((source) => source.message),
+  );
 
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
@@ -459,11 +473,26 @@ export async function preflightDiscordMessage(
     conversationId: messageChannelId,
     providerPolicy: params.discordConfig?.mentionPatterns,
   });
-  const explicitlyMentioned = Boolean(
-    botId &&
-    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
-      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
-  );
+  const requiresActiveBotMention =
+    author.bot === true && !sender.isPluralKit && allowBotsMode === "mentions";
+  const mentionSources = hydratedSources.map(({ message: source, kind }) => {
+    const documents = resolveDiscordMessageMentionDocuments(source);
+    const hasRawMention =
+      (kind === "unavailable" || (requiresActiveBotMention && source.type === MessageType.Reply)) &&
+      documents.some((text) => hasRawDiscordUserMention(text, botId));
+    const explicitlyMentioned = Boolean(
+      botId &&
+      (source.mentionedUsers?.some((user: User) => user.id === botId) ||
+        (kind === "unavailable" && hasRawMention)),
+    );
+    return {
+      documents,
+      explicitlyMentioned,
+      activeNativeMention:
+        explicitlyMentioned && (source.type !== MessageType.Reply || hasRawMention),
+    };
+  });
+  const explicitlyMentioned = mentionSources.some((source) => source.explicitlyMentioned);
   const hasAnyMention =
     !isDirectMessage &&
     ((message.mentionedUsers?.length ?? 0) > 0 ||
@@ -598,7 +627,7 @@ export async function preflightDiscordMessage(
     await resolveDiscordPreflightAudioMentionContext({
       message,
       isDirectMessage,
-      shouldRequireMention,
+      shouldRequireMention: shouldRequireMention || requiresActiveBotMention,
       mentionRegexes,
       cfg: params.cfg,
       abortSignal: params.abortSignal,
@@ -608,7 +637,7 @@ export async function preflightDiscordMessage(
   }
 
   const mentionText = hasTypedText ? baseText : "";
-  const { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({
+  const { implicitMentionKinds, wasMentioned: wasNormallyMentioned } = resolveDiscordMentionState({
     authorIsBot: Boolean(author.bot),
     botId,
     hasAnyMention,
@@ -621,6 +650,16 @@ export async function preflightDiscordMessage(
     senderIsPluralKit: sender.isPluralKit,
     transcript: preflightTranscript,
   });
+  const hasActiveBotMention =
+    requiresActiveBotMention &&
+    !isDirectMessage &&
+    (mentionSources.some(
+      (source) =>
+        source.activeNativeMention ||
+        source.documents.some((text) => matchesActiveDiscordMentionPatterns(text, mentionRegexes)),
+    ) ||
+      matchesActiveDiscordMentionPatterns(preflightTranscript ?? "", mentionRegexes));
+  const wasMentioned = wasNormallyMentioned || hasActiveBotMention;
   logDiscordPreflightInboundSummary({
     messageId: message.id,
     guildId: params.data.guild_id ?? undefined,
@@ -731,8 +770,11 @@ export async function preflightDiscordMessage(
     }
   }
 
-  if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
-    const botMentioned = isDirectMessage || wasMentioned || mentionDecision.implicitMention;
+  if (requiresActiveBotMention) {
+    const botMentioned =
+      isDirectMessage ||
+      hasActiveBotMention ||
+      mentionDecision.matchedImplicitMentionKinds.some((kind) => kind !== "reply_to_bot");
     if (!botMentioned) {
       logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
       logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");

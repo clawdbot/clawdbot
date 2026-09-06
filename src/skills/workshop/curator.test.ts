@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
 import {
   emitDiagnosticEvent,
   emitTrustedSkillUsedDiagnosticEvent,
@@ -15,9 +17,20 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { getSkillCuratorStatus, registerSkillUsageTracking } from "./curator.js";
-import { applySkillProposal, proposeCreateSkill } from "./service.js";
+import {
+  applySkillProposal as applySkillProposalImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+} from "./service.js";
 
 let testState: OpenClawTestState;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+const applySkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
+) => applySkillProposalImpl({ config: workshopConfig, ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, ...input });
 
 beforeEach(async () => {
   resetDiagnosticEventsForTest();
@@ -39,6 +52,8 @@ describe("skill curator usage tracking", () => {
     const database = openOpenClawStateDatabase({ env: testState.env });
     const skillFile = testState.path("skills", "daily-brief", "SKILL.md");
     const unregister = registerSkillUsageTracking({ env: testState.env });
+    expect(hasInternalDiagnosticEventInterest("skill.used")).toBe(true);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const event = {
       type: "skill.used",
@@ -111,6 +126,7 @@ describe("skill curator usage tracking", () => {
     });
 
     unregister();
+    expect(hasInternalDiagnosticEventInterest("skill.used")).toBe(false);
     emitTrustedSkillUsedDiagnosticEvent(event, { skillUsage: { skillFile } });
     await waitForDiagnosticEventsDrained();
     expect(
@@ -122,6 +138,7 @@ describe("skill curator usage tracking", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.workspaceDir,
       env: testState.env,
+      agentId: "main",
       name: "Daily Brief",
       description: "Prepare a daily briefing",
       content: "# Daily Brief\nPrepare the daily briefing.\n",
@@ -129,6 +146,7 @@ describe("skill curator usage tracking", () => {
     const applied = await applySkillProposal({
       workspaceDir: testState.workspaceDir,
       env: testState.env,
+      agentId: "main",
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
     });

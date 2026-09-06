@@ -16,6 +16,7 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
@@ -91,17 +92,21 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
   expect(queued[0]).toEqual({ ...queued[2], id: queued[0]?.id });
 
-  await poll(second.run.session.id);
+  const result = await poll(second.run.session.id);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
+  acknowledgeInternalToolResult(result);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
-  await poll(second.run.session.id);
+  acknowledgeInternalToolResult(await poll(second.run.session.id));
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
 });
 
-it("invalidates a heartbeat snapshot when terminal poll consumes its occurrence", async () => {
+it("invalidates a heartbeat snapshot when an acknowledged poll consumes its occurrence", async () => {
   const process = await startNotifyRun();
   await process.finish();
   const snapshot = peekSystemEventEntries(QUEUE_KEY);
-  await poll(process.run.session.id);
+  const result = await poll(process.run.session.id);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(snapshot);
+  acknowledgeInternalToolResult(result);
 
   expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
   expect(consumeSelectedSystemEventEntries(QUEUE_KEY, snapshot)).toEqual([]);
@@ -134,7 +139,9 @@ it("keeps an identical successor queued when heartbeat consumes a stale snapshot
 
     let successor: Awaited<ReturnType<typeof startNotifyRun>> | undefined;
     replySpy.mockImplementation(async () => {
-      await poll(first.run.session.id);
+      const result = await poll(first.run.session.id);
+      expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(firstQueued);
+      acknowledgeInternalToolResult(result);
       await execute("clear", first.run.session.id);
       const replacement = await startNotifyRun();
       successor = replacement;
@@ -166,9 +173,12 @@ it("keeps an identical successor queued when heartbeat consumes a stale snapshot
       throw new Error("heartbeat reply did not enqueue the successor completion");
     }
     expect(successor.run.session.id).toBe(first.run.session.id);
-    expect(peekSystemEventEntries(QUEUE_KEY)).toHaveLength(1);
+    const successorQueued = peekSystemEventEntries(QUEUE_KEY);
+    expect(successorQueued).toHaveLength(1);
 
-    await poll(successor.run.session.id);
+    const successorResult = await poll(successor.run.session.id);
+    expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(successorQueued);
+    acknowledgeInternalToolResult(successorResult);
     expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
   });
 });

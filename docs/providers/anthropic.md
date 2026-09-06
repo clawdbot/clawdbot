@@ -9,7 +9,7 @@ title: "Anthropic"
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** - direct Anthropic API access with usage-based billing (`anthropic/*` models)
-- **Claude CLI** - reuse an existing Claude Code login on the same host through Anthropic's official Agent SDK
+- **Claude CLI** - reuse an existing Claude Code login through the installed executable on the same host
 
 ## Usage and cost tracking
 
@@ -85,8 +85,8 @@ OpenClaw release:
 
     <Steps>
       <Step title="Ensure Claude CLI is installed and logged in">
-        OpenClaw runs the installed Claude Code executable through Anthropic's
-        official Agent SDK. Verify that Claude Code is installed and up to date:
+        OpenClaw communicates directly with the installed Claude Code executable.
+        Verify that Claude Code is installed and up to date:
 
         ```bash
         claude --version
@@ -112,18 +112,21 @@ OpenClaw release:
         # choose: Claude CLI
         ```
 
-        Normal agent turns use the official Agent SDK with the installed,
-        authenticated Claude Code executable. OpenClaw uses a non-secret route
+        Normal agent turns use the installed, authenticated Claude Code executable
+        through OpenClaw's direct CLI transport. OpenClaw uses a non-secret route
         marker and never reads, persists, refreshes, selects, or forwards the
         native login tokens. Claude owns the login and token refresh lifecycle.
+        Gateway startup shares the native login availability check across agent
+        workspaces using the same config and environment. Explicit catalog/auth
+        captures recheck availability for their own generation.
         Explicitly selected API-key or token credentials still use protected
         file-descriptor forwarding. Native-tool approvals remain under OpenClaw
         control. Schema-valid native calls pass through OpenClaw's canonical
         tool policy before native approval. Isolated side-question completions
         and paired-node execution retain the supervised CLI path.
 
-        Consecutive agent turns reuse the same warm Agent SDK query and Claude
-        Code subprocess when their authenticated session and execution policy
+        Consecutive agent turns reuse the same warm Claude Code subprocess
+        when their authenticated session and execution policy
         match. If that process ends or the gateway restarts, the next turn
         resumes the persisted Claude Code session.
       </Step>
@@ -258,9 +261,18 @@ see Anthropic's [migration guide](https://platform.claude.com/docs/en/models/fab
 Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
 blocks. Claude Code manages this history for the CLI runtime. OpenClaw's
-embedded runtime persists hidden runtime-context carriers after their user turn
-and keeps earlier carriers and inline inbound metadata in place. Direct
-Anthropic API-key requests with adaptive thinking send the
+embedded runtime uses append-only context only for prefix-binding models such as
+Fable 5.1: it persists hidden runtime-context carriers after their user turn,
+keeps earlier carriers and inline inbound metadata in place, and preserves
+consecutive user turns on the Messages API. This also applies to matching Claude
+models on Bedrock, Vertex, and Foundry, although Bedrock Converse still merges
+consecutive user turns. Carriers contain only the delimited context body; the
+instruction to use it privately lives once in the stable system prompt.
+Other Claude models keep transient carriers and normal user-turn merging.
+Transient carriers are the cheaper cache shape when thinking does not bind the
+prefix: old carriers consume no later context or repeated cache-read charges.
+
+Direct Anthropic API-key requests with adaptive thinking send the
 `thinking-binding-controls-2026-08-01` beta and
 `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Anthropic drops
 invalidated replayed thinking server-side, and OpenClaw logs a warning with the
@@ -271,6 +283,17 @@ thinking rejection can still trigger one retry without prior thinking and
 persist the successful repair. Adaptive mode remains enabled,
 but a response may contain no thinking block. Integrations that build Messages API
 requests directly should follow Anthropic's [preserved-thinking rules](https://platform.claude.com/docs/en/build-with-claude/thinking#preserved-thinking).
+
+With `contextPruning.mode: "cache-ttl"`, direct Anthropic API-key requests use
+[server-side tool-result clearing](/concepts/session-pruning#direct-anthropic-api-key-requests).
+Anthropic's server-side clearing and compaction never invalidate Fable 5.1
+thinking: the prefix check uses the history sent by the client, before those
+server edits. See Anthropic's [context-editing contract](https://platform.claude.com/docs/en/build-with-claude/context-editing).
+On other eligible routes, a client-side prune is a one-time prefix edit. OpenClaw
+retains that projection for later requests, so pruning does not flip back to the
+original bytes and invalidate newly created thinking. Earlier thinking affected
+by a client-side edit is handled by `drop_block` where the binding controls above
+apply, or by the existing rejection-and-repair path elsewhere.
 
 Fable 5.1 thinking is also bound to the model that produced it. Switching a
 session from Fable 5.1 to any other model (Opus 5, Sonnet 5, Fable 5, or

@@ -23,11 +23,13 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import * as doctor from "./state-migrations.doctor.js";
 import * as migration from "./state-migrations.shared-auth-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ownerStates: OpenClawTestState[] = [];
+let ownerFixtureRun: Promise<void> | undefined;
 
 function makeStore(profileId: string, key: string) {
   return {
@@ -40,6 +42,9 @@ function makeStore(profileId: string, key: string) {
 
 describe("shared auth store relocation", () => {
   afterEach(async () => {
+    // Timeouts leave the callback running; join it before resetting env or deleting its stores.
+    await ownerFixtureRun?.catch(() => {});
+    ownerFixtureRun = undefined;
     vi.restoreAllMocks();
     sqlite.closeAuthProfileReadPool();
     closeOpenClawAgentDatabasesForTest();
@@ -95,6 +100,127 @@ describe("shared auth store relocation", () => {
     }
     return { env, stateDir, sourcePath, ownership, sqlite, migration };
   }
+
+  it.each(["legacy-main", "state-db"])(
+    "preserves copied auth SQLite artifacts during %s inspection",
+    async (location) => {
+      const fixture = await createEmptyFixture(false);
+      const statePath = resolveOpenClawStateSqlitePath(fixture.env);
+      const seedPath = path.join(tempDirs.make("openclaw-auth-wal-seed-"), "seed.sqlite");
+      for (const target of [fixture.sourcePath, statePath]) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        const seed = new DatabaseSync(seedPath);
+        try {
+          seed.exec(`
+            PRAGMA journal_mode = WAL;
+            PRAGMA wal_autocheckpoint = 0;
+            CREATE TABLE IF NOT EXISTS auth_profile_store (store_key TEXT, store_json TEXT, updated_at INTEGER);
+            CREATE TABLE IF NOT EXISTS config_machine_state (state_key TEXT, value_json TEXT, updated_at_ms INTEGER);
+            CREATE TABLE IF NOT EXISTS migration_sources (source_key TEXT, migration_kind TEXT, source_path TEXT, removed_source INTEGER);
+            PRAGMA wal_checkpoint(TRUNCATE);
+          `);
+          if (target === fixture.sourcePath) {
+            seed
+              .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+              .run(JSON.stringify(makeStore("openai:copied", "fixture-key")));
+          } else {
+            seed
+              .prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)")
+              .run(JSON.stringify({ location }));
+            seed
+              .prepare(
+                "INSERT INTO migration_sources VALUES ('pending', 'shared-auth-store-state-db', ?, 0)",
+              )
+              .run(fixture.sourcePath);
+          }
+          fs.copyFileSync(seedPath, target);
+          fs.copyFileSync(`${seedPath}-wal`, `${target}-wal`);
+        } finally {
+          seed.close();
+        }
+      }
+      const inventory = () =>
+        [fixture.sourcePath, statePath].flatMap((file) =>
+          ["", "-wal", "-shm", "-journal"].map((suffix) => ({
+            path: `${file}${suffix}`,
+            bytes: fs.existsSync(`${file}${suffix}`) ? fs.readFileSync(`${file}${suffix}`) : null,
+          })),
+        );
+      const before = inventory();
+      expect(fs.existsSync(`${fixture.sourcePath}-shm`)).toBe(false);
+      expect(fs.existsSync(`${statePath}-shm`)).toBe(false);
+      expect(
+        migration.detectSharedAuthStoreMigration({
+          stateDir: fixture.stateDir,
+          env: fixture.env,
+          doctorOnlyStateMigrations: true,
+          artifactPreservingReadOnly: true,
+        }),
+      ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+      expect(inventory()).toEqual(before);
+    },
+  );
+
+  it("does not pin runtime auth ownership during copied inspection", async () => {
+    const fixture = await createEmptyFixture(false);
+    expect(
+      migration.detectSharedAuthStoreMigration({
+        stateDir: fixture.stateDir,
+        env: fixture.env,
+        doctorOnlyStateMigrations: true,
+        artifactPreservingReadOnly: true,
+      }),
+    ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+    const statePath = resolveOpenClawStateSqlitePath(fixture.env);
+    expect(fs.existsSync(statePath)).toBe(false);
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    const database = new DatabaseSync(statePath);
+    try {
+      database.exec(`
+        CREATE TABLE config_machine_state (state_key TEXT, value_json TEXT, updated_at_ms INTEGER);
+        INSERT INTO config_machine_state VALUES ('auth.sharedStore', '{"location":"state-db"}', 1);
+      `);
+    } finally {
+      database.close();
+    }
+    expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+      location: "state-db",
+    });
+  });
+
+  it.runIf(process.platform === "linux")(
+    "preserves the live auth source's POSIX locks during copied inspection",
+    async () => {
+      const fixture = await createEmptyFixture(false);
+      fs.mkdirSync(path.dirname(fixture.sourcePath), { recursive: true });
+      const writer = new DatabaseSync(fixture.sourcePath);
+      try {
+        writer.exec(`
+          PRAGMA journal_mode = WAL;
+          CREATE TABLE auth_profile_store (store_key TEXT, store_json TEXT, updated_at INTEGER);
+          INSERT INTO auth_profile_store VALUES ('primary', '{"version":1,"profiles":{}}', 1);
+        `);
+        const before = readMainDatabasePosixLocks(fixture.sourcePath);
+        expect(before).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
+        expect(
+          migration.detectSharedAuthStoreMigration({
+            stateDir: fixture.stateDir,
+            env: fixture.env,
+            doctorOnlyStateMigrations: true,
+            artifactPreservingReadOnly: true,
+          }),
+        ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+        expect(readMainDatabasePosixLocks(fixture.sourcePath)).toEqual(before);
+        expect(writer.prepare("SELECT store_key FROM auth_profile_store").all()).toEqual([
+          { store_key: "primary" },
+        ]);
+      } finally {
+        writer.close();
+      }
+    },
+  );
 
   it.each([
     { label: "fresh profile", createSourceDatabase: false },
@@ -456,101 +582,102 @@ describe("shared auth store relocation", () => {
 
   it.each(["absolute", "tilde"] as const)(
     "detects and relocates only the selected env's %s shared auth source",
-    async (pathStyle) => {
-      const createOwner = async () => {
-        const owner = await createOpenClawTestState({
-          prefix: "openclaw-shared-auth-source-owner-",
-          layout: "split",
-          applyEnv: false,
-          env: {
-            OPENCLAW_AGENT_DIR: undefined,
-            PI_CODING_AGENT_DIR: undefined,
-            OPENCLAW_OAUTH_DIR: undefined,
-          },
-        });
-        ownerStates.push(owner);
-        return owner;
-      };
-      const selected = await createOwner();
-      const ambient = await createOwner();
-      const selectedDir = path.join(selected.home, "relocated-auth");
-      const ambientDir = path.join(ambient.home, "relocated-auth");
-      const selectedEnv = {
-        ...selected.env,
-        OPENCLAW_AGENT_DIR: pathStyle === "tilde" ? "~/relocated-auth" : selectedDir,
-      };
-      const ambientEnv = {
-        ...ambient.env,
-        OPENCLAW_AGENT_DIR: pathStyle === "tilde" ? "~/relocated-auth" : ambientDir,
-      };
-      ambient.applyEnv();
-      vi.stubEnv("OPENCLAW_AGENT_DIR", ambientEnv.OPENCLAW_AGENT_DIR);
-      const profileId = "openai:source";
-      const selectedStore = makeStore(profileId, `fake-selected-${randomUUID()}`);
-      const ambientStore = makeStore(profileId, `fake-ambient-${randomUUID()}`);
-      const selectedState = { version: 1, usageStats: { [profileId]: { lastUsed: 20 } } };
-      const ambientState = { version: 1, usageStats: { [profileId]: { lastUsed: 10 } } };
-      for (const source of [
-        { agentDir: selectedDir, env: selectedEnv, store: selectedStore, state: selectedState },
-        { agentDir: ambientDir, env: ambientEnv, store: ambientStore, state: ambientState },
-      ]) {
-        sqlite.runAuthProfileWriteTransaction(
-          source.agentDir,
-          (database) => {
-            sqlite.writePersistedAuthProfileStoreRaw(source.store, source.agentDir, database);
-            sqlite.writePersistedAuthProfileStateRaw(source.state, source.agentDir, database);
-          },
-          { env: source.env },
-        );
-        expect(sqlite.readPersistedAuthProfileStoreRaw(source.agentDir)).toEqual(source.store);
-        expect(sqlite.readPersistedAuthProfileStateRaw(source.agentDir)).toEqual(source.state);
-      }
+    (pathStyle) =>
+      (ownerFixtureRun = (async () => {
+        const createOwner = async () => {
+          const owner = await createOpenClawTestState({
+            prefix: "openclaw-shared-auth-source-owner-",
+            layout: "split",
+            applyEnv: false,
+            env: {
+              OPENCLAW_AGENT_DIR: undefined,
+              PI_CODING_AGENT_DIR: undefined,
+              OPENCLAW_OAUTH_DIR: undefined,
+            },
+          });
+          ownerStates.push(owner);
+          return owner;
+        };
+        const selected = await createOwner();
+        const ambient = await createOwner();
+        const selectedDir = path.join(selected.home, "relocated-auth");
+        const ambientDir = path.join(ambient.home, "relocated-auth");
+        const selectedEnv = {
+          ...selected.env,
+          OPENCLAW_AGENT_DIR: pathStyle === "tilde" ? "~/relocated-auth" : selectedDir,
+        };
+        const ambientEnv = {
+          ...ambient.env,
+          OPENCLAW_AGENT_DIR: pathStyle === "tilde" ? "~/relocated-auth" : ambientDir,
+        };
+        ambient.applyEnv();
+        vi.stubEnv("OPENCLAW_AGENT_DIR", ambientEnv.OPENCLAW_AGENT_DIR);
+        const profileId = "openai:source";
+        const selectedStore = makeStore(profileId, `fake-selected-${randomUUID()}`);
+        const ambientStore = makeStore(profileId, `fake-ambient-${randomUUID()}`);
+        const selectedState = { version: 1, usageStats: { [profileId]: { lastUsed: 20 } } };
+        const ambientState = { version: 1, usageStats: { [profileId]: { lastUsed: 10 } } };
+        for (const source of [
+          { agentDir: selectedDir, env: selectedEnv, store: selectedStore, state: selectedState },
+          { agentDir: ambientDir, env: ambientEnv, store: ambientStore, state: ambientState },
+        ]) {
+          sqlite.runAuthProfileWriteTransaction(
+            source.agentDir,
+            (database) => {
+              sqlite.writePersistedAuthProfileStoreRaw(source.store, source.agentDir, database);
+              sqlite.writePersistedAuthProfileStateRaw(source.state, source.agentDir, database);
+            },
+            { env: source.env },
+          );
+          expect(sqlite.readPersistedAuthProfileStoreRaw(source.agentDir)).toEqual(source.store);
+          expect(sqlite.readPersistedAuthProfileStateRaw(source.agentDir)).toEqual(source.state);
+        }
 
-      const detected = await doctor.detectLegacyStateMigrations({
-        cfg: { plugins: { enabled: false } },
-        env: selectedEnv,
-        homedir: () => selected.home,
-        doctorOnlyStateMigrations: true,
-        pluginSessionStoreAgentIds: [],
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      });
-      expect(detected.stateDir).toBe(selected.stateDir);
-      expect(detected.stateSchema.hasLegacy).toBe(false);
-      const selectedSourcePath = sqlite.resolveAuthProfileDatabasePath(selectedDir);
-      expect.soft(detected.sharedAuthStore).toEqual({
-        sourcePath: selectedSourcePath,
-        hasLegacy: true,
-      });
-      const result = await migration.migrateSharedAuthStore({
-        detected: detected.sharedAuthStore,
-        stateDir: detected.stateDir,
-        env: selectedEnv,
-      });
-
-      expect.soft(result.warnings).toEqual([]);
-      expect
-        .soft(sqlite.readPersistedSharedAuthProfileStoreRaw(selectedEnv))
-        .toEqual(selectedStore);
-      expect
-        .soft(sqlite.readPersistedSharedAuthProfileStateRaw(selectedEnv))
-        .toEqual(selectedState);
-      expect.soft(sqlite.readPersistedAuthProfileStoreRaw(selectedDir)).toBeNull();
-      expect.soft(sqlite.readPersistedAuthProfileStateRaw(selectedDir)).toBeNull();
-      expect.soft(sqlite.readPersistedAuthProfileStoreRaw(ambientDir)).toEqual(ambientStore);
-      expect.soft(sqlite.readPersistedAuthProfileStateRaw(ambientDir)).toEqual(ambientState);
-      const receipts = stateDb
-        .openOpenClawStateDatabase({ env: selectedEnv })
-        .db.prepare("SELECT source_path, status, removed_source FROM migration_sources")
-        .all();
-      expect.soft(receipts).toHaveLength(2);
-      for (const receipt of receipts) {
-        expect.soft(receipt).toEqual({
-          source_path: selectedSourcePath,
-          status: "completed",
-          removed_source: 1,
+        const detected = await doctor.detectLegacyStateMigrations({
+          cfg: { plugins: { enabled: false } },
+          env: selectedEnv,
+          homedir: () => selected.home,
+          doctorOnlyStateMigrations: true,
+          pluginSessionStoreAgentIds: [],
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
         });
-      }
-    },
+        expect(detected.stateDir).toBe(selected.stateDir);
+        expect(detected.stateSchema.hasLegacy).toBe(false);
+        const selectedSourcePath = sqlite.resolveAuthProfileDatabasePath(selectedDir);
+        expect.soft(detected.sharedAuthStore).toEqual({
+          sourcePath: selectedSourcePath,
+          hasLegacy: true,
+        });
+        const result = await migration.migrateSharedAuthStore({
+          detected: detected.sharedAuthStore,
+          stateDir: detected.stateDir,
+          env: selectedEnv,
+        });
+
+        expect.soft(result.warnings).toEqual([]);
+        expect
+          .soft(sqlite.readPersistedSharedAuthProfileStoreRaw(selectedEnv))
+          .toEqual(selectedStore);
+        expect
+          .soft(sqlite.readPersistedSharedAuthProfileStateRaw(selectedEnv))
+          .toEqual(selectedState);
+        expect.soft(sqlite.readPersistedAuthProfileStoreRaw(selectedDir)).toBeNull();
+        expect.soft(sqlite.readPersistedAuthProfileStateRaw(selectedDir)).toBeNull();
+        expect.soft(sqlite.readPersistedAuthProfileStoreRaw(ambientDir)).toEqual(ambientStore);
+        expect.soft(sqlite.readPersistedAuthProfileStateRaw(ambientDir)).toEqual(ambientState);
+        const receipts = stateDb
+          .openOpenClawStateDatabase({ env: selectedEnv })
+          .db.prepare("SELECT source_path, status, removed_source FROM migration_sources")
+          .all();
+        expect.soft(receipts).toHaveLength(2);
+        for (const receipt of receipts) {
+          expect.soft(receipt).toEqual({
+            source_path: selectedSourcePath,
+            status: "completed",
+            removed_source: 1,
+          });
+        }
+      })()),
   );
 
   it("defers shared auth inspection while the selected state schema needs repair", async () => {

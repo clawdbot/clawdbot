@@ -441,7 +441,23 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async () => {
 
 const { encodeRecoveryKey } = await import("matrix-js-sdk/lib/crypto-api/recovery-key.js");
 const { DecryptionFailureCode } = await import("matrix-js-sdk/lib/crypto-api/index.js");
-const { MatrixClient } = await import("./sdk.js");
+const { MatrixClient: BaseMatrixClient } = await import("./sdk.js");
+const startedClients = new Set<InstanceType<typeof BaseMatrixClient>>();
+
+class MatrixClient extends BaseMatrixClient {
+  protected override registerBridge(): void {
+    super.registerBridge();
+    startedClients.add(this);
+  }
+}
+
+async function stopStartedClients(): Promise<void> {
+  const clients = [...startedClients];
+  startedClients.clear();
+  // Retire the client owner before mocks or state disappear; its periodic
+  // persistence must not run against the next test's runtime or deleted home.
+  await Promise.all(clients.map((client) => client.stopWithoutPersist()));
+}
 
 function makeCryptoApi(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -490,7 +506,8 @@ describe("MatrixClient request hardening", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopStartedClients();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     clearTestUndiciRuntimeDepsOverride();
@@ -1876,7 +1893,8 @@ describe("MatrixClient event bridge", () => {
     lastCreateClientOpts = null;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopStartedClients();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -2650,7 +2668,8 @@ describe("MatrixClient crypto bootstrapping", () => {
     lastCreateClientOpts = null;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopStartedClients();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

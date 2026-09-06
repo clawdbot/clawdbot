@@ -6,6 +6,7 @@ import {
   type ErrorShape,
   type SessionsRecoverResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import { inspectMainRestartRecoveryRolloverEligibility } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
@@ -26,7 +27,6 @@ import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identi
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../state/user-profiles.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildDashboardSessionKey } from "./session-create-service.js";

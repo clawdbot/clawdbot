@@ -1,4 +1,5 @@
 // Codex tests cover conversation binding plugin behavior.
+import type { ReadFileSyncOptions } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -62,14 +63,20 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
-    readFileSync(filePath: string | URL | number, options?: BufferEncoding | object | null) {
+    readFileSync(
+      filePath: string | URL | number,
+      options?: BufferEncoding | ReadFileSyncOptions | null,
+    ) {
       if (filePath === "/etc/codex/requirements.toml") {
         const content = codexRequirementsTomlMock();
         if (content !== undefined) {
           return content;
         }
       }
-      return actual.readFileSync(filePath, options);
+      return actual.readFileSync(
+        filePath,
+        typeof options === "string" ? { encoding: options } : (options ?? {}),
+      );
     },
   };
 });
@@ -466,11 +473,10 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "bound-thread", cwd: tempDir });
     const notificationHandlers = new Set<(notification: unknown) => unknown>();
     const requestHandlers = new Set<(request: unknown) => unknown>();
-    const siblingRequestOwner = vi.fn(
-      (request: { method: string }): JsonValue =>
-        request.method === "item/tool/call"
-          ? { contentItems: [], success: true }
-          : { decision: "accept" },
+    const siblingRequestOwner = vi.fn((request: { method: string }): JsonValue =>
+      request.method === "item/tool/call"
+        ? { contentItems: [], success: true }
+        : { decision: "accept" },
     );
     const siblingResponses: unknown[] = [];
     let releaseSiblingRoute: (() => void) | undefined;
@@ -1952,9 +1958,9 @@ describe("codex conversation binding", () => {
     const request = vi.fn(async () => {
       throw new Error("native unsubscribe failed");
     });
-    const close = vi.fn();
+    const closeAndWait = vi.fn(async () => true);
     sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
-      client: { request, close },
+      client: { request, closeAndWait },
       release: vi.fn(),
     });
     await testCodexAppServerBindingStore.mutate(identity, {
@@ -2002,6 +2008,7 @@ describe("codex conversation binding", () => {
     expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: "thread-failed-denial",
     });
+    expect(closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("preserves the live conversation generation when a replacement bind is denied", async () => {
@@ -4076,7 +4083,7 @@ describe("codex conversation binding", () => {
         expect(request).toHaveBeenCalledWith(
           "turn/interrupt",
           { threadId: "thread-1", turnId: "turn-1" },
-          { timeoutMs: 5_000 },
+          { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
         );
         expect(request.mock.calls.map(([method]) => method)).toEqual([
           "turn/start",
@@ -4158,7 +4165,7 @@ describe("codex conversation binding", () => {
         expect(request).toHaveBeenCalledWith(
           "turn/interrupt",
           { threadId: "thread-1", turnId: "turn-1" },
-          { timeoutMs: 5_000 },
+          { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
         );
         if (acknowledged) {
           expect(readCodexConversationActiveTurn(identity)).toMatchObject({

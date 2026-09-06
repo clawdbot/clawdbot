@@ -518,7 +518,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** One-run rollback guard for a model selected by the agent sessions tool. */
     modelFallback?: AgentPatchedSessionModelFallback;
     authProfileOverride?: string;
-    authProfileOverrideSource?: "auto" | "user";
+    authProfileOverrideSource?: "auto" | "user" | "user-link";
     authProfileOverrideCompactionCount?: number;
     /**
      * Set on explicit user-driven session model changes (for example `/model`

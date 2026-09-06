@@ -1,6 +1,57 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+
+const executionBudgetContext = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentToolExecutionBudgetContext"),
+  () => new AsyncLocalStorage<() => void>(),
+);
+
+/** One invocation owns the count and closes every tool closure it created. */
+export function createAgentToolExecutionBudget(params: {
+  maxToolCalls?: number;
+  signal: AbortSignal;
+  abort: (reason: Error) => void;
+  isCurrent?: () => boolean;
+}) {
+  let toolCalls = 0;
+  let active = true;
+  const admit = () => {
+    params.signal.throwIfAborted();
+    if (!active || params.isCurrent?.() === false) {
+      const error = new Error("Agent tool execution scope is no longer active");
+      params.abort(error);
+      throw error;
+    }
+    if (params.maxToolCalls !== undefined && toolCalls >= params.maxToolCalls) {
+      const error = new Error("Agent tool-call budget exhausted");
+      params.abort(error);
+      throw error;
+    }
+    // This is the last synchronous source boundary, after approval/steering awaits.
+    // Charging here admits exactly the cap even when sibling calls run in parallel.
+    toolCalls += 1;
+  };
+  return {
+    get toolCalls() {
+      return toolCalls;
+    },
+    async run<T>(run: () => Promise<T>): Promise<T> {
+      try {
+        return await executionBudgetContext.run(admit, run);
+      } finally {
+        active = false;
+      }
+    },
+  };
+}
+
+/** Capture at tool construction so retained tools cannot borrow a later budget. */
+export function captureAgentToolExecutionBudget(): (() => void) | undefined {
+  return executionBudgetContext.getStore();
+}
 
 /** Freeze the invocation's operational fence before asynchronous source work. */
 export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): () => void {

@@ -25,6 +25,7 @@ import type {
   ReplyDispatchSettledCounts,
   ReplyDispatcher,
 } from "./reply-dispatcher.types.js";
+import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = {
@@ -40,21 +41,11 @@ type PluginTargetedInboundClaimOutcome = Awaited<
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),
-  routeReply: vi.fn(
-    async (
-      _params: unknown,
-    ): Promise<{
-      ok: boolean;
-      delivered: boolean;
-      messageId?: string;
-      suppressed?: boolean;
-      error?: string;
-    }> => ({
-      ok: true,
-      delivered: true,
-      messageId: "mock",
-    }),
-  ),
+  routeReply: vi.fn<typeof import("./route-reply.js").routeReply>(async () => ({
+    ok: true,
+    delivered: true,
+    messageId: "mock",
+  })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -304,9 +295,9 @@ const replyMediaPathMocks = vi.hoisted(() => ({
   ),
 }));
 const stageSandboxMediaMocks = vi.hoisted(() => ({
-  stageSandboxMedia: vi.fn<(params: unknown) => Promise<{ staged: Map<string, string> }>>(
-    async () => ({ staged: new Map() }),
-  ),
+  stageSandboxMedia: vi.fn<(params: unknown) => Promise<StageSandboxMediaResult>>(async () => ({
+    staged: new Map(),
+  })),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
   pluginRegistry: { plugins: [], tools: [], diagnostics: [] },

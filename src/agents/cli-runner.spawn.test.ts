@@ -23,6 +23,7 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
@@ -39,16 +40,20 @@ import {
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
 import { logCliInvocation } from "./cli-runner/execute-logging.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
   buildCliExecLogLine,
   createManagedRun,
+  createSuccessfulProcessExit,
   setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
 import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 // Approval behavior is injected below; loading its gateway/tool graph here is incidental.
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
@@ -209,7 +214,9 @@ describe("runCliAgent spawn path", () => {
     expect(logLine).not.toContain("claude-session-secret");
   });
 
-  it("streams a node-placed Claude resume through the normal JSONL parser", async () => {
+  it("streams a node-placed Claude resume through the normal JSONL parser", async ({
+    onTestFinished,
+  }) => {
     const writeSystemPrompt = vi.fn(writeCliSystemPromptFile);
     let toolAvailability: unknown = "unset";
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
@@ -296,6 +303,14 @@ describe("runCliAgent spawn path", () => {
     context.params.claimCliSessionFork = vi.fn(async () => true);
     context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});
 
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      context.params.runId,
+      "main",
+      "cli-node-resume-test",
+    );
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
     const output = await executePreparedCliRun(context, "source-node-session");
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
@@ -1943,16 +1958,7 @@ describe("runCliAgent spawn path", () => {
           result: "Hello world",
         }) + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -1993,16 +1999,7 @@ describe("runCliAgent spawn path", () => {
           }),
         ].join("\n") + "\n",
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -2050,16 +2047,7 @@ describe("runCliAgent spawn path", () => {
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({
       provider: "codex-cli",

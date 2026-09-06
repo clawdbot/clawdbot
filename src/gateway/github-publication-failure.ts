@@ -1,3 +1,7 @@
+import {
+  GatewayErrorDetailCodes,
+  type GitHubPublicationSelectionRejectedErrorDetails,
+} from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
 type PublicationFailure = Pick<
@@ -5,14 +9,45 @@ type PublicationFailure = Pick<
   "code" | "nextAction"
 >;
 
+export type GitHubPublicationPreparation = {
+  idempotencyKey: string;
+  hasRequest: () => boolean;
+};
+const identityNextAction =
+  "Reconnect My GitHub or System GitHub in Settings → Profile → GitHub connections (agent overrides: Agents → Tools), then request publication again.";
+
 /** An owner observed a definitive outcome; an unavailable probe is not this failure. */
 export class GitHubPublicationKnownFailure extends Error {
   constructor(
     message: string,
     readonly failure: PublicationFailure,
+    readonly rejection?: GitHubPublicationSelectionRejectedErrorDetails,
   ) {
     super(message);
   }
+}
+
+export function rejectGitHubPublicationSelection(
+  message: string,
+  preparation?: GitHubPublicationPreparation,
+): never {
+  let rejection: GitHubPublicationSelectionRejectedErrorDetails | undefined;
+  try {
+    // Check at rejection, not before awaited preparation. Another invocation may have admitted.
+    if (preparation && !preparation.hasRequest()) {
+      rejection = {
+        code: GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED,
+        idempotencyKey: preparation.idempotencyKey,
+      };
+    }
+  } catch {
+    // An unreadable receipt cannot establish that publication was not admitted.
+  }
+  throw new GitHubPublicationKnownFailure(
+    message,
+    { code: "identity_changed", nextAction: identityNextAction },
+    rejection,
+  );
 }
 
 export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKnownFailure {
@@ -33,8 +68,7 @@ export function resolveGitHubPublicationFailure(error: unknown): PublicationFail
   if (message.includes("identity")) {
     return {
       code: message.includes("changed") ? "identity_changed" : "identity_unavailable",
-      nextAction:
-        "Reconnect My GitHub or System GitHub in Settings → Profile → GitHub connections (agent overrides: Agents → Tools), then request publication again.",
+      nextAction: identityNextAction,
     };
   }
   if (message.includes("session") || message.includes("worktree owner")) {

@@ -45,9 +45,11 @@ function renderWorktreeFields(params: {
         type="text"
         list="new-session-branches"
         ?disabled=${params.submitting || params.pendingPlacement}
-        placeholder=${params.branchesLoading
-          ? t("common.loading")
-          : (params.branches?.defaultBranch ?? t("newSession.worktreeBaseRef"))}
+        placeholder=${
+          params.branchesLoading
+            ? t("common.loading")
+            : (params.branches?.defaultBranch ?? t("newSession.worktreeBaseRef"))
+        }
         .value=${params.baseRef}
         @input=${(event: Event) => {
           if (event.currentTarget instanceof HTMLInputElement) {
@@ -107,9 +109,9 @@ export function renderCheckoutChip(params: {
       <button
         id="new-session-checkout-trigger"
         type="button"
-        class="new-session-page__trigger ${params.popoverHiding
-          ? "new-session-page__trigger--hiding"
-          : ""}"
+        class="new-session-page__trigger ${
+          params.popoverHiding ? "new-session-page__trigger--hiding" : ""
+        }"
         title=${t("newSession.checkout")}
         aria-label="${t("newSession.checkout")}: ${params.state.label}"
         data-worktree=${String(params.worktree)}
@@ -176,11 +178,13 @@ export function renderCheckoutChip(params: {
           params.submitting,
         )}
         ${params.worktree ? renderWorktreeFields(params) : nothing}
-        ${params.remotePlacement
-          ? html`<div class="new-session-page__menu-note">
-              ${t("newSession.placementSyncsFolder", { folder: params.folderLabel })}
-            </div>`
-          : nothing}
+        ${
+          params.remotePlacement
+            ? html`<div class="new-session-page__menu-note">
+                ${t("newSession.placementSyncsFolder", { folder: params.folderLabel })}
+              </div>`
+            : nothing
+        }
       </div>
     </wa-popover>
   `;

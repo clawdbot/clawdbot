@@ -1,5 +1,9 @@
 // Provides shared replay-policy helpers for provider plugins.
-import { resolveClaudeModelIdentity, resolveClaudeOpus5ModelIdentity } from "@openclaw/llm-core";
+import {
+  bindsClaudeThinkingPrefix,
+  resolveClaudeModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+} from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
@@ -70,6 +74,7 @@ export function buildOpenAICompatibleReplayPolicy(
 export function buildStrictAnthropicReplayPolicy(
   options: {
     dropThinkingBlocks?: boolean;
+    appendOnlyRuntimeContext?: boolean;
     sanitizeToolCallIds?: boolean;
     preserveNativeAnthropicToolUseIds?: boolean;
   } = {},
@@ -87,7 +92,7 @@ export function buildStrictAnthropicReplayPolicy(
         }
       : {}),
     preserveSignatures: true,
-    appendOnlyRuntimeContext: true,
+    appendOnlyRuntimeContext: options.appendOnlyRuntimeContext ?? false,
     repairToolUseResultPairing: true,
     validateAnthropicTurns: true,
     allowSyntheticToolResults: true,
@@ -119,6 +124,7 @@ export function buildAnthropicReplayPolicyForModel(
 ): ProviderReplayPolicy {
   return buildStrictAnthropicReplayPolicy({
     dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
+    appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({ id: modelId, params: model?.params }),
   });
 }
 
@@ -127,11 +133,10 @@ export function buildNativeAnthropicReplayPolicyForModel(
   modelId?: string,
   model?: Pick<ProviderRuntimeModel, "params">,
 ): ProviderReplayPolicy {
-  return buildStrictAnthropicReplayPolicy({
-    dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
-    sanitizeToolCallIds: true,
+  return {
+    ...buildAnthropicReplayPolicyForModel(modelId, model),
     preserveNativeAnthropicToolUseIds: true,
-  });
+  };
 }
 
 /** @deprecated Provider replay helper; prefer provider-local replay hooks. */
@@ -141,6 +146,10 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
     return buildStrictAnthropicReplayPolicy({
+      appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
+        id: ctx.modelId,
+        params: ctx.model?.params,
+      }),
       dropThinkingBlocks:
         options.anthropicModelDropThinkingBlocks &&
         shouldDropClaudeThinkingBlocks(ctx.modelId, ctx.model),

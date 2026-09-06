@@ -149,10 +149,20 @@ export function createGitHubPublicationCoordinator(params: {
     request.assertCurrent?.();
     const identity = await prepareCurrentGitHubPublicationIdentity(request.agentId);
     request.assertCurrent?.();
-    assertExpectedSharedGitHubPublisher(request.expectedPublisher, {
-      source: identity.source,
-      ...identity.account,
-    });
+    assertExpectedSharedGitHubPublisher(
+      request.expectedPublisher,
+      { source: identity.source, ...identity.account },
+      {
+        idempotencyKey: request.idempotencyKey,
+        hasRequest: () =>
+          Boolean(
+            readGitHubPublicationRequest(openOpenClawStateDatabase().db, {
+              sessionId: request.claim.sessionId,
+              idempotencyKey: request.idempotencyKey,
+            }),
+          ),
+      },
+    );
     if (!params.placements.validateTurnClaim(request.claim)) {
       throw new Error("GitHub publication lost the live session turn claim after verification.");
     }

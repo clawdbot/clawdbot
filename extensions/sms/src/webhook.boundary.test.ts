@@ -1,10 +1,9 @@
 import { createHmac } from "node:crypto";
 import {
-  createServer,
   request,
   type ClientRequest,
   type IncomingHttpHeaders,
-  type Server,
+  type RequestListener,
 } from "node:http";
 import { createConnection } from "node:net";
 import {
@@ -13,6 +12,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
@@ -63,21 +63,6 @@ function createAccount(): ResolvedSmsAccount {
     allowFrom: [],
     textChunkLimit: 1500,
   };
-}
-
-function listen(server: Server): Promise<number> {
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected the SMS boundary server to have a TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
 }
 
 function readResponse(req: ClientRequest): Promise<HttpResult> {
@@ -179,13 +164,6 @@ function computeTwilioSignature(params: {
   return createHmac("sha1", params.account.authToken).update(input).digest("base64");
 }
 
-async function closeServer(server: Server): Promise<void> {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
 describe("SMS webhook real route boundary", () => {
   afterEach(() => {
     enqueueSmsIngress.mockReset();
@@ -216,8 +194,7 @@ describe("SMS webhook real route boundary", () => {
 
     let receivedRequests = 0;
     let heldBodyReaders = 0;
-    let overflowRequestComplete: boolean | undefined;
-    const server = createServer((req, res) => {
+    const handler: RequestListener = (req, res) => {
       receivedRequests += 1;
       const requestNumber = receivedRequests;
       if (requestNumber <= 64) {
@@ -225,72 +202,70 @@ describe("SMS webhook real route boundary", () => {
           heldBodyReaders += 1;
         });
       }
-      void Promise.resolve(route.handler(req, res))
-        .then(() => {
-          if (requestNumber === 65) {
-            overflowRequestComplete = req.complete;
-          }
-        })
-        .catch((error: unknown) => {
-          if (!res.writableEnded) {
-            res.statusCode = 500;
-            res.end(error instanceof Error ? error.message : String(error));
-          }
-        });
-    });
+      void Promise.resolve(route.handler(req, res)).catch((error: unknown) => {
+        if (!res.writableEnded) {
+          res.statusCode = 500;
+          res.end(error instanceof Error ? error.message : String(error));
+        }
+      });
+    };
     const held: HeldRequest[] = [];
 
     try {
-      const port = await listen(server);
-      for (let index = 0; index < 64; index += 1) {
-        held.push(holdIncompletePost(port, index));
-      }
-      await vi.waitFor(
-        () => {
-          expect(receivedRequests).toBe(64);
-          expect(heldBodyReaders).toBe(64);
-        },
-        { timeout: 10_000 },
-      );
+      await withServer(handler, async (baseUrl) => {
+        const port = Number(new URL(baseUrl).port);
+        try {
+          for (let index = 0; index < 64; index += 1) {
+            held.push(holdIncompletePost(port, index));
+          }
+          await vi.waitFor(
+            () => {
+              expect(receivedRequests).toBe(64);
+              expect(heldBodyReaders).toBe(64);
+            },
+            { timeout: 10_000 },
+          );
 
-      const overflow = await sendIncompleteRawPost(port);
-      expect(overflow.response).toContain("HTTP/1.1 429 Too Many Requests\r\n");
-      expect(overflow.response).toMatch(/\r\nConnection: close\r\n/iu);
-      expect(overflow.response).toContain("\r\n\r\nRate limit exceeded");
-      expect(overflow.endedByServer).toBe(true);
-      await vi.waitFor(() => expect(overflowRequestComplete).toBe(false));
-      expect(enqueueSmsIngress).not.toHaveBeenCalled();
+          // Header-only input plus peer closure proves early rejection; Bun marks req.complete on response end.
+          const overflow = await sendIncompleteRawPost(port);
+          expect(overflow.response).toContain("HTTP/1.1 429 Too Many Requests\r\n");
+          expect(overflow.response).toMatch(/\r\nConnection: close\r\n/iu);
+          expect(overflow.response).toContain("\r\n\r\nRate limit exceeded");
+          expect(overflow.endedByServer).toBe(true);
+          expect(enqueueSmsIngress).not.toHaveBeenCalled();
 
-      for (const pending of held) {
-        pending.finish();
-      }
-      const released = await Promise.all(held.map((pending) => pending.result));
-      expect(released.every((result) => result.statusCode === 403)).toBe(true);
+          for (const pending of held) {
+            pending.finish();
+          }
+          const released = await Promise.all(held.map((pending) => pending.result));
+          expect(released.every((result) => result.statusCode === 403)).toBe(true);
 
-      const form = {
-        AccountSid: account.accountSid,
-        From: "+15551234567",
-        To: account.fromNumber,
-        Body: "boundary proof",
-        MessageSid: "SM00000000000000000000000000000985",
-      };
-      const body = new URLSearchParams(form).toString();
-      const admitted = await postForm({
-        port,
-        body,
-        signature: computeTwilioSignature({ account, form }),
+          const form = {
+            AccountSid: account.accountSid,
+            From: "+15551234567",
+            To: account.fromNumber,
+            Body: "boundary proof",
+            MessageSid: "SM00000000000000000000000000000985",
+          };
+          const body = new URLSearchParams(form).toString();
+          const admitted = await postForm({
+            port,
+            body,
+            signature: computeTwilioSignature({ account, form }),
+          });
+
+          expect(admitted.statusCode).toBe(200);
+          expect(admitted.headers["x-openclaw-delivery-accepted"]).toBe("durable");
+          expect(enqueueSmsIngress).toHaveBeenCalledOnce();
+          expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
+        } finally {
+          for (const pending of held) {
+            pending.request.destroy();
+          }
+          await Promise.allSettled(held.map((pending) => pending.result));
+        }
       });
-
-      expect(admitted.statusCode).toBe(200);
-      expect(admitted.headers["x-openclaw-delivery-accepted"]).toBe("durable");
-      expect(enqueueSmsIngress).toHaveBeenCalledOnce();
-      expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
     } finally {
-      for (const pending of held) {
-        pending.request.destroy();
-      }
-      await Promise.allSettled(held.map((pending) => pending.result));
-      await closeServer(server);
       abortController.abort();
       await lifecycle;
       if (previousRegistry) {

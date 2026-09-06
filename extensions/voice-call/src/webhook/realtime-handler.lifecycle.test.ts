@@ -604,14 +604,13 @@ describe("RealtimeCallHandler lifecycle", () => {
   });
 
   it("does not hang up a replacement when its stale predecessor rejects startup", async () => {
-    let rejectStartup: (error: Error) => void = () => {};
-    const pendingStartup = new Promise<void>((_resolve, reject) => {
-      rejectStartup = reject;
-    });
+    const pendingStartup = createDeferred<void>();
     const replacementGreeting = vi.fn();
     const createBridgeForCall = vi
       .fn<RealtimeVoiceProviderPlugin["createBridge"]>()
-      .mockImplementationOnce(() => createBridge(vi.fn(), { connect: () => pendingStartup }))
+      .mockImplementationOnce(() =>
+        createBridge(vi.fn(), { connect: () => pendingStartup.promise }),
+      )
       .mockImplementationOnce(() =>
         createBridge(vi.fn(), { triggerGreeting: replacementGreeting }),
       );
@@ -639,7 +638,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(2));
 
       const previousClosed = waitForClose(previous.ws);
-      rejectStartup(new Error("superseded provider rejected startup"));
+      pendingStartup.reject(new Error("superseded provider rejected startup"));
       expect(await previousClosed).toEqual({ code: 1011, reason: "Failed to connect" });
       expect(hangupCall).not.toHaveBeenCalled();
       expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
@@ -664,13 +663,10 @@ describe("RealtimeCallHandler lifecycle", () => {
   });
 
   it("ends an idle realtime call after the media inactivity grace", async () => {
-    let resolveBridgeStarted = () => {};
-    const bridgeStarted = new Promise<void>((resolve) => {
-      resolveBridgeStarted = resolve;
-    });
+    const bridgeStarted = createDeferred<void>();
     const closeBridge = vi.fn();
     const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(() => {
-      resolveBridgeStarted();
+      bridgeStarted.resolve();
       return createBridge(closeBridge);
     });
     const { server, ws } = await connectCarrierStream(handler);
@@ -683,7 +679,7 @@ describe("RealtimeCallHandler lifecycle", () => {
           start: { streamSid: "MZ-inactivity", callSid: call.providerCallId },
         }),
       );
-      await bridgeStarted;
+      await bridgeStarted.promise;
 
       await vi.advanceTimersByTimeAsync(30_000);
       expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
@@ -720,17 +716,11 @@ describe("RealtimeCallHandler lifecycle", () => {
   });
 
   it("renews realtime liveness when inbound media continues", async () => {
-    let resolveBridgeStarted = () => {};
-    const bridgeStarted = new Promise<void>((resolve) => {
-      resolveBridgeStarted = resolve;
-    });
-    let resolveMediaReceived = () => {};
-    const mediaReceived = new Promise<void>((resolve) => {
-      resolveMediaReceived = resolve;
-    });
-    const sendAudio = vi.fn(() => resolveMediaReceived());
+    const bridgeStarted = createDeferred<void>();
+    const mediaReceived = createDeferred<void>();
+    const sendAudio = vi.fn(() => mediaReceived.resolve());
     const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(() => {
-      resolveBridgeStarted();
+      bridgeStarted.resolve();
       return createBridge(vi.fn(), { sendAudio });
     });
     const { server, ws } = await connectCarrierStream(handler);
@@ -743,7 +733,7 @@ describe("RealtimeCallHandler lifecycle", () => {
           start: { streamSid: "MZ-active-media", callSid: call.providerCallId },
         }),
       );
-      await bridgeStarted;
+      await bridgeStarted.promise;
 
       await vi.advanceTimersByTimeAsync(29_999);
       ws.send(
@@ -752,7 +742,7 @@ describe("RealtimeCallHandler lifecycle", () => {
           media: { payload: Buffer.from([0xff]).toString("base64") },
         }),
       );
-      await mediaReceived;
+      await mediaReceived.promise;
       await vi.advanceTimersByTimeAsync(29_999);
 
       expect(sendAudio).toHaveBeenCalledOnce();

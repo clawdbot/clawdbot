@@ -17,7 +17,6 @@ import {
   listRunningSessions,
   markBackgrounded,
   markExited,
-  markTerminalPollObserved,
   prepareSessionPoll,
   recordNotifyOnExitRemoval,
   setJobTtlMs,
@@ -59,7 +58,7 @@ describe("bash process registry", () => {
     resetProcessRegistryForTests();
   });
 
-  it("suppresses a notify-on-exit event when terminal poll wins the race", () => {
+  it("suppresses a notify-on-exit event when terminal poll acknowledgement wins the race", () => {
     const session = createRegistrySession({
       id: "poll-first",
       maxOutputChars: 10_000,
@@ -67,8 +66,8 @@ describe("bash process registry", () => {
       backgrounded: true,
     });
     addSession(session);
-    markTerminalPollObserved(session);
     markExited(session, 0, null, "completed");
+    acknowledgeNotifyOnExit(session);
 
     const remove = vi.fn(() => true);
     recordNotifyOnExitRemoval(session, remove);

@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -80,7 +81,7 @@ it("stops waiting when a Linux process is a zombie", async () => {
   vi.spyOn(process, "kill").mockImplementation(() => true);
   vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
     if (String(filePath) === "/proc/42/status") {
-      return "Name:\tworker\nState:\tZ (zombie)\nPid:\t42\n";
+      return "Name:\tworker\nState:\tZ (zombie)\nPid:\t42\nThreads:\t1\n";
     }
     throw new Error(`unexpected read: ${String(filePath)}`);
   });
@@ -158,8 +159,8 @@ child.once('close', (_code, signal) => {
           await waitForDead(controller.pid, 2_000);
         }
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }

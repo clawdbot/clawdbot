@@ -51,7 +51,7 @@ function createDispatch(
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       resolveWorkspacePath: async () => support.testState.root,
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     }),
     (_request, run) => run(),
   );

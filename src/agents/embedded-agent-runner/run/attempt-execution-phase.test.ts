@@ -40,15 +40,10 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
 }));
 vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
-vi.mock("./attempt-finalize.js", async (importOriginal) => {
-  const { resolveEmbeddedAbortSettleTimeoutMs } =
-    await importOriginal<typeof import("./attempt-finalize.js")>();
-  return {
-    createEmbeddedAttemptRunAbort: mocks.createRunAbort,
-    resolveEmbeddedAbortSettleTimeoutMs,
-  };
-});
-vi.mock("./attempt-history.js", () => ({
+vi.mock("./attempt-finalize.js", () => ({
+  createEmbeddedAttemptRunAbort: mocks.createRunAbort,
+}));
+vi.mock("./attempt-history-prepare.js", () => ({
   prepareEmbeddedAttemptHistory: mocks.prepareHistory,
 }));
 vi.mock("./attempt-settle.js", () => ({
@@ -175,7 +170,6 @@ async function createFixture(
     resolveActiveContextEnginePluginId: vi.fn(),
     runAbortController: new AbortController(),
     externalAbortController,
-    abortState: {},
     prepared: {
       bootstrap: {},
       bundleTools: {},
@@ -243,7 +237,7 @@ async function createFixture(
     order.push("stream");
     if (options.exerciseTerminalMerges !== false) {
       const idleError = new Error("idle timeout");
-      mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
+      mocks.installStreamGuards.mock.calls[0]?.[1].onIdleTimeout(idleError);
       streamInput.markExternalAbort();
     }
     return streamResult;
@@ -259,7 +253,7 @@ async function createFixture(
   mocks.runSettledPhase.mockImplementation(async (settledInput) => {
     order.push("settled-phase");
     expect(settledInput.getRepairedRejectedProviderReplay()).toBe(false);
-    mocks.installStreamGuards.mock.calls[0]?.[0].onRejectedProviderReplayRepaired();
+    mocks.installStreamGuards.mock.calls[0]?.[1].onRejectedProviderReplayRepaired();
     expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
     return result;
   });
@@ -517,15 +511,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }),
     );
 
-    const guardInput = mocks.installStreamGuards.mock.calls[0]?.[0];
-    expect(guardInput).toEqual(
-      expect.objectContaining({
-        attempt: fixture.input.attempt,
-        session: fixture.activeSession,
-        sessionManager: fixture.sessionManager,
-      }),
-    );
-    expect(guardInput.isYieldDetected()).toBe(true);
     expect(fixture.runAbort).toHaveBeenCalledWith(true, expect.any(Error));
 
     const abortInput = mocks.createRunAbort.mock.calls[0]?.[0];
@@ -619,7 +604,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         expect(onAttemptDeadlineChanged.mock.calls).toEqual([
           [{ kind: "bounded", deadlineAtMs: 100 }],
         ]);
-        mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
+        mocks.installStreamGuards.mock.calls[0]?.[1].onIdleTimeout(idleError);
         await vi.advanceTimersByTimeAsync(200);
 
         expect(fixture.runAbort).toHaveBeenCalledExactlyOnceWith(true, idleError);
@@ -647,9 +632,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     fixture.activeSession.isCompacting = true;
     await runEmbeddedAttemptExecutionPhase(fixture.input);
     const idleError = new Error("idle timeout");
-    const guardInput = mocks.installStreamGuards.mock.calls[0]?.[0];
+    const guardCallbacks = mocks.installStreamGuards.mock.calls[0]?.[1];
 
-    guardInput.onIdleTimeout(idleError);
+    guardCallbacks.onIdleTimeout(idleError);
 
     expect(fixture.state.terminal).toEqual({
       kind: "timeout",

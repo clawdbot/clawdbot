@@ -64,6 +64,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
     "source": "Claws",
     "target": "Claws"
   },
@@ -890,6 +894,10 @@
   {
     "source": "Tool plugins",
     "target": "工具插件"
+  },
+  {
+    "source": "Feature plugins",
+    "target": "功能插件"
   },
   {
     "source": "Plugin SDK subpaths",
@@ -1810,6 +1818,14 @@
   {
     "source": "llama-server",
     "target": "llama-server"
+  },
+  {
+    "source": "llmman",
+    "target": "llmman"
+  },
+  {
+    "source": "llmman (local models)",
+    "target": "llmman（本地模型）"
   },
   {
     "source": "llama.cpp (managed or existing server)",

@@ -21,6 +21,7 @@ import {
   type ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -44,13 +45,47 @@ import {
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import {
+  setTranscriptBytePreflightClaim,
+  type TranscriptBytePreflightAuthority,
+  type TranscriptByteCompactionPersistence,
+} from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
+
+type QueuedCompactionHostCommit = {
+  entry: AcceptedCompactionSuccessor["entry"];
+  tokensAfter?: number;
+  compactionKind: "context-engine" | "server-endpoint";
+};
 
 /** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
 export type QueuedCompactionHostOptions = {
   assertActive?: () => void;
+  transcriptBytePreflightHarness?: "codex";
+  withCompactionPersistence?: TranscriptByteCompactionPersistence;
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
+  onHostCompactionCommitted?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
+  onHostCompactionTranscriptSettled?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
 };
+
+export function createQueuedCompactionAbortedResult(): EmbeddedAgentCompactResult {
+  return { ok: false, compacted: false, reason: "compaction aborted" };
+}
+
+export async function withQueuedCompactionCancellationResult(
+  params: Pick<CompactEmbeddedAgentSessionParams, "abortSignal">,
+  run: () => Promise<EmbeddedAgentCompactResult>,
+): Promise<EmbeddedAgentCompactResult> {
+  try {
+    return await run();
+  } catch (error) {
+    const signal = params.abortSignal;
+    if (!signal?.aborted || (!isAbortError(error) && error !== signal.reason)) {
+      throw error;
+    }
+    return createQueuedCompactionAbortedResult();
+  }
+}
 
 export function projectQueuedCompactionSessionTarget(
   params: CompactEmbeddedAgentSessionParams,
@@ -104,6 +139,7 @@ export async function executeQueuedContextEngineCompaction(input: {
   preparedHarnessRuntime?: string;
   contextTokenBudget?: number;
   attemptNativeHarnessCompaction: boolean;
+  transcriptBytePreflightAuthority?: TranscriptBytePreflightAuthority;
 }): Promise<EmbeddedAgentCompactResult> {
   const {
     params,
@@ -121,6 +157,7 @@ export async function executeQueuedContextEngineCompaction(input: {
     preparedHarnessRuntime,
     contextTokenBudget,
     attemptNativeHarnessCompaction,
+    transcriptBytePreflightAuthority,
   } = input;
   let expected = { ...expectedEntry };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
@@ -186,7 +223,7 @@ export async function executeQueuedContextEngineCompaction(input: {
       let checkpointSnapshotRetained = false;
       try {
         if (params.abortSignal?.aborted) {
-          return { ok: false, compacted: false, reason: "compaction aborted" };
+          return createQueuedCompactionAbortedResult();
         }
         assertActive();
         // When the context engine owns compaction, its compact() implementation
@@ -239,7 +276,7 @@ export async function executeQueuedContextEngineCompaction(input: {
           }
         }
         if (params.abortSignal?.aborted) {
-          return { ok: false, compacted: false, reason: "compaction aborted" };
+          return createQueuedCompactionAbortedResult();
         }
         assertActive();
         // Preserve the delegate's progress-aware watchdog and bound other engines.
@@ -258,7 +295,14 @@ export async function executeQueuedContextEngineCompaction(input: {
                 expectedEntry,
                 backendParams.abortSignal,
               );
-              return withOwnedSessionTranscriptWrites(writeContext, () => compact(backendParams));
+              const clearClaim = setTranscriptBytePreflightClaim(
+                backendParams.runtimeContext,
+                transcriptBytePreflightAuthority,
+                host.withCompactionPersistence,
+              );
+              return withOwnedSessionTranscriptWrites(writeContext, () =>
+                compact(backendParams),
+              ).finally(clearClaim);
             }),
           };
           result = await compactContextEngineWithSafetyTimeout(
@@ -350,6 +394,18 @@ export async function executeQueuedContextEngineCompaction(input: {
             }
           }
         }
+        const compactionKind: "context-engine" | "server-endpoint" =
+          isRecord(result.result?.details) &&
+          result.result.details.compactionKind === "server-endpoint" &&
+          typeof tokensAfter === "number"
+            ? "server-endpoint"
+            : "context-engine";
+        const hostCommit = successor.entry
+          ? { entry: successor.entry, tokensAfter, compactionKind }
+          : undefined;
+        if (hostCommit) {
+          await host.onHostCompactionCommitted?.(hostCommit);
+        }
         const postCompactionSessionId = successor.sessionId;
         const postCompactionSessionFile = successor.sessionFile;
         const postCompactionSessionTarget = successor.sessionTarget;
@@ -389,7 +445,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               postCompactionSessionTarget,
               resolvedWorkspaceDir,
             );
-            await runContextEngineMaintenance({
+            const maintenance = runContextEngineMaintenance({
               contextEngine,
               sessionId: postCompactionSessionId,
               sessionKey: contextEngineSessionKey ?? params.sessionKey,
@@ -416,6 +472,15 @@ export async function executeQueuedContextEngineCompaction(input: {
               assertActive: rewriteContext.assertCommitAllowed,
               abortSignal: params.abortSignal,
             });
+            try {
+              await maintenance;
+            } finally {
+              if (hostCommit) {
+                // A rewrite can commit before cancellation is observed. Reconcile transcript
+                // state before hooks or native sync; the host callback keeps the writer fence.
+                await host.onHostCompactionTranscriptSettled?.(hostCommit);
+              }
+            }
           }
           if (engineOwnsCompaction && result.ok && result.compacted && canContinue()) {
             await runPostCompactionSideEffects({
@@ -458,13 +523,15 @@ export async function executeQueuedContextEngineCompaction(input: {
             }
           }
           if (
-            engineOwnsCompaction &&
+            (engineOwnsCompaction || transcriptBytePreflightAuthority) &&
             result.ok &&
             result.compacted &&
             canContinue() &&
             attemptNativeHarnessCompaction
           ) {
             try {
+              // Committed host compaction stays authoritative; secondary native failure is
+              // diagnostic-only in result details and must not trigger a retry.
               // The native bridge owns its terminal-event watchdog. Keep this lane held until
               // that bridge settles; an outer timeout would release transcript ownership while
               // the harness could still be compacting the same session.
@@ -516,18 +583,14 @@ export async function executeQueuedContextEngineCompaction(input: {
           normalizeOptionalAgentRuntimeId(preparedHarnessRuntime) === "codex"
             ? "codexNativeCompaction"
             : "nativeHarnessCompaction";
-        const serverEndpointCompaction =
-          isRecord(result.result?.details) &&
-          result.result.details.compactionKind === "server-endpoint" &&
-          typeof tokensAfter === "number";
         return {
           ok: result.ok,
           compacted: result.compacted,
-          compactionKind: serverEndpointCompaction ? "server-endpoint" : "context-engine",
+          compactionKind,
           reason: result.reason,
           result: result.result
             ? {
-                ...(serverEndpointCompaction
+                ...(compactionKind === "server-endpoint"
                   ? { kind: "server-endpoint" as const }
                   : {
                       summary: result.result.summary ?? "",

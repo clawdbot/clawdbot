@@ -109,6 +109,9 @@ export function buildSystemAgentChatResult(params: {
         ? "Setup here is done — continue with your agent."
         : "Nothing to change."),
     action,
+    ...(params.reply.handoff?.kind === "model-accounts"
+      ? { handoff: { kind: "model-accounts" as const } }
+      : {}),
     ...(action === "open-agent" && params.reply.agentDraft
       ? { agentDraft: params.reply.agentDraft }
       : {}),

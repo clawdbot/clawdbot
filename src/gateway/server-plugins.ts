@@ -18,6 +18,7 @@ import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cach
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import {
+  bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -61,6 +62,7 @@ export {
   getInProcessGatewayRequestContext,
 };
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
+export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 
@@ -194,6 +196,9 @@ function createGatewayPluginRuntimeBindings(
   const resolveBoundGatewayContext = resolveGatewayContext
     ? () => (active ? resolveGatewayContext() : undefined)
     : undefined;
+  if (resolveBoundGatewayContext) {
+    bindGatewayContextResolver(resolveBoundGatewayContext, resolveGatewayContext);
+  }
   return {
     retire: () => {
       lifetime.abort(new Error("Plugin Gateway runtime retired; duplex invocation cancelled."));

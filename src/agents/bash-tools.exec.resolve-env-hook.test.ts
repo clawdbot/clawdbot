@@ -182,6 +182,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       security: "full",
       ask: "off",
       sessionKey: "agent:main:telegram:chat-1",
+      sessionId: "session-1",
       messageProvider: "telegram",
       currentChannelId: "chat-1",
       channelContext: {
@@ -204,6 +205,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       {
         agentId: "main",
         sessionKey: "agent:main:telegram:chat-1",
+        sessionId: "session-1",
         messageProvider: "telegram",
         channelId: "chat-1",
         channelContext: {
@@ -555,6 +557,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     const [definition] = toToolDefinitions([tool], {
       agentId: "ctx-agent",
       sessionKey: "agent:ctx-agent:telegram:chat-2",
+      sessionId: "ctx-session",
       channelId: "ctx-channel",
     });
 
@@ -581,6 +584,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.hookRunner.runResolveExecEnv!.mock.calls[0]?.[1]).toMatchObject({
       agentId: "ctx-agent",
       sessionKey: "agent:ctx-agent:telegram:chat-2",
+      sessionId: "ctx-session",
       channelId: "ctx-channel",
     });
     expect(buildExecSpec.mock.calls[0]?.[0]?.env).toMatchObject({

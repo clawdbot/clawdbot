@@ -98,6 +98,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   );
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
     reason: "doctor recover restored and validated a failed session SQLite migration run",
+    trustedTargets,
   });
   const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
   report.migrationRun = {

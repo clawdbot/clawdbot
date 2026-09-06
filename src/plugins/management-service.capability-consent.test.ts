@@ -86,12 +86,9 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  inspectManagedPlugin,
-  listManagedPlugins,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
+const { setManagedPluginEnabled } = await import("./management-mutations.js");
 
 const trackedArtifactDirs: string[] = [];
 

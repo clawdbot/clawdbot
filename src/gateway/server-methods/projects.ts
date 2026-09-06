@@ -88,7 +88,7 @@ const PROJECTS_LIST_MAX_RAW_CANDIDATES = Math.max(
 
 function folderDisplayName(folder: string): string {
   const trimmed = folder.replace(/[\\/]+$/u, "");
-  return path.posix.basename(trimmed) || path.win32.basename(trimmed) || folder;
+  return trimmed.split(/[\\/]/u).at(-1) || folder;
 }
 
 function checkoutName(checkoutPath: string): string {

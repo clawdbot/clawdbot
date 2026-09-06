@@ -170,7 +170,6 @@ export function proposalFromManifest(
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: previousIsCurrent ? previous.supportFiles : [],
-    isNew: previous?.isNew ?? false,
   };
 }
 
@@ -206,7 +205,6 @@ export function proposalFromInspect(
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: supportFilesFromInspect(result),
-    isNew: previous?.isNew ?? false,
   };
 }
 
@@ -239,6 +237,5 @@ export function proposalFromEvaluation(
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: previous.supportFiles,
-    isNew: previous.isNew,
   };
 }

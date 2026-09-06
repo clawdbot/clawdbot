@@ -260,7 +260,7 @@ describe("staged worker placement result recovery", () => {
       Object.assign(harness.environments, environments);
 
       await expect(harness.service.reclaim(REQUEST)).rejects.toThrow(
-        "Worker provider operation failed",
+        "provider deletion unavailable",
       );
       expect(environments.get(ready.environmentId)).toMatchObject({
         state: "destroying",

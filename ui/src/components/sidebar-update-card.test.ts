@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import "./sidebar-update-card.ts";
 
 type SidebarUpdateCardElement = HTMLElement & {
@@ -11,11 +13,13 @@ type SidebarUpdateCardElement = HTMLElement & {
   compact: boolean;
   heldUpdateCampaignId: string | null;
   updateBusy: boolean;
+  updateRun: UpdateRunRecord | null;
+  updateRunAcknowledged: boolean;
   canUpdate: boolean;
   canHoldUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
   onHoldUpdate: () => Promise<boolean>;
   statusBanner: ApplicationStatusBanner | null;
   onReviewUpdate: () => void;
@@ -59,7 +63,7 @@ afterEach(() => {
 describe("SidebarUpdateCard", () => {
   it("renders the refresh state and invokes its action", async () => {
     const element = await mount(null);
-    const onRefresh = vi.fn();
+    const onRefresh = vi.fn(async () => false);
     element.refreshRequired = true;
     element.onRefresh = onRefresh;
     await element.updateComplete;
@@ -78,13 +82,90 @@ describe("SidebarUpdateCard", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
+  it("restores an actionable retry after stale-client recovery cannot reach the Gateway", async () => {
+    const element = await mount(null);
+    let completeRefresh: ((reloading: boolean) => void) | undefined;
+    const firstRefresh = new Promise<boolean>((resolve) => {
+      completeRefresh = resolve;
+    });
+    const onRefresh = vi
+      .fn<() => Promise<boolean>>()
+      .mockReturnValueOnce(firstRefresh)
+      .mockResolvedValue(false);
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    action?.click();
+    await element.updateComplete;
+
+    expect(action?.disabled).toBe(true);
+    expect(action?.textContent).toContain("Reloading…");
+    action?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    completeRefresh?.(false);
+    await vi.waitFor(() => expect(action?.disabled).toBe(false));
+    expect(element.textContent).toContain("Actions are unavailable while the Gateway reconnects.");
+    expect(action?.textContent).toContain("Retry now");
+
+    action?.click();
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores an obsolete refresh result after recovery state is re-established", async () => {
+    const element = await mount(null);
+    let completeFirst: ((reloading: boolean) => void) | undefined;
+    let completeSecond: ((reloading: boolean) => void) | undefined;
+    const onRefresh = vi
+      .fn<() => Promise<boolean>>()
+      .mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          completeFirst = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          completeSecond = resolve;
+        }),
+      );
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    await element.updateComplete;
+
+    element.refreshRequired = false;
+    await element.updateComplete;
+    element.refreshRequired = true;
+    await element.updateComplete;
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    action?.click();
+    await element.updateComplete;
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(action?.disabled).toBe(true);
+
+    completeFirst?.(false);
+    await element.updateComplete;
+    expect(action?.disabled).toBe(true);
+    expect(element.textContent).not.toContain(
+      "Actions are unavailable while the Gateway reconnects.",
+    );
+
+    completeSecond?.(false);
+    await vi.waitFor(() => expect(action?.disabled).toBe(false));
+    expect(element.textContent).toContain("Actions are unavailable while the Gateway reconnects.");
+  });
+
   it("gives the refresh state precedence over an available update", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "stable",
     });
-    const onRefresh = vi.fn();
+    const onRefresh = vi.fn(async () => false);
     const onUpdate = vi.fn();
     element.refreshRequired = true;
     element.onRefresh = onRefresh;
@@ -110,6 +191,33 @@ describe("SidebarUpdateCard", () => {
     expect(element.textContent).toContain("Update failed");
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__review")?.click();
     expect(onReviewUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("shows live run progress and stops surfacing an acknowledged or old result", async () => {
+    const element = await mount(null);
+    element.updateRun = createUpdateRunFixture();
+    await element.updateComplete;
+    expect(element.textContent).toContain("OpenClaw update in progress: staging");
+    expect(element.textContent).toContain("phases complete");
+    expect(element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.disabled).toBe(
+      false,
+    );
+
+    element.updateRun = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: Date.now(),
+      after: { version: "2026.9.2" },
+    });
+    await element.updateComplete;
+    expect(element.textContent).toContain("OpenClaw updated to 2026.9.2");
+    element.updateRunAcknowledged = true;
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    element.updateRunAcknowledged = false;
+    element.updateRun = { ...element.updateRun, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 };
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card")).toBeNull();
   });
 
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {

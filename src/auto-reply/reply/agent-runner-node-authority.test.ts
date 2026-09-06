@@ -79,6 +79,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         await import("../../gateway/node-invoke-plugin-policy.test-helpers.js");
       const { runWithGatewayRequestEnvelope } = await import("../../gateway/server-methods.js");
       const { createGatewayNodesRuntime } = await import("../../gateway/server-plugins.js");
+      const { success } = await import("../../gateway/worker-environments/tunnel.test-support.js");
       const { createPluginRecord } = await import("../../plugins/loader-records.js");
       const {
         markPluginRegistryActive,
@@ -217,7 +218,7 @@ describe("webchat admission to plugin node duplex authority", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
         reconcileWorkspace: async (request) => {

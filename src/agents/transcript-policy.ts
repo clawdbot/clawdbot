@@ -3,6 +3,7 @@
  * Combines provider plugin replay hooks with core transport fallbacks so chat
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
+import { bindsClaudeThinkingPrefix } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -166,7 +167,15 @@ function buildUnownedProviderTransportReplayFallback(params: {
           toolCallIdMode: "strict" as const,
         }
       : {}),
-    ...(isAnthropic ? { preserveSignatures: true, appendOnlyRuntimeContext: true } : {}),
+    ...(isAnthropic
+      ? {
+          preserveSignatures: true,
+          appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
+            id: modelId,
+            params: params.model?.params,
+          }),
+        }
+      : {}),
     ...(isGoogle
       ? {
           sanitizeThoughtSignatures: {

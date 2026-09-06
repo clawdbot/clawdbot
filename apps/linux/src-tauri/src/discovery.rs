@@ -60,7 +60,7 @@ impl DiscoveredGateway {
     }
 
     fn advertises_direct_transport(&self) -> bool {
-        // The desktop has no SSH/relay transport, so match the native client's direct-selection gate.
+        // Discovery selections open direct WebViews; they cannot use the manual SSH transport.
         self.tls || self.direct_reachable || self.host.to_ascii_lowercase().ends_with(".ts.net")
     }
 

@@ -26,18 +26,14 @@ const mocks = vi.hoisted(() => ({
     throw new Error("Unable to resolve bundled plugin public surface codex/api.js");
   }),
   inspectEmbeddingProviderSetup: vi.fn(),
-  loadBundledPluginManifestRegistry: vi.fn(
-    (): PluginManifestRegistry => ({
-      plugins: [],
-      diagnostics: [],
-    }),
-  ),
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(
-    (): PluginManifestRegistry => ({
-      plugins: [],
-      diagnostics: [],
-    }),
-  ),
+  loadBundledPluginManifestRegistry: vi.fn((): PluginManifestRegistry => ({
+    plugins: [],
+    diagnostics: [],
+  })),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn((): PluginManifestRegistry => ({
+    plugins: [],
+    diagnostics: [],
+  })),
   registerCuaDriverDoctorChecks: vi.fn(),
   registerMemoryCoreDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),

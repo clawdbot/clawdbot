@@ -3,6 +3,7 @@ import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import {
   resetSubagentRegistryForTests,
@@ -13,7 +14,10 @@ import { testing as spawnTesting } from "../subagents/spawn/subagent-spawn.test-
 import { testing as swarmSchedulerTesting } from "../subagents/swarm/swarm-scheduler.test-support.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
-import { testing as structuredOutputTesting } from "./structured-output-tool.test-support.js";
+import {
+  consumeSwarmStructuredOutput,
+  peekSwarmStructuredOutput,
+} from "./structured-output-tool.js";
 
 const requesterSessionKey = "agent:main:main";
 const config: OpenClawConfig = {
@@ -38,11 +42,11 @@ function requestParams(value: unknown): Record<string, unknown> {
 
 describe("swarm tools integration", () => {
   const completionResolvers = new Map<string, () => void>();
+  const collectorRunIds = new Set<string>();
 
   beforeEach(() => {
     completionResolvers.clear();
     resetSubagentRegistryForTests({ persist: false });
-    structuredOutputTesting.reset();
     swarmSchedulerTesting.reset();
   });
 
@@ -50,7 +54,10 @@ describe("swarm tools integration", () => {
     spawnTesting.setDepsForTest();
     registryTesting.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    structuredOutputTesting.reset();
+    for (const runId of collectorRunIds) {
+      consumeSwarmStructuredOutput(runId);
+    }
+    collectorRunIds.clear();
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
   });
@@ -81,6 +88,8 @@ describe("swarm tools integration", () => {
         const outputSchema = params.swarmOutputSchema as Record<string, unknown>;
         const index = ++launchCount;
         const gatewayRunId = `gateway-${index}`;
+        collectorRunIds.add(publicRunId);
+        collectorRunIds.add(gatewayRunId);
         const structuredOutput = createOpenClawTools({
           agentSessionKey: childSessionKey,
           runId: publicRunId,
@@ -157,6 +166,12 @@ describe("swarm tools integration", () => {
         requesterRunId: "parent-run",
         config,
       });
+      const wait = createAgentsWaitTool({
+        agentSessionKey: requesterSessionKey,
+        agentId: "main",
+        config,
+      });
+      finalizeAgentToolAvailability([spawn, wait]);
       const runIds: string[] = [];
       const completionInputs = [
         {},
@@ -193,11 +208,6 @@ describe("swarm tools integration", () => {
       await vi.waitFor(() => expect(completionResolvers.size).toBe(3));
       expect(modelStructuredCalls).toEqual([1, 3]);
 
-      const wait = createAgentsWaitTool({
-        agentSessionKey: requesterSessionKey,
-        agentId: "main",
-        config,
-      });
       const pending = new Set(runIds);
       const completionOrder: string[] = [];
       for (const publicRunId of [runIds[1] ?? "", runIds[2] ?? "", runIds[0] ?? ""]) {
@@ -223,7 +233,7 @@ describe("swarm tools integration", () => {
       expect(completionOrder).toEqual([runIds[1], runIds[2], runIds[0]]);
       expect(pending.size).toBe(0);
       for (const runId of runIds) {
-        expect(structuredOutputTesting.readSwarmStructuredOutput(runId)).toBeUndefined();
+        expect(peekSwarmStructuredOutput(runId)).toBeUndefined();
       }
       // Inspect the real spawn builders, not the mock model's own response.
       for (const guidance of [...childGuidance, ...acceptedNotes]) {

@@ -1,5 +1,10 @@
 // Applies command feature gates before command handlers execute.
-import { isCommandFlagEnabled, type CommandFlagKey } from "../../config/commands.flags.js";
+import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
+import {
+  isCommandFlagEnabled,
+  isRestartEnabled,
+  type CommandFlagKey,
+} from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
@@ -59,8 +64,27 @@ export function defineAuthorizedTextCommand<T>(
   };
 }
 
-function buildNativeCommandGateReply(text: string): CommandHandlerResult {
-  return commandReply(text);
+export function defineGatewayControlCommand(
+  label: "/restart" | "/update",
+  run: (params: HandleCommandsParams) => ReturnType<CommandHandler>,
+): CommandHandler {
+  return defineAuthorizedTextCommand(
+    {
+      label,
+      match: (body) => (body === label ? true : null),
+      ownerOnly: true,
+      silentUnauthorized: true,
+    },
+    async (params) => {
+      if (!isRestartEnabled(params.cfg)) {
+        return commandReply(`⚠️ ${label} is disabled (commands.restart=false).`);
+      }
+      // Adopt before teardown so the successor cannot replay this non-idempotent
+      // command. Adoption loss throws and must prevent the effect.
+      await params.opts?.turnAdoptionLifecycle?.onAdopted();
+      return run(params);
+    },
+  );
 }
 
 export function rejectUnauthorizedCommand(
@@ -74,7 +98,7 @@ export function rejectUnauthorizedCommand(
     `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
-    return buildNativeCommandGateReply("You are not authorized to use this command.");
+    return commandReply("You are not authorized to use this command.");
   }
   return { shouldContinue: false };
 }
@@ -89,10 +113,15 @@ export function rejectNonOwnerCommand(
   logVerbose(
     `Ignoring ${commandLabel} from non-owner sender: ${redactIdentifier(params.command.senderId)}`,
   );
-  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
-    return buildNativeCommandGateReply("You are not authorized to use this command.");
+  if (!params.command.isAuthorizedSender) {
+    return rejectUnauthorizedCommand(params, commandLabel);
   }
-  return { shouldContinue: false };
+  const hint = formatCommandOwnerHint({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    id: params.command.senderId,
+  });
+  return commandReply(`You are not authorized to use this owner-only command. ${hint}`);
 }
 
 export function requireGatewayClientScope(

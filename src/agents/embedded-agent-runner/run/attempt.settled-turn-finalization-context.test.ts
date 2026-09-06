@@ -17,7 +17,10 @@ function transientFinalCallFailure() {
   return Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
 }
 
-async function runSettledTurnWithFailedFinalCall(sessionKey: string) {
+async function runSettledTurnWithFailedFinalCall(
+  sessionKey: string,
+  error: Error = transientFinalCallFailure(),
+) {
   return await createContextEngineAttemptRunner({
     contextEngine: createContextEngineBootstrapAndAssemble(),
     sessionKey,
@@ -42,7 +45,7 @@ async function runSettledTurnWithFailedFinalCall(sessionKey: string) {
           content: [{ type: "text", text: "file contents" }],
         },
       ];
-      throw transientFinalCallFailure();
+      throw error;
     },
   });
 }
@@ -61,14 +64,24 @@ describe("settled post-tool turn finalization context", () => {
     tempPaths.length = 0;
   });
 
-  it("captures the settled transcript when the final provider call fails", async () => {
-    const result = await runSettledTurnWithFailedFinalCall("agent:main:telegram:direct:settled");
+  it.each([
+    { kind: "transient", error: transientFinalCallFailure(), captures: true },
+    { kind: "non-transient", error: new Error("invalid api key"), captures: false },
+  ])("$kind final provider failure captures context=$captures", async ({ error, captures }) => {
+    const result = await runSettledTurnWithFailedFinalCall(
+      "agent:main:telegram:direct:settled",
+      error,
+    );
 
     expect(result.terminal.kind).toBe("failed");
     expect(result.assistantTexts.every((text) => !text.trim())).toBe(true);
     // Without this context the provider-failure branch of incomplete-turn
     // recovery fails closed and the whole completed turn is discarded.
     const context = result.settledTurnFinalizationContext;
+    if (!captures) {
+      expect(context).toBeUndefined();
+      return;
+    }
     if (context?.source !== "openclaw-transcript") {
       throw new Error("Expected the built-in settled transcript context");
     }

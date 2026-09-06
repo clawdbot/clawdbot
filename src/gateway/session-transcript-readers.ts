@@ -1,5 +1,6 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
@@ -16,6 +17,7 @@ import {
   readRecentSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
+  readSessionTranscriptHistoryEventLookup,
   readSessionTranscriptHistoryEventPage,
   readSessionTranscriptHistoryEvents,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
@@ -164,11 +166,38 @@ function buildSqlitePreviewItems(
   target: ResolvedTranscriptReadTarget,
   maxItems: number,
   maxChars: number,
+  view: "display" | "model-context",
 ): SessionPreviewItem[] {
   // Tool-only and suppressed rows need headroom; cap even the recovery scan so previews
   // never materialize an entire large transcript or monopolize the Gateway thread.
   const initialMaxEvents = Math.min(256, Math.max(64, Math.ceil(maxItems) * 4));
   const readPreviewPage = (maxEvents: number, maxBytes: number) => {
+    if (view === "model-context") {
+      const { agentId, sessionId, sessionKey, storePath } = target;
+      if (!agentId || !sessionKey || !storePath) {
+        throw new Error("Model-context preview requires an exact session target");
+      }
+      let truncated = false;
+      const manager = SessionManager.openBounded(
+        { agentId, sessionId, sessionKey, storePath },
+        {
+          maxEvents,
+          maxBytes,
+          onTruncated: () => {
+            truncated = true;
+          },
+        },
+      );
+      return {
+        items: buildSessionPreviewItems(
+          manager.buildSessionContext().messages,
+          maxItems,
+          maxChars,
+          view,
+        ),
+        hasOlderEvents: truncated,
+      };
+    }
     const page = readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(target), {
       maxBytes,
       maxLines: maxEvents,
@@ -249,6 +278,24 @@ export async function readSessionMessageByIdAsync(
     });
   }
   return { found: false, oversized: false };
+}
+
+/** Read exact membership while retaining full-history validity and empty-only archive fallback. */
+export async function readSessionMessagesMatchingIdAsync(
+  scope: SessionTranscriptReadScope,
+  messageId: string,
+): Promise<unknown[]> {
+  const target = resolveTranscriptReadTarget(scope);
+  const lookup = readSessionTranscriptHistoryEventLookup(toTranscriptReadScope(target), messageId);
+  const messages = lookup.hasDisplayMessages
+    ? projectSqliteHistoryEvents(lookup.events)
+    : await archivedTranscriptReader(target).readMessageCandidatesById(messageId, {
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      });
+  return messages.filter(
+    (message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id === messageId,
+  );
 }
 
 /** Visits raw message payloads within the SQLite read snapshot. */
@@ -383,12 +430,13 @@ export function readRecentSessionUsageFromTranscript(
   return aggregateSessionTranscriptUsage(extractMessagePayloads(page.events));
 }
 
-/** Reads compact session preview items through the reader seam. */
+/** Reads a bounded display or canonical model-context preview before discarding metadata. */
 export function readSessionPreviewItemsFromTranscript(
   scope: SessionTranscriptReadScope,
   maxItems: number,
   maxChars: number,
+  view: "display" | "model-context" = "display",
 ): SessionPreviewItem[] {
   const target = resolveTranscriptReadTarget(scope);
-  return buildSqlitePreviewItems(target, maxItems, maxChars);
+  return buildSqlitePreviewItems(target, maxItems, maxChars, view);
 }

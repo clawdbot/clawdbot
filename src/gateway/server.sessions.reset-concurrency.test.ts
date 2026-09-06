@@ -2,6 +2,9 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { isSessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
@@ -9,8 +12,13 @@ import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessio
 import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
+  getGatewayConfigModule,
+  expectNoSessionQueueCleanup,
+  browserSessionTabMocks,
+  sessionHookMocks,
   sessionLifecycleHookMocks,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
@@ -34,6 +42,117 @@ vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
+
+async function resetFromCaller(key: string, current: () => boolean) {
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  return await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
+    withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:reset-requester",
+        operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
+        receiptAuthority: current,
+      },
+      () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
+    ),
+  );
+}
+
+test.each(["normal", "incognito", "replacement"])(
+  "sessions.reset completes only its accepted %s generation after caller closure during cleanup",
+  async (mode) => {
+    const registeredHarnesses = listRegisteredAgentHarnesses();
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = `agent:main:${mode === "incognito" ? "incognito" : "dashboard"}:closing-reset`;
+    const sessionId = "closing-reset";
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, {
+          incognito: mode === "incognito" ? true : undefined,
+          lifecycleRevision: "original",
+          totalTokens: 99,
+        }),
+      },
+    });
+    let current = true;
+    let cleaned = false;
+    registerAgentHarness({
+      id: "caller-reset-cleanup",
+      label: "Caller reset cleanup",
+      supports: () => ({ supported: false }),
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+      reset: async () => {
+        cleaned = true;
+        current = false;
+        if (mode === "replacement") {
+          await writeSessionStore({
+            entries: {
+              [sessionKey]: sessionStoreEntry(sessionId, {
+                lifecycleRevision: "replacement",
+                totalTokens: 123,
+              }),
+            },
+          });
+        }
+      },
+    });
+    try {
+      await expect(resetFromCaller(sessionKey, () => current)).rejects.toThrow(/authority/i);
+      expect(cleaned).toBe(true);
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      if (mode === "incognito") {
+        expect(entry).toBeUndefined();
+      } else if (mode === "replacement") {
+        expect(entry).toMatchObject({ lifecycleRevision: "replacement", totalTokens: 123 });
+        expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual([]);
+      } else {
+        expect(entry).toMatchObject({ sessionId, totalTokens: 0 });
+        expect(entry?.lifecycleRevision).not.toBe("original");
+      }
+    } finally {
+      restoreRegisteredAgentHarnesses(registeredHarnesses);
+    }
+  },
+);
+
+test("sessions.reset never creates a missing session after caller closure during cleanup", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:missing-reset";
+  let current = true;
+  browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(async () => {
+    current = false;
+    return 0;
+  });
+  await expect(resetFromCaller(sessionKey, () => current)).rejects.toThrow(/authority/i);
+  expect(current).toBe(false);
+  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+});
+
+test.each([false, true])(
+  "sessions.reset rejects caller closure before cleanup (incognito: %s)",
+  async (incognito) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = `agent:main:${incognito ? "incognito" : "dashboard"}:early-reset`;
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry("early-reset", {
+          incognito: incognito ? true : undefined,
+          totalTokens: 99,
+        }),
+      },
+    });
+    const before = loadSessionEntry({ sessionKey, storePath });
+    let current = true;
+    sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
+      current = false;
+    });
+    await expect(resetFromCaller(sessionKey, () => current)).rejects.toThrow(/authority/i);
+    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
+    expectNoSessionQueueCleanup();
+  },
+);
 
 test("sessions.reset preserves a concurrent same-id lifecycle replacement", async () => {
   const registeredHarnesses = listRegisteredAgentHarnesses();

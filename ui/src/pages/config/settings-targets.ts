@@ -29,6 +29,32 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  device: {
+    routeId: "device",
+    labelKey: "tabs.device",
+    hash: "",
+    searchKeys: [
+      "configPage.deviceSettings.app",
+      "configPage.deviceSettings.showDockIcon",
+      "configPage.deviceSettings.launchAtLogin",
+      "configPage.deviceSettings.quickChat",
+      "configPage.deviceSettings.capabilities",
+      "configPage.deviceSettings.computerControl",
+      "configPage.deviceSettings.browser",
+      "configPage.deviceSettings.cookieSync",
+      "configPage.deviceSettings.developer",
+    ],
+  },
+  devicePermissions: {
+    routeId: "device-permissions",
+    labelKey: "tabs.devicePermissions",
+    hash: "",
+    searchKeys: [
+      "configPage.deviceSettings.systemAccess",
+      "configPage.deviceSettings.location",
+      "configPage.deviceSettings.activePresence",
+    ],
+  },
   updates: {
     routeId: "updates",
     labelKey: "tabs.updates",

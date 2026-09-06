@@ -223,7 +223,7 @@ describe("resolveSessionAuthProfileOverride", () => {
           },
         },
         order: {
-          openai: [TEST_PRIMARY_PROFILE_ID],
+          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
         },
       });
 

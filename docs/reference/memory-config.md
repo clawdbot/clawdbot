@@ -8,6 +8,7 @@ read_when:
   - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
   - You need to exclude specific session sources from automatic dreaming ingestion
+  - You see a memory file-watching pressure warning
 ---
 
 This page lists every configuration knob for OpenClaw memory search. For conceptual overviews, see:
@@ -371,6 +372,26 @@ Memory engines own synchronization, batching, watch, and post-compaction
 indexing heuristics. OpenClaw keeps these behaviors enabled with maintained
 defaults rather than exposing per-install timing switches.
 
+### File-watcher pressure
+
+The "Memory file watching is tracking ..." warning reports an advisory count of
+watched paths or directories, not a measured host limit or confirmed exhaustion.
+Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
+roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
+are combined: an empty per-agent list does not remove global roots. Changing only
+an entry's `pattern` filters indexed files, not the directory tree being watched.
+
+Removing extra-path entries does not exclude files that still belong to the
+default `MEMORY.md`, `USER.md`, or `memory/` roots. If reducing extra paths is
+insufficient, review file-watch and open-file limits on the Gateway host. There is no supported
+`memory.search.sync.watch` setting.
+
+After changes, restart the Gateway. To refresh the affected index, run
+`openclaw memory index --force --agent <id>` on the Gateway host using its profile
+and environment, including any `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH`
+overrides. Use the affected agent's ID; the command printed in the warning includes
+it and the active profile or container hint. See [memory index](/cli/memory#memory-index).
+
 ## Hybrid search config
 
 All under `memory.search.query`:
@@ -433,6 +454,16 @@ auto-injected.
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
 file entries are indexed exactly. The builtin engine skips symlinks.
+
+For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
+canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
+migration through a symlink.
+
+If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, check the named path and
+permissions. Back up the legacy journal before replacing any symlink. To import it, preserve its
+contents at `memory/.dreams/events.jsonl` as a regular file under regular directories inside the intended
+workspace, then rerun `openclaw doctor --fix`. Doctor leaves rejected sources untouched. A symlink to
+the workspace root itself is supported; symlinks below that root are refused by this migration.
 
 ---
 
@@ -574,6 +605,10 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 | Key                   | Type     | Default     | Description                               |
 | --------------------- | -------- | ----------- | ----------------------------------------- |
 | `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
+
+With `trigram`, query terms shorter than three characters use substring matching,
+so short terms such as `AI` and `UK` remain searchable. Longer terms keep
+full-text matching, including in queries that also contain short terms.
 
 ---
 

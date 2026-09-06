@@ -2,13 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
+import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
+import type { SessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import {
   SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
-import type { SessionMcpRuntime, SessionMcpRuntimeManager } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { testing as resolverTesting } from "./mcp-connection-resolver.js";
+import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 vi.mock("./agent-bundle-mcp-runtime.js", () => {
   throw new Error("Lifecycle-only MCP work must not import the transport runtime");
@@ -58,6 +60,7 @@ function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): Se
     getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
     peekCatalog: () => null,
     callTool: async () => ({ content: [] }),
+    joinCleanup: async () => {},
     dispose: vi.fn(async () => {}),
   };
 }
@@ -110,6 +113,33 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
+  it("joins an unpublished disposal and reports its failure in the joining caller", async () => {
+    const manager = createManager(createRuntimeFixture);
+    const runtime = await manager.getOrCreate(params);
+    const closing = holdDisposal(runtime);
+    runtime.joinCleanup = async () => {
+      throw new Error("cleanup owner lost");
+    };
+    const first = manager.disposeSession(params.sessionId);
+    await closing.started;
+    const cleanupScope = createAgentCleanupScope();
+    let joined = false;
+    const second = cleanupScope.run(() =>
+      manager.disposeSession(params.sessionId).then(() => {
+        joined = true;
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(joined).toBe(false);
+    closing.release();
+    await Promise.all([first, second]);
+    expect(runtime.dispose).toHaveBeenCalledOnce();
+    expect(cleanupScope.outcome).toBe("uncertain");
+    expect(manager.listRuntimeKeys()).toEqual([]);
+  });
+
   it("constructs and retires an empty manager without binding or importing transports", async () => {
     const manager = createManager();
 
@@ -180,7 +210,7 @@ describe("MCP manager creation ownership", () => {
   );
 
   it.each(["session", "all"] as const)(
-    "drains late creation during %s disposal without publishing or clearing a successor",
+    "drains late creation during %s disposal before admitting a successor",
     async (scope) => {
       const first = holdFactory();
       const next = holdFactory();
@@ -190,7 +220,6 @@ describe("MCP manager creation ownership", () => {
         .mockImplementationOnce(next.createRuntime);
       const manager = createManager(createRuntime);
       const oldRequest = manager.getOrCreate(params);
-      const oldOutcome = oldRequest.catch((error: unknown) => error);
       const oldRuntime = await first.started;
       const closing = holdDisposal(oldRuntime);
       let drained = false;
@@ -201,17 +230,17 @@ describe("MCP manager creation ownership", () => {
       });
 
       const nextRequest = manager.getOrCreate(params);
-      const nextRuntime = await next.started;
       first.release();
       await closing.started;
       expect(drained).toBe(false);
+      expect(createRuntime).toHaveBeenCalledOnce();
       expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
       closing.release();
       await disposal;
-      expect(await oldOutcome).toMatchObject({ message: expect.stringContaining("superseded") });
+      expect(await oldRequest).toBe(oldRuntime);
       expect(oldRuntime.dispose).toHaveBeenCalledOnce();
 
-      // The old producer's finally and teardown both ran while this claim was pending.
+      const nextRuntime = await next.started;
       const concurrentRequest = manager.getOrCreate(params);
       next.release();
       const [created, concurrent] = await Promise.all([nextRequest, concurrentRequest]);
@@ -260,7 +289,93 @@ describe("MCP manager creation ownership", () => {
     expect(oldRuntime.dispose).toHaveBeenCalledOnce();
   });
 
-  it("supersedes a pending factory without duplicating its replacement", async () => {
+  it.each(["session", "all"] as const)(
+    "drains the requester partition of a pending full acquisition during %s disposal",
+    async (scope) => {
+      const first = holdFactory();
+      const resolutionStarted = createDeferred();
+      const releaseResolution = createDeferred();
+      releaseHeldWork.push(() => releaseResolution.resolve());
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        {
+          serverName: "scoped",
+          resolve: async () => {
+            resolutionStarted.resolve();
+            await releaseResolution.promise;
+            return { url: "https://mcp.example.test/scoped" };
+          },
+        },
+      ]);
+      const created: SessionMcpRuntime[] = [];
+      const manager = createManager(async (input) => {
+        const runtime = created.length
+          ? createRuntimeFixture(input)
+          : await first.createRuntime(input);
+        created.push(runtime);
+        return runtime;
+      });
+      const pending = manager.acquire(requesterParams("sender"));
+      await first.started;
+      let drained = false;
+      const disposal = (
+        scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll()
+      ).then(() => {
+        drained = true;
+      });
+      first.release();
+      await resolutionStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(drained).toBe(false);
+      releaseResolution.resolve();
+      const acquired = await pending;
+      acquired.releaseLease();
+      await disposal;
+      expect(created).toHaveLength(2);
+      for (const runtime of created) {
+        expect(runtime.dispose).toHaveBeenCalledOnce();
+      }
+      expect(manager.listRuntimeKeys()).toEqual([]);
+      expect(manager.resolveSessionId(params.sessionKey)).toBeUndefined();
+    },
+  );
+
+  it.each(["session", "all"] as const)(
+    "queues a new requester key behind %s teardown",
+    async (scope) => {
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        { serverName: "scoped", resolve: async () => ({ url: "https://mcp.example.test/scoped" }) },
+      ]);
+      const createRuntime = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
+      const manager = createManager(createRuntime);
+      const old = expectDefined(
+        await manager.acquireRequesterScoped(requesterParams("first")),
+        "first requester",
+      );
+      old.releaseLease();
+      const closing = holdDisposal(old.runtime);
+      const disposal =
+        scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll();
+      await closing.started;
+      const next = manager.acquireRequesterScoped({
+        ...requesterParams("next"),
+        ...(scope === "all" ? { sessionId: "another-session", sessionKey: "another-key" } : {}),
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(createRuntime).toHaveBeenCalledOnce();
+      closing.release();
+      await disposal;
+      const acquired = expectDefined(await next, "next requester");
+      acquired.releaseLease();
+      expect(acquired.runtime.dispose).not.toHaveBeenCalled();
+      expect(manager.listSessionIds()).toEqual([acquired.runtime.sessionId]);
+    },
+  );
+
+  it("serializes a pending factory and reuses its queued replacement", async () => {
     const first = holdFactory();
     const next = holdFactory();
     const createRuntime = vi
@@ -268,7 +383,7 @@ describe("MCP manager creation ownership", () => {
       .mockImplementationOnce(first.createRuntime)
       .mockImplementationOnce(next.createRuntime);
     const manager = createManager(createRuntime);
-    const oldRequest = manager.getOrCreate(params).catch((error: unknown) => error);
+    const oldRequest = manager.getOrCreate(params);
     const oldRuntime = await first.started;
     const changed = { ...params, workspaceDir: "/replacement-workspace" };
     const replacement = manager.getOrCreate(changed);
@@ -277,7 +392,7 @@ describe("MCP manager creation ownership", () => {
     first.release();
 
     const nextRuntime = await next.started;
-    expect(await oldRequest).toMatchObject({ message: expect.stringContaining("superseded") });
+    expect(await oldRequest).toBe(oldRuntime);
     expect(oldRuntime.dispose).toHaveBeenCalledOnce();
     expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
     next.release();

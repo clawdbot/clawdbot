@@ -497,7 +497,6 @@ describe("sidebar attention refresh ownership", () => {
           Promise.resolve(authStatus(1)),
           staleAuth.promise,
           switchedAuth.promise,
-          Promise.resolve(authStatus(2)),
         ],
       };
       const request = vi.fn((method: keyof typeof responses) => {
@@ -597,7 +596,8 @@ describe("sidebar attention refresh ownership", () => {
 
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(9));
       eventListener?.({ type: "event", event: "cron", payload: {} });
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(11));
+      switchedAuth.resolve(authStatus(2));
       await waitForFast(() =>
         expect(
           element
@@ -616,7 +616,6 @@ describe("sidebar attention refresh ownership", () => {
       } else {
         staleAuth.reject(new Error("stale Main auth"));
       }
-      switchedAuth.resolve(authStatus(4, "ok"));
       await Promise.allSettled([staleCron.promise, staleAuth.promise, switchedAuth.promise]);
       await new Promise<void>((resolve) => {
         globalThis.setTimeout(resolve, 0);

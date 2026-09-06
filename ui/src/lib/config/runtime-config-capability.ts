@@ -48,6 +48,7 @@ export type RuntimeConfigCapability = {
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
+  retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
   /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
@@ -248,6 +249,7 @@ export function createRuntimeConfigCapability(
     setWritesSuspended: writes.setWritesSuspended,
     waitForPendingWrites: writes.waitForPendingWrites,
     save: writes.save,
+    retry: writes.retry,
     apply: writes.apply,
     openFile: () =>
       canCallConfigMethod("config.openFile", { requireAdvertisement: false })

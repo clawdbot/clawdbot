@@ -14,6 +14,7 @@ import {
 } from "./placement-reclaim-contract.js";
 import {
   isCurrentPlacementTurnClaim,
+  isForceAbandonedWorkerPlacement,
   projectWorkerSessionTurnClaim,
   reportPlacementTransition,
 } from "./placement-record.js";
@@ -26,7 +27,11 @@ import type {
 } from "./service-contract.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 
-type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
+type WorkerMoveBeginResult = {
+  intent: WorkerPlacementMoveIntent;
+  placement: Extract<WorkerDispatchPlacement, { state: "draining" | "failed" }>;
+  joined: boolean;
+};
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
 type WorkerPlacementMoveSourceDisposition = "reconcile" | "abandon";
 const RESTART_AUTHORITY_EXPIRED =
@@ -37,17 +42,9 @@ export type WorkerPlacementMoveBarrier = (
     authorize?: WorkerPlacementAuthorization;
     signal?: AbortSignal;
     sourceDisposition: WorkerPlacementMoveSourceDisposition;
-    begin: (prepareNew?: (runId: string) => Promise<void>) => Promise<{
-      intent: WorkerPlacementMoveIntent;
-      placement: WorkerDrainingDispatchPlacement;
-      joined: boolean;
-    }>;
+    begin: (prepareNew?: (runId: string) => Promise<void>) => Promise<WorkerMoveBeginResult>;
   },
-) => Promise<{
-  intent: WorkerPlacementMoveIntent;
-  placement: WorkerDrainingDispatchPlacement;
-  joined: boolean;
-}>;
+) => Promise<WorkerMoveBeginResult>;
 
 type MoveSessionIdentity = Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">;
 
@@ -144,7 +141,10 @@ export function createWorkerPlacementMoveService(options: {
             }
           }
           const started = options.placements.beginPlacementMove(moveRequest);
-          if (started.placement.state !== "draining") {
+          if (
+            started.placement.state !== "draining" &&
+            !(request.abandonSource && isForceAbandonedWorkerPlacement(started.placement))
+          ) {
             throw new Error(
               `Session ${request.sessionKey} placement move is already in ${started.placement.state}`,
             );
@@ -236,16 +236,6 @@ export function createWorkerPlacementMoveService(options: {
             sessionId: intent.sessionId,
           });
           return;
-        }
-        if (
-          placement.state !== "active" &&
-          placement.state !== "draining" &&
-          placement.state !== "reconciling" &&
-          placement.state !== "failed"
-        ) {
-          throw new Error(
-            `Session ${identity.sessionKey} abandonment recovery is waiting in ${placement.state}`,
-          );
         }
         await options.abandonSource(identity, intent);
         return;

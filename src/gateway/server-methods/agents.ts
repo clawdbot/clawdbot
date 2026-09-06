@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -22,13 +23,18 @@ import {
 import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createAgent } from "../../agents/agent-create.js";
 import {
-  findOverlappingWorkspaceAgentIds,
+  isPathOwnedBySurvivingAgent,
+  prepareAgentDeleteDatabases,
+  readAgentDeleteDatabaseRegistry,
+  resolveSurvivingDatabaseFilePaths,
+  type AgentDeleteDatabasePlan,
+} from "../../agents/agent-delete-databases.js";
+import {
   formatSharedAuthStoreOwnerDeleteError,
   isInheritedAuthStoreOwner,
   isSharedAuthStoreOwner,
 } from "../../agents/agent-delete-safety.js";
 import {
-  isPathOwnedByAnotherRegisteredAgent,
   normalizeAgentDirRegistryPath,
   registerResolvedAgentDir,
   resolveRegisteredAgentIdForDir,
@@ -87,20 +93,13 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { normalizeAgentId, normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
 } from "../../state/agent-deletion-journal.js";
-import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  listOpenClawRegisteredAgentDatabases,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
@@ -660,88 +659,6 @@ function cleanupPathCovers(
   );
 }
 
-type AgentDeleteDatabasePlan = {
-  paths: string[];
-  registrationPaths: string[];
-  fileGroups: string[][];
-  relocatedFileGroups: string[][];
-};
-
-function resolveSurvivingDatabaseFilePaths(
-  registeredDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases>,
-  agentId: string,
-): string[] {
-  return [
-    ...new Set(
-      registeredDatabases
-        .filter((entry) => normalizeAgentId(entry.agentId) !== agentId)
-        .flatMap((entry) => resolveSqliteDatabaseFilePaths(entry.path))
-        .map((pathname) => normalizeAgentDirRegistryPath(pathname)),
-    ),
-  ];
-}
-
-function isPathOwnedBySurvivingAgent(
-  cfg: OpenClawConfig,
-  agentId: string,
-  pathname: string,
-  survivingDatabaseFilePaths: readonly string[] = [],
-): boolean {
-  const canonicalPath = normalizeAgentDirRegistryPath(pathname);
-  return (
-    isPathOwnedByAnotherRegisteredAgent({ agentId, pathname }) ||
-    findOverlappingWorkspaceAgentIds(cfg, agentId, pathname).length > 0 ||
-    survivingDatabaseFilePaths.some(
-      (databasePath) =>
-        databasePath === canonicalPath ||
-        isPathInside(databasePath, canonicalPath) ||
-        isPathInside(canonicalPath, databasePath),
-    )
-  );
-}
-
-function prepareAgentDeleteDatabases(
-  cfg: OpenClawConfig,
-  agentId: string,
-  agentDir: string,
-): AgentDeleteDatabasePlan {
-  const registeredDatabases = listOpenClawRegisteredAgentDatabases();
-  const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-    registeredDatabases,
-    agentId,
-  );
-  const registeredDatabasePaths = new Set([
-    resolveOpenClawAgentSqlitePath({
-      agentId,
-      path: path.join(agentDir, "openclaw-agent.sqlite"),
-    }),
-    ...registeredDatabases
-      .filter((entry) => normalizeAgentId(entry.agentId) === agentId)
-      .map((entry) => entry.path),
-  ]);
-  const databasePaths = [...registeredDatabasePaths].filter((pathname) =>
-    resolveSqliteDatabaseFilePaths(pathname).every(
-      (filePath) =>
-        !isPathOwnedBySurvivingAgent(cfg, agentId, filePath, survivingDatabaseFilePaths),
-    ),
-  );
-  for (const databasePath of databasePaths) {
-    closeOpenClawAgentDatabaseByPath(databasePath);
-  }
-  assertNoOpenClawAgentDatabaseLeases(agentId);
-  const fileGroups = databasePaths.map(resolveSqliteDatabaseFilePaths);
-  const relocatedFileGroups = fileGroups.filter((fileGroup) => {
-    const relative = path.relative(agentDir, fileGroup[0] ?? agentDir);
-    return relative.startsWith("..") || path.isAbsolute(relative);
-  });
-  return {
-    paths: databasePaths,
-    registrationPaths: [...registeredDatabasePaths],
-    fileGroups,
-    relocatedFileGroups,
-  };
-}
-
 function unregisterAgentDeleteDatabases(agentId: string, databasePaths: string[]): void {
   for (const databasePath of databasePaths) {
     unregisterOpenClawAgentDatabase({ agentId, path: databasePath });
@@ -904,6 +821,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
       listAgentsForGateway(cfg, undefined, {
         modelCatalogByAgentId,
         includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+        httpAvatarBasePath:
+          client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
+            ? (cfg.gateway?.controlUi?.basePath ?? "")
+            : undefined,
       }),
       undefined,
     );
@@ -1236,7 +1157,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 }
               }),
           );
-          deletion.commit();
         } catch (error) {
           let canReleaseFence =
             !rosterCommitted &&
@@ -1268,14 +1188,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
         // A journaled path is trash-eligible only while registry ownership still points at the
         // deleted agent; recovery must not consume a path claimed by a surviving agent.
         const agentDirRegistryPath = normalizeAgentDirRegistryPath(deleteResult.agentDir);
-        const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId);
+        const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId, {
+          runDatabaseCleanup: deletion.runDatabaseCleanup,
+        });
 
         const removed: AgentDeleteRemovedPath[] = [];
         const failed: AgentDeleteFailedPath[] = [];
 
-        if (deleteFiles) {
+        if (deleteFiles && !purgeFailed) {
           const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-            listOpenClawRegisteredAgentDatabases(),
+            readAgentDeleteDatabaseRegistry(),
             agentId,
           );
           const workspaceTrashEligible = !isPathOwnedBySurvivingAgent(
@@ -1403,7 +1325,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               continue;
             }
             const refreshedDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-              listOpenClawRegisteredAgentDatabases(),
+              readAgentDeleteDatabaseRegistry(),
               agentId,
             );
             const blockingProtection = protectedCleanupPaths.find(
@@ -1500,7 +1422,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
             unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
           }
         }
-        if (failed.length === 0) {
+        if (failed.length === 0 && !purgeFailed) {
           unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
           if (deleteFiles) {
             unregisterAgentDeleteDatabases(agentId, databasePlan?.registrationPaths ?? []);

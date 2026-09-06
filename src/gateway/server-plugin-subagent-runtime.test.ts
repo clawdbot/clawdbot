@@ -222,11 +222,25 @@ describe("plugin background completions", () => {
       subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
       model: "test-provider/override",
       allowed: true,
+      expectedText: "research:test-provider/override",
+    },
+    {
+      name: "provider-qualified model id",
+      subagent: { allowModelOverride: true, allowedModels: ["openrouter/test-model"] },
+      model: "openrouter/test-model",
+      allowed: true,
+      expectedText: "research:openrouter/openrouter/test-model",
     },
     {
       name: "model outside allowlist",
       subagent: { allowModelOverride: true, allowedModels: ["test-provider/other"] },
       model: "test-provider/override",
+      allowed: false,
+    },
+    {
+      name: "auth profile outside allowlist",
+      subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
+      model: "test-provider/override@other-profile",
       allowed: false,
     },
     {
@@ -237,11 +251,11 @@ describe("plugin background completions", () => {
     },
   ])(
     "applies existing subagent override policy for $name",
-    async ({ subagent, model, allowed }) => {
+    async ({ subagent, model, allowed, expectedText }) => {
       config.plugins = { entries: { [PLUGIN_ID]: { subagent } } };
       const result = complete(createRuntime(), { model });
       if (allowed) {
-        await expect(result).resolves.toEqual({ text: "research:test-provider/override" });
+        await expect(result).resolves.toEqual({ text: expectedText });
         expect(isolated).toHaveBeenCalledOnce();
       } else {
         await expect(result).rejects.toThrow(/not trusted|not allowlisted|none of the entries/u);
@@ -485,7 +499,10 @@ describe("plugin background completions", () => {
       await started.promise;
       const second = complete(runtime);
       await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
-      const rejected = expect(first).rejects.toThrow(/caller cancelled|timeout/u);
+      const rejected =
+        reason === "timeout"
+          ? expect(first).rejects.toMatchObject({ name: "TimeoutError" })
+          : expect(first).rejects.toThrow("caller cancelled");
       if (reason === "caller cancellation") {
         controller.abort(new Error("caller cancelled"));
       }

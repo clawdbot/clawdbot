@@ -1,5 +1,6 @@
-// Voice Call tests cover response generator plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Voice Call tests cover response generator plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { VoiceCallConfigSchema } from "./config.js";
@@ -179,8 +180,8 @@ function createAgentRuntime(
 
 function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
   const calls = runEmbeddedAgent.mock.calls as unknown[][];
-  const firstCall = requireFirstMockCall(
-    calls,
+  const firstCall = expectDefined(
+    calls.at(0),
     "voice response generator embedded agent invocation",
   );
   const args = firstCall[0] as Partial<EmbeddedAgentArgs> | undefined;
@@ -188,14 +189,6 @@ function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
     throw new Error("voice response generator did not pass the spoken-output contract prompt");
   }
   return args as EmbeddedAgentArgs;
-}
-
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 async function runGenerateVoiceResponse(
@@ -656,8 +649,8 @@ describe("generateVoiceResponse", () => {
     expect(pinnedSessionEntry?.modelProvider).toBeUndefined();
     expect(pinnedSessionEntry?.contextTokens).toBeUndefined();
     expect(pinnedSessionEntry?.authProfileOverride).toBeUndefined();
-    const patchSessionEntryCall = requireFirstMockCall(
-      patchSessionEntry.mock.calls,
+    const patchSessionEntryCall = expectDefined(
+      patchSessionEntry.mock.calls.at(0),
       "session entry patch",
     );
     expect(patchSessionEntryCall[0]).toMatchObject({

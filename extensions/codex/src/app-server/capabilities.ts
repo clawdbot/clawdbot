@@ -17,6 +17,7 @@ export const CODEX_CONTROL_METHODS = {
   listSkills: "skills/list",
   listThreads: "thread/list",
   listThreadTurns: "thread/turns/list",
+  listThreadItems: "thread/items/list",
   readThread: "thread/read",
   rateLimits: "account/rateLimits/read",
   archiveThread: "thread/archive",

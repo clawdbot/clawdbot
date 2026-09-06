@@ -1,20 +1,23 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { callGateway } from "../../gateway/call.js";
+import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import {
   createConfiguredGatewayLocalProbe,
   type ConfiguredGatewayLocalProbe,
 } from "../../gateway/local-http-probe.js";
+import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
-import { probeGateway } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
@@ -97,14 +100,8 @@ function formatGatewayRestartProbeError(error: unknown): string {
   );
 }
 
-function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
-  if (code !== 1008) {
-    return false;
-  }
+function isGatewayAuthRejection(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
-  if (!normalized) {
-    return false;
-  }
   const pairingFailure = classifyGatewayConnectFailure({ reason: normalized });
   if (
     pairingFailure.kind === "pairing-required" &&
@@ -213,74 +210,72 @@ function readChannelProbeErrors(health: unknown): Array<{ id: string; error: str
 
 export async function confirmGatewayReachable(params: {
   port: number;
-  includeHealthDetails?: boolean;
   auth?: GatewayRestartProbeAuth;
   config?: OpenClawConfig;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   env?: NodeJS.ProcessEnv;
   allowDeviceIdentityRequired?: boolean;
 }): Promise<GatewayReachability> {
-  const token = normalizeOptionalString(params.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN);
-  const password = normalizeOptionalString(
-    params.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
-  );
+  const result: GatewayReachability = {
+    reachable: false,
+    gatewayVersion: null,
+    gatewayBuildId: undefined,
+    activatedPluginErrors: [],
+    channelProbeErrors: [],
+  };
   try {
+    const context = params.config
+      ? { config: params.config, auth: params.auth }
+      : await resolveGatewayRestartProbeContext(params.env);
+    const auth = params.auth ?? context.auth;
     const configuredProbe =
-      params.configuredProbe ?? createConfiguredGatewayLocalProbe(params.config ?? {});
+      params.configuredProbe ?? createConfiguredGatewayLocalProbe(context.config);
     const target = await configuredProbe.resolveWebSocketTarget(params.port);
     if (!target) {
-      return {
-        reachable: false,
-        gatewayVersion: null,
-        gatewayBuildId: null,
-        activatedPluginErrors: [],
-        channelProbeErrors: [],
-        probeError: "gateway TLS certificate unavailable",
-      };
+      return { ...result, gatewayBuildId: null, probeError: "gateway TLS certificate unavailable" };
     }
-    const probe = await probeGateway({
-      url: target.url,
-      auth: token || password ? { token, password } : undefined,
-      ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
-      ...(params.config ? { config: params.config } : {}),
+    const authNone = context.config.gateway?.auth?.mode === "none";
+    // Readiness is first-party local control. CLI shared auth preserves read scopes;
+    // auth-none uses the existing loopback backend contract without pairing a device.
+    const health = await callGateway({
+      config: context.config,
+      localPortOverride: params.port,
+      token: auth?.token,
+      password: auth?.password,
+      skipImplicitAuth: true,
+      tlsFingerprint: target.tlsFingerprint,
+      method: "health",
+      scopes: [READ_SCOPE],
+      clientName: authNone ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+      mode: authNone ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+      requireLocalBackendSharedAuth: authNone,
+      deviceIdentity: null,
+      sharedStateMode: "read-only",
       timeoutMs: 3_000,
-      includeDetails: params.includeHealthDetails === true,
-      env: params.env,
+      onHelloOk: (hello) => {
+        result.gatewayVersion = hello.server.version;
+        result.gatewayBuildId = hello.server.buildId ?? null;
+      },
     });
-    const reachedGateway =
-      probe.ok ||
-      (probe.gatewayReached === true &&
-        (looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
-          (params.allowDeviceIdentityRequired === true &&
-            probe.close?.code === 1008 &&
-            normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
-          (probe.connectLatencyMs != null &&
-            probe.server?.version != null &&
-            probe.auth.capability === "connected_no_operator_scope")));
-    return {
-      reachable: reachedGateway,
-      gatewayVersion: probe.server?.version ?? null,
-      gatewayBuildId:
-        probe.server?.buildId ??
-        (reachedGateway || probe.server?.version != null || probe.server?.connId != null
-          ? null
-          : undefined),
-      activatedPluginErrors: readActivatedPluginErrors(probe.health),
-      channelProbeErrors: readChannelProbeErrors(probe.health),
-      ...(!reachedGateway && probe.error
-        ? { probeError: formatGatewayRestartProbeError(probe.error) }
-        : {}),
-    };
+    result.reachable = true;
+    result.activatedPluginErrors = readActivatedPluginErrors(health);
+    result.channelProbeErrors = readChannelProbeErrors(health);
   } catch (error) {
-    return {
-      reachable: false,
-      gatewayVersion: null,
-      gatewayBuildId: undefined,
-      activatedPluginErrors: [],
-      channelProbeErrors: [],
-      probeError: formatGatewayRestartProbeError(error),
-    };
+    // Only a correlated Gateway rejection proves protocol reachability. Bare socket
+    // closes (including foreign listeners) must never satisfy restart health.
+    result.reachable =
+      result.gatewayVersion === null &&
+      isGatewayProtocolResponseError(error) &&
+      (isGatewayAuthRejection(error.message) ||
+        (params.allowDeviceIdentityRequired === true &&
+          error.message === "device identity required"));
+    if (result.reachable) {
+      result.gatewayBuildId ??= null;
+    } else {
+      result.probeError = formatGatewayRestartProbeError(error);
+    }
   }
+  return result;
 }
 
 export type GatewayRestartProbeContext = {

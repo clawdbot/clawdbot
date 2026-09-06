@@ -198,7 +198,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     },
   );
 
-  it.each(["healthy", "exited", "old-version"] as const)(
+  it.each(["healthy", "exited", "old-version", "http-unready"] as const)(
     "verifies doctor update restart readiness: %s",
     async (outcome) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -213,11 +213,15 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         after: { version: "2026.4.24", buildId: "new-build" },
       });
       mocks.waitForHealthyRestart.mockResolvedValue({
-        healthy: outcome === "healthy",
+        healthy: outcome === "healthy" || outcome === "http-unready",
         runtime: { status: outcome === "exited" ? "stopped" : "running" },
         gatewayVersion: outcome === "old-version" ? "2026.4.23" : "2026.4.24",
         versionMismatch: outcome === "old-version",
         staleGatewayPids: [],
+      });
+      mocks.waitForHttpReadiness.mockResolvedValue({
+        healthz: 200,
+        readyz: outcome === "http-unready" ? 503 : 200,
       });
 
       const offer = runOffer({ confirm: vi.fn().mockResolvedValue(true), runtime });
@@ -236,6 +240,13 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
           requireRunningService: true,
         }),
       );
+      expect(mocks.waitForHttpReadiness).toHaveBeenCalledWith(
+        expect.objectContaining({
+          port: mocks.waitForHealthyRestart.mock.calls[0]?.[0]?.port,
+          config: {},
+        }),
+      );
+      expect(mocks.runUpdateInferenceProbe).toHaveBeenCalledTimes(outcome === "healthy" ? 1 : 0);
       expect(mocks.doctorCommand).not.toHaveBeenCalled();
       if (outcome === "healthy") {
         expect(runtime.exit).not.toHaveBeenCalled();
@@ -244,6 +255,9 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
           "Update",
         );
         expect(mocks.waitForHealthyRestart.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.waitForHttpReadiness.mock.invocationCallOrder[0]!,
+        );
+        expect(mocks.waitForHttpReadiness.mock.invocationCallOrder[0]).toBeLessThan(
           mocks.note.mock.invocationCallOrder.at(-1)!,
         );
       } else {
@@ -296,6 +310,9 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
 
       expect(mocks.waitForHealthyRestart).toHaveBeenCalledWith(
         expect.objectContaining({ port: expected, expectedVersion: "2026.4.24", env: serviceEnv }),
+      );
+      expect(mocks.waitForHttpReadiness).toHaveBeenCalledWith(
+        expect.objectContaining({ port: expected, config: { gateway: { port: 19203 } } }),
       );
       if (envPort === undefined) {
         expect(mocks.createServiceConfigIO).toHaveBeenCalledWith(

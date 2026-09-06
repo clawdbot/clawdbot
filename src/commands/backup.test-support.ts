@@ -16,8 +16,6 @@ type ResolveBackupPlanFromPathsParams = {
   workspaceDirs?: string[];
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
-  configInsideState?: boolean;
-  oauthInsideState?: boolean;
   nowMs?: number;
 };
 
@@ -92,8 +90,6 @@ export async function mockStateOnlyBackupPlan(stateDir: string) {
       configPath: path.join(stateDir, "openclaw.json"),
       oauthDir: path.join(stateDir, "credentials"),
       includeWorkspace: false,
-      configInsideState: true,
-      oauthInsideState: true,
       nowMs: 123,
     }),
   );

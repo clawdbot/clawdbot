@@ -6,7 +6,6 @@ import MarkdownIt, {
   type StateInline,
 } from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
-import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
   markdownItAssistantTranscriptRoles,
@@ -37,6 +36,7 @@ import {
   type MarkdownStyle,
   type MarkdownStyleSpan,
 } from "./ir-spans.js";
+import { renderMarkdownCodeTable, renderMarkdownTableBullets } from "./table-layout.js";
 import type { MarkdownTableMode } from "./types.js";
 
 export type { MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir-spans.js";
@@ -83,6 +83,7 @@ type RenderEnv = {
   assistantTranscriptRoleHeaders?: boolean;
   assistantTranscriptRolePreserveLinks?: boolean;
   listStack: ListState[];
+  tableSourceColumns?: Map<number, number>;
 };
 
 type MarkdownToken = {
@@ -180,6 +181,20 @@ export type MarkdownTableMeta = MarkdownTableData & {
   rowCells: MarkdownTableCell[][];
 };
 
+type MarkdownTableSource = {
+  start: number;
+  end: number;
+  prefix: string;
+  headers: string[];
+  rows: string[][];
+};
+type MarkdownTableWithSource = MarkdownTableMeta & { source?: MarkdownTableSource };
+
+/** Private source coordinates do not change the serialized native-table payload. */
+export function getMarkdownTableSource(table: MarkdownTableWithSource) {
+  return table.source;
+}
+
 type OpenStyle = {
   style: MarkdownStyle;
   start: number;
@@ -197,6 +212,10 @@ type RenderTarget = {
 type TableCell = MarkdownTableCell;
 
 type TableState = {
+  sourceLines?: [number, number];
+  sourceHeaders: string[];
+  sourceRows: string[][];
+  currentSourceRow: string[];
   headers: TableCell[];
   rows: TableCell[][];
   aligns: (MarkdownTableAlignment | undefined)[];
@@ -363,6 +382,15 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   md.enable("strikethrough");
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
+    md.block.ruler.before("table", "markdown_core_table_source", (state, line, _end, silent) => {
+      // SAFETY: markdownToIRWithMeta creates and passes this parser's RenderEnv.
+      const env = state.env as RenderEnv;
+      if (!silent && env.tableSourceColumns) {
+        const start = (state.bMarks[line] ?? 0) + (state.tShift[line] ?? 0);
+        env.tableSourceColumns.set(line, start - state.src.lastIndexOf("\n", start - 1) - 1);
+      }
+      return false;
+    });
   } else {
     md.disable("table");
   }
@@ -834,6 +862,9 @@ function isInsideMarkdownHtmlTag(text: string): boolean {
 
 function initTableState(): TableState {
   return {
+    sourceHeaders: [],
+    sourceRows: [],
+    currentSourceRow: [],
     headers: [],
     rows: [],
     aligns: [],
@@ -855,42 +886,16 @@ function finishTableCell(cell: RenderTarget): TableCell {
 
 function trimCell(cell: TableCell): TableCell {
   const text = cell.text;
-  let start = 0;
-  let end = text.length;
-  while (start < end && /\s/.test(text[start] ?? "")) {
-    start += 1;
-  }
-  while (end > start && /\s/.test(text[end - 1] ?? "")) {
-    end -= 1;
-  }
-  if (start === 0 && end === text.length) {
-    return cell;
-  }
-  const trimmedText = text.slice(start, end);
-  const trimmedLength = trimmedText.length;
-  const trimmedStyles: MarkdownStyleSpan[] = [];
+  let start = text.length - text.trimStart().length;
+  let end = text.trimEnd().length;
+  // Code owns its edge whitespace; only surrounding cell padding may be trimmed.
   for (const span of cell.styles) {
-    const sliceStart = Math.max(0, span.start - start);
-    const sliceEnd = Math.min(trimmedLength, span.end - start);
-    if (sliceEnd > sliceStart) {
-      trimmedStyles.push({ start: sliceStart, end: sliceEnd, style: span.style });
+    if (span.style === "code") {
+      start = Math.min(start, span.start);
+      end = Math.max(end, span.end);
     }
   }
-  const trimmedLinks: MarkdownLinkSpan[] = [];
-  for (const span of cell.links) {
-    const sliceStart = Math.max(0, span.start - start);
-    const sliceEnd = Math.min(trimmedLength, span.end - start);
-    if (sliceEnd > sliceStart) {
-      trimmedLinks.push(copyMarkdownLinkSpan(span, { start: sliceStart, end: sliceEnd }));
-    }
-  }
-  const trimmedAnnotations = sliceAnnotationSpans(cell.annotations ?? [], start, end);
-  return {
-    text: trimmedText,
-    styles: trimmedStyles,
-    links: trimmedLinks,
-    ...(trimmedAnnotations.length > 0 ? { annotations: trimmedAnnotations } : {}),
-  };
+  return start === 0 && end === text.length ? cell : sliceMarkdownIR(cell, start, end);
 }
 
 function appendCell(state: RenderState, cell: TableCell) {
@@ -923,21 +928,13 @@ function appendCell(state: RenderState, cell: TableCell) {
   }
 }
 
-function appendCellTextOnly(state: RenderState, cell: TableCell) {
-  if (!cell.text) {
-    return;
-  }
-  state.text += cell.text;
-  // Do not append styles - this is used for code blocks where inner styles would overlap
-}
-
 function collectTableBlock(state: RenderState) {
   if (!state.table) {
     return;
   }
   const headerCells = state.table.headers.map(trimCell);
   const rowCells = state.table.rows.map((row) => row.map(trimCell));
-  const table = {
+  const table: MarkdownTableWithSource = {
     headers: headerCells.map((cell) => cell.text),
     rows: rowCells.map((row) => row.map((cell) => cell.text)),
     headerCells,
@@ -946,30 +943,19 @@ function collectTableBlock(state: RenderState) {
     ...(state.table.aligns.some(Boolean) ? { aligns: [...state.table.aligns] } : {}),
   };
   state.collectedTables.push(table);
-}
-
-function appendTableBulletValue(
-  state: RenderState,
-  params: {
-    header?: TableCell;
-    value?: TableCell;
-    columnIndex: number;
-    includeColumnFallback: boolean;
-  },
-) {
-  const { header, value, columnIndex, includeColumnFallback } = params;
-  if (!value?.text) {
-    return;
+  if (state.table.sourceLines) {
+    const [first, after] = state.table.sourceLines;
+    const { lines, starts } = (state.sourceIndex ??= indexSourceLines(state.source));
+    const column = state.env.tableSourceColumns?.get(first) ?? 0;
+    defineMetadata(table, "source", {
+      start: (starts[first] ?? 0) + column,
+      end: (starts[after - 1] ?? 0) + (lines[after - 1]?.length ?? 0),
+      // Continue list markers as indentation while retaining enclosing quote markers.
+      prefix: (lines[first] ?? "").slice(0, column).replace(/[^\t >]/gu, " "),
+      headers: state.table.sourceHeaders,
+      rows: state.table.sourceRows,
+    });
   }
-  state.text += "• ";
-  if (header?.text) {
-    appendCell(state, header);
-    state.text += ": ";
-  } else if (includeColumnFallback) {
-    state.text += `Column ${columnIndex}: `;
-  }
-  appendCell(state, value);
-  state.text += "\n";
 }
 
 function renderTableAsBullets(state: RenderState) {
@@ -978,127 +964,35 @@ function renderTableAsBullets(state: RenderState) {
   }
   const headers = state.table.headers.map(trimCell);
   const rows = state.table.rows.map((row) => row.map(trimCell));
-
-  // If no headers or rows, skip
-  if (headers.length === 0 && rows.length === 0) {
-    return;
-  }
-
-  // Determine if first column should be used as row labels
-  // (common pattern: first column is category/feature name)
-  const useFirstColAsLabel = headers.length > 1 && rows.length > 0;
-
-  if (useFirstColAsLabel) {
-    // Format: each row becomes a section with header as row[0], then key:value pairs
-    for (const row of rows) {
-      if (row.length === 0) {
-        continue;
+  renderMarkdownTableBullets(
+    headers,
+    rows,
+    (text) => {
+      state.text += text;
+    },
+    (cell, rowLabel) => {
+      const start = state.text.length;
+      appendCell(state, cell);
+      if (rowLabel) {
+        state.styles.push({ start, end: state.text.length, style: "bold" });
       }
-
-      const rowLabel = row[0];
-      if (rowLabel?.text) {
-        const labelStart = state.text.length;
-        appendCell(state, rowLabel);
-        const labelEnd = state.text.length;
-        if (labelEnd > labelStart) {
-          state.styles.push({ start: labelStart, end: labelEnd, style: "bold" });
-        }
-        state.text += "\n";
-      }
-
-      // Add each column as a bullet point
-      for (let i = 1; i < row.length; i++) {
-        appendTableBulletValue(state, {
-          header: headers[i],
-          value: row[i],
-          columnIndex: i,
-          includeColumnFallback: true,
-        });
-      }
-      state.text += "\n";
-    }
-  } else {
-    // Simple table: just list headers and values
-    for (const row of rows) {
-      for (let i = 0; i < row.length; i++) {
-        appendTableBulletValue(state, {
-          header: headers[i],
-          value: row[i],
-          columnIndex: i,
-          includeColumnFallback: false,
-        });
-      }
-      state.text += "\n";
-    }
-  }
+    },
+  );
 }
 
 function renderTableAsCode(state: RenderState) {
   if (!state.table) {
     return;
   }
-  const measureCell = (cell: TableCell) => {
-    const trimmed = trimCell(cell);
-    return { cell: trimmed, width: visibleWidth(trimmed.text) };
-  };
-  const headers = state.table.headers.map(measureCell);
-  const rows = state.table.rows.map((row) => row.map(measureCell));
-
-  const columnCount = Math.max(headers.length, ...rows.map((row) => row.length));
-  if (columnCount === 0) {
+  const headers = state.table.headers.map((cell) => trimCell(cell).text);
+  const rows = state.table.rows.map((row) => row.map((cell) => trimCell(cell).text));
+  const code = renderMarkdownCodeTable(headers, rows);
+  if (!code) {
     return;
   }
-
-  const widths = Array.from({ length: columnCount }, () => 0);
-  const updateWidths = (cells: typeof headers) => {
-    for (const [i, cell] of cells.entries()) {
-      widths[i] = Math.max(widths[i] ?? 0, cell.width);
-    }
-  };
-  updateWidths(headers);
-  for (const row of rows) {
-    updateWidths(row);
-  }
-
-  const codeStart = state.text.length;
-
-  const appendRow = (cells: typeof headers) => {
-    state.text += "|";
-    for (const [i, width] of widths.entries()) {
-      state.text += " ";
-      const cell = cells[i];
-      if (cell) {
-        // Use text-only append to avoid overlapping styles with code_block
-        appendCellTextOnly(state, cell.cell);
-      }
-      const pad = width - (cell?.width ?? 0);
-      if (pad > 0) {
-        state.text += " ".repeat(pad);
-      }
-      state.text += " |";
-    }
-    state.text += "\n";
-  };
-
-  const appendDivider = () => {
-    state.text += "|";
-    for (const width of widths) {
-      const dashCount = Math.max(3, width);
-      state.text += ` ${"-".repeat(dashCount)} |`;
-    }
-    state.text += "\n";
-  };
-
-  appendRow(headers);
-  appendDivider();
-  for (const row of rows) {
-    appendRow(row);
-  }
-
-  const codeEnd = state.text.length;
-  if (codeEnd > codeStart) {
-    state.styles.push({ start: codeStart, end: codeEnd, style: "code_block" });
-  }
+  const start = state.text.length;
+  state.text += code;
+  state.styles.push({ start, end: state.text.length, style: "code_block" });
   if (state.env.listStack.length === 0) {
     state.text += "\n";
   }
@@ -1122,6 +1016,9 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
     }
     switch (token.type) {
       case "inline":
+        if (state.table?.currentCell) {
+          state.table.currentSourceRow.push(token.content ?? "");
+        }
         if (token.children) {
           renderTokens(token.children, state);
         }
@@ -1342,6 +1239,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "table_open":
         if (state.tableMode !== "off") {
           state.table = initTableState();
+          state.table.sourceLines = token.map ?? undefined;
           state.hasTables = true;
         }
         break;
@@ -1373,14 +1271,17 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "tr_open":
         if (state.table) {
           state.table.currentRow = [];
+          state.table.currentSourceRow = [];
         }
         break;
       case "tr_close":
         if (state.table) {
           if (state.table.inHeader) {
             state.table.headers = state.table.currentRow;
+            state.table.sourceHeaders = state.table.currentSourceRow;
           } else {
             state.table.rows.push(state.table.currentRow);
+            state.table.sourceRows.push(state.table.currentSourceRow);
           }
           state.table.currentRow = [];
         }
@@ -1625,6 +1526,7 @@ export function markdownToIRWithMeta(
   const source = markdown ?? "";
   const env: RenderEnv = {
     listStack: [],
+    ...(options.tableMode === "block" ? { tableSourceColumns: new Map<number, number>() } : {}),
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders === true,
     assistantTranscriptRolePreserveLinks: options.assistantTranscriptRoleHeaders === true,
   };
@@ -1749,7 +1651,7 @@ export function markdownToIRWithMeta(
     ir,
     hasTables: state.hasTables,
     tables: state.collectedTables.map((table) =>
-      Object.assign({}, table, {
+      Object.assign(table, {
         placeholderOffset: Math.min(table.placeholderOffset, finalLength),
       }),
     ),

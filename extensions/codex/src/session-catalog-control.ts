@@ -18,6 +18,8 @@ import type {
   CodexThreadForkResponse,
   CodexThreadListParams,
   CodexThreadListResponse,
+  CodexThreadItemsListParams,
+  CodexThreadItemsListResponse,
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
@@ -87,6 +89,7 @@ type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
   listThreads(params: CodexThreadListParams, timeoutMs: number): Promise<CodexThreadListResponse>;
   listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
+  listThreadItems(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
   forkThread(
     params: CodexThreadForkParams,
     assertCurrent?: () => void,
@@ -100,6 +103,7 @@ type CodexCatalogRequestMethod =
   | typeof CODEX_CONTROL_METHODS.forkThread
   | typeof CODEX_CONTROL_METHODS.listThreads
   | typeof CODEX_CONTROL_METHODS.listThreadTurns
+  | typeof CODEX_CONTROL_METHODS.listThreadItems
   | typeof CODEX_CONTROL_METHODS.readThread;
 
 type CodexCatalogRequest = <M extends CodexCatalogRequestMethod>(
@@ -118,6 +122,7 @@ function createCodexCatalogRequestSnapshot(
     listThreads: (params, timeoutMs) =>
       request(CODEX_CONTROL_METHODS.listThreads, params, timeoutMs),
     listThreadTurns: (params) => request(CODEX_CONTROL_METHODS.listThreadTurns, params),
+    listThreadItems: (params) => request(CODEX_CONTROL_METHODS.listThreadItems, params),
     forkThread: (params, assertCurrent) =>
       request(
         CODEX_CONTROL_METHODS.forkThread,
@@ -333,6 +338,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
       const response = await params.createRequestSnapshot().listThreadTurns(listParams);
       return response;
     },
+    listItemPage: (listParams) => params.createRequestSnapshot().listThreadItems(listParams),
     async forkThread(forkParams, assertCurrent) {
       return await params.createRequestSnapshot().forkThread(forkParams, assertCurrent);
     },

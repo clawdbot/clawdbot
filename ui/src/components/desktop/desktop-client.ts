@@ -1,4 +1,5 @@
-type DesktopDisconnectDetail = {
+export type DesktopDisconnectDetail = {
+  clean: boolean;
   code?: number;
   reason?: string;
 };
@@ -25,10 +26,10 @@ type DesktopConnectOptions = {
 export type DesktopConnectionHandle = {
   disconnect(): void;
   disableInput(): void;
-  sendBackspace?(): void;
-  sendKeyboardEvent?(event: KeyboardEvent): void;
-  sendText?(text: string): void;
-  setScaleViewport?(enabled: boolean): void;
+  sendBackspace(): void;
+  sendKeyboardEvent(event: KeyboardEvent): void;
+  sendText(text: string): void;
+  setScaleViewport(enabled: boolean): void;
 };
 
 type RfbClient = EventTarget & {
@@ -89,7 +90,7 @@ export class DesktopClient {
       throw new DOMException("Desktop connection is no longer current", "AbortError");
     }
     const socket = this.createWebSocket(wsUrl);
-    let closeDetail: DesktopDisconnectDetail = {};
+    let closeDetail: Pick<CloseEvent, "code" | "reason"> | undefined;
     socket.addEventListener("close", (event) => {
       closeDetail = { code: event.code, reason: event.reason };
     });
@@ -101,8 +102,15 @@ export class DesktopClient {
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
     rfb.scaleViewport = options.scaleViewport ?? true;
+    let retired = false;
     rfb.addEventListener("connect", () => options.onConnect?.());
-    rfb.addEventListener("disconnect", () => options.onDisconnect?.(closeDetail));
+    rfb.addEventListener("disconnect", (event) => {
+      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
+      retired = true;
+      // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
+      const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
+      options.onDisconnect?.({ ...closeDetail, clean });
+    });
     rfb.addEventListener("securityfailure", (event) => {
       const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
       options.onSecurityFailure?.(detail);
@@ -128,7 +136,12 @@ export class DesktopClient {
         cancelable: true,
       });
     return {
-      disconnect: () => rfb.disconnect(),
+      disconnect: () => {
+        if (!retired) {
+          retired = true;
+          rfb.disconnect();
+        }
+      },
       disableInput: () => {
         rfb.viewOnly = true;
       },

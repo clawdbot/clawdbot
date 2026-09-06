@@ -13,6 +13,7 @@ import {
   visibleSettingsNavigationGroups,
 } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import type { IconName } from "./icons.ts";
@@ -236,8 +237,9 @@ const APP_CARDS = [
 
 export function getStaticCommandPaletteCatalogItems(
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): CommandPaletteCatalogItem[] {
-  const settings = visibleSettingsNavigationGroups(canAdmin)
+  const settings = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings)
     .flatMap((group) => group.routes)
     .concat(SETTINGS_SEARCHABLE_SUBPAGE_ROUTES)
     .map((routeId) => ({
@@ -266,7 +268,8 @@ export async function loadCommandPaletteCatalogItems(params: {
   agentId: string;
   agents: () => Promise<AgentsListResult | null>;
   methodAvailable: (method: string) => boolean;
-}): Promise<CommandPaletteCatalogItem[]> {
+}): Promise<{ items: CommandPaletteCatalogItem[]; modelSearchFailed: boolean }> {
+  let modelSearchFailed = false;
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -286,14 +289,21 @@ export async function loadCommandPaletteCatalogItems(params: {
     }),
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
-    requestIfAvailable<{ models: ModelCatalogEntry[] }>("models.list", {
-      view: "configured",
-      agentId: params.agentId,
-      preparedOnly: true,
-    }),
+    params.methodAvailable("models.list")
+      ? params.client
+          .request<{ models: ModelCatalogEntry[] }>("models.list", {
+            view: "configured",
+            agentId: params.agentId,
+            preparedOnly: true,
+          })
+          .catch(() => {
+            modelSearchFailed = true;
+            return null;
+          })
+      : null,
   ]);
 
-  return [
+  const items: CommandPaletteCatalogItem[] = [
     ...(agents?.agents ?? []).map((agent) => ({
       id: `agent-${agent.id}`,
       label: agent.identity?.name ?? agent.name ?? agent.id,
@@ -348,4 +358,5 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
   ];
+  return { items, modelSearchFailed };
 }

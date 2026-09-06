@@ -8,7 +8,8 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
+import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
   boundedCronCompletionRetention,
   matrixOutboundForQueueTest,
@@ -164,7 +165,13 @@ describe("queued lazy outbound adapter availability", () => {
 
     expect(result).toMatchObject({ failed: 1, recovered: 0, skippedMaxRetries: 0 });
     expect(recoveryDeliver).toHaveBeenCalledOnce();
-    expect(deliveryError).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(deliveryError).toBeInstanceOf(OutboundDeliveryError);
+    expect(deliveryError).toMatchObject({
+      queueCustody: "held",
+      cause: expect.any(PlatformMessageNotDispatchedError),
+      sentBeforeError: false,
+    });
+    expect(isProvenDeliveryNotSentError(deliveryError)).toBe(true);
     const pendingEntry = expectDefined(
       (await loadPendingDeliveries(tmpDir))[0],
       "retained adapter-miss delivery",

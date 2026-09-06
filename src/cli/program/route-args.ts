@@ -1,6 +1,6 @@
 // Route-first argv parsers for commands that can skip full Commander startup.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { consumeRootOptionToken, isValueToken } from "../../infra/cli-root-options.js";
+import { isValueToken } from "../../infra/cli-root-options.js";
 import {
   getCommandPositionalsWithRootOptions,
   getFlagValue,
@@ -57,7 +57,6 @@ type RoutedCommandArgShape = {
   commandPath: string[];
   booleanFlags?: string[];
   valueFlags?: string[];
-  rejectOptionsBeforeCommand?: boolean;
 };
 
 function getRoutedCommandPositionals(
@@ -66,32 +65,6 @@ function getRoutedCommandPositionals(
 ): string[] | null {
   if (argv.slice(2).includes("--")) {
     return null;
-  }
-  if (shape.rejectOptionsBeforeCommand) {
-    // These root commands have no parent command whose options can precede the command name;
-    // let Commander report command options in that position instead of running a fast path.
-    const args = argv.slice(2);
-    let commandIndex = 0;
-    for (let index = 0; index < args.length; index += 1) {
-      const arg = args[index];
-      if (!arg) {
-        break;
-      }
-      const rootConsumed = consumeRootOptionToken(args, index);
-      if (rootConsumed > 0) {
-        index += rootConsumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        return null;
-      }
-      if (arg === shape.commandPath[commandIndex]) {
-        commandIndex += 1;
-        if (commandIndex === shape.commandPath.length) {
-          break;
-        }
-      }
-    }
   }
   return getCommandPositionalsWithRootOptions(argv, shape);
 }
@@ -116,7 +89,6 @@ export function parseHealthRouteArgs(argv: string[]) {
     commandPath: ["health"],
     booleanFlags: ["--json", "--verbose", "--debug"],
     valueFlags: ["--timeout"],
-    rejectOptionsBeforeCommand: true,
   });
   if (!positionals || positionals.length !== 0) {
     return null;
@@ -138,7 +110,6 @@ export function parseStatusRouteArgs(argv: string[]) {
     commandPath: ["status"],
     booleanFlags: ["--json", "--deep", "--all", "--usage", "--verbose", "--debug"],
     valueFlags: ["--timeout", "--agent"],
-    rejectOptionsBeforeCommand: true,
   });
   if (!positionals || positionals.length !== 0) {
     return null;

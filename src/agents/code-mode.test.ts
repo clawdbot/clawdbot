@@ -19,6 +19,7 @@ import {
   mcpTool,
   createCodeModeHarness,
 } from "./code-mode.test-support.js";
+import { readToolInputSchema } from "./sessions/tools/read-tool-contract.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
@@ -254,6 +255,11 @@ describe("Code Mode catalog and model-visible surface", () => {
     const parameters = execTool.parameters as {
       properties?: Record<string, Record<string, unknown>>;
     };
+    expect(parameters.properties?.title).toMatchObject({
+      type: "string",
+      maxLength: 120,
+      description: expect.stringContaining("never claim success"),
+    });
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
@@ -375,11 +381,12 @@ describe("Code Mode catalog and model-visible surface", () => {
   it("primes the exec schema with callable names and compact contracts", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
+    const read = { ...fakeTool("read", "Read file"), parameters: readToolInputSchema };
     alpha.outputSchema = Type.Array(
       Type.Object({ id: Type.String(), score: Type.Number() }, { additionalProperties: false }),
     );
     const compacted = applyCodeModeCatalog({
-      tools: [...tools, pluginTool("zeta_tool", "Description stays deferred."), alpha],
+      tools: [...tools, pluginTool("zeta_tool", "Description stays deferred."), alpha, read],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -393,6 +400,9 @@ describe("Code Mode catalog and model-visible surface", () => {
       "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
     );
     expect(description).toContain("- zeta_tool { value?: string } -> ?");
+    expect(description).toContain(
+      "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
+    );
     expect(description).not.toContain("openclaw:fake-code-mode");
     expect(description.indexOf("alpha_tool")).toBeLessThan(description.indexOf("zeta_tool"));
     expect(description).not.toContain("Description stays deferred.");
@@ -621,6 +631,7 @@ describe("Code Mode catalog and model-visible surface", () => {
         pluginTool("llm-task", "Run an LLM task"),
         pluginTool("llm_task", "Run the exact-name task"),
         pluginTool("catalog", "Collide with discovery"),
+        pluginTool("MCP", "Collide with the namespace global"),
         pluginTool("class", "Use a reserved word"),
         pluginTool("9patch", "Start with a digit"),
       ],
@@ -636,6 +647,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(description).toContain("- llm_task ");
     expect(description).toMatch(/- llm_task_[a-f0-9]{8} /u);
     expect(description).toMatch(/- catalog_[a-f0-9]{8} /u);
+    expect(description).toMatch(/- MCP_[a-f0-9]{8} /u);
     expect(description).toMatch(/- class_[a-f0-9]{8} /u);
     expect(description).toContain("- tool_9patch ");
     expect(description).not.toContain("openclaw:fake-code-mode");

@@ -612,14 +612,16 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         ${t("memoryPage.dreaming.intro", { plugin: pluginId })}
         ${renderLearnMoreLink(DREAMING_DOCS_URL)}
       </p>
-      ${this.support === "unsupported"
-        ? renderDreamingUnsupported(pluginId)
-        : renderDreamingSettings({
-            dreaming: this.dreamingConfig(),
-            timezoneDefault: resolveDreamingTimezoneDefault(this.configObjectFromController()),
-            disabled: this.mutationDisabled,
-            onPatch: (path, value) => this.patchDreaming(path, value),
-          })}
+      ${
+        this.support === "unsupported"
+          ? renderDreamingUnsupported(pluginId)
+          : renderDreamingSettings({
+              dreaming: this.dreamingConfig(),
+              timezoneDefault: resolveDreamingTimezoneDefault(this.configObjectFromController()),
+              disabled: this.mutationDisabled,
+              onPatch: (path, value) => this.patchDreaming(path, value),
+            })
+      }
     `;
   }
 
@@ -677,10 +679,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         <openclaw-memory-memories
           .client=${this.context.gateway.snapshot.client}
           .connected=${this.context.gateway.snapshot.phase === "connected"}
-          .methodAdvertised=${isGatewayMethodAdvertised(
-            this.context.gateway.snapshot,
-            "memory.search",
-          ) === true}
+          .methodAdvertised=${
+            isGatewayMethodAdvertised(this.context.gateway.snapshot, "memory.search") === true
+          }
           .agentId=${agentId}
         ></openclaw-memory-memories>
       `,

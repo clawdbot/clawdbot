@@ -122,7 +122,7 @@ export const en = {
       enable: "Enable {shell} shell completion for {cli}?",
       installed: "Shell completion installed. {reloadHint}",
       profileNotWritable:
-        "Shell completion was not changed: {profile} is not writable. Run `{command}` against a writable profile file.",
+        "Automatic shell completion installation failed (permission or read-only error at {profile}). For this {shell} session only, run:\n{command}",
       reloadPowerShell: "Restart your shell or run: {command}",
       reloadShell: "Restart your shell or run: source {profile}",
       title: "Shell completion",

@@ -246,12 +246,13 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   /** Force remote/manual browser presentation for a connected GUI client. */
   isRemote?: boolean;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
-  agentDir: string;
-  workspaceDir: string;
+  agentDir?: string;
+  workspaceDir?: string;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
@@ -264,6 +265,7 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,

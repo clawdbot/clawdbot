@@ -151,7 +151,6 @@
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {
   max-width: var(--chat-message-column-max);
-  margin-inline-start: 1px;
 }
 
 .chat-group.user .chat-group-footer {
@@ -878,11 +877,11 @@ img.chat-avatar.chat-avatar--logo {
   }
 
   .chat-group.chat-group--with-footer:has(
-    .chat-group-footer:not(.chat-group-footer--persistent-identity) .chat-group-footer-actions
-  ),
+      .chat-group-footer:not(.chat-group-footer--persistent-identity) .chat-group-footer-actions
+    ),
   .chat-group.chat-group--with-footer:is(.chat-group--meta-revealed, :focus-within):has(
-    .chat-group-footer--persistent-identity .chat-group-footer-actions
-  ) {
+      .chat-group-footer--persistent-identity .chat-group-footer-actions
+    ) {
     padding-bottom: 0;
     margin-bottom: 0;
   }

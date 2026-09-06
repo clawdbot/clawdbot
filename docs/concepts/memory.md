@@ -259,9 +259,9 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
   job for a full dreaming sweep.
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
-- **Consolidated**: a bounded subagent rewrite merges duplicates and
-  supersedes stale entries after the deterministic gate. Invalid or
-  unavailable rewrites use append-only fallback.
+- **Consolidated**: a tool-free completion selects merges and supersessions
+  after the deterministic gate. The memory writer composes the result from
+  validated source evidence; invalid or unavailable decisions use append-only fallback.
 - **Taint gated**: untrusted and system-derived candidates never enter the
   consolidation prompt or durable promotion path.
 - **Reviewable**: phase summaries and diary entries are written to

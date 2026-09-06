@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleChatAttachmentPaste } from "./chat-attachments.ts";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as payloads from "../attachment-payload-store.ts";
+import { ChatAttachmentReadLifecycle, handleChatAttachmentPaste } from "./chat-attachments.ts";
 
 class StubFileReader {
   static failNames = new Set<string>();
+  static heldNames = new Set<string>();
   result: string | ArrayBuffer | null = null;
   private listeners = new Map<string, Array<() => void>>();
 
@@ -17,6 +20,9 @@ class StubFileReader {
   abort() {}
 
   readAsDataURL(file: File) {
+    if (StubFileReader.heldNames.has(file.name)) {
+      return;
+    }
     queueMicrotask(() => {
       if (StubFileReader.failNames.has(file.name)) {
         this.emit("error");
@@ -53,14 +59,69 @@ describe("chat attachment read failures", () => {
   beforeEach(() => {
     vi.stubGlobal("FileReader", StubFileReader as unknown as typeof FileReader);
     StubFileReader.failNames = new Set();
+    StubFileReader.heldNames = new Set();
     toastHost = document.createElement("openclaw-toast-host");
     document.body.append(toastHost);
   });
 
   afterEach(() => {
     document.body.replaceChildren();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each([false, true])(
+    "releases a completed payload when its pasted batch aborts (presented=%s)",
+    async (presented) => {
+      StubFileReader.heldNames.add("held.png");
+      const registered = vi.spyOn(payloads, "registerChatAttachmentPayload");
+      const create = vi.fn(() => "blob:completed-paste");
+      const revoke = vi.fn();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = create;
+          static override revokeObjectURL = revoke;
+        },
+      );
+      const reads = new ChatAttachmentReadLifecycle(() => {});
+      const signal = reads.readSignal;
+      const onAttachmentsChange = vi.fn();
+      handleChatAttachmentPaste(
+        pasteEventWithFiles([
+          new File(["hi"], "completed.png", { type: "image/png" }),
+          new File(["held"], "held.png", { type: "image/png" }),
+        ]),
+        {
+          attachments: [],
+          readSignal: signal,
+          onAttachmentsChange,
+          onPendingReadsChange: (delta) => reads.updatePending(signal, delta),
+        },
+      );
+      await vi.waitFor(() => expect(registered).toHaveBeenCalledOnce());
+      const attachment = expectDefined(
+        registered.mock.calls[0]?.[0].attachment,
+        "completed payload",
+      );
+      onTestFinished(() => payloads.releaseChatAttachmentPayload(attachment.id));
+      expect(payloads.getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aGk=");
+      expect(create).not.toHaveBeenCalled();
+      expect(reads.pendingReads).toBe(1);
+      if (presented) {
+        expect(payloads.getChatAttachmentPreviewUrl(attachment)).toBe("blob:completed-paste");
+      }
+
+      reads.abortReads();
+
+      await vi.waitFor(() => expect(payloads.getChatAttachmentDataUrl(attachment)).toBeNull());
+      expect(payloads.getChatAttachmentBlob(attachment)).toBeNull();
+      expect(reads.pendingReads).toBe(0);
+      expect(onAttachmentsChange).not.toHaveBeenCalled();
+      expect(create).toHaveBeenCalledTimes(presented ? 1 : 0);
+      expect(revoke.mock.calls).toEqual(presented ? [["blob:completed-paste"]] : []);
+    },
+  );
 
   it("names files whose read failed instead of dropping them silently", async () => {
     StubFileReader.failNames = new Set(["bad.png"]);

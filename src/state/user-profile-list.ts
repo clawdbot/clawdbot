@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -96,6 +97,7 @@ export function hasMultipleSessionSharingIdentities(
       .selectFrom("user_profiles")
       .select("id")
       .where("merged_into", "is", null)
+      .where("id", "!=", GATEWAY_OWNER_PROFILE_ID)
       .limit(2),
   ).rows;
   return profiles.length >= 2;

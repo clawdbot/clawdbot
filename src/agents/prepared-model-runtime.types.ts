@@ -21,7 +21,7 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
-  /** Present for live generations, including when the resolved model set is empty. */
+  /** Captured static rows; cleared when catalog discovery expands the provider registry. */
   providerStaticModels?: readonly ProviderRuntimeModel[];
   inlineProviderModels: readonly InlineModelEntry[];
   configuredCatalogEntries: readonly ModelCatalogEntry[];
@@ -44,6 +44,9 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Session active project set, ordered most-recent first; empty before run binding. */
   activeProjectKeys: readonly string[];
   config: OpenClawConfig;
+  /** Native observations retain preparation identity across model-neutral config publications. */
+  observationConfig: OpenClawConfig;
+  isCurrent: () => boolean;
   /** Secret-free usable auth modes captured by this exact lifecycle generation. */
   authModes: PreparedAgentCredentialModes;
   metadataSnapshot: PluginMetadataSnapshot;
@@ -106,6 +109,19 @@ export type PreparedModelRuntimeLease = Readonly<{
   release: () => void;
 }>;
 
+export type PreparedModelRuntimeLeaseOptions = {
+  retainIdleRunOwner?: boolean;
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  abortSignal?: AbortSignal;
+  /** Pure planning against admitted facts; requested selections remain explicit and additive. */
+  deriveRuntimePluginSelections?: (context: {
+    config: OpenClawConfig;
+    metadataSnapshot: PluginMetadataSnapshot;
+  }) => readonly AgentHarnessPluginSelection[];
+};
+
 export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
   provenance?: PreparedModelRuntimeOwner["provenance"];
@@ -148,6 +164,13 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   fullCatalogConcurrencyLimit: number;
 }>;
 
+export type PreparedModelCatalogInventory = {
+  catalog: ModelCatalogSnapshot;
+  key: string;
+  pluginFingerprint: string;
+  discoveryOrigins: readonly { provider: string; profileId?: string }[];
+};
+
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
@@ -158,7 +181,7 @@ export type PreparedModelRuntimeOwner = {
   needsRefresh: boolean;
   catalogStale: boolean;
   /** Completed discovery facts; runtime capability projection belongs to each generation. */
-  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
+  catalogInventory?: PreparedModelCatalogInventory;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
@@ -166,6 +189,7 @@ export type PreparedModelRuntimeOwner = {
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
+  admissionCount?: number;
   leaseCount?: number;
 };
 

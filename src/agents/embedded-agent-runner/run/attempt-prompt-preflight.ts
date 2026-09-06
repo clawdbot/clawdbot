@@ -9,6 +9,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { log } from "../logger.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
@@ -59,6 +60,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
   request: MidTurnPrecheckRequest;
   sessionAgentId: string;
   sessionManager: SessionManager;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   prePromptMessageCount: number;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
 }): {
@@ -88,6 +90,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     });
     const truncationResult = truncateOversizedToolResultsInSessionManager({
       sessionManager: input.sessionManager,
+      projectionState: input.toolResultPromptProjectionState,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
       sessionFile: attempt.sessionFile,

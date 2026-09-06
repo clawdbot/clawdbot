@@ -46,9 +46,10 @@ Gateway export as one copy-pasteable support report:
 
 In group chats, an owner can still run `/diagnostics`, but OpenClaw sends the
 export result, approval prompts, and Codex session/thread breakdown to the
-owner privately. The group only sees a short notice that diagnostics were sent
-privately. If no private owner route exists, the command fails closed and asks
-the owner to run it from a DM.
+owner privately. The group sees only a short status notice: approval pending,
+private delivery confirmed, delivery pending, or delivery suppressed. Pending
+delivery does not trigger another private send. If no private owner route exists,
+the command asks the owner to run it from a DM.
 
 When the active session uses the native OpenAI Codex harness, the same exec
 approval also covers an OpenAI feedback upload for the Codex threads OpenClaw
@@ -110,7 +111,13 @@ delay; otherwise they log at `debug`. Idle liveness samples are still recorded
 as diagnostic events but never escalate to a warning by themselves.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
-CPU timing. Stalled embedded-run diagnostics mark `terminalProgressStale=true`
+whole-process CPU timing, including worker and native threads. Phase CPU can
+include concurrent work outside that phase; it is not exclusive attribution.
+The `cpuCoreRatio` in phase and liveness events is measured in core equivalents
+and can exceed `1`. See
+[CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
+
+Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the
 embedded run active.

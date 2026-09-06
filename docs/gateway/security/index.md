@@ -316,10 +316,10 @@ Slash commands and directives are honored only for authorized senders. Configure
 
 Two built-in tools remain control-plane sensitive:
 
-- `gateway` reads config with `config.schema.lookup` / `config.get`. It cannot write config, update OpenClaw, or restart the Gateway.
+- `gateway` reads config with `config.schema.lookup` / `config.get` and starts owner-requested OpenClaw updates with `update.run`. It has no config-write or standalone restart action; update restart and completion notices are automatic.
 - `cron` creates scheduled jobs that keep running after the original chat/task ends.
 
-The `gateway` tool stays owner-only because config reads can expose secrets and host topology. Agents request persistent config or lifecycle changes through the `openclaw` delegation tool. OpenClaw maps them to typed operations and applies the requesting run's effective permission policy: Full Access, including Default (Full Access), authorizes permitted changes without an approval prompt; restricted runs require human approval. Independent tool, filesystem, sandbox, and operation restrictions still apply, and the host revalidates live authority before execution. See [Session permission modes](/gateway/permission-modes#delegated-setup-and-repair) and [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
+The `gateway` tool stays owner-only because config reads can expose secrets and host topology and `update.run` changes the running installation. Updates require an explicit user request. Agents request other persistent config or lifecycle changes through the `openclaw` delegation tool. OpenClaw maps them to typed operations and applies the requesting run's effective permission policy: Full Access, including Default (Full Access), authorizes permitted changes without an approval prompt; restricted runs require human approval. Independent tool, filesystem, sandbox, and operation restrictions still apply, and the host revalidates live authority before execution. See [Session permission modes](/gateway/permission-modes#delegated-setup-and-repair) and [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
 
 For any agent/surface handling untrusted content, deny these by default:
 

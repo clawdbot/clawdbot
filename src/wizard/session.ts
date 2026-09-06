@@ -193,13 +193,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       return (Array.isArray(res) ? res : []) as T[];
     },
 
-    async text(params: {
-      message: string;
-      initialValue?: string;
-      placeholder?: string;
-      validate?: (value: string) => string | undefined;
-      sensitive?: boolean;
-    }): Promise<string> {
+    async text(params: Parameters<WizardPrompter["text"]>[0]): Promise<string> {
       const res = await session.awaitAnswer(
         createStep({
           type: "text",
@@ -210,6 +204,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
           executor: "client",
         }),
         params.validate,
+        params.signal,
       );
       const value =
         res === null || res === undefined
@@ -268,8 +263,8 @@ export class WizardSession {
   private progressSteps: WizardStep[] = [];
   private deliveredProgressStepIds = new Set<string>();
   private stepDeferred: Deferred<WizardStep | null> | null = null;
-  private pendingTerminalResolution = false;
   private cancellationLocked = false;
+  private inputClosedError: Error | undefined;
   private settled = false;
   private pendingExternalUrl: string | undefined;
   private answerDeferred = new Map<
@@ -285,6 +280,7 @@ export class WizardSession {
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
   private preparedModelRef: string | undefined;
   private modelActivation: ProtocolWizardNextResult["modelActivation"];
+  private activationRejection: ProtocolWizardNextResult["activationRejection"];
 
   constructor(
     private runner: (
@@ -303,6 +299,11 @@ export class WizardSession {
   }
 
   async next(): Promise<WizardNextResult> {
+    // Retired progress must not hide the terminal outcome or bypass the Gateway's
+    // done-result settlement barrier before clients decide whether setup may retry.
+    if (this.status !== "running") {
+      return this.terminalResult();
+    }
     const progressStep = this.progressSteps.shift();
     if (progressStep) {
       this.rememberDeliveredProgressStep(progressStep.id);
@@ -311,21 +312,19 @@ export class WizardSession {
     if (this.currentStep) {
       return { done: false, step: this.currentStep, status: this.status };
     }
-    if (this.pendingTerminalResolution) {
-      this.pendingTerminalResolution = false;
-      return this.terminalResult();
-    }
-    if (this.status !== "running") {
-      return this.terminalResult();
-    }
     if (!this.stepDeferred) {
       this.stepDeferred = createDeferredCore();
     }
     const step = await this.stepDeferred.promise;
-    if (step) {
-      return { done: false, step, status: this.status };
+    if (step && this.getStatus() === "running") {
+      return { done: false, step, status: "running" };
     }
     return this.terminalResult();
+  }
+
+  /** A non-consuming view for polling clients; retired prompts are never replayed. */
+  getCurrentStep(): WizardStep | undefined {
+    return this.status === "running" ? (this.currentStep ?? this.progressSteps.at(-1)) : undefined;
   }
 
   private terminalResult(): WizardNextResult {
@@ -345,6 +344,9 @@ export class WizardSession {
       ...(this.status === "done" && this.modelActivation
         ? { modelActivation: this.modelActivation }
         : {}),
+      ...(this.status === "error" && this.activationRejection
+        ? { activationRejection: this.activationRejection }
+        : {}),
     };
   }
 
@@ -361,6 +363,11 @@ export class WizardSession {
   /** Record the live activation result, distinct from provider preparation. */
   setModelActivation(activation: NonNullable<ProtocolWizardNextResult["modelActivation"]>) {
     this.modelActivation = activation;
+  }
+
+  /** Only the activation owner can distinguish rejection from possibly committed failure. */
+  setActivationRejection(rejection: NonNullable<ProtocolWizardNextResult["activationRejection"]>) {
+    this.activationRejection = rejection;
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
@@ -389,23 +396,29 @@ export class WizardSession {
   }
 
   cancel(): boolean {
-    if (this.status !== "running" || this.cancellationLocked) {
+    if (this.status !== "running" || this.cancellationLocked || this.inputClosedError) {
       return false;
     }
     this.status = "cancelled";
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
-    this.currentStep = null;
-    for (const [, pending] of this.answerDeferred) {
-      // Reject all pending prompt promises so the runner can unwind through its
-      // normal cancellation path.
-      pending.deferred.reject(new WizardCancelledError());
-    }
-    this.answerDeferred.clear();
+    this.rejectPendingAnswers();
     this.progressSteps = [];
     this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
     return true;
+  }
+
+  /** Close client input without interrupting an operation past its commit point. */
+  close(error: Error): void {
+    if (this.status !== "running") {
+      return;
+    }
+    this.inputClosedError ??= error;
+    if (!this.cancellationLocked) {
+      this.abortController.abort(this.inputClosedError);
+    }
+    this.rejectPendingAnswers(this.inputClosedError);
   }
 
   /** The underlying mutation crossed its durable commit point and must finish. */
@@ -478,42 +491,68 @@ export class WizardSession {
       if (this.status !== "running") {
         return;
       }
-      if (err instanceof WizardCancelledError) {
+      // A provider may translate an aborted prompt into user cancellation.
+      // The recorded host closure still owns that outcome, including after writes.
+      const error = err instanceof WizardCancelledError ? (this.inputClosedError ?? err) : err;
+      if (error instanceof WizardCancelledError) {
         this.status = "cancelled";
-        this.error = err.message;
+        this.error = error.message;
       } else {
         this.status = "error";
-        this.error = String(err);
+        this.error = String(error);
       }
     } finally {
       this.settled = true;
       if (this.expiryTimer) {
         clearTimeout(this.expiryTimer);
       }
+      // Browser completion can win while manual input is pending. Terminal
+      // sessions must retire that prompt and reject retained answer handles.
+      this.rejectPendingAnswers();
       this.resolveStep(null);
     }
+  }
+
+  private rejectPendingAnswers(error: Error = new WizardCancelledError()) {
+    this.currentStep = null;
+    for (const pending of this.answerDeferred.values()) {
+      pending.deferred.reject(error);
+    }
+    this.answerDeferred.clear();
   }
 
   async awaitAnswer(
     step: WizardStep,
     validate?: (value: string) => string | undefined,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     if (this.status !== "running") {
       throw new Error("wizard: session not running");
     }
-    this.pushStep(step);
+    if (this.inputClosedError) {
+      throw this.inputClosedError;
+    }
+    signal?.throwIfAborted();
     const deferred = createDeferredCore<unknown>();
     this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
-    return await deferred.promise;
+    const abort = () => {
+      this.answerDeferred.delete(step.id);
+      if (this.currentStep?.id === step.id) {
+        this.currentStep = null;
+      }
+      deferred.reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    this.pushStep(step);
+    try {
+      return await deferred.promise;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
   }
 
   private resolveStep(step: WizardStep | null) {
     if (!this.stepDeferred) {
-      if (step === null) {
-        // The runner can finish immediately after an answer before next() has
-        // installed a waiter; remember that terminal state for the next poll.
-        this.pendingTerminalResolution = true;
-      }
       return;
     }
     const deferred = this.stepDeferred;

@@ -8,7 +8,6 @@ import type {
 // contracts used by every gateway RPC method module.
 import type {
   ConnectParams,
-  ErrorShape,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -76,6 +75,7 @@ import type {
   ChatStartupProjectionResult,
 } from "./chat-startup-projection-contract.js";
 import type { GatewayClient } from "./client-types.js";
+import type { RespondFn } from "./response-types.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -92,13 +92,7 @@ export type {
 /** Host-minted role authority; leaf contract re-exported for method handlers. */
 export type { GatewayOperatorRoleActor };
 
-/** Callback used by method handlers to emit one protocol response frame. */
-export type RespondFn = (
-  ok: boolean,
-  payload?: unknown,
-  error?: ErrorShape,
-  meta?: Record<string, unknown>,
-) => void;
+export type { RespondFn } from "./response-types.js";
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
 /**
@@ -371,6 +365,9 @@ type GatewayResidentBridgeContext = {
   githubOAuthService?: ReturnType<
     typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle
   >;
+  modelAccountConnectService?: ReturnType<
+    typeof import("../model-account-connect.js").createModelAccountConnectService
+  >;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
@@ -399,10 +396,18 @@ export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
   GatewayResidentBridgeContext & {
+    /** Retains original execution while callers may receive an early response. */
+    trackExecution: typeof import("../../shared/async-work-scope.js").trackAsyncWork;
     /** Local commands can dispatch methods without owning a Gateway server. */
     localEmbedded?: true;
     /** Live instance routing only; never authorization or wire state. */
     resolveGatewayContext?: GatewayContextResolver;
+    hostLifecycle?: import("../server-public.js").GatewayHostLifecycle;
+    /** Entry-only access; the kernel owns closure. Absent in embedded-only contexts. */
+    requestEntryLifetime?: Pick<
+      import("../server-request-entry.js").GatewayRequestEntryLifetime,
+      "enter" | "signal"
+    >;
   };
 
 /** Full dispatch context for raw request frames before params are normalized. */
@@ -417,6 +422,8 @@ export type GatewayRequestOptions = {
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
   signal?: AbortSignal;
+  /** Live transport authority; in-process only and never derived from request data. */
+  hasCurrentClientAuthority?: () => boolean;
 };
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
@@ -443,6 +450,8 @@ export type GatewayRequestHandlerOptions = {
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** In-process caller lifetime; absent for ordinary transport requests. */
   signal?: AbortSignal;
+  /** Live transport authority; in-process only and never derived from request data. */
+  hasCurrentClientAuthority?: () => boolean;
 };
 
 /** Single gateway method implementation. */

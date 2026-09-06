@@ -909,4 +909,47 @@ describe("createModelExecAutoReviewer", () => {
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(complete).toHaveBeenCalledTimes(2);
   });
+
+  it("uses systemAgent.agentId when agentId is omitted in multi-agent explicit mode", async () => {
+    const prepare = vi.fn(async ({ agentId }: { agentId: string }) => {
+      if (agentId !== "agent-a") {
+        throw new Error(`unexpected reviewer owner: ${agentId}`);
+      }
+      return {
+        selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+        model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
+        auth: { apiKey: "redacted", mode: "env" as const },
+      };
+    });
+    const complete = vi.fn(async () => ({
+      stopReason: "stop" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ decision: "allow", risk: "low", rationale: "safe" }),
+        },
+      ],
+    }));
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            "agent-a": {},
+            "agent-b": {},
+          },
+          defaults: { systemAgent: { agentId: "agent-a" } },
+        },
+      },
+      deps: {
+        prepareSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "allow-once" });
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ agentId: "agent-a" }));
+  });
 });

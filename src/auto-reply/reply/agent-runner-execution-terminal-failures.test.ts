@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   formatBillingErrorMessage,
@@ -573,21 +574,36 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(terminalFailureEvent).toBeDefined();
   });
 
-  it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
-    const recoveryText =
-      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-      "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
-      "Tool actions may already have run; verify their effects before retrying. " +
-      "Retry with a higher --max-turns value or a narrower task.";
-    const maxTurns = new FailoverError(recoveryText, {
-      reason: "unknown",
+  it.each([
+    {
+      name: "max-turn",
       code: "cli_max_turns",
+      recoveryText:
+        "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    },
+    {
+      name: "hook-stopped",
+      code: "cli_turn_stopped",
+      recoveryText:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
+        "OpenClaw run: run-hook-stopped. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+        "apply to headless runs — move or disable that hook.",
+    },
+  ])("surfaces CLI $name recovery context at normal verbosity", async ({ code, recoveryText }) => {
+    const terminalStop = new FailoverError(recoveryText, {
+      reason: "unknown",
+      code,
       provider: "claude-cli",
       model: "sonnet",
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new AggregateError(
-        [maxTurns, new Error("fork successor persistence failed")],
+        [terminalStop, new Error("fork successor persistence failed")],
         "CLI turn failed and its fork successor could not be persisted",
       ),
     );
@@ -705,18 +721,17 @@ describe("executeAgentTurn: terminal failures", () => {
 
   it("explains that CLI background tasks share the timed-out parent process", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
-      err: new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
-        reason: "timeout",
-        provider: "claude-cli",
-        code: "cli_overall_timeout",
-        cliTimeout: {
+      err: createCliTimeoutError(
+        { provider: "claude-cli" },
+        {
           mode: "overall",
           timeoutSeconds: 600,
           observedActivity: true,
           activeToolCount: 1,
           backgroundTaskCount: 1,
         },
-      }),
+        "cli_overall_timeout",
+      ),
       sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
       resolvedVerboseLevel: "off",
     });

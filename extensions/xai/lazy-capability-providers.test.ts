@@ -85,7 +85,7 @@ vi.mock("./video-generation-provider.js", () => ({
 vi.mock("./speech-provider.js", () => ({
   buildXaiSpeechProvider: runtimeMocks.buildSpeechProvider,
 }));
-vi.mock("./realtime-transcription-provider.js", () => ({
+vi.mock("./realtime-transcription-provider-factory.js", () => ({
   buildXaiRealtimeTranscriptionProvider: runtimeMocks.buildTranscriptionProvider,
 }));
 vi.mock("./realtime-voice-provider.js", () => ({
@@ -791,6 +791,8 @@ describe("xAI lazy capability providers", () => {
 
   it("ignores nonterminal callbacks from a superseded voice generation", async () => {
     const onAudio = vi.fn();
+    const playback = [{ itemId: "current-item", audioEndMs: 320 }];
+    const getPlaybackState = vi.fn(() => playback);
     const onClearAudio = vi.fn();
     const onMark = vi.fn();
     const onTranscript = vi.fn();
@@ -802,6 +804,7 @@ describe("xAI lazy capability providers", () => {
     const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(
       createVoiceRequest({
         onAudio,
+        getPlaybackState,
         onClearAudio,
         onMark,
         onTranscript,
@@ -832,6 +835,8 @@ describe("xAI lazy capability providers", () => {
     };
 
     staleRequest?.onAudio(staleAudio);
+    expect(staleRequest?.getPlaybackState?.()).toEqual([]);
+    expect(getPlaybackState).not.toHaveBeenCalled();
     staleRequest?.onClearAudio("barge-in");
     staleRequest?.onMark?.("stale-mark");
     staleRequest?.onTranscript?.("assistant", "stale", true);
@@ -858,7 +863,8 @@ describe("xAI lazy capability providers", () => {
       name: "current-tool",
       args: {},
     };
-    currentRequest?.onAudio(currentAudio);
+    currentRequest?.onAudio(currentAudio, { itemId: "current-item" });
+    expect(currentRequest?.getPlaybackState?.()).toEqual(playback);
     currentRequest?.onClearAudio("barge-in");
     currentRequest?.onMark?.("current-mark");
     currentRequest?.onTranscript?.("assistant", "current", true);
@@ -867,7 +873,7 @@ describe("xAI lazy capability providers", () => {
     currentRequest?.onReady?.();
     currentRequest?.onError?.(currentError);
 
-    expect(onAudio).toHaveBeenCalledWith(currentAudio);
+    expect(onAudio).toHaveBeenCalledWith(currentAudio, { itemId: "current-item" });
     expect(onClearAudio).toHaveBeenCalledWith("barge-in");
     expect(onMark).toHaveBeenCalledWith("current-mark");
     expect(onTranscript).toHaveBeenCalledWith("assistant", "current", true);

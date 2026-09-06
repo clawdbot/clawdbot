@@ -32,6 +32,7 @@ import {
   type GitHubPublicationRow as PublicationRow,
 } from "./github-publication-store.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -52,28 +53,8 @@ function exactClaimForPlacement(
   placement: NonNullable<ReturnType<WorkerSessionPlacementStore["get"]>>,
 ): WorkerSessionTurnClaim | undefined {
   const claim = placement.turnClaim;
-  if (!claim) {
-    return undefined;
-  }
-  if (claim.owner === "worker") {
-    if (
-      (placement.state !== "active" && placement.state !== "draining") ||
-      !placement.environmentId ||
-      placement.activeOwnerEpoch !== claim.ownerEpoch
-    ) {
-      return undefined;
-    }
-    return {
-      sessionId: placement.sessionId,
-      claimId: claim.claimId,
-      runId: claim.runId,
-      placementGeneration: claim.generation,
-      owner: {
-        kind: "worker",
-        environmentId: placement.environmentId,
-        ownerEpoch: claim.ownerEpoch,
-      },
-    };
+  if (claim?.owner !== "local") {
+    return projectWorkerSessionTurnClaim(placement);
   }
   return {
     sessionId: placement.sessionId,
@@ -200,10 +181,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         body: input.body,
       });
       const database = openOpenClawStateDatabase().db;
-      const existing = readGitHubPublicationRequest(database, {
-        sessionId,
-        idempotencyKey: input.idempotencyKey,
-      });
+      const readRequest = () =>
+        readGitHubPublicationRequest(database, {
+          sessionId,
+          idempotencyKey: input.idempotencyKey,
+        });
+      const existing = readRequest();
       if (existing) {
         if (existing.request_digest !== requestDigest || !sameWorktree(existing, worktree)) {
           throw new Error("GitHub publication idempotency key was reused.");
@@ -217,10 +200,16 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       input.assertCurrent?.();
       const identity = await prepareCurrentGitHubPublicationIdentity(input.agentId);
       input.assertCurrent?.();
-      assertExpectedSharedGitHubPublisher(expected, {
-        source: identity.source,
-        ...identity.account,
-      });
+      assertExpectedSharedGitHubPublisher(
+        expected,
+        { source: identity.source, ...identity.account },
+        existing
+          ? undefined
+          : {
+              idempotencyKey: input.idempotencyKey,
+              hasRequest: () => Boolean(readRequest()),
+            },
+      );
       const insertSessionRequest = (snapshot?: {
         sourceHeadCommit: string;
         sourceIndexTree: string;

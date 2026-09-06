@@ -25,6 +25,7 @@ import {
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import {
   closeQaGatewayLogStream,
+  createQaGatewayChildLogAccess,
   createQaGatewayChildLogCollector,
   formatQaGatewayProcessBoundaryStartupFailure,
   monitorQaGatewayChildFailure,
@@ -32,7 +33,6 @@ import {
   throwQaGatewayChildFailure,
 } from "./gateway-child-process.js";
 import {
-  callQaGatewayWithRetry,
   isRetryableRpcStartupError,
   resolveQaGatewayStartupRetry,
   waitForGatewayReady,
@@ -103,6 +103,7 @@ function createParams(baseEnv?: NodeJS.ProcessEnv) {
     bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
     stagedBundledPluginsRoot: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
     compatibilityHostVersion: "2026.4.8",
+    developmentSourceRoot: "/repo/openclaw",
     baseEnv,
   };
 }
@@ -755,6 +756,34 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
   });
 
+  it("binds plugin authority to the source candidate after caller environment patches", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
+      }),
+      developmentSourceRoot: "/repo/release-candidate",
+      runtimeEnvPatch: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+      },
+    });
+
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe("/repo/release-candidate");
+  });
+
+  it("clears inherited and patched source roots for packaged candidates", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
+      }),
+      developmentSourceRoot: null,
+      runtimeEnvPatch: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+      },
+    });
+
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBeUndefined();
+  });
+
   it("maps live frontier key aliases into provider env vars", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
@@ -985,7 +1014,7 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
-  it("re-scrubs blocked credentials in the spawned gateway child env", async () => {
+  it("re-scrubs blocked credentials and source authority in a packaged gateway child", async () => {
     const tempParent = await tempDirs.makeTempDir("qa-gateway-env-scrub-");
     qaTempPathState.preferredTmpDir = tempParent;
     const observedEnvPath = path.join(tempParent, "observed-env.json");
@@ -1000,6 +1029,7 @@ describe("buildQaRuntimeEnv", () => {
       "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
       "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
       "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
+      "OPENCLAW_DEV_SOURCE_ROOT: process.env.OPENCLAW_DEV_SOURCE_ROOT,",
       "};",
       `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
     ].join("\n");
@@ -1015,6 +1045,7 @@ describe("buildQaRuntimeEnv", () => {
         },
         runtimeEnvPatch: {
           SAFE_VALUE: "patched",
+          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
           OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
           OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
           OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
@@ -1035,6 +1066,73 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(
       JSON.stringify({ SAFE_VALUE: "patched" }),
     );
+  });
+
+  it("clears inherited source authority when the repo CLI resolves to packaged plugins", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-repo-cli-source-root-");
+    const repoRoot = await tempDirs.makeTempDir("qa-gateway-repo-cli-");
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-source-root");
+    const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
+    await mkdir(path.dirname(runnerPath), { recursive: true });
+    await writeFile(
+      runnerPath,
+      [
+        'import fs from "node:fs";',
+        `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+      ].join("\n"),
+      "utf8",
+    );
+    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", "/repo/current-harness");
+
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot,
+        useRepoCli: true,
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe("");
+  });
+
+  it("binds a spawned source gateway to the candidate repo root", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-source-root-");
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-source-root");
+    const candidateRepoRoot = process.cwd();
+    const captureScript = [
+      'const fs = require("node:fs");',
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+    ].join("\n");
+
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot: candidateRepoRoot,
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["--eval", captureScript],
+        },
+        runtimeEnvPatch: {
+          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(candidateRepoRoot);
   });
 
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {
@@ -1104,56 +1202,6 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
-  it("preserves relative gateway retry timeouts without an absolute deadline", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("gateway closed (1012 service restart)"))
-      .mockResolvedValueOnce({ ok: true });
-    const waitForReady = vi.fn(async () => {});
-
-    await expect(
-      callQaGatewayWithRetry({
-        logs: () => "qa logs",
-        request,
-        throwChildFailure: vi.fn(),
-        timeoutMs: 2_000,
-        waitForReady,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(request).toHaveBeenNthCalledWith(1, { timeoutMs: 2_000 });
-    expect(request).toHaveBeenNthCalledWith(2, { timeoutMs: 2_000 });
-    expect(waitForReady).toHaveBeenCalledWith(10_000);
-  });
-
-  it("bounds near-expiry restart recovery by the absolute deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const request = vi.fn(async () => {
-      vi.setSystemTime(9_995);
-      throw new Error("gateway closed (1012 service restart)");
-    });
-    const waitForReady = vi.fn(async (timeoutMs: number) => {
-      vi.setSystemTime(Date.now() + timeoutMs);
-    });
-
-    await expect(
-      callQaGatewayWithRetry({
-        deadlineMs: 10_000,
-        logs: () => "qa logs",
-        request,
-        throwChildFailure: vi.fn(),
-        timeoutMs: 20_000,
-        waitForReady,
-      }),
-    ).rejects.toThrow("gateway call deadline exceeded");
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith({ deadlineMs: 10_000, timeoutMs: 10_000 });
-    expect(waitForReady).toHaveBeenCalledWith(5);
-    expect(Date.now()).toBe(10_000);
-  });
-
   it("waits for a fresh in-process restart boundary after the current log offset", async () => {
     let logs = "old restart mode: in-process restart\n";
     const mark = logs.length;
@@ -1169,10 +1217,9 @@ describe("buildQaRuntimeEnv", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
-  it("keeps restart offsets stable after stderr output", async () => {
+  it("keeps a private restart marker visible after an unterminated log prefix", async () => {
     const output = createQaGatewayChildLogCollector();
-    output.push("stdout", Buffer.from("gateway ready\n"));
-    output.push("stderr", Buffer.from("stderr warning\n"));
+    output.push("stderr", Buffer.from("unterminated warning"));
     const mark = output.mark();
     const wait = waitForQaGatewayRestartBoundary({
       readLogsSince: (since) => output.readSince(since),
@@ -1181,26 +1228,73 @@ describe("buildQaRuntimeEnv", () => {
       timeoutMs: 100,
     });
 
-    output.push(
-      "stdout",
-      Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"),
-    );
+    output.push("stdout", Buffer.from("restart mode: in-process restart\n"));
 
     await expect(wait).resolves.toBeUndefined();
+    expect(output.readRedactedSince(mark)).toBe("");
   });
 
   it("bounds diagnostics while monotonic marks retain fresh output semantics", () => {
     const output = createQaGatewayChildLogCollector();
-    output.push("stdout", Buffer.from(`old😀${"x".repeat(70_000)}`));
-    const mark = output.mark();
-    output.push("stdout", Buffer.from("fresh restart mode: in-process restart\n"));
+    const childLogs = createQaGatewayChildLogAccess(output);
+    output.push("stdout", Buffer.from(`old😀${"x".repeat(70_000)}\n`));
+    const mark = childLogs.markLogs();
+    expect(mark).toBeGreaterThan(output.text().length);
+    output.push(
+      "stdout",
+      Buffer.from("fresh restart mode: in-process restart\nAuthorization: Bearer fixture-secret\n"),
+    );
 
     expect(output.text()).toContain("[qa-lab] older gateway logs truncated");
     expect(output.text().length).toBeLessThan(66_000);
-    expect(output.readSince(mark)).toBe("fresh restart mode: in-process restart\n");
+    expect(childLogs.markLogs()).toBeGreaterThan(mark);
+    expect(childLogs.readLogsSince(mark)).toBe(
+      "fresh restart mode: in-process restart\nAuthorization: Bearer ***\n",
+    );
     expect(output.text()).not.toMatch(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
     );
+  });
+
+  it("redacts credentials whose pattern crosses a monotonic log cursor", () => {
+    const bearerOutput = createQaGatewayChildLogCollector();
+    const bearerLogs = createQaGatewayChildLogAccess(bearerOutput);
+    bearerOutput.push("stdout", Buffer.from("Authorization: Bearer "));
+    const bearerMark = bearerLogs.markLogs();
+    bearerOutput.push("stdout", Buffer.from("fixture-secret-value\nfresh line\n"));
+
+    expect(bearerLogs.readLogsSince(bearerMark)).toBe("fresh line\n");
+
+    const telegramOutput = createQaGatewayChildLogCollector();
+    const telegramLogs = createQaGatewayChildLogAccess(telegramOutput);
+    telegramOutput.push("stdout", Buffer.from("123456789:"));
+    const telegramMark = telegramLogs.markLogs();
+    telegramOutput.push("stdout", Buffer.from("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef\nfresh line\n"));
+
+    const freshTelegramLogs = telegramLogs.readLogsSince(telegramMark);
+    expect(freshTelegramLogs).toBe("fresh line\n");
+    expect(freshTelegramLogs).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef");
+
+    const truncatedOutput = createQaGatewayChildLogCollector();
+    const truncatedLogs = createQaGatewayChildLogAccess(truncatedOutput);
+    truncatedOutput.push(
+      "stdout",
+      Buffer.from(`Authorization: Bearer ${"s".repeat(70_000)}\nfresh line\n`),
+    );
+
+    const freshTruncatedLogs = truncatedLogs.readLogsSince(0);
+    expect(freshTruncatedLogs).toBe("[qa-lab] older gateway logs truncated\nfresh line\n");
+    expect(freshTruncatedLogs).not.toContain("s".repeat(100));
+  });
+
+  it("does not reconstruct workflow commands split by a monotonic log cursor", () => {
+    const output = createQaGatewayChildLogCollector();
+    const logs = createQaGatewayChildLogAccess(output);
+    output.push("stdout", Buffer.from("::error"));
+    const mark = logs.markLogs();
+    output.push("stdout", Buffer.from("::warning::credential\nfresh line\n"));
+
+    expect(logs.readLogsSince(mark)).toBe("fresh line\n");
   });
 
   it("decodes interleaved stdout and stderr independently", () => {
@@ -1574,7 +1668,7 @@ describe("buildQaRuntimeEnv", () => {
   });
 
   it.each([false, true])(
-    "lets an explicit packaged command own mock auth and plugins before gateway spawn (legacy=%s)",
+    "lets the packaged candidate create its auth DB before gateway spawn (legacy=%s)",
     async (legacy) => {
       const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-auth-");
       const tempParentDir = path.join(fixtureRoot, "gateway-temp");
@@ -1639,6 +1733,10 @@ describe("buildQaRuntimeEnv", () => {
         expect(record.configSymlink).toBe(false);
       }
       expect(authRecords.map((record) => record.dbExists)).toEqual([false, true]);
+      expect(records[0]).toMatchObject({
+        kind: "auth",
+        dbExists: false,
+      });
       const authConfigPaths = authRecords.map((record) => String(record.configPath));
       expect(new Set(authConfigPaths).size).toBe(1);
       expect(authConfigPaths[0]).toBe(

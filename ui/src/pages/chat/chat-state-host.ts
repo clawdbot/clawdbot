@@ -1,3 +1,4 @@
+import type { ChatAccountSelection } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   AgentsListResult,
@@ -55,7 +56,6 @@ export type ChatPageHost = ChatHost &
     assistantIdentityRequestVersion: number;
     userName: string | null;
     userAvatar: string | null;
-    localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     automaticallyFetchFavicons: boolean;
@@ -75,6 +75,7 @@ export type ChatPageHost = ChatHost &
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogError: string | null;
+    chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
@@ -109,10 +110,7 @@ export type ChatPageHost = ChatHost &
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
     lastErrorCode: string | null;
-    chatScrollCommitCleanup: (() => void) | null;
     chatStreamRenderFrame: number | null;
-    chatScrollFrame: number | null;
-    chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;

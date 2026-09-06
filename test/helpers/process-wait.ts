@@ -22,7 +22,12 @@ export async function waitForFile(filePath: string, timeoutMs: number): Promise<
 }
 
 // writeFileSync can expose an open-truncate window, so wait for valid contents, not existence.
-export async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
+// Inject a real delay when the caller controls execution deadlines with fake timers.
+export async function waitForPidFile(
+  filePath: string,
+  timeoutMs: number,
+  delay: (ms: number) => Promise<unknown> = sleep,
+): Promise<number> {
   const deadlineAt = Date.now() + timeoutMs;
   while (true) {
     if (existsSync(filePath)) {
@@ -34,7 +39,7 @@ export async function waitForPidFile(filePath: string, timeoutMs: number): Promi
     if (Date.now() >= deadlineAt) {
       throw new Error(`timeout waiting for pid in ${filePath}`);
     }
-    await sleep(5);
+    await delay(5);
   }
 }
 

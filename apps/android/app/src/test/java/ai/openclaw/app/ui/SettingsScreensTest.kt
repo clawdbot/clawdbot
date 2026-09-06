@@ -133,6 +133,8 @@ class SettingsScreensTest {
     assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
     assertEquals("Pairing needed", gatewayStatusLabel("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Offline", gatewayStatusLabel("Offline", isConnected = false))
+    assertEquals("Cannot reach gateway", gatewayStatusLabel("Gateway error: offline", isConnected = false))
   }
 
   @Test

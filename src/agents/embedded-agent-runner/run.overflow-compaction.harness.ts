@@ -544,14 +544,12 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedCoerceToFailoverError.mockReset();
   mockedCoerceToFailoverError.mockReturnValue(null);
   mockedDescribeFailoverError.mockReset();
-  mockedDescribeFailoverError.mockImplementation(
-    (err: unknown): MockFailoverErrorDescription => ({
-      message: formatErrorMessage(err),
-      reason: undefined,
-      status: undefined,
-      code: undefined,
-    }),
-  );
+  mockedDescribeFailoverError.mockImplementation((err: unknown): MockFailoverErrorDescription => ({
+    message: formatErrorMessage(err),
+    reason: undefined,
+    status: undefined,
+    code: undefined,
+  }));
   mockedResolveFailoverStatus.mockReset();
   mockedResolveFailoverStatus.mockReturnValue(undefined);
 

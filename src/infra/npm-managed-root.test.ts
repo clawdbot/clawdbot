@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -76,17 +77,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`Expected path to be missing: ${targetPath}`);
-}
-
-function requireFirstMockCall<T extends unknown[]>(
-  mock: { mock: { calls: T[] } },
-  label: string,
-): T {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 function requireCommandOptions(
@@ -859,7 +849,10 @@ describe("managed npm root", () => {
 
     await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
 
-    const [args, rawOptions] = requireFirstMockCall(runCommand, "npm peer plan command");
+    const [args, rawOptions] = expectDefined(
+      runCommand.mock.calls[0],
+      "npm peer plan command call",
+    );
     const options = requireCommandOptions(rawOptions, "npm peer plan");
     expect(args).toEqual([
       "npm",
@@ -1419,7 +1412,10 @@ describe("managed npm root", () => {
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const [repairArgs, rawRepairOptions] = requireFirstMockCall(runCommand, "repair command");
+    const [repairArgs, rawRepairOptions] = expectDefined(
+      runCommand.mock.calls[0],
+      "repair command call",
+    );
     const repairOptions = requireCommandOptions(rawRepairOptions, "repair");
     expect(repairArgs).toEqual([
       "npm",

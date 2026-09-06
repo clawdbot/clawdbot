@@ -116,8 +116,21 @@ function isExcludedTopLevelPublicSurfaceFile(fileName) {
   );
 }
 
-/** Collect plugin source entry files declared by package export metadata. */
-export function collectPluginSourceEntries(packageJson) {
+const CATALOG_ENTRY_FIELDS = ["providerCatalogEntry", "capabilityCatalogEntry"];
+
+/** Keep catalog declarations aligned with the artifact owner that emits their modules. */
+export function mapPluginCatalogEntries(manifest, mapEntry) {
+  const result = { ...manifest };
+  for (const field of CATALOG_ENTRY_FIELDS) {
+    if (typeof manifest[field] === "string") {
+      result[field] = mapEntry(manifest[field]);
+    }
+  }
+  return result;
+}
+
+/** Collect plugin source entry files declared by package and manifest metadata. */
+export function collectPluginSourceEntries(packageJson, manifest = {}) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
         (entry) => typeof entry === "string" && entry.trim().length > 0,
@@ -131,7 +144,14 @@ export function collectPluginSourceEntries(packageJson) {
   if (setupEntry) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
   }
-  return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
+  return [
+    ...new Set([
+      ...(packageEntries.length > 0 ? packageEntries : ["./index.ts"]),
+      ...CATALOG_ENTRY_FIELDS.map((field) => manifest[field]).filter(
+        (entry) => typeof entry === "string" && entry.trim().length > 0,
+      ),
+    ]),
+  ];
 }
 
 /** Select typed plugin contracts, not runtime loader sidecars or implementation helpers. */
@@ -307,7 +327,12 @@ export function collectBundledPluginBuildEntries(params = {}) {
       packageJson,
       sourceEntries: Array.from(
         new Set([
-          ...(hasManifest ? collectPluginSourceEntries(packageJson) : []),
+          ...(hasManifest
+            ? collectPluginSourceEntries(
+                packageJson,
+                JSON.parse(fs.readFileSync(manifestPath, "utf8")),
+              )
+            : []),
           ...topLevelPublicSurfaceEntries,
         ]),
       ),

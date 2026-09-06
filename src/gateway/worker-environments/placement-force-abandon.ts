@@ -1,5 +1,5 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR, placementTurnOwner } from "./placement-record.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
@@ -9,29 +9,7 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-export const FORCED_WORKER_ABANDONMENT_ERROR =
-  "Worker result abandoned by forced operator teardown";
-
-async function tryResolveWorkspacePath(
-  resolveWorkspacePath: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<string>,
-  placement: { sessionId: string; sessionKey: string; agentId: string },
-  onCleanupError?: (error: unknown) => void,
-): Promise<string | undefined> {
-  try {
-    return await resolveWorkspacePath(placement);
-  } catch (error) {
-    // Forced teardown is the last-resort state owner. If the session/worktree is
-    // already gone, skip local repair/ref cleanup and still release the claim.
-    reportCleanupError(onCleanupError, error);
-    return undefined;
-  }
-}
-
-function reportCleanupError(
+export function reportWorkerAbandonmentCleanupError(
   onCleanupError: ((error: unknown) => void) | undefined,
   error: unknown,
 ): void {
@@ -87,7 +65,7 @@ export async function forceAbandonWorkerEnvironment(params: {
           journalCleanups.push({ owner, placement, journal });
         }
       } catch (error) {
-        reportCleanupError(params.onCleanupError, error);
+        reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
         retainedJournalSessions.add(owner.sessionId);
       }
     }
@@ -171,7 +149,7 @@ export async function forceAbandonWorkerEnvironment(params: {
       const root = await params.resolveWorkspacePath(cleanup.placement);
       await recoverWorkerWorkspaceReconciliation({ root, journal: cleanup.journal });
     } catch (error) {
-      reportCleanupError(params.onCleanupError, error);
+      reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
       retainedJournalSessions.add(cleanup.owner.sessionId);
     }
   }
@@ -185,21 +163,14 @@ export async function forceAbandonWorkerEnvironment(params: {
   }
   for (const cleanup of stagedResultCleanups) {
     try {
-      const root = await tryResolveWorkspacePath(
-        params.resolveWorkspacePath,
-        cleanup.placement,
-        params.onCleanupError,
-      );
-      if (!root) {
-        continue;
-      }
+      const root = await params.resolveWorkspacePath(cleanup.placement);
       for (const stagedResultRef of cleanup.refs) {
         if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
           await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
         }
       }
     } catch (error) {
-      reportCleanupError(params.onCleanupError, error);
+      reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
     }
   }
 }

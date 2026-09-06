@@ -19,6 +19,7 @@ import {
   type CodexAppServerRequestResult,
   type CodexInitializeParams,
   type CodexInitializeResponse,
+  isJsonObject,
   isRpcResponse,
   type CodexServerNotification,
   type JsonValue,
@@ -33,6 +34,7 @@ import {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
   hasCodexAppServerNaturalExit,
+  type CodexAppServerCloseResult,
   type CodexAppServerTransport,
 } from "./transport.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -221,6 +223,7 @@ export class CodexAppServerClient {
   private modelCatalogRevision = 0;
   private closed = false;
   private transportExited = false;
+  private nativeExecutionObserved = false;
   private closeError: Error | undefined;
   private serverVersion: string | undefined;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
@@ -688,10 +691,16 @@ export class CodexAppServerClient {
       try {
         // Config-fence waits and overload retries can outlive the caller's
         // ownership. Revalidate before each physical write, without an await.
+        // The guard can narrow params, so serialize only after it returns.
         options.assertCurrent?.();
-        mayHaveWritten = true;
-        onWriteStateChange?.(true);
-        this.writeMessage(message, (error) => rejectPending(error));
+        this.writeMessage(
+          message,
+          (error) => rejectPending(error),
+          () => {
+            mayHaveWritten = true;
+            onWriteStateChange?.(true);
+          },
+        );
       } catch (error) {
         rejectPending(toStringifiedError(error));
       }
@@ -749,9 +758,12 @@ export class CodexAppServerClient {
   async closeAndWait(options?: {
     exitTimeoutMs?: number;
     forceKillDelayMs?: number;
-  }): Promise<boolean> {
+  }): Promise<CodexAppServerCloseResult> {
     this.markClosed(new Error("codex app-server client is closed"));
-    return await closeCodexAppServerTransportAndWait(this.child, options);
+    const result = await closeCodexAppServerTransportAndWait(this.child, options);
+    // Codex can discard terminal handles before OS cleanup. Later ancestry
+    // containment cannot discharge a command whose descendants already reparented.
+    return this.nativeExecutionObserved ? { ...result, cleanup: "uncertain" } : result;
   }
 
   /** Closes this transport and runs cleanup only after physical process exit. */
@@ -770,10 +782,7 @@ export class CodexAppServerClient {
     }
     this.child.once("exit", runOnExit);
     try {
-      if (await this.closeAndWait()) {
-        this.child.off?.("exit", runOnExit);
-        runOnExit();
-      }
+      await this.closeAndWait();
     } catch (closeError) {
       embeddedAgentLog.warn("codex app-server shutdown after indeterminate request failed", {
         closeError,
@@ -782,21 +791,34 @@ export class CodexAppServerClient {
     }
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
+  private writeMessage(
+    message: RpcRequest | RpcResponse,
+    onError?: (error: Error) => void,
+    beforeWrite?: () => void,
+  ): void {
     if (this.closed) {
       return;
     }
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    this.child.stdin.write(
-      `${stringifyCodexAppServerMessage(message)}\n`,
-      (error?: Error | null) => {
-        if (error) {
-          embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
-          onError?.(error);
-        }
-      },
-    );
+    const frame = stringifyCodexAppServerMessage(message);
+    // Reject locally before declaring a possible write. Images count toward the
+    // transport frame limit even though Codex's text-input limit excludes them.
+    if (this.child.maxFrameBytes && Buffer.byteLength(frame) > this.child.maxFrameBytes) {
+      throw new Error(
+        "Codex request exceeds the transport frame limit; reduce attached images or context.",
+      );
+    }
+    beforeWrite?.();
+    if (method === "command/exec") {
+      this.nativeExecutionObserved = true;
+    }
+    this.child.stdin.write(`${frame}\n`, (error?: Error | null) => {
+      if (error) {
+        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+        onError?.(error);
+      }
+    });
   }
 
   private handleLine(line: string): void {
@@ -886,6 +908,14 @@ export class CodexAppServerClient {
       pending.reject(new CodexAppServerRpcError(response.error, pending.method));
       return;
     }
+    if (
+      pending.method === "thread/backgroundTerminals/list" &&
+      isJsonObject(response.result) &&
+      Array.isArray(response.result.data) &&
+      response.result.data.length > 0
+    ) {
+      this.nativeExecutionObserved = true;
+    }
     pending.resolve(response.result);
   }
 
@@ -969,6 +999,20 @@ export class CodexAppServerClient {
   }
 
   private handleNotification(notification: CodexServerNotification): void {
+    const params = notification.params;
+    if (
+      notification.method === "item/commandExecution/outputDelta" ||
+      notification.method === "item/commandExecution/terminalInteraction" ||
+      (isJsonObject(params) &&
+        ((isJsonObject(params.item) && params.item.type === "commandExecution") ||
+          (isJsonObject(params.turn) &&
+            Array.isArray(params.turn.items) &&
+            params.turn.items.some(
+              (item) => isJsonObject(item) && item.type === "commandExecution",
+            ))))
+    ) {
+      this.nativeExecutionObserved = true;
+    }
     if (notification.method === "account/updated") {
       this.modelCatalogRevision += 1;
     }
@@ -1014,7 +1058,11 @@ export class CodexAppServerClient {
     }
     this.pending.clear();
     for (const handler of this.closeHandlers) {
-      handler(this);
+      try {
+        handler(this);
+      } catch (closeError) {
+        embeddedAgentLog.warn("codex app-server close handler failed", { error: closeError });
+      }
     }
   }
 }

@@ -381,7 +381,7 @@ function resolvePackageEntrySource(params: {
     }
   }
 
-  for (const candidate of new Set(candidates)) {
+  for (const candidate of candidates) {
     if (!pluginCacheExistsSync(candidate)) {
       continue;
     }

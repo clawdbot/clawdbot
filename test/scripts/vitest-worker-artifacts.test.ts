@@ -804,16 +804,36 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           workerArtifacts.fixtureLifetime.run(async () => {
             const directory = workerArtifacts.fixtureDirectory();
             const { config } = workerProbe(directory);
-            const result = await node([
-              "scripts/run-vitest.mjs",
-              "run",
-              ...(configForm === "separate" ? ["--config", config] : [`--config=${config}`]),
-              "--configLoader",
-              "runner",
-              "--",
-              path.join(directory, "child.test.ts"),
-            ]);
+            const budgetReceipt = path.join(directory, "compiler-budget.json");
+            const preload = writeFixture(
+              directory,
+              "compiler-budget.mjs",
+              `import fs from "node:fs";
+if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
+  fs.writeFileSync(${JSON.stringify(budgetReceipt)}, JSON.stringify([process.env.RAYON_NUM_THREADS, process.env.TOKIO_WORKER_THREADS]));
+}`,
+            );
+            const result = await node(
+              [
+                "scripts/run-vitest.mjs",
+                "run",
+                ...(configForm === "separate" ? ["--config", config] : [`--config=${config}`]),
+                "--configLoader",
+                "runner",
+                "--",
+                path.join(directory, "child.test.ts"),
+              ],
+              root,
+              {
+                ...process.env,
+                OPENCLAW_VITEST_MAX_WORKERS: "2",
+                RAYON_NUM_THREADS: "",
+                TOKIO_WORKER_THREADS: "",
+                NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${pathToFileURL(preload).href}`,
+              },
+            );
             expect(result.code, result.stderr + result.stdout).toBe(0);
+            expect(JSON.parse(fs.readFileSync(budgetReceipt, "utf8"))).toEqual(["2", "2"]);
             expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
             const generations = fs
               .readFileSync(path.join(directory, "generations.jsonl"), "utf8")

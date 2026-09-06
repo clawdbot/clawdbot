@@ -637,6 +637,7 @@ describe("Gateway GitHub publication boundaries", () => {
     { label: "no live claim", claimRunId: undefined, expectedRunId: undefined },
     { label: "another active turn", claimRunId: "run-active", expectedRunId: undefined },
     { label: "a mismatched run identity", claimRunId: "run-active", expectedRunId: "run-other" },
+    { label: "its own active turn", claimRunId: "run-active", expectedRunId: "run-active" },
   ])("queues a cloud session publication with $label", async ({ claimRunId, expectedRunId }) => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
@@ -644,16 +645,16 @@ describe("Gateway GitHub publication boundaries", () => {
       environmentId: "environment-deferred-request",
       ownerEpoch: 2,
     });
-    if (claimRunId) {
-      placements.claimTurn({
-        sessionId: active.sessionId,
-        sessionKey: active.sessionKey,
-        agentId: active.agentId,
-        claimId: "claim-active",
-        runId: claimRunId,
-        owner: { kind: "worker", environmentId: "environment-deferred-request", ownerEpoch: 2 },
-      });
-    }
+    const claim = claimRunId
+      ? placements.claimTurn({
+          sessionId: active.sessionId,
+          sessionKey: active.sessionKey,
+          agentId: active.agentId,
+          claimId: "claim-active",
+          runId: claimRunId,
+          owner: { kind: "worker", environmentId: "environment-deferred-request", ownerEpoch: 2 },
+        })
+      : undefined;
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
     const result = await coordinator.requestForSession({
@@ -662,6 +663,7 @@ describe("Gateway GitHub publication boundaries", () => {
       idempotencyKey: "deferred-cloud-request",
       ...(expectedRunId ? { expectedRunId } : {}),
     });
+    const acceptedClaim = claim?.runId === expectedRunId ? claim : undefined;
 
     expect(result).toMatchObject({ status: "requested" });
     expect(
@@ -671,11 +673,11 @@ describe("Gateway GitHub publication boundaries", () => {
         )
         .get(result.requestId),
     ).toEqual({
-      claim_id: null,
-      run_id: null,
-      environment_id: null,
-      owner_epoch: null,
-      placement_generation: null,
+      claim_id: acceptedClaim?.claimId ?? null,
+      run_id: acceptedClaim?.runId ?? null,
+      environment_id: acceptedClaim?.owner.environmentId ?? null,
+      owner_epoch: acceptedClaim?.owner.ownerEpoch ?? null,
+      placement_generation: acceptedClaim?.placementGeneration ?? null,
       source_head_commit: null,
       source_index_tree: null,
       workspace_tree: null,

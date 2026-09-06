@@ -16,8 +16,16 @@ import {
 } from "../agents/worktrees/run-lease.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../agents/worktrees/service.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../config/sessions/store-writer-state.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
@@ -99,20 +107,47 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
         : undefined;
     const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
     const synchronize = worktreeLifecycle.synchronizeSessionWorktreeArchive;
+    const sqliteScope = resolveSqliteScope({ storePath, sessionKey: key });
+    const writerQueuePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(sqliteScope));
+    const writerStarted = createDeferredCore();
+    const releaseWriter = createDeferredCore();
+    let heldWriter: Promise<void> | undefined;
+    let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     const placementChange = placements
       ? vi
           .spyOn(worktreeLifecycle, "synchronizeSessionWorktreeArchive")
           .mockImplementationOnce(async (params) => {
-            await synchronize(params);
-            // Another durable owner can advance after filesystem preparation has returned.
-            placements.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
+            const assertCurrent = await synchronize(params);
+            heldWriter = runExclusiveSqliteSessionWrite(sqliteScope, async () => {
+              writerStarted.resolve();
+              await releaseWriter.promise;
+            });
+            await writerStarted.promise;
+            return assertCurrent;
           })
       : undefined;
     try {
-      const admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
+      admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
+      void admission.catch(() => {});
       if (failure === "placement-changed") {
+        // Advance placement only after the restored session waits behind a real SQLite writer.
+        await Promise.race([writerStarted.promise, admission]);
+        expect(heldWriter).toBeDefined();
+        await vi.waitFor(() => {
+          expect(SQLITE_SESSION_WRITER_QUEUES.get(writerQueuePath)?.pending.length).toBe(1);
+        });
+        expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
+        placements!.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
+        // A stopped replacement is eligible, but cannot reuse preparation owned by the prior placement.
+        placements!.fail({ sessionId, expectedGeneration: 1, recoveryError: "preparation failed" });
+        releaseWriter.resolve();
+        await heldWriter;
         await expect(admission).rejects.toThrow("changed before mutation");
-        expect(placements?.get(sessionId)).toMatchObject({ state: "requested", generation: 1 });
+        expect(placements?.get(sessionId)).toMatchObject({
+          state: "failed",
+          generation: 2,
+          environmentId: null,
+        });
         expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
         await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
           "inbound restore keeps work\n",
@@ -132,10 +167,14 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
         transcript,
       );
     } finally {
+      releaseWriter.resolve();
+      await heldWriter;
+      await admission?.catch(() => {});
       placementChange?.mockRestore();
       restore?.mockRestore();
       coordinator.completeDispatchReplyOperation();
       await coordinator.releasePreDispatchLifecycleAdmission();
+      expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(false);
     }
   },
 );

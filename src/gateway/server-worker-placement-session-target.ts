@@ -34,6 +34,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     key: params.sessionKey,
     agentId: params.agentId,
     clone: false,
+    exactRead: true,
   });
   return await runExclusiveSessionLifecycleMutation({
     scope: target.storePath,
@@ -105,6 +106,7 @@ export function resolveWorkerPlacementSessionTarget<
       key: string;
       agentId: string;
       clone: false;
+      exactRead: true;
     }) => Target;
     resolveCanonicalSessionEntryFromStoreKeys: (
       store: Store,
@@ -126,6 +128,7 @@ export function resolveWorkerPlacementSessionTarget<
     key: params.sessionKey,
     agentId: params.agentId,
     clone: false,
+    exactRead: true,
   });
   const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
     target.store,

@@ -5,14 +5,12 @@ import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
   expectUnsupportedNpmSpec,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
-import { isAddressInUseError } from "./gmail-watcher-errors.js";
 
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
@@ -1014,10 +1012,21 @@ describe("installHooksFromNpmSpec", () => {
     expect(result.npmResolution?.integrity).toBe("sha512-hook-test");
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
-    expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, unknown]>,
-      expectedSpec: "@openclaw/test-hooks@0.0.1",
-    });
+    expect(run).toHaveBeenCalledExactlyOnceWith(
+      [
+        "npm",
+        "pack",
+        "@openclaw/test-hooks@0.0.1",
+        "--ignore-scripts",
+        "--json",
+        "--dry-run=false",
+        `--pack-destination=${packTmpDir}`,
+      ],
+      expect.objectContaining({
+        cwd: packTmpDir,
+        env: expect.objectContaining({ NPM_CONFIG_IGNORE_SCRIPTS: "true" }),
+      }),
+    );
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);
@@ -1070,15 +1079,5 @@ describe("installHooksFromNpmSpec", () => {
       expect(result.error).toContain("prerelease version 0.0.2-beta.1");
       expect(result.error).toContain('"@openclaw/test-hooks@beta"');
     }
-  });
-});
-
-describe("gmail watcher", () => {
-  it("detects address already in use errors", () => {
-    expect(isAddressInUseError("listen tcp 127.0.0.1:8788: bind: address already in use")).toBe(
-      true,
-    );
-    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
-    expect(isAddressInUseError("some other error")).toBe(false);
   });
 });

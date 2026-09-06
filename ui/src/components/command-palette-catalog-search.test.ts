@@ -71,7 +71,7 @@ describe("command palette catalog search", () => {
       }
     });
 
-    const items = await loadCommandPaletteCatalogItems({
+    const { items } = await loadCommandPaletteCatalogItems({
       client: { request } as unknown as GatewayBrowserClient,
       agentId: "main",
       agents: async () => ({
