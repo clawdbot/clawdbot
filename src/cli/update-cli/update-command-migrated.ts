@@ -161,7 +161,6 @@ export async function continueMigratedUpdateInFreshProcess(
               : {}),
           },
         },
-        result,
         rollbackBlockedReason: params.rollbackBlockedReason ?? "state-migrated-no-rollback",
         ...(preManagedServiceStop ? { preManagedServiceStop: stopState } : {}),
       },
