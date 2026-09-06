@@ -123,6 +123,25 @@ describe("session transcript runtime SDK", () => {
       throw new Error("expected the first raw transcript page");
     }
 
+    const decodedCursor = JSON.parse(
+      Buffer.from(first.cursor, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    const nonCanonicalCursors = [
+      `${first.cursor}!`,
+      `${first.cursor}=`,
+      Buffer.from(JSON.stringify({ ...decodedCursor, extra: true }), "utf8").toString("base64url"),
+    ];
+    for (const cursor of nonCanonicalCursors) {
+      await expect(
+        readSessionTranscriptRawDelta({
+          ...scope,
+          cursor,
+          maxBytes: 10_000,
+          maxEvents: 2,
+        }),
+      ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    }
+
     await appendTranscriptEvent(scope, { id: "event-4", type: "custom" });
     const second = await readSessionTranscriptRawDelta({
       ...scope,

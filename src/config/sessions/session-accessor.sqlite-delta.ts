@@ -71,20 +71,32 @@ function parseRawTranscriptCursor(value: string): RawTranscriptCursor | undefine
     return undefined;
   }
   try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    ) as Partial<RawTranscriptCursor>;
+    // SDK cursors are opaque continuation tokens that callers must return unchanged.
+    // Exact round-tripping rejects decoder-normalized aliases and extended envelopes.
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) {
+      return undefined;
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as Partial<RawTranscriptCursor>;
     if (
       parsed.version !== RAW_TRANSCRIPT_CURSOR_VERSION ||
       typeof parsed.agentId !== "string" ||
       typeof parsed.sessionId !== "string" ||
       typeof parsed.generation !== "string" ||
+      typeof parsed.lastSeq !== "number" ||
       !Number.isSafeInteger(parsed.lastSeq) ||
-      (parsed.lastSeq ?? -2) < -1
+      parsed.lastSeq < -1
     ) {
       return undefined;
     }
-    return parsed as RawTranscriptCursor;
+    const cursor: RawTranscriptCursor = {
+      agentId: parsed.agentId,
+      generation: parsed.generation,
+      lastSeq: parsed.lastSeq,
+      sessionId: parsed.sessionId,
+      version: parsed.version,
+    };
+    return encodeRawTranscriptCursor(cursor) === value ? cursor : undefined;
   } catch {
     return undefined;
   }
