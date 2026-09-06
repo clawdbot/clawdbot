@@ -191,6 +191,7 @@ struct OnboardingStagedGatewaySetupSection: View {
             Text("Setup Link")
                 .font(OpenClawType.footnoteSemiBold)
         } footer: {
+            // Localization: plaintext means unencrypted network transport with TLS off, not unformatted text.
             Text(self.link.tls
                 ? "Review this endpoint. Credentials are applied only after you tap Connect."
                 :
