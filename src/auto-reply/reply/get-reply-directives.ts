@@ -47,6 +47,7 @@ import {
   resolveConfiguredDirectiveAliases,
 } from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { emitPreRunDirectiveRejectionDiagnostic } from "./get-reply-directives-diagnostic.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
@@ -530,6 +531,12 @@ export async function resolveReplyDirectives(params: {
   });
   if (applyResult.kind === "reply") {
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), applyResult.preRunRejection);
+    emitPreRunDirectiveRejectionDiagnostic({
+      ctx,
+      sessionKey,
+      directives,
+      reply: applyResult.reply,
+    });
     return { kind: "reply", reply: markCommandReplyForDelivery(applyResult.reply) };
   }
   directives = applyResult.directives;
