@@ -1,0 +1,180 @@
+{
+  "id": "aigateway",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["aigateway"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "aigateway",
+      "hosts": ["api.aigateway.sh"]
+    }
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "aigateway",
+        "envVars": ["AIGATEWAY_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "aigateway",
+      "method": "api-key",
+      "choiceId": "aigateway-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "AIgateway API key",
+      "choiceHint": "OpenAI-compatible aggregator endpoint (1,000+ models)",
+      "groupId": "aigateway",
+      "groupLabel": "AIgateway",
+      "groupHint": "OpenAI-compatible aggregator endpoint",
+      "optionKey": "aigatewayApiKey",
+      "cliFlag": "--aigateway-api-key",
+      "cliOption": "--aigateway-api-key <key>",
+      "cliDescription": "AIgateway API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "modelsDev": {
+      "aigateway": "aigateway"
+    },
+    "providers": {
+      "aigateway": {
+        "baseUrl": "https://api.aigateway.sh/v1",
+        "api": "openai-completions",
+        "defaultModel": "zai-org/glm-5.3-flash",
+        "models": [
+          {
+            "id": "zai-org/glm-5.3-flash",
+            "name": "GLM-5.3 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1310720,
+            "maxTokens": 131072,
+            "cost": { "input": 0.15, "output": 0.5 },
+            "compat": { "codeMode": "capable" }
+          },
+          {
+            "id": "anthropic/claude-opus-4.7",
+            "name": "Claude Opus 4.7",
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": { "input": 5, "output": 25 }
+          },
+          {
+            "id": "anthropic/claude-sonnet-4.6",
+            "name": "Claude Sonnet 4.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": { "input": 3, "output": 15 }
+          },
+          {
+            "id": "anthropic/claude-haiku-4.5",
+            "name": "Claude Haiku 4.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": { "input": 1, "output": 5 }
+          },
+          {
+            "id": "openai/gpt-5.4",
+            "name": "GPT-5.4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "maxTokens": 128000,
+            "cost": { "input": 2.5, "output": 15 },
+            "compat": { "codeMode": "capable" }
+          },
+          {
+            "id": "openai/gpt-5.4-mini",
+            "name": "GPT-5.4 Mini",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": { "input": 0.75, "output": 4.5 }
+          },
+          {
+            "id": "google/gemini-3.7-flash",
+            "name": "Gemini 3.7 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": { "input": 0.75, "output": 3.75 }
+          },
+          {
+            "id": "xai/grok-4.6",
+            "name": "Grok 4.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 128000,
+            "cost": { "input": 2, "output": 6 }
+          },
+          {
+            "id": "moonshot/kimi-k3",
+            "name": "Kimi K3",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": { "input": 3, "output": 15 },
+            "compat": { "codeMode": "capable" }
+          },
+          {
+            "id": "moonshot/kimi-k2.7-code",
+            "name": "Kimi K2.7 Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": { "input": 0.95, "output": 4 }
+          },
+          {
+            "id": "alibaba/qwen3.8-max",
+            "name": "Qwen3.8 Max",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": { "input": 2, "output": 6 }
+          },
+          {
+            "id": "deepseek/deepseek-v4-pro-0813",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 393216,
+            "cost": { "input": 1.32, "output": 3.96 },
+            "compat": { "codeMode": "capable" }
+          },
+          {
+            "id": "meta/llama-4-scout-17b-16e-instruct",
+            "name": "Llama 4 Scout",
+            "input": ["text", "image"],
+            "contextWindow": 10485760,
+            "maxTokens": 32768,
+            "cost": { "input": 0.27, "output": 0.85 }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "aigateway": "refreshable"
+    }
+  }
+}

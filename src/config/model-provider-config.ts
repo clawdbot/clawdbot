@@ -10,6 +10,7 @@ type MergedModelProviderEntry = {
 };
 
 const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
+  "aigateway",
   "amazon-bedrock",
   "amazon-bedrock-mantle",
   "anthropic",

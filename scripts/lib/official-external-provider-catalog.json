@@ -1,6 +1,31 @@
 {
   "entries": [
     {
+      "name": "@openclaw/aigateway-provider",
+      "description": "OpenClaw AIgateway provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "aigateway",
+          "label": "AIgateway"
+        },
+        "providers": [
+          {
+            "id": "aigateway",
+            "name": "AIgateway",
+            "docs": "/providers/aigateway",
+            "categories": ["llm"]
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/aigateway-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/amazon-bedrock-provider",
       "description": "OpenClaw Amazon Bedrock provider plugin",
       "source": "official",

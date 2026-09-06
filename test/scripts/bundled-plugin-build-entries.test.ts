@@ -403,6 +403,7 @@ describe("bundled plugin build entries", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
     for (const pluginId of [
+      "aigateway",
       "byteplus",
       "cohere",
       "meta",

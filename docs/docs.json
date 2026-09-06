@@ -1654,6 +1654,7 @@
               {
                 "group": "Providers",
                 "pages": [
+                  "providers/aigateway",
                   "providers/alibaba",
                   "providers/bedrock",
                   "providers/bedrock-mantle",

@@ -17,6 +17,12 @@ content otherwise match the cited upstream files.
 
 Provider names and marks remain the property of their respective owners.
 
+## AIgateway icon
+
+`ProviderIcon-aigateway.svg` is a currentColor redraw of the AIgateway brand
+mark (https://aigateway.sh), contributed by AIgateway for this provider
+plugin.
+
 ## Pi icon
 
 `ProviderIcon-pi.svg` is a metadata-cleaned copy of the official Pi logo:

@@ -213,6 +213,16 @@ describe("collectClawHubPublishablePluginPackages", () => {
 describe("OpenClaw dual-published plugin metadata", () => {
   const dualPublishedPlugins = [
     {
+      extensionId: "aigateway",
+      packageName: "@openclaw/aigateway-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/aigateway-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.7.2",
+        npmSpec: "@openclaw/aigateway-provider",
+      },
+    },
+    {
       extensionId: "cohere",
       packageName: "@openclaw/cohere-provider",
       install: {

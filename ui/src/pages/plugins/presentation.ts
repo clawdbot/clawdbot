@@ -12,6 +12,7 @@ import { takeGraphemes } from "../../lib/graphemes.ts";
  */
 const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "acpx",
+  "aigateway",
   "active-memory",
   "admin-http-rpc",
   "airtable",

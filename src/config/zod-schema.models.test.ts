@@ -11,6 +11,7 @@ describe("ModelsConfigSchema", () => {
     "gmi-cloud",
     "gmicloud",
     "moonshot-ai",
+    "aigateway",
     "moonshotai",
     "novita",
     "novita-ai",

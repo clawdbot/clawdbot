@@ -60,6 +60,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
+- **[aigateway](/plugins/reference/aigateway)** (`@openclaw/aigateway-provider`) - npm; ClawHub: `clawhub:@openclaw/aigateway-provider`. Adds AIgateway model provider support to OpenClaw.
 - **[alibaba](/plugins/reference/alibaba)** (`@openclaw/alibaba-provider`) - included in OpenClaw. Adds video generation provider support.
 
 - **[anthropic](/plugins/reference/anthropic)** (`@openclaw/anthropic-provider`) - included in OpenClaw. Anthropic models, Claude CLI, and native Claude session catalog.

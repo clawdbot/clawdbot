@@ -25,6 +25,7 @@ const MANIFEST_DERIVED_PLUGIN_IDS = new Set([
   "byteplus",
   "cerebras",
   "clawrouter",
+  "aigateway",
   "cohere",
   "deepseek",
   "featherless",
