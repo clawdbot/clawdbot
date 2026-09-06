@@ -128,21 +128,25 @@ export async function inspectLegacySkillWorkshopMigration(params: {
         }
       });
     }
+    // Lint needs ownership counts, not adoption verification through writable recovery readers.
+    const { external } = classifyWorkshopRelocation(records, params.config, env);
+    const backups = await listPendingLegacyCollectionBackupRoots(
+      params.config,
+      env,
+      database ?? null,
+    );
+    return {
+      externalProposalCount: external.length,
+      externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
+        const ownerAgentId = plan.ownerAgentId ?? plan.unconfiguredOwnerAgentId ?? "unknown";
+        counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
+        return counts;
+      }, {}),
+      legacyBackupRootCount: backups.length,
+    };
   } finally {
     database?.walMaintenance.close();
   }
-  // Lint needs ownership counts, not adoption verification through writable recovery readers.
-  const { external } = classifyWorkshopRelocation(records, params.config, env);
-  const backups = await listPendingLegacyCollectionBackupRoots(params.config, env);
-  return {
-    externalProposalCount: external.length,
-    externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
-      const ownerAgentId = plan.ownerAgentId ?? plan.unconfiguredOwnerAgentId ?? "unknown";
-      counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
-      return counts;
-    }, {}),
-    legacyBackupRootCount: backups.length,
-  };
 }
 
 async function relocateLegacyWorkshopTargets(
@@ -287,7 +291,7 @@ async function relocateLegacyWorkshopTargets(
   }
   persistUpdates(plan.updates);
   await finishWorkshopWorkspaceRelocations(env);
-  const backupMigration = await migrateLegacyCollectionBackups(config, env);
+  const backupMigration = await migrateLegacyCollectionBackups(config, env, database);
   const updates = [...plan.updates, ...plan.moves.flatMap((move) => move.updates)];
   const staleProposals = updates.filter((update) => update.record.status === "stale").length;
   return {

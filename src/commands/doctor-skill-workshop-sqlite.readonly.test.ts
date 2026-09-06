@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as sqliteReadOnlyLocation from "../infra/sqlite-readonly-location.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { listPendingLegacyCollectionBackupRoots } from "./doctor-skill-workshop-collection-backups.js";
 import { inspectLegacySkillWorkshopMigration } from "./doctor-skill-workshop-sqlite.js";
 import {
   createAppliedLegacyProposal,
@@ -35,6 +37,8 @@ async function snapshotDatabase(databasePath: string) {
     database.close();
   }
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("read-only Skill Workshop migration inspection", () => {
   it.each([
@@ -107,16 +111,28 @@ describe("read-only Skill Workshop migration inspection", () => {
             resultSkillHashes: {},
           }),
         );
+        await fs.cp(
+          path.dirname(backupDir),
+          path.join(path.dirname(path.dirname(backupDir)), "1111111111111111"),
+          { recursive: true },
+        );
         const before = await snapshotDatabase(databasePath);
+        const prepareSnapshot = vi.spyOn(sqliteReadOnlyLocation, "prepareSqliteReadOnlyLocation");
 
         await expect(
           inspectLegacySkillWorkshopMigration({ config, env: state.env }),
         ).resolves.toEqual({
           externalProposalCount: 1,
           externalProposalCountsByAgent: { main: 1 },
-          legacyBackupRootCount: 1,
+          legacyBackupRootCount: 2,
         });
 
+        expect(prepareSnapshot).toHaveBeenCalledTimes(1);
+        prepareSnapshot.mockClear();
+        await expect(
+          listPendingLegacyCollectionBackupRoots(config, state.env),
+        ).resolves.toHaveLength(2);
+        expect(prepareSnapshot).toHaveBeenCalledTimes(1);
         closeOpenClawStateDatabaseForTest();
         expect(await snapshotDatabase(databasePath)).toEqual(before);
         expect(await fs.readFile(skillFile, "utf8")).toBe(content);

@@ -6,6 +6,7 @@ import {
   resolveLegacyWorkspaceSourcePaths,
 } from "../agents/workspace-legacy-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as sqliteReadOnlyLocation from "../infra/sqlite-readonly-location.js";
 import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
@@ -49,6 +50,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -862,7 +864,10 @@ describe("doctor Skill Workshop collection backup migration", () => {
       `)
           .run(`shared-review-${index}`, owner, backupId);
       }
+      const prepareSnapshot = vi.spyOn(sqliteReadOnlyLocation, "prepareSqliteReadOnlyLocation");
       const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+      expect(prepareSnapshot).not.toHaveBeenCalled();
+      expect(database.db.prepare("SELECT 1 AS open").get()).toEqual({ open: 1 });
 
       await expect(fs.access(legacyRoot)).resolves.toBeUndefined();
       if (!archived) {

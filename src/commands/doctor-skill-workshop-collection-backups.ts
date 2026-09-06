@@ -23,7 +23,10 @@ import { openSkillWorkshopStore } from "../skills/workshop/store-sqlite-schema.j
 import { resolveSkillProposalTarget } from "../skills/workshop/store.js";
 import { tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
+import {
+  openExistingOpenClawStateDatabaseReadOnly,
+  type OpenClawStateDatabase as OpenClawStateDatabaseHandle,
+} from "../state/openclaw-state-db.js";
 
 const LEGACY_COLLECTION_BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
 const MAX_BACKUP_MANIFEST_BYTES = 1024 * 1024;
@@ -40,6 +43,8 @@ type LegacyCollectionBackupRoot =
 export async function listPendingLegacyCollectionBackupRoots(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  // null means the caller already checked and no state database exists.
+  database?: OpenClawStateDatabaseHandle | null,
 ): Promise<LegacyCollectionBackupRoot[]> {
   const backupRoot = path.join(resolveStateDir(env), "skill-workshop", "collection-backups");
   if (!(await pathExists(backupRoot))) {
@@ -49,41 +54,60 @@ export async function listPendingLegacyCollectionBackupRoots(
     .filter((entry) => entry.isDirectory() && /^[a-f0-9]{16}$/u.test(entry.name))
     .map((entry) => entry.name);
   const roots: LegacyCollectionBackupRoot[] = [];
-  for (const name of names) {
-    const legacyRoot = path.join(backupRoot, name);
-    try {
-      const backups = await readLegacyCollectionBackups(legacyRoot);
-      if (backups.length === 0) {
-        continue;
+  let ownedDatabase: OpenClawStateDatabaseHandle | undefined;
+  let databaseRead: Promise<OpenClawStateDatabaseHandle | undefined> | undefined;
+  // Standalone listing owns one verified snapshot. Doctor and migration borrow
+  // their existing verified handle, whose caller retains responsibility for closing it.
+  const readDatabase = () =>
+    (databaseRead ??= openExistingOpenClawStateDatabaseReadOnly({ env }).then((opened) => {
+      ownedDatabase = opened;
+      return opened;
+    }));
+  try {
+    for (const name of names) {
+      const legacyRoot = path.join(backupRoot, name);
+      try {
+        const backups = await readLegacyCollectionBackups(legacyRoot);
+        if (backups.length === 0) {
+          continue;
+        }
+        const workspaceDirs = new Set(backups.map((backup) => backup.workspaceDir));
+        const workspaceDir = [...workspaceDirs][0];
+        const ownerAgentId =
+          workspaceDirs.size === 1 && workspaceDir
+            ? inferLegacyCollectionBackupOwnerAgentId(
+                config,
+                env,
+                workspaceDir,
+                backups,
+                database === undefined ? await readDatabase() : database,
+              )
+            : undefined;
+        if (!ownerAgentId) {
+          throw new Error("workspace does not map to exactly one configured agent");
+        }
+        assertWorkspaceStateMigrationReady({ workspaceDirs: [...workspaceDirs], env });
+        const destinationRoot = resolveSkillCollectionBackupRoot(config, ownerAgentId, env);
+        const alreadyArchived = await Promise.all(
+          backups.map((backup) =>
+            isHistoryOnlyBackup(path.join(destinationRoot, backup.manifest.id)),
+          ),
+        );
+        // History-only archives retain their source. Exclude each completed copy
+        // so an interrupted root can resume its remaining backups.
+        const pendingBackups = backups.filter((_, index) => !alreadyArchived[index]);
+        if (pendingBackups.length > 0) {
+          roots.push({ legacyRoot, backups: pendingBackups, ownerAgentId, destinationRoot });
+        }
+      } catch (error) {
+        roots.push({
+          legacyRoot,
+          warning: `Preserved legacy collection backup root ${legacyRoot}: ${String(error)}`,
+        });
       }
-      const workspaceDirs = new Set(backups.map((backup) => backup.workspaceDir));
-      const workspaceDir = [...workspaceDirs][0];
-      const ownerAgentId =
-        workspaceDirs.size === 1 && workspaceDir
-          ? await inferLegacyCollectionBackupOwnerAgentId(config, env, workspaceDir, backups)
-          : undefined;
-      if (!ownerAgentId) {
-        throw new Error("workspace does not map to exactly one configured agent");
-      }
-      assertWorkspaceStateMigrationReady({ workspaceDirs: [...workspaceDirs], env });
-      const destinationRoot = resolveSkillCollectionBackupRoot(config, ownerAgentId, env);
-      const alreadyArchived = await Promise.all(
-        backups.map((backup) =>
-          isHistoryOnlyBackup(path.join(destinationRoot, backup.manifest.id)),
-        ),
-      );
-      // History-only archives retain their source. Exclude each completed copy
-      // so an interrupted root can resume its remaining backups.
-      const pendingBackups = backups.filter((_, index) => !alreadyArchived[index]);
-      if (pendingBackups.length > 0) {
-        roots.push({ legacyRoot, backups: pendingBackups, ownerAgentId, destinationRoot });
-      }
-    } catch (error) {
-      roots.push({
-        legacyRoot,
-        warning: `Preserved legacy collection backup root ${legacyRoot}: ${String(error)}`,
-      });
     }
+  } finally {
+    ownedDatabase?.walMaintenance.close();
   }
   return roots;
 }
@@ -108,53 +132,47 @@ export function inferWorkspaceOwnerAgentId(
   return workspaceMatches.length === 1 ? workspaceMatches[0] : undefined;
 }
 
-async function inferLegacyCollectionBackupOwnerAgentId(
+function inferLegacyCollectionBackupOwnerAgentId(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   workspaceDir: string,
   backups: readonly LegacyCollectionBackup[],
-): Promise<string | undefined> {
+  database: OpenClawStateDatabaseHandle | null | undefined,
+): string | undefined {
   const workspaceOwner = inferWorkspaceOwnerAgentId(config, env, workspaceDir);
-  // Listing is also used by read-only inspection. Never initialize or migrate
-  // Workshop state merely to recover the owner already recorded by a review.
-  const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
-  try {
-    if (
-      !database ||
-      !tableHasColumn(database.db, "skill_workshop_collection_reviews", "owner_agent_id")
-    ) {
-      return workspaceOwner;
-    }
-    const kysely = getNodeSqliteKysely<
-      Pick<OpenClawStateDatabase, "skill_workshop_collection_reviews">
-    >(database.db);
-    const rootOwners = new Set<string>();
-    for (const backup of backups) {
-      const owners = new Set(
-        executeSqliteQuerySync(
-          database.db,
-          kysely
-            .selectFrom("skill_workshop_collection_reviews")
-            .select("owner_agent_id")
-            .where("backup_id", "=", backup.manifest.id),
-        ).rows.map((row) => row.owner_agent_id),
-      );
-      const owner =
-        owners.size === 0 ? workspaceOwner : owners.size === 1 ? [...owners][0] : undefined;
-      if (
-        !owner ||
-        !listAgentIds(config).includes(owner) ||
-        resolveCanonicalWorkspacePath(resolveAgentWorkspaceDir(config, owner, env)) !==
-          resolveCanonicalWorkspacePath(workspaceDir)
-      ) {
-        return undefined;
-      }
-      rootOwners.add(owner);
-    }
-    return rootOwners.size === 1 ? [...rootOwners][0] : undefined;
-  } finally {
-    database?.walMaintenance.close();
+  if (
+    !database ||
+    !tableHasColumn(database.db, "skill_workshop_collection_reviews", "owner_agent_id")
+  ) {
+    return workspaceOwner;
   }
+  const kysely = getNodeSqliteKysely<
+    Pick<OpenClawStateDatabase, "skill_workshop_collection_reviews">
+  >(database.db);
+  const rootOwners = new Set<string>();
+  for (const backup of backups) {
+    const owners = new Set(
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("skill_workshop_collection_reviews")
+          .select("owner_agent_id")
+          .where("backup_id", "=", backup.manifest.id),
+      ).rows.map((row) => row.owner_agent_id),
+    );
+    const owner =
+      owners.size === 0 ? workspaceOwner : owners.size === 1 ? [...owners][0] : undefined;
+    if (
+      !owner ||
+      !listAgentIds(config).includes(owner) ||
+      resolveCanonicalWorkspacePath(resolveAgentWorkspaceDir(config, owner, env)) !==
+        resolveCanonicalWorkspacePath(workspaceDir)
+    ) {
+      return undefined;
+    }
+    rootOwners.add(owner);
+  }
+  return rootOwners.size === 1 ? [...rootOwners][0] : undefined;
 }
 
 function legacyCollectionSkillPath(workspaceDir: string, relativeDir: string): string {
@@ -496,8 +514,9 @@ async function publishLegacyCollectionBackup(
 export async function migrateLegacyCollectionBackups(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  database: OpenClawStateDatabaseHandle,
 ): Promise<{ migrated: number; warnings: string[] }> {
-  const roots = await listPendingLegacyCollectionBackupRoots(config, env);
+  const roots = await listPendingLegacyCollectionBackupRoots(config, env, database);
   let migrated = 0;
   const warnings: string[] = [];
   for (const root of roots) {
