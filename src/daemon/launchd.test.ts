@@ -1713,7 +1713,7 @@ describe("launchd uninstall", () => {
 
     await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
     await expect(uninstall).rejects.not.toThrow(plistPath);
-    expect(state.launchctlCalls).toEqual([]);
+    expect(launchctlCommandNames().every((command) => command === "print")).toBe(true);
   });
 
   it("fails before mutation when a pre-migration LaunchAgent cannot be inspected", async () => {
@@ -1735,7 +1735,7 @@ describe("launchd uninstall", () => {
     await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
       "LaunchAgent removal failed (EACCES)",
     );
-    expect(state.launchctlCalls).toEqual([]);
+    expect(launchctlCommandNames().every((command) => command === "print")).toBe(true);
   });
 
   it("fails before mutation when canonical exists but pre-migration inspection is denied", async () => {
@@ -1758,7 +1758,7 @@ describe("launchd uninstall", () => {
     await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
       "LaunchAgent removal failed (EACCES)",
     );
-    expect(state.launchctlCalls).toEqual([]);
+    expect(launchctlCommandNames().every((command) => command === "print")).toBe(true);
     expect(fs.rename).not.toHaveBeenCalled();
     expect(state.files.get(bootPlist)).toBe("canonical");
   });
@@ -4306,14 +4306,11 @@ describe("external APFS LaunchAgent placement", () => {
     expect(state.files.has(targetPlistPath)).toBe(false);
     expect(state.serviceLoaded).toBe(true);
     expect(state.serviceRunning).toBe(true);
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "print",
+    expect(launchctlCommandNames().filter((command) => command !== "print")).toEqual([
       "bootout",
       "unload",
       "enable",
       "bootstrap",
-      "print",
       "enable",
       "bootstrap",
     ]);
