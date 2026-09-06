@@ -24,6 +24,7 @@ import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogPricing,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
+import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type ModelCatalogManifestInput = {
@@ -135,12 +136,11 @@ export function readModelCatalogManifests(
 }
 
 async function loadClientBundleValidator() {
-  const { tsImport } = await import("tsx/esm/api");
   const modulePath = path.join(
     defaultRootDir,
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
-  const module = await tsImport(pathToFileURL(modulePath).href, import.meta.url);
+  const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
   if (typeof module.validateAndSanitizeRemoteModelCatalogBundle !== "function") {
     throw new Error("remote catalog bundle validator export is unavailable");
   }
