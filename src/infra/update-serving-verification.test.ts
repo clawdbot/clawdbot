@@ -17,7 +17,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readUpdateServingTranscript } from "./update-serving-verification-readback.js";
-import { UpdateServingReceiptSchema, verifyUpdateServing } from "./update-serving-verification.js";
+import { UpdateServingReceiptSchema } from "./update-serving-verification-receipt.js";
+import { verifyUpdateServing } from "./update-serving-verification.js";
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock("../gateway/call.js", () => ({

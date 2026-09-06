@@ -21,7 +21,6 @@ import {
 } from "./update-serving-verification-receipt.js";
 
 export type { UpdateServingVerificationResult } from "./update-serving-verification-receipt.js";
-export { UpdateServingReceiptSchema } from "./update-serving-verification-receipt.js";
 
 export type VerifyUpdateServingParams = {
   runId: string;
