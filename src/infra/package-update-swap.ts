@@ -264,21 +264,21 @@ export async function swapStagedPackageInstall(params: {
   let retained = false;
   let projectActivated = false;
   let activationCompleted = false;
-  const verifyNpmRecovery = async (root: string, retained: boolean) => {
+  const verifyNpmRecovery = async (root: string, fromBackup: boolean) => {
     const reader = createPackageIntegrityReader(params.timeoutMs);
     if (
       hadPackage
         ? !previousTree || !isDeepStrictEqual(await reader.tree(root, targetSwapRoot), previousTree)
-        : !retained && (await reader.exists(root))
+        : !fromBackup && (await reader.exists(root))
     ) {
       throw new Error("Package rollback verification failed: retained package tree changed");
     }
     for (const shim of shims) {
-      const target = retained ? shim.backup : shim.destination;
+      const target = fromBackup ? shim.backup : shim.destination;
       if (
         shim.backup
           ? !target || (await reader.launcher(target)) !== shim.fingerprint
-          : !retained && (await reader.exists(shim.destination))
+          : !fromBackup && (await reader.exists(shim.destination))
       ) {
         throw new Error(
           `Package rollback verification failed: launcher ${shim.destination} changed`,
