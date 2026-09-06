@@ -810,6 +810,23 @@ describe("runServiceRestart token drift", () => {
     expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
   });
 
+  it("checks readiness before reporting an already-running gateway", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+    const postStartCheck = vi.fn(async () => {});
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      postStartCheck,
+    });
+
+    expect(postStartCheck).toHaveBeenCalledOnce();
+    expect(service.start).not.toHaveBeenCalled();
+    expect(readJsonLog<{ result?: string }>().result).toBe("already-running");
+  });
+
   it.each(SERVICE_REPAIR_COMMAND_CASES)(
     "warns in json with the %s service repair command and active context",
     async (serviceNoun, profile, container, command, repairAction) => {

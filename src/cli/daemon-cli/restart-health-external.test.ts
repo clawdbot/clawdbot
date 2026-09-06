@@ -133,6 +133,58 @@ describe("restart health", () => {
     },
   );
 
+  it("waits for replacement listener ownership before reporting plugin failures", async () => {
+    inspectPortUsage
+      .mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4200, commandLine: "openclaw-gateway" }],
+        hints: [],
+      })
+      .mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4300, commandLine: "openclaw-gateway" }],
+        hints: [],
+      });
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        health: {
+          ok: true,
+          plugins: {
+            errors: [],
+            unavailable: [
+              {
+                id: "discord",
+                state: "configured-unavailable",
+                diagnostic: {
+                  kind: "plugin-verification",
+                  reason: "missing-openclaw-peer-link",
+                  detail: "plugin failure",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const previousLockIdentity = mockGatewayLockReplacement({ pid: 4300 });
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      previousLockIdentity,
+      includePluginHealth: true,
+      attempts: 2,
+      delayMs: 500,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.unavailablePlugins?.[0]?.id).toBe("discord");
+    expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds replacement health after an indefinite previous-owner wait", async () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,

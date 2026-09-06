@@ -7,15 +7,7 @@ import {
   requireMockCallArg,
   type RestartParams,
 } from "./lifecycle.test-helpers.js";
-
-type RestartHealthSnapshot = {
-  healthy: boolean;
-  staleGatewayPids: number[];
-  runtime: { status?: string };
-  portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
-  waitOutcome?: string;
-  elapsedMs?: number;
-};
+import type { GatewayRestartSnapshot as RestartHealthSnapshot } from "./restart-health.types.js";
 
 const service = {
   readCommand: vi.fn(),
@@ -562,6 +554,7 @@ describe("runDaemonRestart health checks", () => {
       staleGatewayPids: [1993],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      unavailablePlugins: [{} as never],
     };
     const healthy: RestartHealthSnapshot = {
       healthy: true,
@@ -606,6 +599,7 @@ describe("runDaemonRestart health checks", () => {
       staleGatewayPids: [],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      unavailablePlugins: [{} as never],
       waitOutcome: "timeout",
       elapsedMs: 60_000,
     };
@@ -654,11 +648,13 @@ describe("runDaemonRestart health checks", () => {
       delayMs?: unknown;
       includeUnknownListenersAsStale?: unknown;
       port?: unknown;
+      requireRunningService?: unknown;
     };
     expect(waitParams.attempts).toBe(360);
     expect(waitParams.delayMs).toBe(500);
     expect(waitParams.includeUnknownListenersAsStale).toBe(true);
     expect(waitParams.port).toBe(18789);
+    expect(waitParams.requireRunningService).toBe(true);
   });
 
   it("fails restart with a stopped-free message when the waiter exits early", async () => {
@@ -868,6 +864,7 @@ describe("runDaemonRestart health checks", () => {
       port: 18_789,
       attempts: 960,
       delayMs: 500,
+      includePluginHealth: true,
       previousLockIdentity: {
         pid: 4200,
         ownerId: "gateway-owner-old",
@@ -911,6 +908,7 @@ describe("runDaemonRestart health checks", () => {
       port: 18_789,
       attempts: 420,
       delayMs: 500,
+      includePluginHealth: true,
       previousLockIdentity: {
         pid: 4200,
         createdAt: "2026-07-16T12:00:00.000Z",

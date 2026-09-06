@@ -49,12 +49,11 @@ import {
   createGatewayLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
 import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
+import { runServiceRestart, runServiceStop, runServiceUninstall } from "./lifecycle-core.js";
 import {
-  runServiceRestart,
-  runServiceStart,
-  runServiceStop,
-  runServiceUninstall,
-} from "./lifecycle-core.js";
+  failGatewayPluginReadiness,
+  hasGatewayPluginReadinessFailure,
+} from "./lifecycle-health.js";
 import {
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
@@ -63,6 +62,7 @@ import { createDaemonActionContext, createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
+  type GatewayPortHealthSnapshot,
   formatGatewayRestartFailure,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
@@ -71,7 +71,6 @@ import {
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { renderGatewayServiceStartHints } from "./shared.js";
-import { verifyGatewayStartReadiness } from "./start-health.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -356,7 +355,10 @@ function isGatewaySignalRestartResult(
 }
 
 async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
-  const { emit, fail } = createDaemonActionContext({ action: "restart", json: Boolean(opts.json) });
+  const { emit, fail, warnings } = createDaemonActionContext({
+    action: "restart",
+    json: Boolean(opts.json),
+  });
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
   if (!lockIdentity?.ownerId) {
@@ -396,9 +398,19 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     port: lockIdentity.port,
     attempts: healthWait.attempts,
     delayMs: POST_RESTART_HEALTH_DELAY_MS,
+    includePluginHealth: true,
     previousLockIdentity: signaled.previousLockIdentity,
     waitIndefinitelyForPreviousOwner: healthWait.waitIndefinitelyForPreviousOwner,
   });
+  if (hasGatewayPluginReadinessFailure(health)) {
+    failGatewayPluginReadiness({
+      action: "restart",
+      health,
+      json: Boolean(opts.json),
+      warnings,
+      fail,
+    });
+  }
   if (!health.healthy) {
     const message = `Gateway restart timed out after ${healthWait.timeoutSeconds}s waiting for health checks.`;
     fail(message, renderGatewayPortHealthDiagnostics(health));
@@ -428,50 +440,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   });
 }
 
-/** Start the managed Gateway service, repairing stale service definitions when possible. */
-export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceMutationAllowed("start the gateway");
-  const service = resolveGatewayService();
-  const expectedPort = (await resolveGatewayConfigPorts()).explicit;
-  return await runServiceStart({
-    serviceNoun: "Gateway",
-    service,
-    renderStartHints: renderGatewayServiceStartHints,
-    onNotLoaded:
-      process.platform === "darwin"
-        ? async () => {
-            const recovered = await recoverInstalledLaunchAgent({ result: "started" });
-            if (recovered) {
-              appendGatewayLifecycleAudit({
-                action: "start",
-                source: "cli",
-                mode: "launchd-bootstrap",
-              });
-            }
-            return recovered;
-          }
-        : undefined,
-    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
-      await repairLoadedGatewayServiceForStart({
-        service,
-        json,
-        stdout,
-        warn,
-        state,
-        issues,
-      }),
-    postStartCheck: ({ fail, warnings }) =>
-      verifyGatewayStartReadiness({
-        service,
-        expectedPort,
-        resolveContext: () => resolveGatewayLifecycleContext(service),
-        fail,
-        warnings,
-      }),
-    expectedPort,
-    opts,
-  });
-}
+export { runDaemonStart } from "./lifecycle-start.js";
 
 /** Stop the managed Gateway service or verified unmanaged listener fallback. */
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
@@ -623,6 +592,17 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       return null;
     },
     postRestartCheck: async ({ warnings, fail, stdout, warn }) => {
+      const assertPluginReadiness = (health: GatewayPortHealthSnapshot) => {
+        if (hasGatewayPluginReadinessFailure(health)) {
+          failGatewayPluginReadiness({
+            action: "restart",
+            health,
+            json: jsonOutput,
+            warnings,
+            fail,
+          });
+        }
+      };
       if (restartedWithoutServiceManager) {
         // Unmanaged restarts have no service-manager state to watch; use listener health and,
         // when targeted delivery required it, prove the previous lock owner was replaced.
@@ -630,6 +610,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: unmanagedPort,
           attempts: unmanagedRestartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          includePluginHealth: true,
           ...(unmanagedPreviousLockIdentity
             ? {
                 previousLockIdentity: unmanagedPreviousLockIdentity,
@@ -637,6 +618,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
               }
             : {}),
         });
+        assertPluginReadiness(health);
         if (health.healthy) {
           return undefined;
         }
@@ -668,6 +650,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
           env: managedRestartContext.env,
           includeUnknownListenersAsStale: process.platform === "win32",
+          includePluginHealth: true,
+          includeChannelHealth: false,
+          requireRunningService: true,
           supervisorKeepsAlive: process.platform === "darwin",
         });
       let health = await waitForHealthy();
@@ -694,6 +679,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           return retryRestart;
         }
         health = await waitForHealthy();
+      }
+
+      // Plugin details can come from an older listener while the managed restart fails.
+      // Only the waiter's runtime-qualified plugin outcomes may supersede restart diagnostics.
+      if (health.waitOutcome === "plugin-errors" || health.waitOutcome === "plugin-unavailable") {
+        assertPluginReadiness(health);
       }
 
       if (health.healthy) {

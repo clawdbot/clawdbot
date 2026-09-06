@@ -311,6 +311,7 @@ export async function runServiceStart(params: {
           defaultRuntime.log(warning);
         }
       }
+      await params.postStartCheck?.({ json, stdout, warnings, warn, fail });
       emitDaemonAlreadyRunning({
         serviceNoun: params.serviceNoun,
         service: params.service,

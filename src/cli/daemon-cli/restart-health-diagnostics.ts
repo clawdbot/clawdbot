@@ -1,6 +1,23 @@
 import { formatPortDiagnostics } from "../../infra/ports.js";
 import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.types.js";
 
+function renderPluginDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+  const lines: string[] = [];
+  if (snapshot.activatedPluginErrors?.length) {
+    lines.push("Activated plugin load errors:");
+    for (const plugin of snapshot.activatedPluginErrors) {
+      lines.push(`- ${plugin.id}: ${plugin.error}`);
+    }
+  }
+  if (snapshot.unavailablePlugins?.length) {
+    lines.push("Configured plugins unavailable:");
+    for (const plugin of snapshot.unavailablePlugins) {
+      lines.push(`- ${plugin.id}: ${plugin.diagnostic.detail}`);
+    }
+  }
+  return lines;
+}
+
 function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   const lines: string[] = [];
   if (snapshot.portUsage.status === "busy") {
@@ -14,6 +31,7 @@ function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string
   if (snapshot.probeError) {
     lines.push(`Gateway probe failed: ${snapshot.probeError}`);
   }
+  lines.push(...renderPluginDiagnostics(snapshot));
   return lines;
 }
 
@@ -30,12 +48,6 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
     lines.push(
       `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
     );
-  }
-  if (snapshot.activatedPluginErrors?.length) {
-    lines.push("Activated plugin load errors:");
-    for (const plugin of snapshot.activatedPluginErrors) {
-      lines.push(`- ${plugin.id}: ${plugin.error}`);
-    }
   }
   if (snapshot.channelProbeErrors?.length) {
     lines.push("Channel health probe errors:");

@@ -16,6 +16,7 @@ export async function waitForGatewayHealthyListener(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  includePluginHealth?: boolean;
   previousLockIdentity?: GatewayLockIdentity;
   waitIndefinitelyForPreviousOwner?: boolean;
 }): Promise<GatewayPortHealthSnapshot> {
@@ -45,6 +46,7 @@ export async function waitForGatewayHealthyListener(params: {
         port: params.port,
         auth: probeContext.auth,
         configuredProbe,
+        includePluginHealth: params.includePluginHealth === true,
       });
 
   let attempt = 0;
@@ -66,10 +68,14 @@ export async function waitForGatewayHealthyListener(params: {
       auth: probeContext.auth,
       configuredProbe,
       expectedListenerPid,
+      includePluginHealth: params.includePluginHealth === true,
     });
   }
 
   if (snapshot.healthy) {
+    return snapshot;
+  }
+  if (snapshot.activatedPluginErrors?.length || snapshot.unavailablePlugins?.length) {
     return snapshot;
   }
   while (attempt < attempts) {
@@ -80,8 +86,12 @@ export async function waitForGatewayHealthyListener(params: {
       auth: probeContext.auth,
       configuredProbe,
       expectedListenerPid,
+      includePluginHealth: params.includePluginHealth === true,
     });
     if (snapshot.healthy) {
+      return snapshot;
+    }
+    if (snapshot.activatedPluginErrors?.length || snapshot.unavailablePlugins?.length) {
       return snapshot;
     }
   }

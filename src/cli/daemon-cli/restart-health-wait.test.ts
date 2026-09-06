@@ -181,6 +181,61 @@ describe("restart health", () => {
     expect(sleep).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { name: "stopped", runtime: { status: "stopped" } as const, observedPlugin: "discord" },
+    {
+      name: "running under a different pid",
+      runtime: { status: "running", pid: 8000 } as const,
+      observedPlugin: undefined,
+    },
+  ])(
+    "does not attribute stale-listener plugin failures when the managed service is $name",
+    async ({ runtime, observedPlugin }) => {
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.4.24", connId: "stale" },
+          health: {
+            ok: true,
+            plugins: {
+              errors: [],
+              unavailable: [
+                {
+                  id: "discord",
+                  state: "configured-unavailable",
+                  diagnostic: {
+                    kind: "plugin-verification",
+                    reason: "missing-openclaw-peer-link",
+                    detail: "stale listener plugin failure",
+                  },
+                },
+              ],
+            },
+          },
+        }),
+      );
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 5151, commandLine: "openclaw-gateway" }],
+        hints: [],
+      });
+
+      const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service: makeGatewayService(runtime),
+        port: 18789,
+        includePluginHealth: true,
+        includeChannelHealth: false,
+        requireRunningService: true,
+        attempts: 2,
+        delayMs: 1,
+      });
+
+      expect(snapshot.waitOutcome).toBe("timeout");
+      expect(snapshot.unavailablePlugins?.[0]?.id).toBe(observedPlugin);
+    },
+  );
+
   it("waits through a healthy long-running startup migration", async () => {
     let inspections = 0;
     inspectPortUsage.mockImplementation(async () => {

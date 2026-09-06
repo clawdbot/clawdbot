@@ -237,6 +237,7 @@ describe("external gateway supervision lifecycle", () => {
       port: 19_455,
       attempts: 120,
       delayMs: 500,
+      includePluginHealth: true,
       previousLockIdentity: lockIdentity,
       waitIndefinitelyForPreviousOwner: false,
     });
@@ -265,6 +266,7 @@ describe("external gateway supervision lifecycle", () => {
       port: 18_789,
       attempts: 180,
       delayMs: 500,
+      includePluginHealth: true,
       previousLockIdentity: gatewayLockIdentity,
       waitIndefinitelyForPreviousOwner: false,
     });
@@ -297,9 +299,34 @@ describe("external gateway supervision lifecycle", () => {
       port: 18_789,
       attempts: 420,
       delayMs: 500,
+      includePluginHealth: true,
       previousLockIdentity: gatewayLockIdentity,
       waitIndefinitelyForPreviousOwner: false,
     });
+  });
+
+  it("reports unavailable plugins after an externally supervised restart", async () => {
+    waitForGatewayHealthyListener.mockResolvedValue({
+      healthy: false,
+      portUsage: { port: 18_789, status: "busy", listeners: [], hints: [] },
+      unavailablePlugins: [
+        {
+          id: "discord",
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "missing-openclaw-peer-link",
+            detail: "plugin was built for another OpenClaw release",
+          },
+        },
+      ],
+    });
+
+    await expectExternalRestartFailure("Gateway remains running in degraded mode");
+
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith(
+      expect.objectContaining({ includePluginHealth: true }),
+    );
   });
 
   it("keeps safe restarts on the exact local lock owner", async () => {
