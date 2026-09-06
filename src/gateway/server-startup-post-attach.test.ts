@@ -2669,7 +2669,7 @@ describe("startGatewayPostAttachRuntime", () => {
         .catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(actualServices.PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
       expect(await replacing).toBeInstanceOf(AggregateError);
-      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(serviceStop).not.toHaveBeenCalled();
       reservation.reject();
       startup.resolve();
 
@@ -2679,6 +2679,7 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(drained).toBe(true);
+      expect(serviceStop).toHaveBeenCalledOnce();
       expect(generation.currentServices()).toBe(owner);
 
       let cleanupSettled = false;
