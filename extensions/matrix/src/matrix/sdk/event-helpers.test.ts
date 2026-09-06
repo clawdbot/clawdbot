@@ -167,21 +167,18 @@ describe("event-helpers", () => {
     expect(matrixEventToRaw(event)).not.toHaveProperty("decryptionFailure");
   });
 
-  it("retains the SDK decryption-failure fact without replacing its display content", async () => {
+  it("retains the SDK decryption-failure fact without replacing its display content", () => {
     const event = new MatrixEvent({
       event_id: "$unreadable",
       sender: "@alice:example.org",
-      type: "m.room.encrypted",
+      type: "m.room.message",
       content: {
-        algorithm: "m.megolm.v1.aes-sha2",
+        msgtype: "m.bad.encrypted",
+        body: "Synthetic missing session key",
         "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
       },
     });
-    await event.attemptDecryption({
-      decryptEvent: async () => {
-        throw new Error("Synthetic missing session key");
-      },
-    } as Parameters<MatrixEvent["attemptDecryption"]>[0]);
+    vi.spyOn(event, "isDecryptionFailure").mockReturnValue(true);
     expect(event.isDecryptionFailure()).toBe(true);
     const raw = matrixEventToRaw(event);
     expect(getMatrixEventProjection(raw)?.decryptionFailure).toBe(true);

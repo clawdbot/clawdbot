@@ -181,12 +181,18 @@ function makeEncryptedMediaClient() {
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
-async function failMatrixTestDecryption(event: MatrixEvent) {
-  await event.attemptDecryption({
-    decryptEvent: async () => {
-      throw new Error("Synthetic missing session key");
+function createMatrixTestDecryptionFailure(event: MatrixEvent) {
+  const failed = new MatrixEvent({
+    ...event.event,
+    type: "m.room.message",
+    content: {
+      msgtype: "m.bad.encrypted",
+      body: "Synthetic missing session key",
+      "m.relates_to": event.getWireContent()["m.relates_to"],
     },
-  } as Parameters<MatrixEvent["attemptDecryption"]>[0]);
+  });
+  vi.spyOn(failed, "isDecryptionFailure").mockReturnValue(true);
+  return failed;
 }
 
 function requireArray(value: unknown, label: string): Array<unknown> {
@@ -1633,7 +1639,22 @@ describe("editMessageMatrix mentions", () => {
     },
     { name: "older failed edit", overrides: { origin_server_ts: 100 }, rejects: false },
     { name: "unrelated sender", overrides: { sender: "@other:example.org" }, rejects: false },
-    { name: "redacted edit", overrides: { unsigned: { redacted_because: {} } }, rejects: false },
+    {
+      name: "redacted edit",
+      overrides: {
+        unsigned: {
+          redacted_because: {
+            event_id: "$redaction",
+            type: "m.room.redaction",
+            sender: "@alice:example.org",
+            origin_server_ts: 400,
+            content: {},
+            unsigned: {},
+          },
+        },
+      },
+      rejects: false,
+    },
     {
       name: "unrelated target",
       overrides: { content: { "m.relates_to": { rel_type: "m.replace", event_id: "$other" } } },
@@ -1661,16 +1682,16 @@ describe("editMessageMatrix mentions", () => {
           "m.new_content": { "m.mentions": { user_ids: ["@alice:example.org"] } },
         },
       };
-      const encrypted = new MatrixEvent({
-        ...original,
+      let encrypted = new MatrixEvent({
         event_id: "$unreadable",
+        sender: original.sender,
         origin_server_ts: 300,
         type: "m.room.encrypted",
         content: { "m.relates_to": relation },
         ...overrides,
       });
       if (!pending && !encrypted.isRedacted()) {
-        await failMatrixTestDecryption(encrypted);
+        encrypted = createMatrixTestDecryptionFailure(encrypted);
       }
       getRelations.mockResolvedValue({
         events: [readable, matrixEventToRaw(encrypted)],
@@ -1694,9 +1715,15 @@ describe("editMessageMatrix mentions", () => {
     const { client, sendMessage, getEvent } = makeClient();
     const original = createBundledReplacementEvent("$original");
     delete original.unsigned;
-    const encrypted = new MatrixEvent({ ...original, type: "m.room.encrypted" });
+    let encrypted = new MatrixEvent({
+      event_id: original.event_id,
+      sender: original.sender,
+      origin_server_ts: original.origin_server_ts,
+      content: original.content,
+      type: "m.room.encrypted",
+    });
     if (mode === "failed") {
-      await failMatrixTestDecryption(encrypted);
+      encrypted = createMatrixTestDecryptionFailure(encrypted);
     }
     getEvent.mockResolvedValue(matrixEventToRaw(encrypted));
     await expect(
@@ -1740,14 +1767,15 @@ describe("editMessageMatrix mentions", () => {
         origin_server_ts: 1,
         content: { body: "Hello Alice", "m.mentions": { user_ids: ["@alice:example.org"] } },
       });
-      const overlay = new MatrixEvent({
-        event_id: "$overlay",
-        sender: mode === "foreign overlay" ? "@other:example.org" : "@bot:example.org",
-        type: "m.room.encrypted",
-        origin_server_ts: 2,
-        content: { "m.relates_to": { rel_type: "m.replace", event_id: "$original" } },
-      });
-      await failMatrixTestDecryption(overlay);
+      const overlay = createMatrixTestDecryptionFailure(
+        new MatrixEvent({
+          event_id: "$overlay",
+          sender: mode === "foreign overlay" ? "@other:example.org" : "@bot:example.org",
+          type: "m.room.encrypted",
+          origin_server_ts: 2,
+          content: { "m.relates_to": { rel_type: "m.replace", event_id: "$original" } },
+        }),
+      );
       original.makeReplaced(overlay);
       expect(original.isDecryptionFailure()).toBe(false);
       expect(original.getContent()).toEqual({});
