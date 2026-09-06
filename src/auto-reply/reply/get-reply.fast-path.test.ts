@@ -97,11 +97,7 @@ async function loadGetReplyRuntimeForTest() {
 }
 
 function requirePreparedReplyParams() {
-  const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
-  if (!preparedReplyParams) {
-    throw new Error("expected prepared reply params");
-  }
-  return preparedReplyParams;
+  return expectDefined(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0], "prepared reply params");
 }
 
 function requireDirectiveParams() {
