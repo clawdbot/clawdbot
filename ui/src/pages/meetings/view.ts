@@ -32,6 +32,7 @@ registerTranscriptsEnglish();
 registerMeetingsEnglish();
 
 export type TranscriptReadState = {
+  summary: TranscriptsGetResult | null;
   pages: TranscriptsGetResult[];
   loading: boolean;
   error: unknown;
@@ -296,7 +297,8 @@ function renderReader(props: TranscriptsViewProps) {
       <p>${t("transcripts.chooseHint")}</p>
     </div>`;
   }
-  const page = props.reader.pages.at(-1);
+  const transcriptPage = props.reader.pages.at(-1);
+  const page = transcriptPage ?? props.reader.summary;
   return html`<article
     class="transcripts-reader"
     aria-label=${t("transcripts.reader")}
@@ -394,7 +396,9 @@ function renderReader(props: TranscriptsViewProps) {
             >
               ${
                 props.readerTab === "summary"
-                  ? renderSummary(page)
+                  ? props.reader.summary
+                    ? renderSummary(props.reader.summary)
+                    : nothing
                   : html`
                       <form
                         class="transcripts-search"
@@ -473,6 +477,9 @@ function renderReader(props: TranscriptsViewProps) {
                           )}
                       </ol>
                       ${
+                        transcriptPage &&
+                        !props.reader.loading &&
+                        !props.reader.error &&
                         !props.reader.pages.some((result) => result.utterances?.length)
                           ? html`<p role="status">
                               ${t(
@@ -484,7 +491,7 @@ function renderReader(props: TranscriptsViewProps) {
                           : nothing
                       }
                       ${
-                        page.nextCursor
+                        transcriptPage?.nextCursor
                           ? html`<button
                               class="btn"
                               ?disabled=${props.reader.loading}

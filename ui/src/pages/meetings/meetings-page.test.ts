@@ -61,6 +61,69 @@ afterEach(() => {
 });
 
 describe("meeting transcript library", () => {
+  it("keeps large saved notes readable and exportable when a transcript page exceeds its budget", async () => {
+    const markdown = `# Design review\n\nPreviously saved large notes.\n\n${"x".repeat(1024 * 1024)}`;
+    const request = vi.fn(async (method: string, params: { limit?: number }) => {
+      if (method === "transcripts.list") {
+        return { sessions: [], nextCursor: null };
+      }
+      if (method === "transcripts.export") {
+        return {
+          data: btoa("Complete saved notes"),
+          filename: "notes.md",
+          mimeType: "text/markdown",
+        };
+      }
+      if (params.limit !== undefined) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Transcript page exceeds its byte limit",
+          details: { type: "transcript_result_too_large" },
+        });
+      }
+      return {
+        ...meetingPage,
+        utterances: undefined,
+        summary: { ...meetingPage.summary, markdown },
+      };
+    });
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:notes");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const { page } = mount(request, "?selector=meeting");
+    await vi.waitFor(() =>
+      expect(page.querySelector(".transcripts-summary")?.textContent ?? "").toContain(
+        "Previously saved large notes.",
+      ),
+    );
+    expect(page.textContent).not.toContain("Transcript page exceeds its byte limit");
+    page
+      .querySelector<HTMLElement>("#transcript-reader-tab-text")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(page.querySelector(".transcripts-reader [role=alert]")?.textContent).toContain(
+        "Transcript page exceeds its byte limit",
+      ),
+    );
+    button(page, "Download Markdown").click();
+    await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(page.textContent).toContain("Download started");
+    page
+      .querySelector<HTMLElement>("#transcript-reader-tab-summary")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(page.querySelector(".transcripts-summary")?.textContent ?? "").toContain(
+        "Previously saved large notes.",
+      ),
+    );
+    expect(page.textContent).not.toContain("Transcript page exceeds its byte limit");
+  });
+
   it("preserves every filter draft across pending responses, and clears even uncommitted filters", async () => {
     const pending = deferred<unknown>();
     const request = vi.fn(() => pending.promise);
@@ -358,9 +421,13 @@ describe("meeting transcript library", () => {
 
   it("keeps a denied paginated archive hidden until a fresh first-page retry succeeds", async () => {
     const reads: ReturnType<typeof deferred<unknown>>[] = [];
-    const request = vi.fn((method: string) => {
+    const summary = deferred<unknown>();
+    const request = vi.fn((method: string, params: { includeUtterances?: boolean }) => {
       if (method === "transcripts.list") {
         return Promise.resolve({ sessions: [meetingEntry], nextCursor: null });
+      }
+      if (!params.includeUtterances) {
+        return summary.promise;
       }
       const read = deferred<unknown>();
       reads.push(read);
@@ -502,7 +569,7 @@ describe("meeting transcript library", () => {
       expect(page.textContent).not.toContain("Late private");
       expect(createObjectURL).not.toHaveBeenCalled();
       expect(blob).not.toHaveBeenCalled();
-      expect(request).toHaveBeenCalledTimes(6);
+      expect(request).toHaveBeenCalledTimes(8);
       expect(button(page, "Refresh").disabled).toBe(false);
       request.mockImplementation(async (method: string) =>
         method === "transcripts.get"
@@ -538,20 +605,28 @@ describe("meeting transcript library", () => {
     const reader = page.querySelector(".transcripts-reader")!;
     expect(reader.textContent).not.toContain("Keep the reader quiet");
     expect(reader.textContent).toContain("Transcript access is restricted");
-    expect(request.mock.calls.filter(([method]) => method === "transcripts.get")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "transcripts.get")).toHaveLength(2);
     button(reader, "Retry").click();
     await vi.waitFor(() => expect(reader.textContent).toContain("Keep the reader quiet"));
     expect(page.textContent).not.toContain("Transcript access is restricted");
   });
 
-  it.each(["selection", "client", "epoch", "same-args retry"])(
-    "ignores a denied request retired by %s without poisoning the new reader",
-    async (replacement) => {
+  it.each(
+    ["selection", "client", "epoch", "same-args retry"].flatMap((replacement) => [
+      ["summary", replacement],
+      ["speech", replacement],
+    ]),
+  )(
+    "ignores a denied %s request retired by %s without poisoning the new reader",
+    async (readKind, replacement) => {
       const old = deferred<unknown>();
       let readCount = 0;
-      const request = vi.fn((method: string) => {
+      const request = vi.fn((method: string, params: { includeUtterances?: boolean }) => {
         if (method === "transcripts.list") {
           return Promise.resolve({ sessions: [], nextCursor: null });
+        }
+        if (Boolean(params.includeUtterances) !== (readKind === "speech")) {
+          return Promise.resolve(meetingPage);
         }
         return ++readCount === 1 ? old.promise : Promise.resolve(meetingPage);
       });
@@ -592,7 +667,13 @@ describe("meeting transcript library", () => {
     const { page } = mount(request, "?tab=transcript&selector=meeting");
     await vi.waitFor(() => expect(page.textContent).toContain("Keep the reader quiet"));
     button(page, "Load more").click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "transcripts.get",
+        expect.objectContaining({ cursor: "more" }),
+        expect.anything(),
+      ),
+    );
     more.reject(new Error("Temporary network failure"));
     await vi.waitFor(() => expect(page.textContent).toContain("Temporary network failure"));
     expect(page.textContent).toContain("Keep the reader quiet");

@@ -773,6 +773,9 @@ beginning** returns to the first page. **Summary** renders the stored Markdown
 notes, including their speaker-labeled transcript, and labels model-generated or
 heuristic provenance when available. Opening this tab does not run a summary job.
 Missing summaries and empty transcripts have distinct empty states.
+Saved summaries load independently of speech pages. If a transcript page exceeds
+its transfer limit, you can still read the saved notes and download an export
+within the export limit below.
 
 **Download Markdown** downloads the transcript and any stored summary;
 **Download JSONL** downloads the reader's public utterance projection, including

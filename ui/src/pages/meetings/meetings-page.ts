@@ -43,6 +43,7 @@ class MeetingsPage extends OpenClawLightDomElement {
   @state() private readerDenial: unknown = null;
   private accessGeneration = 0;
   @state() private readerCursor: string | null = null;
+  @state() private summary: TranscriptsGetResult | null = null;
   @state() private readerPages: TranscriptsGetResult[] = [];
   @state() private trimmed = false;
   @state() private exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string } =
@@ -136,6 +137,7 @@ class MeetingsPage extends OpenClawLightDomElement {
         this.listDenial = error;
         this.readerDenial = error;
         this.list = null;
+        this.summary = null;
         this.readerPages = [];
         this.trimmed = false;
         this.cancelExport();
@@ -167,6 +169,27 @@ class MeetingsPage extends OpenClawLightDomElement {
         accept: (result) => {
           this.listDenial = null;
           this.list = result;
+        },
+      });
+    },
+  });
+
+  private readonly summaryTask = new Task(this, {
+    args: () => [this.requestClient(), this.gateway.epoch, this.selection.selector] as const,
+    task: async ([client, , selector], { signal }) => {
+      if (!client || !selector) {
+        return initialState;
+      }
+      return this.readArchive({
+        client,
+        method: "transcripts.get",
+        // Stored notes retain the shipped summary-read budget, independent of speech pages.
+        params: { selector },
+        signal,
+        current: () => this.selection.selector === selector,
+        accept: (result) => {
+          this.readerDenial = null;
+          this.summary = result;
         },
       });
     },
@@ -214,6 +237,9 @@ class MeetingsPage extends OpenClawLightDomElement {
     if (changed.has("routeSearch")) {
       const previous = new URLSearchParams(String(changed.get("routeSearch") ?? ""));
       const next = new URLSearchParams(this.routeSearch);
+      if (previous.get("selector") !== next.get("selector")) {
+        this.summary = null;
+      }
       // Only route-owned changes replace drafts; async reader/list work does not.
       for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
         if (
@@ -252,7 +278,9 @@ class MeetingsPage extends OpenClawLightDomElement {
     this.list = null;
     this.listDenial = null;
     this.readerDenial = null;
+    this.summary = null;
     this.listTask.abort();
+    this.summaryTask.abort();
     this.readerTask.abort();
     this.cancelExport();
     this.resetReader();
@@ -283,6 +311,7 @@ class MeetingsPage extends OpenClawLightDomElement {
 
   private refresh() {
     this.cancelExport();
+    this.summary = null;
     this.resetReader();
     // A refresh starts a new cursor snapshot, rather than reusing an old list page.
     if (new URLSearchParams(this.routeSearch).has("cursor")) {
@@ -290,6 +319,7 @@ class MeetingsPage extends OpenClawLightDomElement {
     } else {
       void this.listTask.run();
     }
+    void this.summaryTask.run();
     void this.readerTask.run();
   }
 
@@ -340,12 +370,14 @@ class MeetingsPage extends OpenClawLightDomElement {
   override render() {
     const snapshot = this.context.gateway.snapshot;
     const client = this.requestClient();
+    const activeReaderTask = this.readerTab === "summary" ? this.summaryTask : this.readerTask;
     const reader: TranscriptReadState = {
+      summary: this.summary,
       pages: this.readerPages,
-      loading: this.readerTask.status === TaskStatus.PENDING,
+      loading: activeReaderTask.status === TaskStatus.PENDING,
       error:
         this.readerDenial ??
-        (this.readerTask.status === TaskStatus.ERROR ? this.readerTask.error : null),
+        (activeReaderTask.status === TaskStatus.ERROR ? activeReaderTask.error : null),
       trimmed: this.trimmed,
     };
     return renderTranscripts({
@@ -367,8 +399,15 @@ class MeetingsPage extends OpenClawLightDomElement {
       onNavigate: (patch) => this.navigate(patch),
       onRefresh: () => this.refresh(),
       onReaderRetry: () => {
+        if (this.readerTab === "summary") {
+          void this.summaryTask.run();
+          return;
+        }
         if (!this.readerPages.length) {
           this.resetReader();
+        }
+        if (!this.summary) {
+          void this.summaryTask.run();
         }
         void this.readerTask.run();
       },

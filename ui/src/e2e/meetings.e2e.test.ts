@@ -110,13 +110,14 @@ suite.define(() => {
         expect(
           await view.getByText("Ada: Let's keep the setup simple.", { exact: true }).isVisible(),
         ).toBe(true);
-        for (const request of await gateway.getRequests("transcripts.get")) {
-          expect(request.params).toMatchObject({
-            selector: meeting.selector,
-            includeUtterances: true,
-            limit: 50,
-          });
-        }
+        expect(
+          (await gateway.getRequests("transcripts.get")).map((request) => request.params),
+        ).toEqual(
+          expect.arrayContaining([
+            { selector: meeting.selector },
+            { selector: meeting.selector, includeUtterances: true, limit: 50 },
+          ]),
+        );
         for (const theme of ["light", "dark"] as const) {
           await page.emulateMedia({ colorScheme: theme });
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
@@ -138,13 +139,14 @@ suite.define(() => {
         }
         await page.reload();
         await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
-        for (const request of await gateway.getRequests("transcripts.get")) {
-          expect(request.params).toMatchObject({
-            selector: meeting.selector,
-            includeUtterances: true,
-            limit: 50,
-          });
-        }
+        expect(
+          (await gateway.getRequests("transcripts.get")).map((request) => request.params),
+        ).toEqual(
+          expect.arrayContaining([
+            { selector: meeting.selector },
+            { selector: meeting.selector, includeUtterances: true, limit: 50 },
+          ]),
+        );
       },
     );
   });

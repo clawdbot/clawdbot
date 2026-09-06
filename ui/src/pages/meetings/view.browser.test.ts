@@ -27,6 +27,7 @@ function readerProps(): Parameters<typeof renderTranscripts>[0] {
     listLoading: false,
     listError: null,
     reader: {
+      summary: meetingPage,
       pages: [
         {
           ...meetingPage,
@@ -106,16 +107,14 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     await page.viewport(1440, 1000);
     const props = readerProps();
     props.readerTab = "summary";
-    props.reader.pages = [
-      {
-        ...meetingPage,
-        summary: {
-          ...meetingPage.summary!,
-          markdown:
-            "# Design review\n\nFirst paragraph.\n\nSecond paragraph.\n\n## Next steps\n- Follow up.\n",
-        },
+    props.reader.summary = {
+      ...meetingPage,
+      summary: {
+        ...meetingPage.summary!,
+        markdown:
+          "# Design review\n\nFirst paragraph.\n\nSecond paragraph.\n\n## Next steps\n- Follow up.\n",
       },
-    ];
+    };
     render(renderTranscripts(props), container);
     const notes = container.querySelector<HTMLElement>(".meetings-notes")!;
     const paragraphs = notes.querySelectorAll("p");
