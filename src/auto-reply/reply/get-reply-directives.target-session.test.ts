@@ -9,11 +9,18 @@ import {
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   prepareReplyConversation,
   type PreparedReplyConversation,
 } from "./prompt-session-context.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+  type ReplyPreRunRejectionCode,
+} from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const mocks = vi.hoisted(() => ({
@@ -425,27 +432,60 @@ describe("resolveReplyDirectives", () => {
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
   });
 
-  it("marks terminal directive replies for delivery under source suppression", async () => {
-    mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
-      kind: "reply",
+  it.each<{
+    label: string;
+    body: string;
+    reply: ReplyPayload;
+    reason?: ReplyPreRunRejectionCode;
+  }>([
+    {
+      label: "model acknowledgement",
+      body: "/model openai/gpt-5.5",
       reply: {
-        text: "Model set to fable (anthropic/claude-fable-5) for this session only; configured default unchanged.",
+        text: "Model set to openai/gpt-5.5 for this session only; configured default unchanged.",
       },
-    });
+    },
+    {
+      label: "model rejection",
+      body: "/model openai/REJECTED_PRIVATE_TOKEN",
+      reply: { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true },
+      reason: "model-selection-rejected",
+    },
+    {
+      label: "combined directive rejection",
+      body: "/model openai/REJECTED_PRIVATE_TOKEN\n/think high",
+      reply: { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true },
+      reason: "session-directive-rejected",
+    },
+  ])(
+    "preserves $label delivery and its invocation rejection fact",
+    async ({ body, reply, reason }) => {
+      const runState: ReplyOperationRunState = {};
+      const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
+      mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
+        kind: "reply",
+        reply: { ...reply },
+        preRunRejection: reason,
+      });
 
-    const { result } = await resolveHelloWithModelDefaults({
-      body: "/model fable",
-      commandAuthorized: true,
-      defaultThinking: "off",
-      defaultReasoning: "on",
-    });
+      const { result } = await resolveHelloWithModelDefaults({
+        body,
+        commandAuthorized: true,
+        defaultThinking: "off",
+        defaultReasoning: "on",
+        opts,
+      });
 
-    expect(result.kind).toBe("reply");
-    if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
-      throw new Error("expected a single directive reply");
-    }
-    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
+      expect(result).toEqual({ kind: "reply", reply });
+      expect(runState.preRunRejection).toBe(reason);
+      if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
+        throw new Error("expected a single directive reply");
+      }
+      expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(
+        true,
+      );
+    },
+  );
 
   it("preserves explicitly suppressed command-shaped text for the model", async () => {
     const body = "/model openai/gpt-5.5";

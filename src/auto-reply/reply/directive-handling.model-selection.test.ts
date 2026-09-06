@@ -1,4 +1,4 @@
-import "./directive-handling.mixed-inline.test-harness.js";
+import "./directive-handling.mixed-inline.test-mocks.js";
 import { describe, expect, it } from "vitest";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";

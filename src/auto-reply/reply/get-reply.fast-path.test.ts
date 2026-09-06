@@ -36,6 +36,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import "./get-reply.test-runtime-mocks.js";
 
@@ -339,6 +340,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     );
 
     const runState: import("./reply-operation-run-state.js").ReplyOperationRunState = {};
+    const replyOptions: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
     const result = await getReplyFromConfig(
       buildGetReplyCtx({
         Body: "/reset openai/gpt-5.5 continue",
@@ -347,7 +349,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         CommandAuthorized: true,
         SessionKey: sessionKey,
       }),
-      { [REPLY_OPERATION_RUN_STATE]: runState },
+      replyOptions,
       {} as OpenClawConfig,
     );
 

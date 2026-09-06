@@ -1,4 +1,4 @@
-import "./directive-handling.mixed-inline.test-harness.js";
+import "./directive-handling.mixed-inline.test-mocks.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as authProfileStore from "../../agents/auth-profiles/store.js";

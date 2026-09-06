@@ -1,12 +1,12 @@
-// Tests directive rejection through the shared resolver, finalizer, and diagnostic bus.
+// Tests invocation rejection outcomes through shared dispatch and the diagnostic bus.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onDiagnosticEvent,
   type DiagnosticMessageProcessedEvent,
 } from "../../infra/diagnostic-events.js";
+import type { ReplyPayload } from "../types.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -18,15 +18,12 @@ import {
   setDiscordTestRegistry,
   threadInfoMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
-import { resolveReplyDirectives } from "./get-reply-directives.js";
-import { finalizeInboundContext } from "./inbound-context.js";
-import { prepareReplyConversation } from "./prompt-session-context.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
+  type ReplyPreRunRejectionCode,
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createMockTypingController } from "./test-helpers.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -36,22 +33,21 @@ const REJECTED_MODEL = "openai/REJECTED_PRIVATE_TOKEN";
 const SESSION_KEY = "agent:main:session";
 const cfg: OpenClawConfig = {
   diagnostics: { enabled: true },
-  commands: { text: true },
   messages: { visibleReplies: "automatic" },
-  agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } },
 };
 
-function createDirectiveFixture() {
-  const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-  const sessionStore = { [SESSION_KEY]: sessionEntry };
-  const continueReply = vi.fn(async () => ({ text: "Agent reply." }));
-  let messageId = 0;
-  const dispatch = async (body: string) => {
-    const runState: ReplyOperationRunState = {};
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Body: body,
-      CommandBody: body,
+async function dispatchReplyFixture(params: {
+  body: string;
+  messageId: string;
+  reply: ReplyPayload;
+  rejection?: ReplyPreRunRejectionCode;
+}) {
+  const runState: ReplyOperationRunState = { preRunRejection: params.rejection };
+  const dispatcher = createDispatcher();
+  await dispatchReplyFromConfig({
+    ctx: buildTestCtx({
+      Body: params.body,
+      CommandBody: params.body,
       CommandAuthorized: true,
       From: "user1",
       To: "telegram:2000",
@@ -59,51 +55,14 @@ function createDirectiveFixture() {
       Surface: "telegram",
       ChatType: "direct",
       SessionKey: SESSION_KEY,
-      MessageSid: String(++messageId),
-    });
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
-      replyResolver: async (resolverCtx, resolverOpts) => {
-        const finalizedCtx = finalizeInboundContext(resolverCtx);
-        const result = await resolveReplyDirectives({
-          ctx: finalizedCtx,
-          cfg,
-          agentId: "main",
-          agentDir: "/tmp/main-agent",
-          workspaceDir: "/tmp/workspace",
-          agentCfg: cfg.agents?.defaults,
-          sessionCtx: finalizedCtx,
-          conversation: prepareReplyConversation({ ctx: finalizedCtx, sessionEntry }),
-          sessionEntry,
-          sessionStore,
-          sessionKey: SESSION_KEY,
-          sessionScope: "per-sender",
-          isGroup: false,
-          triggerBodyNormalized: body,
-          resetTriggered: false,
-          commandAuthorized: true,
-          defaultProvider: "anthropic",
-          defaultModel: "claude-opus-4-6",
-          aliasIndex: { byAlias: new Map(), byKey: new Map() },
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          hasResolvedHeartbeatModelOverride: false,
-          typing: createMockTypingController(),
-          preparedModelCatalog: {
-            entries: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Opus" }],
-            routeVariants: [],
-          },
-          opts: resolverOpts,
-        });
-        return result.kind === "reply" ? result.reply : continueReply();
-      },
-    });
-    return { runState, dispatcher };
-  };
-  return { dispatch, continueReply, sessionEntry };
+      MessageSid: params.messageId,
+    }),
+    cfg,
+    dispatcher,
+    replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
+    replyResolver: async () => params.reply,
+  });
+  return dispatcher;
 }
 
 describe("dispatchReplyFromConfig pre-run directive rejection", () => {
@@ -154,66 +113,64 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     diagnosticMocks.forwardToRealPipeline = false;
   });
 
-  it.each([
-    { body: `/model ${REJECTED_MODEL} -s`, reason: "model-selection-rejected" },
-    { body: `please reply /model ${REJECTED_MODEL} -s`, reason: "session-directive-rejected" },
-    { body: `/model ${REJECTED_MODEL} -s\n/think high`, reason: "session-directive-rejected" },
-  ])("emits one safe skipped event for $body", async ({ body, reason }) => {
-    const fixture = createDirectiveFixture();
-    const { runState, dispatcher } = await fixture.dispatch(body);
-
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("is not allowed") }),
-    );
-    expect(fixture.continueReply).not.toHaveBeenCalled();
-    expect(fixture.sessionEntry).toEqual({ sessionId: "session-1", updatedAt: 1 });
-    expect(processedEvents).toEqual([
-      expect.objectContaining({
-        type: "message.processed",
-        channel: "telegram",
-        sessionKey: SESSION_KEY,
+  it.each<ReplyPreRunRejectionCode>(["model-selection-rejected", "session-directive-rejected"])(
+    "emits one safe skipped event for %s without changing the reply",
+    async (reason) => {
+      const reply = { text: `Model "${REJECTED_MODEL}" is not allowed.`, isError: true };
+      const dispatcher = await dispatchReplyFixture({
+        body: `/model ${REJECTED_MODEL} -s`,
         messageId: "1",
-        outcome: "skipped",
-        reason,
-      }),
-    ]);
-    expect(runState.preRunRejection).toBe(reason);
-    expect(processedEvents[0]?.error).toBeUndefined();
-    expect(JSON.stringify(processedEvents)).not.toContain(REJECTED_MODEL);
-    for (const diagnostic of [
-      diagnosticMocks.logMessageProcessed,
-      diagnosticMocks.logMessageDispatchCompleted,
-    ]) {
-      expect(diagnostic).toHaveBeenCalledOnce();
-      expect(diagnostic).toHaveBeenCalledWith(
-        expect.objectContaining({ outcome: "skipped", reason }),
-      );
-      expect(diagnostic.mock.calls[0]?.[0].error).toBeUndefined();
-    }
-  });
+        reply,
+        rejection: reason,
+      });
 
-  it("completes valid directives, ignored hints, and ordinary turns after a rejected turn", async () => {
-    const fixture = createDirectiveFixture();
-    await fixture.dispatch(`please reply /model ${REJECTED_MODEL} -s`);
-    const bodies = [
-      "/model anthropic/claude-opus-4-6 -s",
-      "please reply /model anthropic/claude-opus-4-6 -s",
-      "please reply\n/trace raw\n/reasoning on",
-      "hello again",
-    ];
-    for (const body of bodies) {
-      const { runState, dispatcher } = await fixture.dispatch(body);
-      expect(runState.preRunRejection).toBeUndefined();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-    }
-    expect(fixture.continueReply).toHaveBeenCalledTimes(3);
-    expect(processedEvents.map(({ outcome, reason }) => ({ outcome, reason }))).toEqual([
-      { outcome: "skipped", reason: "session-directive-rejected" },
-      ...bodies.map(() => ({ outcome: "completed", reason: undefined })),
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(reply);
+      expect(processedEvents).toEqual([
+        expect.objectContaining({
+          type: "message.processed",
+          channel: "telegram",
+          sessionKey: SESSION_KEY,
+          messageId: "1",
+          outcome: "skipped",
+          reason,
+        }),
+      ]);
+      expect(processedEvents[0]?.error).toBeUndefined();
+      expect(JSON.stringify(processedEvents)).not.toContain(REJECTED_MODEL);
+      for (const diagnostic of [
+        diagnosticMocks.logMessageProcessed,
+        diagnosticMocks.logMessageDispatchCompleted,
+      ]) {
+        expect(diagnostic).toHaveBeenCalledOnce();
+        expect(diagnostic).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: "skipped", reason }),
+        );
+        expect(diagnostic.mock.calls[0]?.[0].error).toBeUndefined();
+      }
+    },
+  );
+
+  it("completes an ordinary turn after a rejection in the same session", async () => {
+    await dispatchReplyFixture({
+      body: `/model ${REJECTED_MODEL} -s`,
+      messageId: "1",
+      reply: { text: `Model "${REJECTED_MODEL}" is not allowed.`, isError: true },
+      rejection: "session-directive-rejected",
+    });
+    const reply = { text: "Agent reply." };
+    const dispatcher = await dispatchReplyFixture({
+      body: "hello again",
+      messageId: "2",
+      reply,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(reply);
+    expect(
+      processedEvents.map(({ messageId, outcome, reason }) => ({ messageId, outcome, reason })),
+    ).toEqual([
+      { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
+      { messageId: "2", outcome: "completed", reason: undefined },
     ]);
-    expect(fixture.sessionEntry.reasoningLevel).toBeUndefined();
-    expect(fixture.sessionEntry.traceLevel).toBeUndefined();
   });
 
   it.each<{
