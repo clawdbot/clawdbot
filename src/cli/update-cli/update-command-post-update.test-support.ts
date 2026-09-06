@@ -1,8 +1,10 @@
 import os from "node:os";
 import { vi } from "vitest";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { captureEnv } from "../../test-utils/env.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { finishUpdate } from "./update-command-post-update.js";
 
 export function createManagedServiceIdentityFixture(home: string) {
@@ -112,3 +114,44 @@ export async function finishSuccessfulPackageSwitch(
     ...overrides,
   } as unknown as FinishUpdateParams);
 }
+
+export const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
+
+export function managedServiceState(
+  env: NodeJS.ProcessEnv = {},
+  command: Partial<GatewayServiceCommandConfig> = {},
+  unloaded = false,
+) {
+  return {
+    installed: true,
+    loadState: { status: unloaded ? "not-loaded" : "loaded" },
+    env,
+    command: { programArguments: [...programArguments], ...command },
+  };
+}
+
+export function taskRecovery(record: (phase: string) => void = () => {}) {
+  return {
+    suspended: Promise.resolve(true),
+    beginMutation: vi.fn(() => record("mutation")),
+    restore: vi.fn(async () => record("restore")),
+    handoff: vi.fn(),
+    complete: vi.fn(async () => record("complete")),
+    interrupted: () => false,
+  };
+}
+
+export const successfulPluginUpdate: PostCorePluginUpdateResult = {
+  status: "ok",
+  changed: false,
+  sync: {
+    changed: false,
+    switchedToBundled: [],
+    switchedToNpm: [],
+    warnings: [],
+    errors: [],
+  },
+  npm: { changed: false, outcomes: [] },
+  integrityDrifts: [],
+  warnings: [],
+};

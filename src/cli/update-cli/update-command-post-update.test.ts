@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -11,10 +10,13 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
+  managedServiceState,
+  programArguments,
+  successfulPluginUpdate,
+  taskRecovery,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
 
@@ -113,25 +115,11 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 import * as postCoreModule from "./update-command-post-core.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as rollbackModule from "./update-command-rollback.js";
+import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
-
-function managedServiceState(
-  env: NodeJS.ProcessEnv = {},
-  command: Partial<GatewayServiceCommandConfig> = {},
-  unloaded = false,
-) {
-  return {
-    installed: true,
-    loadState: { status: unloaded ? "not-loaded" : "loaded" },
-    env,
-    command: { programArguments: [...programArguments], ...command },
-  };
-}
-
 function expectFailureReport(reason: string, options: unknown = expect.any(Object)) {
   expect(mocks.printResult).toHaveBeenCalledWith(
     expect.objectContaining({ status: "error", reason }),
@@ -150,17 +138,6 @@ function expectUpdateFailure(promise: Promise<unknown>, reason: string, details:
   });
 }
 
-function taskRecovery(record: (phase: string) => void = () => {}) {
-  return {
-    suspended: Promise.resolve(true),
-    beginMutation: vi.fn(() => record("mutation")),
-    restore: vi.fn(async () => record("restore")),
-    handoff: vi.fn(),
-    complete: vi.fn(async () => record("complete")),
-    interrupted: () => false,
-  };
-}
-
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -171,21 +148,6 @@ afterEach(() => {
     Reflect.deleteProperty(process.stdin, "isTTY");
   }
 });
-
-const successfulPluginUpdate: PostCorePluginUpdateResult = {
-  status: "ok",
-  changed: false,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-  warnings: [],
-};
 
 describe("successful update finalization ordering", () => {
   beforeEach(() => {
@@ -214,6 +176,25 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  });
+
+  it("retains pending staged service load without legacy rollback or completion", async () => {
+    const refusal = new UpdateServiceLoadBoundaryError("checkpoint seal refused");
+    mocks.restartService.mockRejectedValueOnce(refusal);
+    const rollback = vi
+      .spyOn(rollbackModule, "rollbackFailedUpdate")
+      .mockImplementationOnce(async ({ result }) => ({ result, rolledBack: false }));
+    const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
+      async () => undefined,
+    );
+    const finishing = finishSuccessfulPackageSwitch(undefined, {
+      packageTransaction: { backupRoot: "/tmp/retained-previous", rollback: vi.fn(), complete },
+    });
+    await expect(finishing).rejects.toBe(refusal);
+    expect(rollback).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(mocks.printResult).not.toHaveBeenCalled();
+    expect(mocks.restartService).toHaveBeenCalledOnce();
   });
 
   it.each(["local", "fresh"] as const)(

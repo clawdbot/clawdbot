@@ -38,7 +38,10 @@ import {
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
-import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
+import {
+  UpdateServiceLoadBoundaryError,
+  type UpdateServiceLoadBoundary,
+} from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
@@ -622,7 +625,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
 
     return await reportResult(resultWithPostUpdate);
   } catch (error) {
-    if (error instanceof UpdateCommandFailure) {
+    if (error instanceof UpdateCommandFailure || error instanceof UpdateServiceLoadBoundaryError) {
+      // Staging may already have changed files. Keep intent/material for fenced reconciliation.
       throw error;
     }
     const message = formatErrorMessage(error);
