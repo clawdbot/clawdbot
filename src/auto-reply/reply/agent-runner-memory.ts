@@ -1356,8 +1356,24 @@ export async function runMemoryFlushIfNeeded(params: {
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
-  const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
-  const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
+  const transcriptUsageTokensFallback =
+    sessionLogSnapshot &&
+    transcriptUsageSnapshot?.promptTokens === undefined &&
+    entry
+      ? await estimatePromptTokensFromSessionTranscript({
+          sessionId: entry.sessionId,
+          sessionEntry: entry,
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+          sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
+          storePath: params.storePath,
+        })
+      : undefined;
+  const transcriptPromptTokens =
+    transcriptUsageSnapshot?.promptTokens ??
+    transcriptUsageTokensFallback?.promptTokens;
+  const transcriptOutputTokens =
+    transcriptUsageSnapshot?.outputTokens ??
+    transcriptUsageTokensFallback?.outputTokens;
   const hasReliableTranscriptPromptTokens =
     typeof transcriptPromptTokens === "number" &&
     Number.isFinite(transcriptPromptTokens) &&
