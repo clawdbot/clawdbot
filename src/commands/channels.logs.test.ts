@@ -788,11 +788,11 @@ describe("channelsLogsCommand", () => {
       );
       await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
 
-      armRace = true;
       await fs.appendFile(
         logPath,
         logLine({ module: "gateway/channels/slack/send", message: "pending" }),
       );
+      armRace = true;
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
       expect(armedOpenCount).toBeGreaterThanOrEqual(4);
@@ -842,11 +842,11 @@ describe("channelsLogsCommand", () => {
       );
       await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
 
-      armRace = true;
       await fs.appendFile(
         logPath,
         logLine({ module: "gateway/channels/slack/send", message: "pending" }),
       );
+      armRace = true;
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(runtime.log.mock.calls.length).toBeGreaterThanOrEqual(4));
       expect(armedOpenCount).toBeGreaterThanOrEqual(4);
