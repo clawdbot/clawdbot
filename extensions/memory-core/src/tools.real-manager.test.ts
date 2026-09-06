@@ -8,6 +8,7 @@ import {
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddingProvider } from "./memory/embeddings.js";
 import * as generationLease from "./memory/manager-index-generation-lease.js";
 import {
   createManagerIndexFixture,
@@ -348,6 +349,53 @@ describe("memory_search real manager", () => {
     });
   });
 
+  it("returns memory-file keyword matches at the deadline without cooling down healthy recall", async () => {
+    const cfg = fixture.createConfig({ minScore: 0, vectorEnabled: false });
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "baseline", force: true });
+    const fields = manager as unknown as { provider: EmbeddingProvider };
+    const embed = fields.provider.embed.bind(fields.provider);
+    const queryEntered = createDeferred<void>();
+    const releaseQuery = createDeferred<void>();
+    const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async (...args) => {
+      const result = await embed(...args);
+      queryEntered.resolve();
+      await releaseQuery.promise;
+      return result;
+    });
+    const tool = createMemorySearchTool({ config: cfg, agentId: "main" });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    vi.useFakeTimers();
+    const execution = tool.execute("keyword-deadline", { query: "zebra", corpus: "memory" });
+    try {
+      await queryEntered.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await execution;
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ path: "memory/2026-01-12.md", source: "memory" })],
+        partial: true,
+        mode: "keyword-only",
+        warning: expect.stringContaining("Only memory-file keyword matches"),
+        error: "memory_search timed out after 15s",
+        corpora: [{ corpus: "memory", outcome: "partial" }],
+        debug: { searchMs: 15_000 },
+      });
+      expect(result.details).not.toHaveProperty("unavailable");
+    } finally {
+      releaseQuery.resolve();
+      querySpy.mockRestore();
+      vi.useRealTimers();
+    }
+    const retried = await tool.execute("partial-results-retry", {
+      query: "zebra",
+      corpus: "memory",
+    });
+    expect(retried.details).not.toHaveProperty("unavailable");
+    expect(fixture.provider.embedQueryCalls).toBe(2);
+  });
+
   it("preserves canonical-session migration recovery through cooldown", async () => {
     const baseConfig = fixture.createConfig({
       provider: "none",
@@ -419,7 +467,7 @@ describe("memory_search real manager", () => {
     expect(fixture.provider.embedQueryCalls).toBe(0);
   });
 
-  it("finishes one-shot cleanup when its deadline aborts a publication wait", async () => {
+  it("returns a timed-out one-shot search before pending cleanup finishes", async () => {
     const cfg = fixture.createConfig({
       provider: "none",
       sources: ["memory"],
@@ -451,6 +499,9 @@ describe("memory_search real manager", () => {
       throw new Error("memory_search tool missing");
     }
     const searchStarted = createDeferred<void>();
+    const cleanupStarted = createDeferred<void>();
+    const releaseCleanup = createDeferred<void>();
+    const cleanupFinished = createDeferred<void>();
     const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
     const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
       const acquired = await originalGet(params);
@@ -461,6 +512,13 @@ describe("memory_search real manager", () => {
       vi.spyOn(acquired, "search").mockImplementation(async (...args) => {
         searchStarted.resolve();
         return await search(...args);
+      });
+      const close = acquired.close.bind(acquired);
+      vi.spyOn(acquired, "close").mockImplementation(async () => {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+        await close();
+        cleanupFinished.resolve();
       });
       return acquired;
     });
@@ -473,14 +531,17 @@ describe("memory_search real manager", () => {
       await searchStarted.promise;
       await vi.advanceTimersByTimeAsync(15_100);
       expect(executionSettled).toBe(true);
+      await cleanupStarted.promise;
       await expect(execution).resolves.toMatchObject({
         details: { unavailable: true },
       });
     } finally {
       releasePublication.resolve();
+      releaseCleanup.resolve();
       await vi.advanceTimersByTimeAsync(100);
       await publication;
       await execution.catch(() => undefined);
+      await cleanupFinished.promise;
       getSpy.mockRestore();
     }
   });

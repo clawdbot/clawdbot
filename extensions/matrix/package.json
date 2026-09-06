@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.6",
-    "@matrix-org/matrix-sdk-crypto-wasm": "18.5.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.7.0",
     "fake-indexeddb": "6.2.5",
     "markdown-it": "15.0.1",
     "matrix-js-sdk": "42.2.0",

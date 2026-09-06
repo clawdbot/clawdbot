@@ -8,6 +8,11 @@ inherits these platforms.
 
 ## macOS
 
+An explicit stable or full release request includes macOS publication unless
+the operator limits its scope. Continue without a separate macOS consent step,
+following the current owner-configured environment policy. Preserve enforced
+rules and the exact-source validation, signing, and promotion checks.
+
 Use `$release-openclaw-mac` for public handoff validation, release-ops
 validation, signing/notarization preflight, and promotion. Use `$release-private`
 for credential topology. A smoke-test artifact with ad-hoc signing proves no

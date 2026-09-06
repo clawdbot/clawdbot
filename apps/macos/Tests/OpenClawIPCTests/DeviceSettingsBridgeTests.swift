@@ -119,6 +119,8 @@ struct DeviceSettingsBridgeTests {
     @Test func `action requests retain the closed panel and permission identities`() {
         #expect(DeviceSettingsRequest(body: ["type": "status"]) == .status)
         #expect(DeviceSettingsRequest(body: ["type": "check-for-updates"]) == .checkForUpdates)
+        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
+        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)
         let panels: [(String, DeviceSettingsPanel)] = [
             ("quick-chat-shortcut", .quickChatShortcut), ("microphone-test", .microphoneTest),
             ("browser-import", .browserImport), ("connection", .connection), ("gateways", .gateways), ("debug", .debug),

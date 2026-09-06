@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 type ScheduledTaskStateProbe =
   | { status: "found"; state: number | null; lastRunResult?: string; lastRunTime?: string }
@@ -34,6 +35,7 @@ export function probeScheduledTaskState(
       Buffer.from(script, "utf16le").toString("base64"),
     ],
     {
+      env: resolveServiceManagerEnv(),
       encoding: "utf8",
       timeout: timeoutMs && timeoutMs > 0 ? Math.min(timeoutMs, 5_000) : 5_000,
       windowsHide: true,

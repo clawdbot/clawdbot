@@ -137,7 +137,10 @@ log(message: string): void;
 Without `schema`, `agents.run()` resolves to the child's final text. With a
 JSON Schema, it resolves to the value submitted through the child's
 `structured_output` tool. A failed, killed, timed-out, or schema-invalid child
-rejects the promise with a `SwarmAgentError`. Read the exact generated
+rejects the promise with an error whose `name` is `"SwarmAgentError"` and whose
+`runId`, `status`, and `message` identify the failed child and outcome. There is
+no global `SwarmAgentError` constructor; inspect the caught error's fields.
+Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
@@ -149,8 +152,9 @@ they do not delay the script if the UI is unavailable.
 
 ### Fan out in parallel with structured results
 
-This example launches one researcher per topic, waits for all of them, then
-asks a final child to synthesize their structured reports:
+This example launches one researcher per topic, waits for every outcome, then
+asks a final child to synthesize the successful reports. Failed lanes stay in
+the result, even if synthesis also fails:
 
 ```javascript
 const reportSchema = {
@@ -167,7 +171,7 @@ const reportSchema = {
 const topics = ["authentication", "storage", "recovery"];
 phase("Independent review");
 
-const reports = await Promise.all(
+const settled = await Promise.allSettled(
   topics.map((topic) =>
     agents.run(`Review the ${topic} path. Return one finding with evidence.`, {
       label: `review-${topic}`,
@@ -178,18 +182,40 @@ const reports = await Promise.all(
   ),
 );
 
-phase("Synthesis");
-log(`Collected ${reports.length} independent reports.`);
+const reports = [];
+const failures = [];
+for (const [index, outcome] of settled.entries()) {
+  if (outcome.status === "fulfilled") {
+    reports.push({ topic: topics[index], report: outcome.value });
+  } else {
+    failures.push({ topic: topics[index], error: String(outcome.reason) });
+  }
+}
 
-return await agents.run(
-  `Reconcile these reports and explain disagreements:\n${JSON.stringify(reports)}`,
-  { label: "synthesis" },
-);
+if (reports.length === 0) return { reports, failures };
+
+phase("Synthesis");
+log(`Collected ${reports.length} reports; ${failures.length} lanes failed.`);
+
+try {
+  const synthesis = await agents.run(
+    `Reconcile these reports, explain disagreements, and disclose failed lanes:\n${JSON.stringify({ reports, failures })}`,
+    { label: "synthesis" },
+  );
+  return { synthesis, reports, failures };
+} catch (error) {
+  return { reports, failures, synthesisError: String(error) };
+}
 ```
 
-`Promise.all` is the fan-out and fan-in boundary. OpenClaw starts up to
-`maxConcurrent` children for the group and queues the rest in submission
-order.
+`Promise.allSettled` preserves partial results while waiting for every child.
+`Promise.all` rejects on the first failure and does not collect the remaining
+outcomes for you. Keep completed work and report failed lanes; do not respawn
+the batch automatically. A later provider failure can still prevent a final
+model reply, so retain the collected results for recovery.
+
+OpenClaw starts up to `maxConcurrent` children for the group and queues the rest
+in submission order.
 
 Code Mode separately bounds concurrent guest bridge calls with
 `tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`). Swarm
@@ -338,25 +364,33 @@ Keep the parent session open in Chat while a swarm is active. The Control UI and
 native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
 between the transcript and composer.
 
-In the Control UI, each active collector group appears as a card with a completion
-count and phase progress segments. Hover over a card or focus it with the keyboard
-to reveal a list of child names, status icons, and run durations.
+In the Control UI, cards show queued, running, completed, and failed counts with
+visible status markers. Click or tap **Child details**, or activate it with the
+keyboard, to expand available child names, status icons, and run durations. The
+view shows up to four active groups plus the latest completed group, with an
+explicit count when more groups are active. Each card displays at most 64 markers
+and 64 child details; its counts include every accepted group member.
 
-Native Android, iOS, and macOS chat surfaces show phase-grouped grids of child
-status markers, capped at 256 markers per phase with an overflow count for additional
-children. Accessible labels identify each child and its queued, running, done, or
-failed status.
+The latest completed group's counts remain visible after the children finish,
+including when the parent fails before writing its final response. These are
+child outcomes, not confirmation that the parent produced a synthesis. Counts
+come from retained collector records, so reloading the page or cleaning up a
+child session does not reduce the reported total. They expire with the existing
+collector retention policy; this is not a permanent execution archive.
 
-All clients present killed and timed-out children as failed. Each group leaves the
-widget when none of its children are queued or running, and the widget disappears
-when no active groups remain.
+Native Android, iOS, and macOS chat surfaces still show active-only phase-grouped
+grids, capped at 256 markers per phase with an overflow count. Accessible labels
+identify each child's status. All clients present killed and timed-out children
+as failed. Native groups leave the widget when none of their children are queued
+or running; the native widget disappears when no active groups remain.
 
 The session sidebar keeps the normal parent/child tree. Expand the parent row to
 inspect a collector child or open its transcript without losing the swarm hierarchy.
 
-Collector results remain waitable until their group is archived. After every
-member reaches its retention deadline, OpenClaw archives the group's children
-as a batch so completed swarms do not remain in the live session tree.
+Delete-mode collectors can clean up their child sessions immediately after
+completion while retaining their waitable results. Those collector records remain
+available until the group is archived after every member reaches its retention
+deadline. Retained child sessions are archived as a batch at that point.
 
 ## Stop a Swarm
 
@@ -417,6 +451,7 @@ const tasks = [
   "Check the recovery path.",
 ];
 const launches = [];
+const failures = [];
 
 for (const [index, task] of tasks.entries()) {
   const launch = parseToolResult(
@@ -427,7 +462,8 @@ for (const [index, task] of tasks.entries()) {
     }),
   );
   if (launch.status !== "accepted") {
-    throw new Error(launch.error ?? "Collector spawn was not accepted.");
+    failures.push({ task, error: launch.error ?? "Collector spawn was not accepted." });
+    continue;
   }
   launches.push(launch);
 }
@@ -452,22 +488,25 @@ while (pending.size > 0) {
   for (const item of batch.completed) {
     pending.delete(item.runId);
     if (item.status !== "done") {
-      const detail = [item.error, item.schemaError, item.result].find(
-        (value) => typeof value === "string" && value.trim(),
-      );
-      throw new Error(detail ?? `${item.runId}: ${item.status}`);
+      failures.push(item);
+    } else {
+      completed.push(item); // Process each result as soon as it finishes.
     }
-    completed.push(item); // Process each result as soon as it finishes.
   }
 
   for (const failure of batch.errors ?? []) {
     pending.delete(failure.runId);
-    throw new Error(`${failure.runId}: ${failure.error}`);
+    failures.push(failure);
   }
 }
 
-return completed;
+return { completed, failures };
 ```
+
+Drain the pending set before synthesizing the successful results and reporting
+failures. A rejected launch or failed child must not discard results from other
+accepted children. Keep the returned run IDs for recovery; do not repeat
+successful launches or automatically rerun failed work.
 
 Each `agents_wait` call accepts 1–1000 run ids. It returns:
 

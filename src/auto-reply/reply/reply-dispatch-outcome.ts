@@ -39,7 +39,19 @@ export function shouldRetryReplyDispatch(outcome: ReplyDispatchDeliveryOutcome):
   );
 }
 
+/** Identityless completion proves ambiguity, not queue custody or an intentional no-send. */
+export function isReplyDispatchDeliveryPending(result: unknown): boolean {
+  return (
+    isRecord(result) &&
+    isRecord(result.suppression) &&
+    result.suppression.reason === "adapter_returned_no_identity"
+  );
+}
+
 export function resolveReplyDispatchDeliveryOutcome(result: unknown): ReplyDispatchDeliveryOutcome {
+  if (isReplyDispatchDeliveryPending(result)) {
+    return "delivered-not-visible";
+  }
   if (!isRecord(result) || result.visibleReplySent !== false) {
     return "delivered";
   }

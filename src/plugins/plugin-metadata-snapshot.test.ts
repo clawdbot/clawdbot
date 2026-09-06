@@ -8,7 +8,7 @@ import {
   resolveProviderRequestPolicy,
 } from "../agents/provider-attribution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";

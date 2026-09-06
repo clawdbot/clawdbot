@@ -140,6 +140,8 @@ openclaw gateway restart --wait 30s
 
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
+On macOS, when `openclaw gateway restart`, `stop`, `install`, or `uninstall` runs inside the managed LaunchAgent's process tree, including an agent's shell command, OpenClaw detects that from launchd's service environment or, when a hand-written plist omits those variables, from process ancestry against the PID launchd reports for the job. Restart hands off to a detached helper so `kickstart -k` cannot kill the caller. Stop, install, and uninstall refuse and ask you to run the command from an external shell.
+
 External terminals without Gateway-service markers, externally supervised Gateways, node services, and non-Windows callers keep their existing routing. Explicit `--force`, `--wait`, `--preserve-definition`, or `--skip-deferral` also retain their existing behavior and validation; they do not implicitly enable `--safe`.
 
 <Warning>
@@ -240,6 +242,11 @@ These reports omit task identities and request origins; categories can overlap.
 An ordinary stop logs `active-work drain settled; beginning server close` before
 teardown, including after a drain timeout or failure. Diagnostics do not change
 drain budgets or the service manager's stop deadline.
+
+A client disconnect leaves interactive setup available for reconnect. A Gateway
+stop or restart closes setup prompts before draining work. Settings writes already
+in progress may finish, but setup will not wait for another answer during shutdown.
+After the Gateway starts again, reopen setup and check the saved settings.
 
 ## Query a running Gateway
 

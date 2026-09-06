@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -11,6 +12,7 @@ import {
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -62,7 +64,6 @@ import {
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -156,18 +157,12 @@ export async function handleToolExecutionEnd(
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const initialCallSummary = ctx.state.toolMetaById.get(toolCallId);
-  const initialArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
+  const initialArgs = asRecord(startData?.args);
   const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
   const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
-  const startArgs =
-    adjustedArgs && typeof adjustedArgs === "object"
-      ? (adjustedArgs as Record<string, unknown>)
-      : initialArgs;
+  const startArgs = asOptionalObjectRecord(adjustedArgs) ?? initialArgs;
   const callSummary = buildToolCallSummary(
     toolName,
     startArgs,
@@ -421,7 +416,9 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
+    !isToolError && toolName === "progress_card"
+      ? projectProgressCardChannelUpdate(startArgs)
+      : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,
@@ -677,15 +674,17 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({
-    ctx,
-    toolName,
-    rawToolName,
-    meta,
-    isToolError,
-    result,
-    sanitizedResult,
-  });
+  if (!planUpdate) {
+    await emitToolResultOutput({
+      ctx,
+      toolName,
+      rawToolName,
+      meta,
+      isToolError,
+      result,
+      sanitizedResult,
+    });
+  }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });

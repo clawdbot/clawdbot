@@ -89,6 +89,7 @@ export type UpdateRestartStatusResponse = {
     stats?: {
       mode?: string | null;
       reason?: string | null;
+      runId?: string | null;
       handoffId?: string | null;
       before?: { sha?: string | null; version?: string | null } | null;
       after?: { sha?: string | null; version?: string | null } | null;
@@ -101,8 +102,8 @@ export type UpdateRestartStatusResponse = {
 
 type UpdateFailureCause = { step: string; detail: string };
 
-function readUpdateHandoffId(sentinel: UpdateRestartStatusResponse["sentinel"]): string | null {
-  const id = sentinel?.stats?.handoffId?.trim();
+function readUpdateAttemptId(sentinel: UpdateRestartStatusResponse["sentinel"]): string | null {
+  const id = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
   return id && id.length <= 256 ? id : null;
 }
 
@@ -153,7 +154,7 @@ export function projectUpdateSentinel(
   }
   const record = {
     id:
-      readUpdateHandoffId(sentinel) ??
+      readUpdateAttemptId(sentinel) ??
       (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}` : null),
     timestampMs: sentinel.ts ?? null,
   };

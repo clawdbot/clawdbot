@@ -22,6 +22,7 @@ import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
   startPluginServices,
 } from "../plugins/services.js";
+import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -286,6 +287,33 @@ describe("createGatewayCloseHandler", () => {
     expect(httpClose).toHaveBeenCalled();
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it("retains Gateway dependencies when a trusted diagnostic service rejects shutdown", async () => {
+    const service: OpenClawPluginService = {
+      id: "diagnostics-otel",
+      start: async () => {},
+      stop: async () => {
+        throw new Error("synthetic plugin cleanup failed");
+      },
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.services.push({ pluginId: service.id, service, source: "test", origin: "bundled" });
+    setActivePluginRegistry(registry);
+    const pluginServices = await startPluginServices({ registry, config: {} });
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const deps = createGatewayCloseTestDeps({ pluginServices, clearSecretsRuntimeSnapshot });
+    try {
+      await expect(
+        createGatewayCloseHandler(deps)({ reason: "gateway startup failed" }),
+      ).rejects.toThrow("synthetic plugin cleanup failed");
+      expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+      expect(getActivePluginRegistry()).toBe(registry);
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+    } finally {
+      await pluginServices.stop().catch(() => {});
+    }
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {

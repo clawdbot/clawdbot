@@ -169,7 +169,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     message: string,
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
-  protected abstract pruneEmbeddingCacheIfNeeded(): void;
+  protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(
@@ -210,7 +210,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     };
   }
 
-  protected takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
+  takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
     const snapshot = this.snapshotReindexRetryState();
     // The detached generation owns only the state observed here. New watcher or
     // session events remain dirty on this manager and trigger a later generation.

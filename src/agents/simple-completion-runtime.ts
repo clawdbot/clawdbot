@@ -377,6 +377,8 @@ async function prepareSimpleCompletionModelCore(
           provider: initialModel.provider,
           modelId: initialModel.id,
           config: params.cfg,
+          workspaceDir,
+          metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
           model: initialModel,
           resolveModel: ({ config, authProfileId, authProfileMode }) =>
             modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {

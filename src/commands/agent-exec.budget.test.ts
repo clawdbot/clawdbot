@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bindAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  bindAgentToolSourceExecutionGuard,
+  captureAgentToolSourceExecutionGuard,
+} from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { getRuntimeConfigSnapshot } from "../config/io.js";
@@ -105,6 +109,32 @@ describe("bounded agent exec", () => {
     expect(source).not.toHaveBeenCalled();
   });
 
+  it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
+    let retainedGuard: (() => void) | undefined;
+    const effect = vi.fn();
+    await agentExecCommand("inspect", {}, runtime, {
+      baseConfig,
+      isCurrent: () => true,
+      runAgent: async () => {
+        retainedGuard = captureAgentToolSourceExecutionGuard();
+        return success();
+      },
+    });
+    const replacement = await agentExecCommand("inspect", {}, runtime, {
+      baseConfig,
+      isCurrent: () => true,
+      runAgent: async () => {
+        expect(() => {
+          retainedGuard?.();
+          effect();
+        }).toThrow("execution scope is no longer active");
+        return success();
+      },
+    });
+    expect(replacement.exitCode).toBe(0);
+    expect(effect).not.toHaveBeenCalled();
+  });
+
   it("aborts an unattended turn at its millisecond deadline even without a state lock", async () => {
     const result = await agentExecCommand("inspect", {}, runtime, {
       baseConfig,
@@ -136,28 +166,55 @@ describe("bounded agent exec", () => {
         baseConfig,
         maxToolCalls: 1,
         runAgent: async (opts) => {
+          const ready = createDeferred();
+          let output = "";
           child = await getProcessSupervisor().spawn({
             mode: "child",
-            argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+            argv: [
+              process.execPath,
+              "-e",
+              `process.once("SIGTERM", () => setTimeout(() => process.exit(0), 250));
+               process.stdout.write("ready");
+               setInterval(() => {}, 1000);`,
+            ],
             sessionId: String(opts.sessionId),
             scopeKey: String(opts.sessionKey),
             backendId: "budget-test",
             timeoutMs: 30_000,
+            onStdout: (chunk) => {
+              output += chunk;
+              if (output.includes("ready")) {
+                ready.resolve();
+              }
+            },
           });
+          await Promise.race([
+            ready.promise,
+            child.wait().then(() => {
+              throw new Error("The background process exited before readiness");
+            }),
+          ]);
           return success();
         },
       });
 
-      expect(result.exitCode).toBe(0);
-      expect(await child?.wait()).toMatchObject({ reason: "manual-cancel" });
+      expect(result.exitCode).toBe(process.platform === "win32" ? 1 : 0);
+      if (process.platform === "win32") {
+        expect(result.envelope.error?.message).toContain(
+          "cannot confirm owned execution-tree settlement",
+        );
+      }
       const pid = child?.pid;
       expect(pid).toBeTypeOf("number");
       if (pid === undefined) {
         throw new Error("The background process did not start");
       }
+      // No post-return wait may supply the cleanup that the command must own.
       expect(() => process.kill(pid, 0)).toThrow();
+      expect(await child?.wait()).toMatchObject({ reason: "manual-cancel" });
     } finally {
       child?.cancel();
+      await child?.wait();
       await child?.waitForExtinction?.();
     }
   });

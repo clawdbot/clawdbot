@@ -22,7 +22,7 @@ function createVitestWorkerDirectory() {
 }
 
 /** The invocation owns preparation and waits for every real borrower before disposal. */
-export function createVitestWorkerRun() {
+export function createVitestWorkerRun(env: NodeJS.ProcessEnv = process.env) {
   const directory = createVitestWorkerDirectory();
   let preparation: Promise<VitestWorkerManifest> | undefined;
   let disposal: Promise<void> | undefined;
@@ -41,6 +41,7 @@ export function createVitestWorkerRun() {
         bin: process.execPath,
         args: [fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)), directory],
         cwd: root,
+        env,
         shell: false,
         // Match the native declaration owner: POSIX group/output join; Windows close/taskkill.
         requireProcessTreeExit: process.platform !== "win32",

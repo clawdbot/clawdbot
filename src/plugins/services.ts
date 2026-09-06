@@ -33,7 +33,7 @@ import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 const log = createSubsystemLogger("plugins");
 export const PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS = 5_000;
 
-class PluginServiceReplacementTimeoutError extends Error {}
+class PluginServiceStopTimeoutError extends Error {}
 
 type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
@@ -204,6 +204,7 @@ export async function startPluginServices(params: {
   startupTrace?: PluginServiceStartupTrace;
   broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
   getCronService?: () => PluginServiceCronHost | null | undefined;
+  oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
   onHandle?: (handle: PluginServicesHandle) => void;
 }): Promise<PluginServicesHandle> {
   const healthGeneration = createPluginServiceHealthGeneration(params.registry);
@@ -230,8 +231,8 @@ export async function startPluginServices(params: {
     }
     const remaining = deadline - Date.now();
     const timeoutError = () =>
-      new PluginServiceReplacementTimeoutError(
-        `${label} timed out after ${PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS}ms${owner ? ` (${owner})` : ""}`,
+      new PluginServiceStopTimeoutError(
+        `${label} timed out after ${Math.max(0, remaining)}ms${owner ? ` (${owner})` : ""}`,
       );
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -278,7 +279,7 @@ export async function startPluginServices(params: {
           ? err
           : new Error(
               `plugin service stop failed (plugin=${entry.pluginId}, service=${entry.id}): ${
-                err instanceof PluginServiceReplacementTimeoutError
+                err instanceof PluginServiceStopTimeoutError
                   ? err.message
                   : `rejected: ${String(err)}`
               }`,
@@ -299,32 +300,36 @@ export async function startPluginServices(params: {
       entry.stopping = true;
     }
     const reversed = entries.toReversed();
-    const diagnosticsExporters = reversed.filter((entry) => entry.diagnosticsExporter);
-    for (const entry of reversed.filter((candidate) => !candidate.diagnosticsExporter)) {
+    const oneShotTimeouts = deadline === undefined ? params.oneShotStopTimeouts : undefined;
+    // One-shot registries are already scoped; every cleanup follows the drain, without changing grants.
+    const afterDrain = oneShotTimeouts
+      ? reversed
+      : reversed.filter((entry) => entry.diagnosticsExporter);
+    for (const entry of oneShotTimeouts
+      ? []
+      : reversed.filter((candidate) => !candidate.diagnosticsExporter)) {
       await stopService(entry, strict ? failures : undefined, deadline);
     }
-    if (diagnosticsExporters.length > 0) {
+    if (afterDrain.length > 0) {
       // Producers stop first; this barrier preserves their queued tail before exporters detach.
       try {
         await runBeforeDeadline(
           waitForDiagnosticEventsDrained,
-          deadline,
+          oneShotTimeouts ? Date.now() + oneShotTimeouts.eventDrainMs : deadline,
           "plugin diagnostic event drain",
-          diagnosticsExporters
-            .map((entry) => `plugin=${entry.pluginId}, service=${entry.id}`)
-            .join("; "),
+          afterDrain.map((entry) => `plugin=${entry.pluginId}, service=${entry.id}`).join("; "),
         );
       } catch (error) {
-        if (!strict) {
+        if (!strict && !oneShotTimeouts) {
           throw error;
         }
         failures.push(error);
       }
     }
-    // Ordinary plugin cleanup stays warn-and-continue. Trusted diagnostics
-    // exporter failures propagate because they can mean telemetry was lost.
-    for (const entry of diagnosticsExporters) {
-      await stopService(entry, failures, deadline);
+    // Fresh one-shot flush budgets start after drain; absolute replacement deadlines span all phases.
+    const stopDeadline = oneShotTimeouts ? Date.now() + oneShotTimeouts.serviceStopMs : deadline;
+    for (const entry of afterDrain) {
+      await stopService(entry, failures, stopDeadline);
     }
   };
   let stopRequested = false;

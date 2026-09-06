@@ -2,21 +2,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ViteUserConfig } from "vitest/config";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import {
-  detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
-  resolveLocalVitestScheduling as resolveLocalVitestSchedulingImpl,
+  resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
-import type {
-  LocalVitestScheduling,
-  VitestHostInfo,
-} from "../../scripts/lib/vitest-local-scheduling.mts";
+import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -25,8 +20,6 @@ import { loadVitestPerformanceConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
-
-export type OpenClawVitestPool = "forks" | "threads";
 
 export type { LocalVitestScheduling };
 
@@ -38,38 +31,6 @@ export const jsdomOptimizedDeps = {
     },
   },
 };
-
-// Vitest 4 omits `false` from the type because it is the default; Vitest 5
-// accepts it and requires the explicit value to preserve independent projects.
-export function preserveIndependentVitestProject<T extends ViteUserConfig>(project: T): T {
-  return Object.assign(project, { extends: false });
-}
-
-function detectVitestHostInfo(): Required<VitestHostInfo> {
-  return detectVitestHostInfoImpl();
-}
-
-export function resolveLocalVitestMaxWorkers(
-  env: Record<string, string | undefined> = process.env,
-  system: VitestHostInfo = detectVitestHostInfo(),
-  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-): number {
-  return resolveLocalVitestSchedulingImpl(env, system, pool).maxWorkers;
-}
-
-export function resolveLocalVitestScheduling(
-  env: Record<string, string | undefined> = process.env,
-  system: VitestHostInfo = detectVitestHostInfo(),
-  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-): LocalVitestScheduling {
-  return resolveLocalVitestSchedulingImpl(env, system, pool);
-}
-
-export function resolveDefaultVitestPool(
-  _env: Record<string, string | undefined> = process.env,
-): OpenClawVitestPool {
-  return "threads";
-}
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
@@ -83,12 +44,7 @@ export function resolveRepoRootPath(value: string): string {
 }
 const isCI = isCiLikeEnv(process.env);
 const isWindows = process.platform === "win32";
-const defaultPool = resolveDefaultVitestPool();
-const localScheduling = resolveLocalVitestScheduling(
-  process.env,
-  detectVitestHostInfo(),
-  defaultPool,
-);
+const localScheduling = resolveLocalVitestScheduling();
 
 function hasWorkerOverride(env: Record<string, string | undefined>): boolean {
   return Boolean((env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS)?.trim());
@@ -501,7 +457,7 @@ export const sharedVitestConfig = {
     unstubEnvs: true,
     unstubGlobals: true,
     isolate: false,
-    pool: defaultPool,
+    pool: "threads" as const,
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,

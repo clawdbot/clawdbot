@@ -50,6 +50,10 @@ Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `--dry-run`, `--verbose`. Actions that take a destination also accept
 `-t, --target <dest>`.
 
+Discord message bodies, captions, poll context, and component text retain
+leading indentation. Existing empty-message validation still applies.
+Ordinary message and caption delivery still trims trailing whitespace.
+
 Local message actions run the loaded plugins' shutdown hooks before exiting, including
 after an action fails. Cleanup has a 2.5-second overall budget and does not change
 the action's exit status. `message read` skips these shutdown hooks.

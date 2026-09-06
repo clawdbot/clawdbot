@@ -75,7 +75,7 @@ openclaw gateway restart
 
 The scaffold includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
-choose Draft composer in the UI customization controls. Choose Built-in to
+open **Plugins → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
 it is not a persistent configuration setting.
 
@@ -250,8 +250,8 @@ limits. TypeScript sources, source maps, and hidden files are excluded. Keep all
 dependencies inside that directory; traversal is limited to eight nested directory
 levels and 128 entries, counting both files and directories.
 
-After browser-only edits, rebuild the installed plugin and use **Reload plugin
-UI** as an administrator. The Gateway captures a fresh asset revision and
+After browser-only edits, rebuild the installed plugin and open **Plugins →
+Customize UI → Reload plugin UI** as an administrator. The Gateway captures a fresh asset revision and
 notifies connected browsers. Asset loading or activation failures are reported
 in the UI customization controls; the previous working activation is retained
 when possible. Retry after correcting the plugin, or select Built-in to

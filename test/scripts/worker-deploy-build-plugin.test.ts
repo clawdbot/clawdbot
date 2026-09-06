@@ -94,12 +94,12 @@ export async function createAttachedBrowserToolRuntime(params) {
 
     const transformed = plugin.transform.call({ error: fail }, source, dispatcherPath);
 
-    expect(transformed).toContain('import * as bundledUndici from "undici";');
+    expect(transformed).toContain('import * as bundledUndici from "undici/index.js";');
     expect(transformed).toContain("return bundledUndici;");
     expect(transformed).toContain('return override as typeof import("undici");');
     expect(transformed).not.toContain('import { createRequire } from "node:module";');
     expect(transformed).not.toContain("const requireUndici = createRequire(import.meta.url);");
-    expect(transformed).not.toContain('requireUndici("undici")');
+    expect(transformed).not.toContain('requireUndici("undici/index.js")');
   });
 
   it("leaves fs-safe native package resolution to the dependency", () => {
@@ -120,7 +120,10 @@ export async function createAttachedBrowserToolRuntime(params) {
     expect(() =>
       plugin.transform.call(
         { error: fail },
-        source.replace('return requireUndici("undici")', 'return changedUndici("undici")'),
+        source.replace(
+          'return requireUndici("undici/index.js")',
+          'return changedUndici("undici/index.js")',
+        ),
         dispatcherPath,
       ),
     ).toThrow("undici dispatcher bootstrap changed");

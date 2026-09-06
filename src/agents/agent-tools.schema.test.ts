@@ -28,20 +28,14 @@ import {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
 } from "./before-tool-call-metadata.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const beforeToolCallTesting = {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
 };
 
-const TEST_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const TEST_USAGE = createZeroUsageFixture();
 
 describe("direct exec tool schema", () => {
   it("keeps model-facing descriptions compact without hiding runtime constraints", () => {
