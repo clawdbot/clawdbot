@@ -1414,9 +1414,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   ])(
     "honors explicit thinking=$thinking over Codex ACP model suffixes",
     async ({ thinking, expectedEffort }) => {
+      const save = vi.fn<TestSessionStore["save"]>(async () => {});
       const baseStore: TestSessionStore = {
         load: vi.fn(async () => undefined),
-        save: vi.fn(async () => {}),
+        save,
       };
       const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
         openclawGatewayInstanceId: "gateway-test",
@@ -1444,7 +1445,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         thinking,
       });
 
-      const [record] = vi.mocked(baseStore.save).mock.calls[0]!;
+      const [record] = save.mock.calls[0]!;
       expect(record.agentCommand).toContain('"model":"gpt-5.6-luna"');
       if (expectedEffort) {
         expect(record.agentCommand).toContain(`"model_reasoning_effort":"${expectedEffort}"`);
