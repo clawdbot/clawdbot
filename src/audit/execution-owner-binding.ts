@@ -55,7 +55,7 @@ export function withPostAdmissionExecutionOwnerBinding(
 ): PreparedAgentRunAdmission {
   let bound = false;
   return Object.freeze({
-    operationalRunInstance: prepared.operationalRunInstance,
+    ...prepared,
     admit: async (runtimeKind, runtimeInstanceId) => {
       const admitted = await prepared.admit(runtimeKind, runtimeInstanceId);
       if (!bound) {
@@ -64,7 +64,6 @@ export function withPostAdmissionExecutionOwnerBinding(
       }
       return admitted;
     },
-    close: prepared.close,
   });
 }
 

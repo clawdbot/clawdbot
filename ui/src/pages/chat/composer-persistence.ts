@@ -15,8 +15,10 @@ import {
   type StoredComposerSession,
 } from "../../lib/chat/outbox-store-codec.ts";
 import {
+  captureDraftReplacement,
   nextDraftRevision,
   rememberDraftAttempt,
+  rememberDraftEdit,
   rememberDraftRevision,
   readDraftRevisionState,
 } from "../../lib/chat/outbox-store-draft-state.ts";
@@ -206,6 +208,23 @@ function writeStoredComposerSession(
 }
 
 type ChatComposerDraftRevisionState = ReturnType<typeof readDraftRevisionState>;
+
+export function captureChatComposerReplacement(
+  state: ChatComposerPersistenceState,
+  sessionKey: string,
+  agentId?: string,
+): () => boolean {
+  const scope = resolveUiConversationIdentity(state, sessionKey, agentId);
+  const { revisions } = loadCapturedChatComposerState(state, scope);
+  // Without browser storage, independent live composers have no shared draft
+  // to overwrite; the same owner ledger still fences that pane's replacements.
+  return captureDraftReplacement(
+    getSafeSessionStorage() ?? state,
+    storageTargetForGateway(state.settings?.gatewayUrl).key,
+    storedChatOutboxScopeKey(scope),
+    revisions.latestAttempt,
+  );
+}
 
 export function loadChatComposerDraftRevision(
   state: ChatComposerScope,
@@ -659,6 +678,10 @@ export class ChatComposerPersistence {
 
   constructor(private readonly getState: () => DurableChatComposerPersistenceState | undefined) {}
 
+  get active(): boolean {
+    return this.ready;
+  }
+
   start() {
     const state = this.getState();
     if (!state) {
@@ -729,6 +752,14 @@ export class ChatComposerPersistence {
     const draftRevision = nextDraftRevision(baseline);
     this.latestDraftRevision = draftRevision;
     this.pending = this.snapshot(state, draftRevision, this.committedDraftRevision);
+    // An edit owns the draft before its debounced write. Otherwise another
+    // pane's older async action can publish over it and fence out that write.
+    rememberDraftEdit(
+      getSafeSessionStorage() ?? state,
+      storageTargetForGateway(state.settings?.gatewayUrl).key,
+      storedChatOutboxScopeKey(this.pending.scope),
+      draftRevision,
+    );
     this.clearTimer();
     this.timer = globalThis.setTimeout(
       () => this.persistNow(),

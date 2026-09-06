@@ -52,6 +52,7 @@ import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -911,17 +912,32 @@ describe("OpenAI-compatible completions compatibility", () => {
       }),
       expectedHeaders: { "x-session-id": "session-123" },
     },
-  ])("sends exact $name session-affinity headers", async ({ model, expectedHeaders }) => {
-    await streamOpenAICompletions(model, context, {
-      apiKey: "test",
-      sessionId: "session-123",
-    }).result();
+    {
+      name: "OpenCode Go without caching",
+      cacheRetention: "none" as const,
+      model: createModel({ baseUrl: "https://opencode.ai/zen/go/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+    {
+      name: "OpenCode Zen",
+      model: createModel({ baseUrl: "https://opencode.ai/zen/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+  ])(
+    "sends exact $name session-affinity headers",
+    async ({ model, expectedHeaders, ...testCase }) => {
+      await streamOpenAICompletions(model, context, {
+        apiKey: "test",
+        sessionId: "session-123",
+        ...testCase,
+      }).result();
 
-    const clientOptions = mockOpenAI.clientOptions[0] as {
-      defaultHeaders?: Record<string, string>;
-    };
-    expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
-  });
+      const clientOptions = mockOpenAI.clientOptions[0] as {
+        defaultHeaders?: Record<string, string>;
+      };
+      expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
+    },
+  );
 
   it("retains replayed Z.AI thinking when reasoning is enabled", async () => {
     let payload: unknown;
@@ -944,14 +960,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         },
         { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
       ],
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "toolUse",
       timestamp: 2,
     };

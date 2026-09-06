@@ -37,6 +37,26 @@ const activeRunRegistrationMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  const gatewayCall = async (...args: Parameters<typeof actual.callGatewayTool>) => {
+    const [method, , rawParams] = args;
+    const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
+    if (method === "question.request") {
+      return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
+    }
+    if (method === "question.waitAnswer") {
+      return await new Promise((resolve) => {
+        activeRunRegistrationMocks.questionWaiters.set(params?.id ?? "", resolve);
+      });
+    }
+    if (method === "question.resolve") {
+      const result = params?.cancel
+        ? { status: "cancelled" as const }
+        : { status: "answered" as const, answers: params?.answers };
+      activeRunRegistrationMocks.questionWaiters.get(params?.id ?? "")?.(result);
+      return result;
+    }
+    return await actual.callGatewayTool(...args);
+  };
   return {
     ...actual,
     cancelPendingAgentQuestionForSession: async (
@@ -50,25 +70,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       }
       return await actual.cancelPendingAgentQuestionForSession(...args);
     },
-    callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
-      const [method, , rawParams] = args;
-      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
-      if (method === "question.request") {
-        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          activeRunRegistrationMocks.questionWaiters.set(params?.id ?? "", resolve);
-        });
-      }
-      if (method === "question.resolve") {
-        const result = params?.cancel
-          ? { status: "cancelled" as const }
-          : { status: "answered" as const, answers: params?.answers };
-        activeRunRegistrationMocks.questionWaiters.get(params?.id ?? "")?.(result);
-        return result;
-      }
-      return await actual.callGatewayTool(...args);
+    agentHarnessStructuredInput: {
+      ...actual.agentHarnessStructuredInput,
+      run: (params: Parameters<typeof actual.agentHarnessStructuredInput.run>[0]) =>
+        actual.agentHarnessStructuredInput.run({ ...params, gatewayCall }),
     },
     clearActiveEmbeddedRun: (
       ...args: Parameters<typeof actual.clearActiveEmbeddedRun>
@@ -338,6 +343,7 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
       sessionKey: params.sessionKey,
       resolvedBy: "image-reply",
+      authority: { kind: "run", assertCurrent: expect.any(Function) },
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -364,8 +370,14 @@ describe("runCodexAppServerAttempt steering", () => {
   ])(
     "persists every completed answer before $name",
     async ({ barrierType, isInboundUserMessage, provenance }) => {
-      const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+      const { requests, completeTurn, notify } = createStartedThreadHarness();
       const params = createSteeringParams();
+      const started = createDeferred<void>();
+      params.onAgentEvent = (event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "start") {
+          started.resolve();
+        }
+      };
       const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
       const sessionTarget = {
         agentId: "main",
@@ -420,10 +432,13 @@ describe("runCodexAppServerAttempt steering", () => {
         hasPersisted: () => steerPersisted,
       } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
+      // Transcript ordering is independent of wall-clock filesystem latency.
+      vi.useFakeTimers();
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: { appServer: { mode: "yolo" } },
       });
-      await waitForMethod("turn/start");
+      await started.promise;
+      expect(requests.some((entry) => entry.method === "turn/start")).toBe(true);
       const onQueueAccepted = vi.fn();
       await notify({
         method: "item/completed",
@@ -508,6 +523,7 @@ describe("runCodexAppServerAttempt steering", () => {
         fastWait,
       );
       const steer = requests.find((entry) => entry.method === "turn/steer");
+      const persistedBeforeNativeSubmission = userTurnTranscriptRecorder.hasPersisted();
       const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
         ?.clientUserMessageId;
       if (!clientUserMessageId) {
@@ -570,8 +586,10 @@ describe("runCodexAppServerAttempt steering", () => {
         },
       });
       await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
+      const completedRun = await run;
 
+      expect(readAttemptTerminal(completedRun)).toMatchObject({ aborted: false, timedOut: false });
+      expect(persistedBeforeNativeSubmission).toBe(true);
       expect(steer?.params).toMatchObject({
         threadId: "thread-1",
         expectedTurnId: "turn-1",
@@ -649,6 +667,15 @@ describe("runCodexAppServerAttempt steering", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         item: { id: "unrelated-user-message", type: "userMessage", clientId: "other-client-id" },
+      },
+    });
+    expect(deliverySettled).toBe(false);
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "other-turn",
+        item: { id: "wrong-turn-user-message", type: "userMessage", clientId: clientUserMessageId },
       },
     });
     expect(deliverySettled).toBe(false);
@@ -905,6 +932,12 @@ describe("runCodexAppServerAttempt steering", () => {
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
     const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }

@@ -273,7 +273,11 @@ describe("runGuidedOnboarding", () => {
     localOnboarding.begin.mockClear();
     localOnboarding.complete.mockClear();
     restoreTerminalState.mockClear();
-    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockReset()
+      .mockImplementation(
+        async ({ additionalGroups }) => additionalGroups?.[0]?.options[0]?.value ?? "skip",
+      );
     ensureAuthProfileStore.mockClear();
     detectAvailableSetupProviderIds.mockReset();
     detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
@@ -346,6 +350,7 @@ describe("runGuidedOnboarding", () => {
     );
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "robby" } }),
+      { beforePersistentApply: expect.any(Function) },
     );
   });
 
@@ -553,7 +558,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/openclaw-workspace");
   });
 
-  it("live-tests an unverified CLI before automatic setup", async () => {
+  it("live-tests an unverified CLI only after its selection", async () => {
     const unverified = {
       ...candidate("claude-cli", "Claude Code"),
       detail: "installed",
@@ -630,7 +635,9 @@ describe("runGuidedOnboarding", () => {
 
   it("never replaces a configured model by fallthrough when its check fails", async () => {
     const existingModel = existingModelCandidate();
-    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:existing-model");
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("candidate:existing-model")
+      .mockResolvedValueOnce("candidate:existing-model");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
@@ -659,8 +666,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    // Only the existing model was auto-tested; the other credentialed candidate
-    // must not run (and persist) without the user choosing it.
+    // Both attempts follow an explicit choice of the existing route.
     expect(activate).toHaveBeenCalledTimes(2);
     expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
       "existing-model",
@@ -672,11 +678,14 @@ describe("runGuidedOnboarding", () => {
     ]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(deps.launchHatchTui).toHaveBeenCalledOnce();
   });
 
-  it("falls through after an auth failure and surfaces both outcomes", async () => {
+  it("changes provider only after another explicit choice and shows the failed result", async () => {
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("candidate:claude-cli")
+      .mockResolvedValueOnce("candidate:codex-cli");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
@@ -711,14 +720,18 @@ describe("runGuidedOnboarding", () => {
     expect(activate.mock.calls.map(([call]) => call.surface)).toEqual(["cli", "cli"]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("Claude Code");
-    // Auto-ladder failures collect into one quiet summary instead of loud notes.
-    expect(notes).not.toContain("Authentication failed");
-    expect(notes).toContain("1 detected option(s) didn't respond");
+    expect(notes).toContain("Authentication failed");
+    expect(notes).toContain("login expired");
+    expect(promptAuthChoiceGrouped.mock.invocationCallOrder[1]).toBeLessThan(
+      activate.mock.invocationCallOrder[1]!,
+    );
     expect(notes).toContain("Gateway: running");
   });
 
-  it("surfaces an auto-attempted failure detail before offering manual retry", async () => {
-    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:codex-cli");
+  it("shows selected-provider failure details before an explicit retry", async () => {
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("candidate:codex-cli")
+      .mockResolvedValueOnce("candidate:codex-cli");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
@@ -755,18 +768,17 @@ describe("runGuidedOnboarding", () => {
             options: [
               expect.objectContaining({
                 value: "candidate:codex-cli",
-                label: "Retry Codex (logged in)",
+                label: "Try Codex (logged in)",
               }),
             ],
           }),
         ],
       }),
     );
-    expect(activate).toHaveBeenNthCalledWith(1, expect.not.objectContaining({ prompter }));
+    expect(activate).toHaveBeenNthCalledWith(1, expect.objectContaining({ prompter }));
     expect(activate).toHaveBeenNthCalledWith(2, expect.objectContaining({ prompter }));
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     const retryNotes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
-    expect(retryNotes).toContain("These didn't work just now:");
     expect(retryNotes).toContain(
       "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
     );
@@ -789,6 +801,7 @@ describe("runGuidedOnboarding", () => {
     });
     const expectSettledProgress = trackWizardProgress(prompter);
     const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+      await params.prompter!.text({ message: "Provider credential", sensitive: true });
       params.prompter!.progress("Testing your AI connection…").stop();
       return {
         ok: true as const,
@@ -806,14 +819,10 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedChoices: new Set(["apiKey", "custom-api-key"]) }),
-    );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "api-key",
+        kind: "provider-auth",
         authChoice: "apiKey",
-        apiKey: enteredValue,
         prompter,
       }),
     );
@@ -867,7 +876,6 @@ describe("runGuidedOnboarding", () => {
         includeSkip: true,
         assistantVisibleOnly: false,
         workspaceDir: "/tmp/work",
-        allowedChoices: new Set(["openai", "custom-api-key"]),
       }),
     );
     expect(activate).toHaveBeenCalledWith(
@@ -914,12 +922,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedChoices: new Set(["ollama", "custom-api-key"]),
-        detectedProviderIds: new Set(["ollama"]),
-      }),
-    );
+    expect(detectAvailableSetupProviderIds).not.toHaveBeenCalled();
     expect(activate).toHaveBeenCalledWith({
       kind: "provider-auth",
       authChoice: "ollama",
@@ -950,12 +953,18 @@ describe("runGuidedOnboarding", () => {
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({
         includeSkip: true,
-        detectedProviderIds: new Set(["ollama"]),
       }),
     );
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.runSetupMemoryImportStep).not.toHaveBeenCalled();
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ installDaemon: false, firstAgent: { name: "main" } }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+    expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("completed");
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Add AI later"),
       "Next steps",
@@ -997,7 +1006,11 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(activate.mock.calls.map(([call]) => call.apiKey)).toEqual(["bad-key", "good-key"]);
+    expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
+      "provider-auth",
+      "provider-auth",
+    ]);
+    expect(text).not.toHaveBeenCalled();
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledOnce();
@@ -1018,6 +1031,7 @@ describe("runGuidedOnboarding", () => {
     expect(text).not.toHaveBeenCalled();
     expect(deps.applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/work", surface: "cli", runtime }),
+      { beforePersistentApply: expect.any(Function) },
     );
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(runSystemAgentChat).not.toHaveBeenCalled();

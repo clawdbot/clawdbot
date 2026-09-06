@@ -192,8 +192,8 @@ function isAwaitedZeroArgumentCall(expression: ts.Expression) {
   return ts.isCallExpression(awaited) && awaited.arguments.length === 0;
 }
 
-function returnCall(statement: ts.Statement) {
-  if (!ts.isReturnStatement(statement) || !statement.expression) {
+function returnCall(statement: ts.Statement | undefined) {
+  if (!statement || !ts.isReturnStatement(statement) || !statement.expression) {
     return null;
   }
   const expression = unwrapExpression(statement.expression);
@@ -238,59 +238,40 @@ function isForwardingOnlyFunction(
   if (!body) {
     return false;
   }
-
+  let call: ts.CallExpression | null;
+  let moduleObjectName: string | undefined;
   if (!ts.isBlock(body)) {
     const expression = unwrapExpression(body);
-    return (
-      ts.isCallExpression(expression) &&
-      parametersAreForwarded(declaration.parameters, expression.arguments) &&
-      (isStaticImportForwarder(expression, functionName, importedNamesByLocalName) ||
-        isLazyModuleForwarderCall(expression, functionName))
-    );
-  }
-
-  if (body.statements.length === 1) {
-    const statement = body.statements[0];
-    if (!statement) {
-      return false;
+    call = ts.isCallExpression(expression) ? expression : null;
+  } else if (body.statements.length === 1 || body.statements.length === 2) {
+    if (body.statements.length === 2) {
+      const loadStatement = body.statements[0];
+      if (!loadStatement || !ts.isVariableStatement(loadStatement)) {
+        return false;
+      }
+      const { declarations, flags } = loadStatement.declarationList;
+      const [loaded] = declarations;
+      if (
+        !(flags & ts.NodeFlags.Const) ||
+        declarations.length !== 1 ||
+        !loaded ||
+        !ts.isIdentifier(loaded.name) ||
+        !loaded.initializer ||
+        !isAwaitedZeroArgumentCall(loaded.initializer)
+      ) {
+        return false;
+      }
+      moduleObjectName = loaded.name.text;
     }
-    const call = returnCall(statement);
-    return Boolean(
-      call &&
-      parametersAreForwarded(declaration.parameters, call.arguments) &&
-      (isStaticImportForwarder(call, functionName, importedNamesByLocalName) ||
-        isLazyModuleForwarderCall(call, functionName)),
-    );
-  }
-
-  if (body.statements.length !== 2) {
+    call = returnCall(body.statements.at(-1));
+  } else {
     return false;
   }
-  const loadStatement = body.statements[0];
-  const returnStatement = body.statements[1];
-  if (
-    !loadStatement ||
-    !returnStatement ||
-    !ts.isVariableStatement(loadStatement) ||
-    !(loadStatement.declarationList.flags & ts.NodeFlags.Const) ||
-    loadStatement.declarationList.declarations.length !== 1
-  ) {
-    return false;
-  }
-  const declarationItem = loadStatement.declarationList.declarations[0];
-  if (
-    !declarationItem ||
-    !ts.isIdentifier(declarationItem.name) ||
-    !declarationItem.initializer ||
-    !isAwaitedZeroArgumentCall(declarationItem.initializer)
-  ) {
-    return false;
-  }
-  const call = returnCall(returnStatement);
   return Boolean(
     call &&
     parametersAreForwarded(declaration.parameters, call.arguments) &&
-    isLazyModuleForwarderCall(call, functionName, declarationItem.name.text),
+    ((!moduleObjectName && isStaticImportForwarder(call, functionName, importedNamesByLocalName)) ||
+      isLazyModuleForwarderCall(call, functionName, moduleObjectName)),
   );
 }
 
@@ -298,6 +279,7 @@ function isForwardingOnlyConst(
   declaration: ts.VariableDeclaration,
   exportName: string,
   importedNamesByLocalName: ReadonlyMap<string, string>,
+  lazyRuntimeMethods: ReadonlyMap<string, number>,
 ) {
   if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
     return false;
@@ -305,6 +287,31 @@ function isForwardingOnlyConst(
   const initializer = unwrapExpression(declaration.initializer);
   if (ts.isIdentifier(initializer)) {
     return importedNamesByLocalName.get(initializer.text) === exportName;
+  }
+  if (ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression)) {
+    const arity = lazyRuntimeMethods.get(initializer.expression.text);
+    const selector = initializer.arguments.at(-1);
+    if (
+      arity !== initializer.arguments.length ||
+      !selector ||
+      !ts.isArrowFunction(selector) ||
+      ts.isBlock(selector.body)
+    ) {
+      return false;
+    }
+    const [parameter] = selector.parameters;
+    const member = unwrapExpression(selector.body);
+    return (
+      selector.parameters.length === 1 &&
+      parameter !== undefined &&
+      !parameter.initializer &&
+      !parameter.dotDotDotToken &&
+      ts.isIdentifier(parameter.name) &&
+      ts.isPropertyAccessExpression(member) &&
+      ts.isIdentifier(member.expression) &&
+      member.expression.text === parameter.name.text &&
+      member.name.text === exportName
+    );
   }
   return (
     ts.isArrowFunction(initializer) &&
@@ -470,6 +477,47 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
     }
   }
 
+  // Only the shared helpers guarantee transparent argument forwarding; a same-named
+  // factory from another module or a selector that adds behavior remains a definition.
+  const lazyRuntimeMethods = new Map<string, number>();
+  for (const reference of importedSymbolsByLocalName.values()) {
+    const source = reference.moduleSpecifier.startsWith(".")
+      ? path.posix.normalize(
+          path.posix.join(path.posix.dirname(fileName), reference.moduleSpecifier),
+        )
+      : reference.moduleSpecifier;
+    if (
+      ![
+        "src/shared/lazy-runtime.js",
+        "src/plugin-sdk/lazy-runtime.js",
+        "openclaw/plugin-sdk/lazy-runtime",
+        "@openclaw/plugin-sdk/lazy-runtime",
+      ].includes(source)
+    ) {
+      continue;
+    }
+    if (reference.importedName === "createLazyRuntimeMethod") {
+      lazyRuntimeMethods.set(reference.localName, 2);
+    } else if (reference.importedName === "createLazyRuntimeMethodBinder") {
+      for (const [name, declarations] of localConstDeclarations) {
+        const [declaration] = declarations;
+        const initializer = declaration?.initializer;
+        if (
+          declarations.length === 1 &&
+          declaration &&
+          ts.isIdentifier(declaration.name) &&
+          initializer &&
+          ts.isCallExpression(initializer) &&
+          ts.isIdentifier(initializer.expression) &&
+          initializer.expression.text === reference.localName &&
+          initializer.arguments.length === 1
+        ) {
+          lazyRuntimeMethods.set(name, 1);
+        }
+      }
+    }
+  }
+
   const definitions = new Set<string>();
   const valueDefinitions = new Map<string, ExportedValueDefinition>();
   for (const name of new Set([...directlyExportedNames, ...locallyExportedNames])) {
@@ -507,7 +555,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       if (
         constDeclarations.length === 1 &&
         constDeclaration &&
-        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName)
+        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName, lazyRuntimeMethods)
       ) {
         continue;
       }

@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
@@ -41,6 +42,159 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
+  @Test
+  fun defaultModelReadsKeepTheLegacyGatewayContract() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              if ("agentId" in Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject) {
+                throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "Legacy catalog parameters unsupported"))
+              }
+              """{"models":[{"id":"legacy-model","provider":"fixture","name":"Legacy"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"legacy-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
+          }
+        }
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) {
+          val jobs = listOf(catalogJobs.receive(), catalogJobs.receive())
+          jobs.forEach { it.join() }
+        }
+        assertEquals(listOf("legacy-model"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("legacy-model"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals(listOf("legacy-credential"), runtime.modelAuthProviders.value.map { it.id })
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun modelReadsUseTheSelectedAgent() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          val agentId =
+            Json
+              .parseToJsonElement(paramsJson.orEmpty())
+              .jsonObject["agentId"]
+              ?.jsonPrimitive
+              ?.content ?: "alpha"
+          when (method) {
+            "models.list" -> """{"models":[{"id":"$agentId-model","provider":"fixture","name":"$agentId"}]}"""
+            "models.authStatus" -> """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
+            else -> error("Unexpected model request: $method")
+          }
+        }
+        runtime.selectChatAgent("beta")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+
+        val catalog = withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }
+        val providerCatalog = withTimeout(2_000) { runtime.providerModelCatalog.first { it.isNotEmpty() } }
+        val providers = withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }
+        assertEquals("beta-model", catalog.single().id)
+        assertEquals("beta-model", providerCatalog.single().id)
+        assertEquals("beta-credential", providers.single().id)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun switchingAwayAndBackRetiresPendingModelReads() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val phase = AtomicInteger(0)
+      val catalogStarted = CompletableDeferred<Job>()
+      val providerCatalogStarted = CompletableDeferred<Job>()
+      val catalogResponse = CompletableDeferred<String>()
+      val providerCatalogResponse = CompletableDeferred<String>()
+      val models = """{"models":[{"id":"alpha-model","provider":"fixture","name":"Alpha"}]}"""
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          when (method) {
+            "models.list" -> {
+              if (phase.get() == 1) {
+                if (Json
+                    .parseToJsonElement(paramsJson.orEmpty())
+                    .jsonObject["view"]
+                    ?.jsonPrimitive
+                    ?.content == "provider-config"
+                ) {
+                  providerCatalogStarted.complete(currentCoroutineContext().job)
+                  providerCatalogResponse.await()
+                } else {
+                  catalogStarted.complete(currentCoroutineContext().job)
+                  catalogResponse.await()
+                }
+              } else {
+                models
+              }
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"alpha-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("alpha")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }
+        withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }
+
+        phase.set(1)
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        val catalogJob = withTimeout(2_000) { catalogStarted.await() }
+        val providerCatalogJob = withTimeout(2_000) { providerCatalogStarted.await() }
+        runtime.selectChatAgent("beta")
+        runtime.selectChatAgent("alpha")
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertTrue(runtime.modelAuthProviders.value.isEmpty())
+
+        phase.set(2)
+        catalogResponse.complete(models)
+        providerCatalogResponse.completeExceptionally(IllegalStateException("Retired model read failed"))
+        withTimeout(2_000) {
+          catalogJob.join()
+          providerCatalogJob.join()
+        }
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertTrue(runtime.modelAuthProviders.value.isEmpty())
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        assertEquals("alpha-model", withTimeout(2_000) { runtime.modelCatalog.first { it.isNotEmpty() } }.single().id)
+        assertEquals("alpha-credential", withTimeout(2_000) { runtime.modelAuthProviders.first { it.isNotEmpty() } }.single().id)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
   @Test
   fun selectingAgentRebindsCanonicalMainSession() {
     val app = RuntimeEnvironment.getApplication()

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -183,8 +185,18 @@ export async function executeLocalTurn<T>(params: {
   runLocal: () => Promise<T>;
 }): Promise<T> {
   const current = params.placements.get(params.claim.sessionId);
+  const identity = resolvePlacementIdentity(params.claim, current);
+  const sessionEntry = loadSessionEntryReadOnly({
+    ...identity,
+    storePath: resolveSessionStorePathForScope(identity),
+  });
+  if (sessionEntry?.repositoryWorkspaceId) {
+    throw new Error(
+      "This repository session needs a cloud worker. Choose a cloud environment and retry.",
+    );
+  }
   const turnClaim = params.placements.claimTurn({
-    ...resolvePlacementIdentity(params.claim, current),
+    ...identity,
     claimId: randomUUID(),
     runId: params.claim.runId,
     owner: { kind: "local" },

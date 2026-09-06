@@ -19,6 +19,7 @@ import {
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
+  renderChatAbortAction,
   renderChatPrimaryActions,
   renderComposerDictationStatus,
 } from "./chat-composer-controls.ts";
@@ -197,7 +198,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           </button>
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
-              ? renderChatPrimaryActions(runControlsProps)
+              ? renderChatAbortAction(runControlsProps)
               : nothing
           }
         </div>
@@ -212,6 +213,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? renderChatVoiceStatus({
         status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
         detail: props.realtimeTalkDetail,
+        onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
         onDismissError: props.realtimeTalkCameraError
           ? undefined
           : props.onDismissRealtimeTalkError,
@@ -280,8 +282,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           activeSession?.status,
           activeSession?.startedAt,
           activeSession?.endedAt,
-          props.progressCardHasActiveRun,
+          props.runActive,
           props.collapseTaskProgress,
+          {
+            activeRunId: props.runId,
+            completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
+          },
         )}
       </div>`
     : nothing;

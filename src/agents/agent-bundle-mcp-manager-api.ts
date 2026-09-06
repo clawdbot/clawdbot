@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
@@ -9,7 +10,9 @@ import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shar
 import type {
   McpToolCatalog,
   RequesterScopedMcpRuntimeHandle,
+  SessionMcpConfigReload,
   SessionMcpRuntime,
+  SessionMcpRuntimeLease,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 
@@ -24,7 +27,7 @@ function peekSessionMcpRuntimeManager(): SessionMcpRuntimeManager | undefined {
     : undefined;
 }
 
-export async function getOrCreateSessionMcpRuntime(params: {
+export async function acquireSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
@@ -35,15 +38,15 @@ export async function getOrCreateSessionMcpRuntime(params: {
   agentAccountId?: string | null;
   messageChannel?: string | null;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}): Promise<SessionMcpRuntime> {
-  return await getSessionMcpRuntimeManager().getOrCreate(params);
+}): Promise<SessionMcpRuntimeLease> {
+  return await getSessionMcpRuntimeManager().acquire(params);
 }
 
 /**
  * Requester-scoped MCP runtime only (no static partition).
  * Shared-thread harnesses use this so static MCP stays harness-native.
  */
-export async function getOrCreateRequesterScopedMcpRuntime(params: {
+export async function acquireRequesterScopedMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
@@ -55,7 +58,7 @@ export async function getOrCreateRequesterScopedMcpRuntime(params: {
   messageChannel?: string | null;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
-  return await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
+  return await getSessionMcpRuntimeManager().acquireRequesterScoped(params);
 }
 
 export function rememberAdvertisedScopedMcpCatalog(
@@ -123,6 +126,17 @@ export async function retireSessionMcpRuntime(params: {
   }
 }
 
+/** Releases an acquisition after its consumer has taken ownership, or after failure. */
+export async function releaseSessionMcpRuntime(lease: {
+  runtime: SessionMcpRuntime;
+  releaseLease?: () => void;
+}): Promise<void> {
+  lease.releaseLease?.();
+  await completeDeferredSessionMcpRuntimeRetirement(lease.runtime).catch((error: unknown) => {
+    logWarn(`bundle-mcp: deferred runtime cleanup failed: ${String(error)}`);
+  });
+}
+
 /** Completes a one-shot retirement after its final run, view, or request lease releases. */
 export async function completeDeferredSessionMcpRuntimeRetirement(
   runtime: SessionMcpRuntime,
@@ -147,6 +161,10 @@ export async function retireSessionMcpRuntimeForSessionKey(params: {
     preserveActiveLeases: params.preserveActiveLeases,
     onError: params.onError,
   });
+}
+
+export async function reloadSessionMcpRuntimes(params: SessionMcpConfigReload): Promise<void> {
+  await peekSessionMcpRuntimeManager()?.reloadConfig(params);
 }
 
 export async function disposeAllSessionMcpRuntimes(): Promise<void> {

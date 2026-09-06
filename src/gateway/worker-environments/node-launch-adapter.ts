@@ -469,6 +469,11 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       parent: deadline,
       label: "node worker availability",
     });
+    // Discovery and handoff use the availability grace; dispatched RPCs keep the caller budget.
+    const dispatchDeadline: OperationDeadline = {
+      ...deadline,
+      signal: availabilityDeadline.signal,
+    };
     let mayHaveLaunched = false;
     let dispatchReady = false;
     let pollStatus = false;
@@ -477,6 +482,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       mayHaveLaunched = true;
       if (!dispatchReady) {
         dispatchReady = true;
+        availabilityDeadline.dispose();
         stableRequest.onDispatchReady?.();
       }
     };
@@ -489,15 +495,20 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           throw new Error("node worker launch authority closed");
         }
         try {
-          const attemptDeadline = dispatchReady ? deadline : availabilityDeadline;
           const receipt = await invoke({
             deviceId: stableRequest.deviceId,
             command: pollStatus
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
-            isAuthorized: stableRequest.isDispatchAuthorized,
-            deadline: attemptDeadline,
+            isAuthorized: () => {
+              if (!dispatchReady) {
+                // Publish expiry through the signal; a guard throw can orphan the invoke promise.
+                availabilityDeadline.remainingMs();
+              }
+              return stableRequest.isDispatchAuthorized();
+            },
+            deadline: dispatchDeadline,
             ...(!pollStatus
               ? {
                   onDispatchReady: markDispatchReady,

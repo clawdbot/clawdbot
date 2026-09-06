@@ -20,14 +20,9 @@ vi.mock("./bundled-discovery-state.js", () => ({
   readBundledDiscoveryMode: mocks.readBundledDiscoveryMode,
 }));
 
-vi.mock("./web-search-providers.shared.js", () => ({
-  resolveBundledWebSearchResolutionConfig: (params: { config?: unknown }) => ({
-    config: params.config,
-  }),
-}));
-
-vi.mock("./web-fetch-providers.shared.js", () => ({
-  resolveBundledWebFetchResolutionConfig: (params: { config?: unknown }) => ({
+vi.mock("./web-provider-resolution-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./web-provider-resolution-shared.js")>()),
+  resolveBundledWebProviderResolutionConfig: (params: { config?: unknown }) => ({
     config: params.config,
   }),
 }));

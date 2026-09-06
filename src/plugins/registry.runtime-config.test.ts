@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -319,63 +320,73 @@ describe("plugin registry runtime config scope", () => {
     expect(acquireScope).toMatchObject({ pluginId: "memory-provider" });
   });
 
-  it("runs node helpers with the owning plugin scope", async () => {
-    let listScope = getPluginRuntimeGatewayRequestScope();
-    let invokeScope = getPluginRuntimeGatewayRequestScope();
-    let duplexScope = getPluginRuntimeGatewayRequestScope();
-    const runtime = createPluginRuntime();
-    runtime.nodes = {
-      list: vi.fn(async () => {
-        listScope = getPluginRuntimeGatewayRequestScope();
-        return { nodes: [] };
-      }),
-      invoke: vi.fn(async () => {
-        invokeScope = getPluginRuntimeGatewayRequestScope();
-        return { ok: true };
-      }),
-      openDuplex: vi.fn(async () => {
-        duplexScope = getPluginRuntimeGatewayRequestScope();
-        return {
-          send: vi.fn(async () => {}),
-          onMessage: vi.fn(() => () => {}),
-          closed: Promise.resolve({ ok: true }),
-          close: vi.fn(),
-        };
-      }),
-    };
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "google-meet",
-      name: "Google Meet",
-      source: "/plugins/google-meet/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+  it.each(["materialized", "lazy"] as const)(
+    "runs node helpers with the owning plugin scope (%s)",
+    async (mode) => {
+      let listScope = getPluginRuntimeGatewayRequestScope();
+      let invokeScope = getPluginRuntimeGatewayRequestScope();
+      let duplexScope = getPluginRuntimeGatewayRequestScope();
+      const nodes: PluginRuntime["nodes"] = {
+        list: vi.fn(async () => {
+          listScope = getPluginRuntimeGatewayRequestScope();
+          return { nodes: [] };
+        }),
+        invoke: vi.fn(async () => {
+          invokeScope = getPluginRuntimeGatewayRequestScope();
+          return { ok: true };
+        }),
+        openDuplex: vi.fn(async () => {
+          duplexScope = getPluginRuntimeGatewayRequestScope();
+          return {
+            send: vi.fn(async () => {}),
+            onMessage: vi.fn(() => () => {}),
+            closed: Promise.resolve({ ok: true }),
+            close: vi.fn(),
+          };
+        }),
+      };
+      const loadPluginModule = vi.fn((_modulePath: string): unknown => {
+        throw new Error("broad runtime should stay lazy during scoped node access");
+      });
+      const runtime =
+        mode === "lazy"
+          ? createLazyPluginRuntime({ loadPluginModule, runtimeOptions: { nodes } })
+          : createPluginRuntime({ nodes });
+      const pluginRegistry = createTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "google-meet",
+        name: "Google Meet",
+        source: "/plugins/google-meet/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
-    await api.runtime.nodes.list({ connected: true });
-    await api.runtime.nodes.invoke({
-      nodeId: "node-1",
-      command: "browser.proxy",
-      scopes: ["operator.admin"],
-    });
-    await api.runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" });
+      await api.runtime.nodes.list({ connected: true });
+      await api.runtime.nodes.invoke({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        scopes: ["operator.admin"],
+      });
+      await api.runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" });
 
-    expect(listScope).toMatchObject({
-      pluginId: "google-meet",
-      pluginSource: "/plugins/google-meet/index.js",
-    });
-    expect(invokeScope).toMatchObject({
-      pluginId: "google-meet",
-      pluginSource: "/plugins/google-meet/index.js",
-    });
-    expect(duplexScope).toMatchObject({
-      pluginId: "google-meet",
-      pluginSource: "/plugins/google-meet/index.js",
-    });
-    expect(duplexScope?.pluginRegistry).toBe(pluginRegistry.registry);
-  });
+      expect(listScope).toMatchObject({
+        pluginId: "google-meet",
+        pluginSource: "/plugins/google-meet/index.js",
+      });
+      expect(invokeScope).toMatchObject({
+        pluginId: "google-meet",
+        pluginSource: "/plugins/google-meet/index.js",
+      });
+      expect(duplexScope).toMatchObject({
+        pluginId: "google-meet",
+        pluginSource: "/plugins/google-meet/index.js",
+      });
+      expect(duplexScope?.pluginRegistry).toBe(pluginRegistry.registry);
+      expect(loadPluginModule).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs gateway requests with the owning plugin scope", async () => {
     let requestScope = getPluginRuntimeGatewayRequestScope();

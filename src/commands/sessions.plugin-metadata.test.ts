@@ -1,4 +1,4 @@
-// Session listing prepares plugin-backed CLI provider metadata once for every row.
+// Session listing prepares plugin metadata once and enriches only selected rows.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -18,15 +18,18 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 
 mockSessionsConfig();
 
+const sessionMeta = await import("../acp/runtime/session-meta.js");
+const runtimeMetadata = await import("../agents/agent-runtime-metadata.js");
 const { sessionsCommand } = await import("./sessions.js");
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetMockSessionsConfig();
   resolvePluginMetadataSnapshotMock.mockReset();
 });
 
 describe("sessions plugin metadata preparation", () => {
-  it("loads one plugin metadata snapshot before enriching every stored row", async () => {
+  it("loads one plugin metadata snapshot and enriches only the selected sessions", async () => {
     const config = {
       agents: {
         defaults: {
@@ -68,6 +71,8 @@ describe("sessions plugin metadata preparation", () => {
       ]),
     );
     const store = await writeStore(entries, "sessions-plugin-metadata");
+    const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaBatch");
+    const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveModelAgentRuntimeMetadata");
 
     const payload = await runSessionsJson<{
       count: number;
@@ -78,8 +83,13 @@ describe("sessions plugin metadata preparation", () => {
     expect(payload).toMatchObject({
       count: 1,
       totalCount: 12,
-      sessions: [{ model: "gpt-5.5", modelProvider: "openai" }],
+      sessions: [{ key: "agent:main:fixture-0", model: "gpt-5.5", modelProvider: "openai" }],
     });
+    expect(readAcpMetadata).toHaveBeenCalledExactlyOnceWith({
+      cfg: config,
+      entries: [{ sessionKey: "agent:main:fixture-0", agentId: "main", entry: expect.any(Object) }],
+    });
+    expect(resolveRuntime).toHaveBeenCalledTimes(1);
     expect(payload.sessions[0]).not.toHaveProperty("displayModelRef");
     expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
     expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledWith({

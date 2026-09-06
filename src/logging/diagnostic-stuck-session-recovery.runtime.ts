@@ -18,6 +18,7 @@ import {
   getCommandLaneSnapshot,
   resetCommandLane,
 } from "../process/command-queue.js";
+import { resolveRunStaleThresholdMs } from "./diagnostic-run-activity-snapshot.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -65,6 +66,7 @@ function isActiveRunProgressStale(params: {
   sessionKey?: string;
   queueDepth?: number;
   staleAbortMs: number;
+  allowActiveAbort?: boolean;
   /**
    * When false, staleness is evaluated even with a zero queued backlog.
    * Run-handle recovery keeps the gate so an unqueued active run is not
@@ -73,19 +75,30 @@ function isActiveRunProgressStale(params: {
    */
   requireQueueBacklog?: boolean;
 }): boolean {
-  if ((params.queueDepth ?? 0) <= 0 && params.requireQueueBacklog !== false) {
+  if (
+    !params.allowActiveAbort &&
+    (params.queueDepth ?? 0) <= 0 &&
+    params.requireQueueBacklog !== false
+  ) {
     return false;
   }
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
-  const lastProgressAgeMs = activity.lastProgressAgeMs;
+  if (params.allowActiveAbort) {
+    // Recovery may have queued before a fresh byte arrived. Revalidate the
+    // backend allowance here; active tools retain their separate recovery policy.
+    return (
+      activity.activeWorkKind === "tool_call" ||
+      activity.activeBackendLivenessDeadlineAtMs === undefined ||
+      Date.now() >= activity.activeBackendLivenessDeadlineAtMs
+    );
+  }
   // A missing activity row is the orphan-handle state: classification age is
   // the only progress evidence available, so it owns the stale fallback.
-  return typeof lastProgressAgeMs === "number"
-    ? lastProgressAgeMs >= params.staleAbortMs
-    : params.ageMs >= params.staleAbortMs;
+  const evidenceAgeMs = activity.lastProgressAgeMs ?? params.ageMs;
+  return evidenceAgeMs >= resolveRunStaleThresholdMs(activity, evidenceAgeMs, params.staleAbortMs);
 }
 
 function formatRecoveryContext(
@@ -215,6 +228,21 @@ export async function recoverStuckDiagnosticSession(
       activeReplyAgeMs !== undefined &&
       activeReplyAgeMs < staleActiveLaneTaskReleaseMs;
 
+    if (activeReplyActivity?.terminalOutcomeCommitted === true) {
+      // The turn already produced its reply and only delivery/finalization is
+      // left, so the no-progress premise is false. Aborting here discards a
+      // completed answer; the finalization lease still bounds this owner.
+      return reportRecoveryOutcome({
+        status: "skipped",
+        action: "keep_lane",
+        reason: "terminal_outcome_committed",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        activeSessionId: activeWorkSessionId,
+        activeWorkKind: "embedded_run",
+      });
+    }
+
     if (activeReplyPhase === "waiting_for_global_lane" || activeMaintenanceProtected) {
       // Queued replies and configured maintenance own their lane until their
       // producer finishes or the existing compaction safety window expires.
@@ -229,16 +257,15 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (activeSessionId) {
-      const reclaimStaleActiveRun =
-        params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
-          ageMs: params.ageMs,
-          sessionId: activeSessionId,
-          sessionKey: params.sessionKey,
-          queueDepth: params.queueDepth,
-          staleAbortMs: staleActiveProgressAbortMs,
-        });
-      if (params.allowActiveAbort !== true && !reclaimStaleActiveRun) {
+      const reclaimStaleActiveRun = isActiveRunProgressStale({
+        ageMs: params.ageMs,
+        sessionId: activeSessionId,
+        sessionKey: params.sessionKey,
+        queueDepth: params.queueDepth,
+        staleAbortMs: staleActiveProgressAbortMs,
+        allowActiveAbort: params.allowActiveAbort,
+      });
+      if (!reclaimStaleActiveRun) {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
           action: "observe_only",
@@ -253,7 +280,7 @@ export async function recoverStuckDiagnosticSession(
         );
         return reportRecoveryOutcome(outcome);
       }
-      if (reclaimStaleActiveRun) {
+      if (params.allowActiveAbort !== true) {
         diag.warn(
           `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
         );
@@ -294,20 +321,19 @@ export async function recoverStuckDiagnosticSession(
           activeSessionId: activeWorkSessionId,
         });
       }
-      const reclaimStaleReplyWork =
-        params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
-          ageMs: params.ageMs,
-          sessionId: activeWorkSessionId,
-          sessionKey: params.sessionKey,
-          queueDepth: params.queueDepth,
-          staleAbortMs: staleActiveProgressAbortMs,
-          // Maintenance retains its backlog gate after the safety window;
-          // other abandoned reply ownership must expire even without a queue.
-          requireQueueBacklog: maintenancePhase ? undefined : false,
-        });
-      if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
-        if (reclaimStaleReplyWork) {
+      const reclaimStaleReplyWork = isActiveRunProgressStale({
+        ageMs: params.ageMs,
+        sessionId: activeWorkSessionId,
+        sessionKey: params.sessionKey,
+        queueDepth: params.queueDepth,
+        staleAbortMs: staleActiveProgressAbortMs,
+        allowActiveAbort: params.allowActiveAbort,
+        // Maintenance retains its backlog gate after the safety window;
+        // other abandoned reply ownership must expire even without a queue.
+        requireQueueBacklog: maintenancePhase ? undefined : false,
+      });
+      if (reclaimStaleReplyWork) {
+        if (params.allowActiveAbort !== true) {
           diag.warn(
             `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
               params,
@@ -339,6 +365,21 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
+    // A terminal outcome can commit after the initial snapshot but before the
+    // abort owner checks it. Its finalization lease still owns lane release.
+    if (
+      activeSessionId &&
+      resolveEmbeddedReplyActivity(activeSessionId)?.terminalOutcomeCommitted
+    ) {
+      return reportRecoveryOutcome({
+        status: "skipped",
+        action: "keep_lane",
+        reason: "terminal_outcome_committed",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        activeSessionId,
+      });
+    }
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {

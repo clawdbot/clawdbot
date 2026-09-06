@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { fetchAgentIdentity } from "../lib/agents/identity.ts";
 import { normalizeAssistantIdentity, type AssistantIdentity } from "../lib/assistant-identity.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
@@ -12,16 +13,6 @@ type PersistedLocalAssistantIdentities = {
   avatar?: unknown;
   agentId?: unknown;
 };
-
-type AssistantIdentityCacheEntry =
-  | { kind: "result"; result: AssistantIdentity | null; cachedAt: number }
-  | { kind: "pending"; pending: Promise<AssistantIdentity | null> };
-
-const ASSISTANT_IDENTITY_CACHE_TTL_MS = 60_000;
-const assistantIdentityCache = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, AssistantIdentityCacheEntry>
->();
 
 function parseLocalAssistantAvatarMap(raw: string): {
   avatars: Record<string, string>;
@@ -79,66 +70,23 @@ export function loadLocalAssistantIdentity(opts?: {
   }
 }
 
-export function invalidateAssistantIdentityCache(client: GatewayBrowserClient | null): void {
-  if (client) {
-    assistantIdentityCache.delete(client);
-  }
-}
-
-export function fetchAssistantIdentity(
+export async function fetchAssistantIdentity(
   client: GatewayBrowserClient,
   agentId: string,
 ): Promise<AssistantIdentity | null> {
-  let cache = assistantIdentityCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    assistantIdentityCache.set(client, cache);
+  const result = await fetchAgentIdentity(client, agentId);
+  if (!result) {
+    return null;
   }
-  const key = agentId.trim();
-  const cached = cache.get(key);
-  if (cached?.kind === "result" && Date.now() - cached.cachedAt < ASSISTANT_IDENTITY_CACHE_TTL_MS) {
-    return Promise.resolve(cached.result);
-  }
-  if (cached?.kind === "result") {
-    cache.delete(key);
-  }
-  if (cached?.kind === "pending") {
-    return cached.pending;
-  }
-  const pending = client
-    .request<Partial<AssistantIdentity> | null>("agent.identity.get", { agentId: key })
-    .then((result) => {
-      if (!result) {
-        return null;
+  const identity = normalizeAssistantIdentity(result);
+  const localAvatar = loadLocalAssistantIdentity({ agentId: identity.agentId }).avatar;
+  return localAvatar
+    ? {
+        ...identity,
+        avatar: localAvatar,
+        avatarSource: localAvatar,
+        avatarStatus: "data",
+        avatarReason: null,
       }
-      const identity = normalizeAssistantIdentity(result);
-      const localAvatar = loadLocalAssistantIdentity({ agentId: identity.agentId }).avatar;
-      return localAvatar
-        ? {
-            ...identity,
-            avatar: localAvatar,
-            avatarSource: localAvatar,
-            avatarStatus: "data" as const,
-            avatarReason: null,
-          }
-        : identity;
-    })
-    .then(
-      (result) => {
-        const current = cache.get(key);
-        if (current?.kind === "pending" && current.pending === pending) {
-          cache.set(key, { kind: "result", result, cachedAt: Date.now() });
-        }
-        return result;
-      },
-      (error: unknown) => {
-        const current = cache.get(key);
-        if (current?.kind === "pending" && current.pending === pending) {
-          cache.delete(key);
-        }
-        throw error;
-      },
-    );
-  cache.set(key, { kind: "pending", pending });
-  return pending;
+    : identity;
 }

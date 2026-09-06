@@ -54,6 +54,12 @@ const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
   match: (value) => typeof value === "boolean",
 };
 
+const CONTROL_UI_TOOL_TITLES_RULE: LegacyConfigRule = {
+  path: ["gateway", "controlUi", "toolTitles"],
+  message:
+    'gateway.controlUi.toolTitles is retired. Tool activity uses agent-provided descriptions automatically, without utility-model calls. Run "openclaw doctor --fix" to remove it.',
+};
+
 const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
   ["0.0.0.0", "lan"],
   ["::", "lan"],
@@ -81,6 +87,21 @@ function escapeControlForLog(value: string): string {
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
+    id: "gateway.control-ui-tool-titles-remove",
+    describe: "Remove the retired Control UI tool-title preference",
+    legacyRules: [CONTROL_UI_TOOL_TITLES_RULE],
+    apply: (raw, changes) => {
+      const controlUi = getRecord(getRecord(raw.gateway)?.controlUi);
+      if (!controlUi || !Object.hasOwn(controlUi, "toolTitles")) {
+        return;
+      }
+      delete controlUi.toolTitles;
+      changes.push(
+        "Removed retired gateway.controlUi.toolTitles; tool activity descriptions are automatic and make no utility-model calls.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "gateway.tailscale.service-name-remove",
     describe: "Disable managed ingress and remove the retired Tailscale Service name",
     legacyRules: [GATEWAY_TAILSCALE_SERVICE_NAME_RULE],
@@ -95,8 +116,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (wasManagedService) {
         tailscale.mode = "off";
       }
-      gateway.tailscale = tailscale;
-      raw.gateway = gateway;
       changes.push(
         wasManagedService
           ? "Removed gateway.tailscale.serviceName and set gateway.tailscale.mode=off because named Services cannot use lifecycle-owned routes. " +
@@ -117,8 +136,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       }
       const cleanupWasEnabled = tailscale.resetOnExit === true;
       delete tailscale.resetOnExit;
-      gateway.tailscale = tailscale;
-      raw.gateway = gateway;
       changes.push(
         cleanupWasEnabled
           ? "Removed gateway.tailscale.resetOnExit; managed Tailscale routes now end automatically with the Gateway lifecycle."
@@ -150,9 +167,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         return;
       }
       delete gateway.webchat;
-      if (Object.keys(gateway).length > 0) {
-        raw.gateway = gateway;
-      } else {
+      if (Object.keys(gateway).length === 0) {
         delete raw.gateway;
       }
       changes.push("Removed retired gateway.webchat config.");
@@ -172,9 +187,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         return;
       }
       delete gateway.port;
-      if (Object.keys(gateway).length > 0) {
-        raw.gateway = gateway;
-      } else {
+      if (Object.keys(gateway).length === 0) {
         delete raw.gateway;
       }
       changes.push(
@@ -213,7 +226,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
           typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined,
       });
       gateway.controlUi = { ...controlUi, allowedOrigins: origins };
-      raw.gateway = gateway;
       changes.push(
         `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${bind}. ` +
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
@@ -245,7 +257,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       }
 
       gateway.bind = mapped;
-      raw.gateway = gateway;
       changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
     },
   }),

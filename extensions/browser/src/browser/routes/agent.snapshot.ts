@@ -91,7 +91,7 @@ async function collectChromeMcpSnapshotUrls(
     fn: `() => {
       const seen = new Set();
       const out = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+      for (const anchor of document.querySelectorAll("a[href]")) {
         const href = anchor.href || "";
         if (!href || seen.has(href)) continue;
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")

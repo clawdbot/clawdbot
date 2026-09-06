@@ -2,12 +2,16 @@ package ai.openclaw.app.chat
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
@@ -51,6 +55,400 @@ class ChatControllerStreamReplayTest {
     sessionKey: String,
     agentId: String = "main",
   ): String = """{"sessionKey":"$sessionKey","agentId":"$agentId","messageId":"voice-4","messageSeq":4,"message":{"role":"assistant","content":[{"type":"text","text":"second answer"}],"__openclaw":{"id":"voice-4","seq":4}},"session":{"key":"$sessionKey","sessionId":"session-voice","agentId":"$agentId"}}"""
+
+  private fun sendAck(
+    runId: String,
+    status: String,
+  ): String =
+    buildJsonObject {
+      put("runId", JsonPrimitive(runId))
+      put("status", JsonPrimitive(status))
+    }.toString()
+
+  private inner class PendingRunReplay(
+    val controller: ChatController,
+    val gateway: ScriptedGateway,
+    val owner: ChatComposerOwner,
+  ) {
+    suspend fun send(id: String): Boolean = controller.sendMessageForOwnerAwaitAcceptance(id, "off", emptyList(), owner, idempotencyKey = id)
+
+    fun text(id: String) {
+      controller.handleGatewayEvent("chat", chatDeltaPayload(owner.sessionKey, id, 1, null, "Original output"))
+    }
+
+    fun tool(
+      id: String,
+      callId: String,
+      phase: String = "start",
+    ) {
+      controller.handleGatewayEvent(
+        "agent",
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(owner.sessionKey))
+          put("runId", JsonPrimitive(id))
+          put("ts", JsonPrimitive(10))
+          put("stream", JsonPrimitive("tool"))
+          put(
+            "data",
+            buildJsonObject {
+              put("phase", JsonPrimitive(phase))
+              put("name", JsonPrimitive("edit"))
+              put("toolCallId", JsonPrimitive(callId))
+              put("args", buildJsonObject { put("path", JsonPrimitive("file.txt")) })
+              put(
+                "diff",
+                buildJsonObject {
+                  put("added", JsonPrimitive(2))
+                  put("removed", JsonPrimitive(1))
+                },
+              )
+            },
+          )
+        }.toString(),
+      )
+    }
+
+    fun terminal(
+      id: String,
+      kind: String,
+    ) {
+      if (kind.startsWith("chat-")) {
+        controller.handleGatewayEvent("chat", chatTerminalPayload(owner.sessionKey, id, 2, state = kind.removePrefix("chat-")))
+        return
+      }
+      val event = if (kind == "session-end") "sessions.changed" else "agent"
+      controller.handleGatewayEvent(
+        event,
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(owner.sessionKey))
+          put("agentId", JsonPrimitive(owner.agentId))
+          put("runId", JsonPrimitive(id))
+          put("seq", JsonPrimitive(2))
+          if (kind == "session-end") {
+            put("phase", JsonPrimitive("end"))
+            put(
+              "session",
+              buildJsonObject {
+                put("key", JsonPrimitive(owner.sessionKey))
+                put("agentId", JsonPrimitive(owner.agentId))
+                put("hasActiveRun", JsonPrimitive(true))
+                put("activeRunIds", JsonArray(listOf(JsonPrimitive(if (id == "z-original") "a-followup" else "z-original"))))
+              },
+            )
+          } else {
+            put("stream", JsonPrimitive(if (kind == "stream-error") "error" else "lifecycle"))
+            put("data", buildJsonObject { put("phase", JsonPrimitive(kind.removePrefix("lifecycle-"))) })
+          }
+        }.toString(),
+      )
+    }
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private suspend fun TestScope.withPendingRunReplay(block: suspend PendingRunReplay.() -> Unit) {
+    val gateway = ScriptedGateway(json)
+    gateway.respondWith("chat.history", historyResponse("session-concurrent", emptyList()))
+    gateway.respondWith("chat.abort", "{}")
+    gateway.respondChatSend("started")
+    val controller = backgroundScope.createChatController(requestGateway = gateway::request)
+    val owner = ChatComposerOwner("gateway-test", "main", "agent:main:node-test")
+    controller.prepareMainSessionKey(owner.sessionKey)
+    controller.load(owner.sessionKey)
+    runCurrent()
+    // Recovery must not restore a wiped stream before the assertion observes it.
+    val historyGate = CompletableDeferred<Unit>()
+    gateway.respond("chat.history") {
+      historyGate.await()
+      historyResponse("session-concurrent", emptyList())
+    }
+    try {
+      PendingRunReplay(controller, gateway, owner).block()
+    } finally {
+      controller.onDisconnected("test cleanup")
+      historyGate.cancel()
+    }
+  }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun followupAdmissionPreservesEmittedOutputAndStopTargetsBothPendingRuns() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("z-original"))
+        text("z-original")
+        tool("z-original", "tool-original")
+        tool("z-original", "tool-original", "input_delta")
+        val originalTools = controller.pendingToolCalls.value
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.respond("chat.send") {
+          entered.complete(Unit)
+          release.await()
+          sendAck("a-followup", "started")
+        }
+        val followup = async { send("a-followup") }
+        try {
+          runCurrent()
+          assertTrue(entered.isCompleted)
+          assertEquals(2, controller.pendingRunCount.value)
+          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals(originalTools, controller.pendingToolCalls.value)
+          release.complete(Unit)
+          assertTrue(followup.await())
+          controller.abort()
+          runCurrent()
+          assertEquals(
+            setOf("z-original", "a-followup"),
+            gateway.calls
+              .filter { it.method == "chat.abort" }
+              .map {
+                json
+                  .parseToJsonElement(requireNotNull(it.paramsJson))
+                  .jsonObject
+                  .getValue("runId")
+                  .jsonPrimitive.content
+              }.toSet(),
+          )
+          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals(originalTools, controller.pendingToolCalls.value)
+        } finally {
+          release.complete(Unit)
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalFollowupAcksPreserveTheOriginalRunOutput() =
+    runTest {
+      for (status in listOf("ok", "timeout", "error")) {
+        withPendingRunReplay {
+          assertTrue(send("z-original"))
+          val entered = CompletableDeferred<Unit>()
+          val release = CompletableDeferred<Unit>()
+          gateway.respond("chat.send") {
+            entered.complete(Unit)
+            release.await()
+            sendAck("a-followup", status)
+          }
+          val followup = async { send("a-followup") }
+          try {
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            // Re-emission isolates terminal ACK cleanup from admission-time cleanup.
+            text("z-original")
+            tool("z-original", "tool-original")
+            val originalTools = controller.pendingToolCalls.value
+            release.complete(Unit)
+            assertTrue(followup.await())
+            assertEquals(status, 1, controller.pendingRunCount.value)
+            assertEquals(status, "Original output", controller.streamingAssistantText.value)
+            assertEquals(status, originalTools, controller.pendingToolCalls.value)
+            if (status != "ok") assertEquals("Chat failed before the run started; try again.", controller.errorText.value)
+          } finally {
+            release.complete(Unit)
+          }
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun otherRunTerminalsPreserveOriginalTextAndRemoveOnlyTheirOwnTools() =
+    runTest {
+      for (kind in listOf("chat-final", "chat-error", "chat-aborted", "lifecycle-end", "lifecycle-error", "session-end", "stream-error")) {
+        withPendingRunReplay {
+          assertTrue(send("z-original"))
+          assertTrue(send("a-followup"))
+          text("z-original")
+          tool("z-original", "tool-original")
+          tool("z-original", "tool-original", "input_delta")
+          val originalTools = controller.pendingToolCalls.value
+          tool("a-followup", "tool-followup")
+          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals(2, controller.pendingToolCalls.value.size)
+          terminal("a-followup", kind)
+          assertEquals(kind, 1, controller.pendingRunCount.value)
+          assertEquals(kind, "Original output", controller.streamingAssistantText.value)
+          assertEquals(kind, originalTools, controller.pendingToolCalls.value)
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun emittingRunRetirementClearsItsOutputEvenWhileAnotherRunRemainsPending() =
+    runTest {
+      for (kind in listOf("lifecycle-end", "lifecycle-error", "session-end", "chat-final", "chat-error", "chat-aborted", "stream-error")) {
+        withPendingRunReplay {
+          assertTrue(send("z-original"))
+          assertTrue(send("a-followup"))
+          tool("a-followup", "tool-followup")
+          val remainingTools = controller.pendingToolCalls.value
+          text("z-original")
+          tool("z-original", "tool-original")
+          terminal("z-original", kind)
+          assertEquals(kind, 1, controller.pendingRunCount.value)
+          assertNull(kind, controller.streamingAssistantText.value)
+          assertEquals(kind, remainingTools, controller.pendingToolCalls.value)
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun toolResultsCannotRemoveAnotherRunsReusedCallId() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("z-original"))
+        assertTrue(send("a-followup"))
+        text("z-original")
+        tool("z-original", "shared-call")
+        tool("a-followup", "shared-call")
+        val followupTools = controller.pendingToolCalls.value
+        tool("z-original", "shared-call", "result")
+        assertEquals("Original output", controller.streamingAssistantText.value)
+        assertEquals(followupTools, controller.pendingToolCalls.value)
+        tool("a-followup", "shared-call", "result")
+        assertTrue(controller.pendingToolCalls.value.isEmpty())
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun ackRekeyRetiresEarlyOutputUnderTheCanonicalRunId() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("a-followup"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.respond("chat.send") {
+          entered.complete(Unit)
+          release.await()
+          sendAck("canonical-original", "started")
+        }
+        val original = async { send("z-original") }
+        try {
+          runCurrent()
+          assertTrue(entered.isCompleted)
+          text("z-original")
+          tool("z-original", "tool-original")
+          val originalTools = controller.pendingToolCalls.value
+          release.complete(Unit)
+          assertTrue(original.await())
+          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals(originalTools, controller.pendingToolCalls.value)
+          terminal("canonical-original", "lifecycle-end")
+          assertEquals(1, controller.pendingRunCount.value)
+          assertNull(controller.streamingAssistantText.value)
+          assertTrue(controller.pendingToolCalls.value.isEmpty())
+        } finally {
+          release.complete(Unit)
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun inactiveRunCompletionDoesNotClearTheCurrentSessionsUnattributedOutput() =
+    runTest {
+      for (completion in listOf("ack", "terminal")) {
+        withPendingRunReplay {
+          val entered = CompletableDeferred<Unit>()
+          val release = CompletableDeferred<Unit>()
+          gateway.respond("chat.send") {
+            entered.complete(Unit)
+            release.await()
+            sendAck("z-original", "started")
+          }
+          val pending = async { send("z-original") }
+          try {
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            if (completion == "terminal") {
+              release.complete(Unit)
+              assertTrue(pending.await())
+            }
+            val currentSession = "agent:other:current-chat"
+            controller.switchSession(currentSession)
+            runCurrent()
+            assertEquals(currentSession, controller.sessionKey.value)
+            assertEquals(0, controller.pendingRunCount.value)
+            controller.handleGatewayEvent(
+              "agent",
+              buildJsonObject {
+                put("sessionKey", JsonPrimitive(currentSession))
+                put("stream", JsonPrimitive("assistant"))
+                put("data", buildJsonObject { put("text", JsonPrimitive("Current session output")) })
+              }.toString(),
+            )
+            assertEquals("Current session output", controller.streamingAssistantText.value)
+            if (completion == "ack") {
+              release.complete(Unit)
+              assertTrue(pending.await())
+            } else {
+              terminal("z-original", "chat-final")
+            }
+            runCurrent()
+            assertEquals(completion, "Current session output", controller.streamingAssistantText.value)
+          } finally {
+            release.complete(Unit)
+          }
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalBeforeSendSettlementKeepsTheCurrentSessionsLiveOutput() =
+    runTest {
+      for (status in listOf("ok", "timeout", "error")) {
+        withPendingRunReplay {
+          val entered = CompletableDeferred<Unit>()
+          val release = CompletableDeferred<Unit>()
+          gateway.respond("chat.send") {
+            entered.complete(Unit)
+            release.await()
+            sendAck("z-original", status)
+          }
+          val pending = async { send("z-original") }
+          try {
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            val currentSession = "agent:other:current-chat"
+            controller.switchSession(currentSession)
+            runCurrent()
+            assertEquals(currentSession, controller.sessionKey.value)
+            assertEquals(0, controller.pendingRunCount.value)
+            controller.handleGatewayEvent(
+              "agent",
+              """{"sessionKey":"$currentSession","stream":"assistant","data":{"text":"Current session output"}}""",
+            )
+            controller.handleGatewayEvent(
+              "agent",
+              """{"sessionKey":"$currentSession","stream":"tool","data":{"phase":"start","name":"edit","toolCallId":"current-tool"}}""",
+            )
+            val currentTools = controller.pendingToolCalls.value
+            assertEquals(1, currentTools.size)
+
+            // A terminal can retire the projection while its asynchronous send settlement waits.
+            terminal("z-original", "chat-error")
+            runCurrent()
+            assertEquals("Current session output", controller.streamingAssistantText.value)
+            assertEquals(currentTools, controller.pendingToolCalls.value)
+
+            release.complete(Unit)
+            assertTrue(pending.await())
+            runCurrent()
+            assertEquals(status, "Current session output", controller.streamingAssistantText.value)
+            assertEquals(status, currentTools, controller.pendingToolCalls.value)
+            assertEquals(currentSession, controller.sessionKey.value)
+          } finally {
+            release.complete(Unit)
+          }
+        }
+      }
+    }
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)

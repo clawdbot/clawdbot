@@ -1,7 +1,10 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionMetaForEntry,
+  resolveSessionStorePathForAcp,
+} from "../acp/runtime/session-meta.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -44,6 +47,7 @@ type TrajectorySnapshot = {
   events: TrajectoryEvent[];
   maxStorageSeq: number;
 };
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -162,12 +166,17 @@ function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
 
 function isRunningSession(selection: TailSelection): boolean {
   const cfg = getRuntimeConfig();
-  const acpMeta = readAcpSessionMeta({
-    sessionKey: resolveStoredSessionKeyForAgentStore({
-      cfg,
-      agentId: selection.agentId,
-      sessionKey: selection.key,
-    }),
+  const sessionKey = resolveStoredSessionKeyForAgentStore({
+    cfg,
+    agentId: selection.agentId,
+    sessionKey: selection.key,
+  });
+  const { agentId } = resolveSessionStorePathForAcp({ cfg, sessionKey });
+  const acpMeta = readAcpSessionMetaForEntry({
+    cfg,
+    sessionKey,
+    agentId,
+    entry: selection.entry,
   });
   return selection.entry.status === "running" || acpMeta?.state === "running";
 }
@@ -217,11 +226,11 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
   return rows.map((row) => row.event);
 }
 
-async function followSelections(
+function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
   initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
-): Promise<void> {
+): Promise<FollowOutcome> {
   const states = selections.map((selection): SqliteFollowState => {
     const snapshot = initialSnapshots.get(selection);
     return {
@@ -230,7 +239,8 @@ async function followSelections(
     };
   });
 
-  await new Promise<void>((resolve) => {
+  return new Promise((resolve) => {
+    let finished = false;
     const interval = setInterval(() => {
       for (const state of states) {
         try {
@@ -241,19 +251,24 @@ async function followSelections(
               error,
             )}`,
           );
-          runtime.exit(1);
+          return finish("ERROR");
         }
       }
     }, FOLLOW_INTERVAL_MS);
 
-    const stop = () => {
-      clearInterval(interval);
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      resolve();
+    const finish = (outcome: FollowOutcome) => {
+      if (!finished) {
+        finished = true;
+        clearInterval(interval);
+        process.off("SIGINT", stopSigint);
+        process.off("SIGTERM", stopSigterm);
+        resolve(outcome);
+      }
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    const stopSigint = () => finish("SIGINT");
+    const stopSigterm = () => finish("SIGTERM");
+    process.once("SIGINT", stopSigint);
+    process.once("SIGTERM", stopSigterm);
   });
 }
 
@@ -292,6 +307,7 @@ export async function sessionsTailCommand(
     for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: target.agentId,
       storePath: target.storePath,
+      projection: "list",
     })) {
       const selection = buildTailSelection({
         agentId: target.agentId,
@@ -319,6 +335,7 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    await followSelections(selected, runtime, followSnapshots);
+    const outcome = await followSelections(selected, runtime, followSnapshots);
+    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }

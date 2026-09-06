@@ -1,6 +1,7 @@
 // Control UI chat module implements chat welcome behavior.
 import { html, nothing } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { identityAvatarImage } from "../../../components/identity-avatar-view.ts";
 import "../../../components/openclaw-mascot.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
@@ -164,7 +165,11 @@ function renderWelcomeHero(
     <div class="agent-chat__welcome-identity">
       ${
         avatar
-          ? html`<img class="agent-chat__welcome-avatar" src=${avatar} alt=${name} />`
+          ? html`<img
+              class="agent-chat__welcome-avatar"
+              src=${identityAvatarImage(avatar)}
+              alt=${name}
+            />`
           : avatarText
             ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
                 ${avatarText}

@@ -1,5 +1,9 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 // Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,6 +14,10 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -91,6 +99,57 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
     );
+  });
+
+  it.each([true, false])(
+    "keeps a held native final with its delivery owner (primary=%s)",
+    async (primary) => {
+      setNoAbort();
+      const error = Object.assign(
+        new OutboundDeliveryError("still queued", {
+          cause: new PlatformMessageNotDispatchedError("offline before dispatch", {
+            cause: undefined,
+          }),
+        }),
+        { queueCustody: "held" as const },
+      );
+      const deliver = vi.fn(async () => {
+        throw error;
+      });
+      const dispatcher = createReplyDispatcher({ deliver, propagateRetryableNoSendFailure: true });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => (primary ? { text: "Held answer." } : undefined),
+      });
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(receipt).toMatchObject({ anyVisibleDelivered: false, hasPendingDelivery: true });
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    },
+  );
+
+  it("keeps a pending routed fallback ineligible for another fallback", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, ambiguous: true });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => undefined,
+    });
+    expect(mocks.routeReply).toHaveBeenCalledOnce();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
 
   it.each([
@@ -1463,7 +1522,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "UTC" } },
-      messages: { suppressToolErrors: true },
+      messages: { responsePrefix: "[test]" },
     } satisfies OpenClawConfig;
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
@@ -1514,7 +1573,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(receivedCfg).not.toBe(overrideCfg);
     expect(receivedCfg).toMatchObject({
       agents: { defaults: { userTimezone: "America/New_York" } },
-      messages: { suppressToolErrors: true },
+      messages: { responsePrefix: "[test]" },
     });
     expect(receivedPreparedRuntime).toBeUndefined();
   });
@@ -1804,13 +1863,15 @@ describe("dispatchReplyFromConfig", () => {
     expect(result.counts).toEqual({ tool: 0, block: 1, final: 0 });
   });
 
-  it("keeps the final fallback when an identical block delivery fails", async () => {
+  it("keeps the final fallback when an identical block is proven unsent", async () => {
     setNoAbort();
     const delivered: Array<{ kind: string; text?: string }> = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload, info) => {
         if (info.kind === "block") {
-          throw new Error("block delivery failed");
+          throw new PlatformMessageNotDispatchedError("block delivery failed before dispatch", {
+            cause: undefined,
+          });
         }
         delivered.push({ kind: info.kind, text: payload.text });
       },
@@ -2341,6 +2402,258 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it.each([
+    { ok: true, delivered: false, ambiguous: true },
+    { ok: false, delivered: false, queueCustody: "held" as const },
+  ])("keeps a pending routed caption with its delivery owner ($ok)", async (pending) => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    mocks.routeReply.mockResolvedValue(pending);
+    const dispatcher = createDispatcher();
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "One captioned answer." }),
+    });
+
+    expect(mocks.routeReply.mock.calls.map(([call]) => call.payload)).toEqual([
+      expect.objectContaining({
+        text: "One captioned answer.",
+        mediaUrl: "https://example.com/tts-synth.opus",
+      }),
+    ]);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.counts.final).toBe(0);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it.each([
+    { final: "same", audio: false, native: false },
+    { final: "different", audio: false, native: false },
+    { final: "same", audio: true, native: false },
+    { final: "same", audio: false, native: true },
+    { final: "different", audio: false, native: true },
+    { final: "same", audio: true, native: true },
+    { final: "same", audio: false, native: "identityless" },
+    { final: "different", audio: false, native: "identityless" },
+    { final: "same", audio: true, native: "identityless" },
+    { final: "same", audio: false, native: "deferred" },
+    { final: "different", audio: false, native: "deferred" },
+    { final: "same", audio: true, native: "deferred" },
+    { final: "same", audio: false, native: "ambiguous" },
+    { final: "different", audio: false, native: "ambiguous" },
+    { final: "same", audio: true, native: "ambiguous" },
+    { final: "same", audio: false, native: "partial" },
+    { final: "different", audio: false, native: "partial" },
+    { final: "same", audio: true, native: "partial" },
+    { final: "same", audio: false, native: "partial-envelope" },
+    { final: "different", audio: false, native: "partial-envelope" },
+    { final: "same", audio: true, native: "partial-envelope" },
+  ])(
+    "preserves uncovered final content after a pending block ($final, audio=$audio, native=$native)",
+    async ({ final, audio, native }) => {
+      setNoAbort();
+      ttsMocks.state.synthesizeFinalAudio = audio;
+      mocks.routeReply
+        .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
+        .mockResolvedValue({ ok: true, delivered: true });
+      const nativePayloads: ReplyPayload[] = [];
+      const dispatcher = native
+        ? createReplyDispatcher({
+            deliver: async (reply, info) => {
+              nativePayloads.push(reply);
+              if (info.kind === "block") {
+                if (native === "ambiguous") {
+                  throw new Error("provider response lost after dispatch");
+                }
+                if (native === "partial") {
+                  const error = new OutboundDeliveryError("later media failed", {
+                    cause: new Error("provider response lost"),
+                    results: [{ channel: "telegram", messageId: "accepted-prefix" }],
+                  });
+                  error.queueCustody = "released";
+                  throw createChannelPartialDeliveryError(error, {
+                    visibleReplySent: true,
+                    messageIds: ["accepted-prefix"],
+                  });
+                }
+                if (native === "partial-envelope") {
+                  throw createChannelPartialDeliveryError(
+                    new PlatformMessageNotDispatchedError("later media rejected", {
+                      cause: undefined,
+                      retryable: false,
+                    }),
+                    { visibleReplySent: true, messageIds: ["accepted-prefix"] },
+                  );
+                }
+                if (native === "identityless") {
+                  return {
+                    visibleReplySent: false,
+                    suppression: { reason: "adapter_returned_no_identity" },
+                  };
+                }
+                const error = Object.assign(
+                  new OutboundDeliveryError("queued block", {
+                    cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+                  }),
+                  {
+                    queueCustody: "held" as const,
+                  },
+                );
+                if (native === "deferred") {
+                  return { finalization: Promise.reject(error) };
+                }
+                throw error;
+              }
+              return { visibleReplySent: true };
+            },
+          })
+        : createDispatcher();
+      const onBlockReplyQueued = vi.fn();
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: native ? "telegram" : "slack",
+          Surface: native ? "telegram" : "slack",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:999",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { onBlockReplyQueued },
+        replyResolver: async (_ctx, opts) => {
+          await opts?.onBlockReply?.({ text: "same" });
+          return { text: final };
+        },
+      });
+
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(
+        native ? nativePayloads : mocks.routeReply.mock.calls.map(([call]) => call.payload),
+      ).toEqual([
+        { text: "same" },
+        ...(audio
+          ? [
+              expect.objectContaining({
+                text: undefined,
+                mediaUrl: "https://example.com/tts-synth.opus",
+              }),
+            ]
+          : final === "different"
+            ? [{ text: "different" }]
+            : []),
+      ]);
+      expect(onBlockReplyQueued).not.toHaveBeenCalled();
+      expect(result.counts.final).toBe(audio || final === "different" ? 1 : 0);
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+      expect(result.observedReplyDelivery).toBeUndefined();
+    },
+  );
+
+  it("shares a deferred native block settlement with its callback before admitting a final", async () => {
+    setNoAbort();
+    const blockStarted = createDeferred();
+    const releaseBlock = createDeferred();
+    const finalPrepared = createDeferred();
+    const attempted: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        attempted.push({ kind: info.kind, text: payload.text });
+        if (info.kind === "block") {
+          blockStarted.resolve();
+          await releaseBlock.promise;
+          throw Object.assign(
+            new OutboundDeliveryError("queued block", {
+              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+            }),
+            { queueCustody: "held" as const },
+          );
+        }
+      },
+    });
+    const admitFinal = vi.spyOn(dispatcher, "sendFinalReply");
+    const onBlockReplyQueued = vi.fn();
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (input: unknown) => {
+      const params = input as { kind: string; payload: ReplyPayload };
+      if (params.kind === "final") {
+        finalPrepared.resolve();
+      }
+      return params.payload;
+    });
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { onBlockReplyQueued },
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "same" });
+        return { text: "same" };
+      },
+    });
+    try {
+      await Promise.all([blockStarted.promise, finalPrepared.promise]);
+      // Drain runnable promise continuations while the transport remains explicitly held.
+      await nextEventLoopTurn();
+      expect(admitFinal).not.toHaveBeenCalled();
+    } finally {
+      releaseBlock.resolve();
+      await dispatch;
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
+    expect(attempted).toEqual([{ kind: "block", text: "same" }]);
+    expect(onBlockReplyQueued).not.toHaveBeenCalled();
+  });
+
+  it("does not borrow an unrelated native block's pending custody to suppress a final", async () => {
+    setNoAbort();
+    const attempted: Array<{ kind: string; text?: string }> = [];
+    const onBlockReplyQueued = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        attempted.push({ kind: info.kind, text: payload.text });
+        if (info.kind === "block") {
+          throw Object.assign(
+            new OutboundDeliveryError("offline", {
+              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+            }),
+            { queueCustody: payload.text === "A" ? ("held" as const) : ("released" as const) },
+          );
+        }
+      },
+    });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { onBlockReplyQueued },
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "A" });
+        await opts?.onBlockReply?.({ text: "B" });
+        return { text: "B" };
+      },
+    });
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(attempted).toEqual([
+      { kind: "block", text: "A" },
+      { kind: "block", text: "B" },
+      { kind: "final", text: "B" },
+    ]);
+    expect(onBlockReplyQueued).not.toHaveBeenCalled();
+    expect(result.counts.final).toBe(1);
+    expect(receipt?.hasPendingDelivery).toBe(true);
+  });
+
   it("delivers independent durable updates immediately without mixing them into the final Telegram voice reply", async () => {
     setNoAbort();
     installCaptionedVoiceTestPlugin("telegram");
@@ -2370,6 +2683,102 @@ describe("dispatchReplyFromConfig", () => {
       audioAsVoice: true,
     });
   });
+
+  it.each([
+    { completionState: "prepared", audio: false, native: false },
+    { completionState: "queued", audio: false, native: false },
+    { completionState: "unknown", audio: false, native: false },
+    { completionState: "prepared", audio: true, native: false },
+    { completionState: "queued", audio: true, native: false },
+    { completionState: "unknown", audio: true, native: false },
+    { completionState: "prepared", audio: false, native: true },
+    { completionState: "queued", audio: false, native: true },
+    { completionState: "unknown", audio: false, native: true },
+    { completionState: "prepared", audio: true, native: true },
+    { completionState: "queued", audio: true, native: true },
+    { completionState: "unknown", audio: true, native: true },
+  ] as const)(
+    "preserves completion ownership for a pending block ($completionState, audio=$audio, native=$native)",
+    async ({ completionState, audio, native }) => {
+      setNoAbort();
+      ttsMocks.state.synthesizeFinalAudio = audio;
+      const pending = {
+        kind: "replayable",
+        text: "same",
+        createdAt: 1,
+        intentId: "pending-block",
+        deliveries: [{ id: "original", state: completionState }],
+      };
+      sessionStoreMocks.currentEntry = { sessionId: "session-1", pendingFinalDelivery: pending };
+      const onFinalDeliverySuccess = vi.fn();
+      const payload = setReplyPayloadMetadata(
+        { text: "same" },
+        {
+          pendingFinalDeliveryCompletion: {
+            deliveryId: "original",
+            intentId: "pending-block",
+            sessionId: "session-1",
+            sessionKey: "agent:main:slack:direct:123",
+            storePath: "/tmp/mock-sessions.json",
+          },
+          onFinalDeliverySuccess,
+        },
+      );
+      mocks.routeReply
+        .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
+        .mockResolvedValue({ ok: true, delivered: true });
+      const nativePayloads: ReplyPayload[] = [];
+      const dispatcher = native
+        ? createReplyDispatcher({
+            deliver: async (reply, info) => {
+              nativePayloads.push(reply);
+              if (info.kind === "block") {
+                throw Object.assign(
+                  new OutboundDeliveryError("queued block", {
+                    cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+                  }),
+                  { queueCustody: "held" as const },
+                );
+              }
+            },
+          })
+        : createDispatcher();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: native ? "telegram" : "slack",
+          Surface: native ? "telegram" : "slack",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:999",
+          SessionKey: "agent:main:slack:direct:123",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          await opts?.onBlockReply?.({ text: "same" });
+          return payload;
+        },
+      });
+
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      const attempted = native
+        ? nativePayloads
+        : mocks.routeReply.mock.calls.map(([call]) => call.payload);
+      expect(attempted).toHaveLength(audio ? 2 : 1);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+        completionState === "prepared" ? undefined : pending,
+      );
+      expect(onFinalDeliverySuccess).not.toHaveBeenCalled();
+      if (audio) {
+        const supplement = expectDefined(attempted[1], "audio supplement");
+        expect(supplement).toMatchObject({
+          text: undefined,
+          mediaUrl: "https://example.com/tts-synth.opus",
+        });
+        expect(getReplyPayloadMetadata(supplement)?.pendingFinalDeliveryCompletion).toBeUndefined();
+      }
+    },
+  );
 
   it("delivers deferred Telegram text when synthesis produces no audio", async () => {
     setNoAbort();

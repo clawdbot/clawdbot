@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import {
   isNonSecretApiKeyMarker,
@@ -42,19 +42,24 @@ type ProfileApiKeyResolution = {
 export type ProviderApiKeyResolver = (provider: string) => {
   apiKey: string | undefined;
   discoveryApiKey?: string;
+  mode?: "api_key" | "oauth" | "token";
   profileId?: string;
 };
 
 /** Resolves full provider auth state for callers that need mode and profile provenance. */
 export type ProviderAuthResolver = (
   provider: string,
-  options?: { oauthMarker?: string },
+  options?: {
+    oauthMarker?: string;
+    excludeProfileIds?: readonly string[];
+  },
 ) => {
   apiKey: string | undefined;
   discoveryApiKey?: string;
   mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
   source: "env" | "profile" | "none";
   profileId?: string;
+  preparationFailed?: boolean;
 };
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
@@ -218,12 +223,19 @@ export function resolveApiKeyFromProfiles(params: {
   provider: string;
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
-}): (ProfileApiKeyResolution & { profileId: string }) | undefined {
-  const ids = listProfilesForProvider(params.store, params.provider);
+  profileIds?: readonly string[];
+}):
+  | (ProfileApiKeyResolution & { profileId: string; mode: AuthProfileCredential["type"] })
+  | undefined {
+  const ids = params.profileIds ?? listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
-    const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
+    const credential = params.store.profiles[id];
+    if (!credential) {
+      continue;
+    }
+    const resolved = resolveApiKeyFromCredential(credential, params.env);
     if (resolved) {
-      return { ...resolved, profileId: id };
+      return { ...resolved, profileId: id, mode: credential.type };
     }
   }
   return undefined;

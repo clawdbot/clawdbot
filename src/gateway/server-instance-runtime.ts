@@ -103,7 +103,6 @@ export function createGatewayInstanceRuntime(
   const recoveryAgentTurns = createAgentTurnFacade({
     client: recoveryClient,
   });
-  const recoveryControlMethods = new Set(["chat.abort"]);
   const approvalClient = createSyntheticPluginRuntimeClient({
     operatorRoleActor: { kind: "system" },
     scopes: [APPROVALS_SCOPE],
@@ -116,14 +115,6 @@ export function createGatewayInstanceRuntime(
   const approvalRouteMethods = new Set(["send"]);
 
   const recovery: GatewayRecoveryRuntime = {
-    abortAgent: async (payload, timeoutMs) =>
-      await dispatch<{ aborted?: boolean; runIds?: string[] }>({
-        allowedMethods: recoveryControlMethods,
-        client: recoveryClient,
-        method: "chat.abort",
-        payload,
-        timeoutMs,
-      }),
     dispatchAgent: async <T>(
       payload: AgentRunRequest,
       timeoutMs?: number,
@@ -162,6 +153,7 @@ export function createGatewayInstanceRuntime(
         return await agentTurns.dispatch<T>(payload, {
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
+          onStartOwner: dispatchOptions.onStartOwner,
           onExecutionStarted: dispatchOptions.onExecutionStarted,
           onSignalAbort: dispatchOptions.onSignalAbort,
           signal: dispatchOptions.signal,
@@ -180,6 +172,9 @@ export function createGatewayInstanceRuntime(
         throw new Error("Gateway instance dispatch unavailable for recovery notice");
       }
       const { sendMessage } = await loadOutboundMessageRuntime();
+      if (payload.isCurrent?.() === false) {
+        throw new Error("Recovery notice owner retired before delivery");
+      }
       const context = options.getContext();
       const result = await sendMessage({
         cfg: context.getRuntimeConfig(),
@@ -195,6 +190,11 @@ export function createGatewayInstanceRuntime(
         deliveryIntentId: payload.idempotencyKey,
         reusePendingDeliveryIntent: true,
         completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
+        onPlatformSendDispatch: async () => {
+          if (closed || !options.isDispatchAvailable() || payload.isCurrent?.() === false) {
+            throw new Error("Recovery notice owner retired before delivery");
+          }
+        },
         abortSignal: AbortSignal.timeout(10_000),
       });
       if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {

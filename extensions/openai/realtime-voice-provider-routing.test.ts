@@ -1,5 +1,6 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -459,6 +460,35 @@ describe("OpenAI realtime voice provider routing", () => {
       token: oauthToken,
       accountId: "account-123",
     });
+  });
+
+  it.each([
+    { name: "OAuth", hostClaim: true, broker: true, auth: "oauth", supported: true },
+    { name: "Platform", hostClaim: true, broker: true, auth: "api_key", supported: true },
+    { name: "older host", hostClaim: false, broker: true, auth: "oauth", supported: false },
+    { name: "missing broker", hostClaim: true, broker: false, auth: "oauth", supported: false },
+    { name: "missing auth", hostClaim: true, broker: true, auth: "none", supported: false },
+  ])("negotiates native Gateway control with $name", ({ hostClaim, broker, auth, supported }) => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes(auth) === true,
+    );
+    const fixture = createQuicksilverBrowserBrokerFixture();
+    const provider = buildOpenAIRealtimeVoiceProvider(
+      broker ? { quicksilverBrowserSessionBroker: fixture.broker } : undefined,
+    );
+    const capabilities = readInternalRealtimeVoiceProviderApi(
+      provider,
+    ).resolveBrowserSessionCapabilities({
+      cfg: {},
+      providerConfig: { model: OPENAI_GPT_LIVE_MODELS[0] },
+      ...(hostClaim ? { clientControl: { owner: "gateway" as const } } : {}),
+    });
+    expect(capabilities.supportsGatewayControl === true).toBe(supported);
+    expect(capabilities.handlesAgentConsult).toBe(true);
+    expect(capabilities.supportsToolCalls).toBe(false);
+    expect(fixture.createBrowserSession).not.toHaveBeenCalled();
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
   });
 
   it("does not advertise GA Gateway control for OAuth-only browser auth", () => {

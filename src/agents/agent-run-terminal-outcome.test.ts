@@ -1,8 +1,10 @@
 /** Tests normalized agent run terminal outcomes and sticky timeout/cancel behavior. */
 import { describe, expect, it } from "vitest";
+import { extractAgentRunTerminalError } from "./agent-run-result.js";
 import {
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  buildAgentRunTerminalOutcomeFromWaitResult,
   classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
   isStickyAgentRunTerminalOutcome,
@@ -105,6 +107,23 @@ describe("agent run terminal outcome", () => {
           }).reason,
       ),
     ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
+  });
+
+  it.each([
+    { metadata: {}, reason: "aborted", sticky: false },
+    { metadata: { livenessState: "abandoned" }, reason: "aborted", sticky: false },
+    { metadata: { livenessState: "blocked" }, reason: "blocked", sticky: false },
+    { metadata: { timeoutPhase: "provider" }, reason: "hard_timeout", sticky: true },
+  ])("preserves auth revocation wait precedence with $metadata", ({ metadata, reason, sticky }) => {
+    const outcome = buildAgentRunTerminalOutcomeFromWaitResult({
+      status: "error",
+      stopReason: "auth-revoked",
+      ...metadata,
+    });
+
+    expect(outcome?.reason).toBe(reason);
+    expect(outcome?.stopReason).toBe("auth-revoked");
+    expect(isStickyAgentRunTerminalOutcome(outcome)).toBe(sticky);
   });
 
   it("keeps queue and gateway draining timeouts non-sticky", () => {
@@ -450,6 +469,54 @@ describe("agent run terminal outcome", () => {
 });
 
 describe("agent run attempt terminal", () => {
+  it("preserves a degraded completion through normalization, merging, and projection", () => {
+    const settlementWarning = {
+      pendingStage: "onPartialReply",
+      elapsedMs: 120_000,
+      timeoutMs: 120_000,
+    };
+    const degraded = normalizeAgentRunAttemptTerminal({ settlementWarning });
+    expect(degraded).toEqual({ kind: "ok", settlementWarning });
+    for (const [current, incoming] of [
+      [{ kind: "ok" }, degraded],
+      [degraded, { kind: "ok" }],
+    ] as const) {
+      const terminal = mergeAgentRunAttemptTerminal(current, incoming);
+      expect(projectAgentRunAttemptTerminal(terminal)).toMatchObject({
+        settlementWarning,
+        aborted: false,
+        failed: false,
+        interrupted: false,
+        timedOut: false,
+        promptError: null,
+      });
+    }
+  });
+
+  it.each([
+    { promptError: "provider failed", expected: "failed" },
+    { externalAbort: true, expected: "aborted" },
+    { timedOut: true, expected: "timeout" },
+  ])("keeps $expected precedence over a settlement warning", ({ expected, ...input }) => {
+    const degraded = {
+      kind: "ok",
+      settlementWarning: { pendingStage: "checkpoint", elapsedMs: 120_000, timeoutMs: 120_000 },
+    } as const;
+    const terminal = normalizeAgentRunAttemptTerminal({
+      ...input,
+      settlementWarning: degraded.settlementWarning,
+    });
+    expect(terminal.kind).toBe(expected);
+    for (const [current, incoming] of [
+      [terminal, degraded],
+      [degraded, terminal],
+    ] as const) {
+      const merged = mergeAgentRunAttemptTerminal(current, incoming);
+      expect(merged.kind).toBe(expected);
+      expect(projectAgentRunAttemptTerminal(merged).settlementWarning).toBeUndefined();
+    }
+  });
+
   it.each([
     {
       label: "external abort",
@@ -749,5 +816,56 @@ describe("agent run attempt terminal", () => {
       source: "prompt",
       timeoutObservation: "compaction",
     });
+  });
+});
+
+describe("agent run terminal error projection", () => {
+  it.each([
+    { name: "normal stop", meta: { stopReason: "stop" } },
+    { name: "completed turn", meta: { stopReason: "completed" } },
+    {
+      name: "yielded turn",
+      meta: { livenessState: "paused", yielded: true, stopReason: "end_turn" },
+    },
+  ])("accepts a healthy $name", ({ meta }) => {
+    expect(
+      extractAgentRunTerminalError({
+        meta: { ...meta, finalAssistantVisibleText: "Done." },
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "CLI timeout",
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider" as const,
+        providerStarted: true,
+      },
+      expected: "Inference timed out.",
+    },
+    {
+      name: "CLI abort",
+      meta: { aborted: true, stopReason: "aborted", providerStarted: true },
+      expected: "agent run aborted",
+    },
+  ])("rejects a partial $name even without an error payload", ({ meta, expected }) => {
+    expect(
+      extractAgentRunTerminalError({
+        payloads: [{ text: "I'll start checking." }],
+        meta: { ...meta, finalAssistantVisibleText: "I'll start checking." },
+      }),
+    ).toBe(expected);
+  });
+
+  it("preserves the owner error before a secondary payload diagnostic", () => {
+    expect(
+      extractAgentRunTerminalError({
+        payloads: [{ text: "Secondary failure", isError: true }],
+        meta: { error: { kind: "incomplete_turn", message: "The owner failed." } },
+      }),
+    ).toBe("The owner failed.");
   });
 });

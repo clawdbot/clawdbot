@@ -226,7 +226,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
           labels: ["Thinking", "Writing", "Searching"], // candidates for label: "auto"
           maxLines: 8, // max rolling progress lines (default: 8)
           maxLineChars: 120, // max chars per line before truncation (default: 120)
-          toolProgress: true, // show tool/progress activity (default: true)
+          toolProgress: true, // rolling tool log in the progress draft (default: false)
         },
       },
     },
@@ -238,7 +238,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 - `progress.labels`: candidates used only when `label` is `"auto"` or unset.
 - `progress.maxLines`: max rolling progress lines kept in the draft; older lines are trimmed past this.
 - `progress.maxLineChars`: max characters per compact progress line before truncation.
-- `progress.toolProgress`: when `true` (default), live tool/progress activity appears in the draft.
+- `progress.toolProgress`: when `true`, live tool/progress activity appears in the draft. The default `false` keeps the draft to its headline, commentary, plan milestones, and approval or failure lines.
 
 | `streaming.mode`  | Behavior                                                                                                                                                 |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -350,7 +350,11 @@ openclaw matrix account add \
   --enable-e2ee
 ```
 
-`--encryption` is an alias for `--enable-e2ee`. Manual config equivalent:
+`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config, so a running Gateway can reload after that work settles. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
+
+Setup preserves unrelated configuration changes made while it runs. If the selected account changes, setup leaves that newer configuration intact and asks you to review it and rerun the command.
+
+Manual config equivalent:
 
 ```json5
 {
@@ -437,6 +441,8 @@ printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --r
 ```
 
 `backup status` shows whether a server-side backup exists and whether this device can decrypt it. `backup restore` imports backed-up room keys into the local crypto store; omit `--recovery-key-stdin` if the recovery key is already on disk.
+
+OpenClaw reads prior edits to notify only newly mentioned recipients. If an edit reports that its history is not fully decrypted, restore the missing room keys with `backup restore`, then retry the edit. If those keys are unavailable, send a new message.
 
 To replace a broken backup with a fresh baseline (accepts losing unrecoverable old history; can also recreate secret storage if the current backup secret is unloadable):
 
@@ -573,6 +579,8 @@ Explicit conversation bindings always win over `sessionScope`; bound rooms and t
 - `"always"`: reply inside a thread rooted at the triggering message; that conversation routes through a matching thread-scoped session from the first trigger onward.
 
 `dm.threadReplies` overrides this for DMs only - for example, keep room threads isolated while keeping DMs flat.
+
+Selecting a reply target inside a thread preserves both the thread and the selected message. Ordinary threaded messages can carry reply metadata for older clients; OpenClaw does not treat that compatibility fallback as a quoted message in the agent's context.
 
 ### Thread inheritance and slash commands
 

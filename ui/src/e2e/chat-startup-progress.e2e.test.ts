@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -64,11 +66,17 @@ suite.define(() => {
       await expect.poll(() => tool.count()).toBe(1);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
       if (capture) {
-        await page.screenshot({ path: path.join(proofDir, "preack-pending.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "preack-pending.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [tool, working]),
+        );
       }
       await gateway.resolveDeferred("chat.send", { status: "started", runId });
       if (capture) {
-        await page.screenshot({ path: path.join(proofDir, "preack-adopted.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "preack-adopted.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [tool, working]),
+        );
       }
       await expect.poll(() => tool.count()).toBe(1);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
@@ -147,7 +155,10 @@ suite.define(() => {
       await gateway.resolveDeferred("chat.history", { messages: [], sessionInfo, inFlightRun });
       // Capture the observed result before asserting so the red run leaves honest visual evidence.
       if (capture) {
-        await page.screenshot({ path: path.join(proofDir, "history.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "history.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
+        );
       }
       await expect.poll(() => working.textContent()).not.toContain("Naming worktree…");
       await expect.poll(() => working.textContent()).toContain("Creating worktree…");

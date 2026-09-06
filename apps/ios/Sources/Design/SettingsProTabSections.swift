@@ -482,11 +482,24 @@ extension SettingsProTab {
                 color: watchStatus.appInstalled ? OpenClawBrand.ok : OpenClawBrand.warn)
 
             Section {
+                NavigationLink {
+                    WatchMessageJournalView()
+                } label: {
+                    Label("Message Delivery", systemImage: "bubble.left.and.text.bubble.right")
+                        .font(OpenClawType.body)
+                }
+            }
+
+            Section {
                 Button {
                     Task { await self.sendDirectWatchSetup() }
                 } label: {
-                    Label("Enable Direct Gateway Connection", systemImage: "point.3.connected.trianglepath.dotted")
-                        .font(OpenClawType.body)
+                    Label {
+                        Text("Connect Apple Watch")
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: "applewatch")
+                    }
                 }
                 .disabled(
                     self.isSendingWatchDirectSetup
@@ -503,7 +516,9 @@ extension SettingsProTab {
             } footer: {
                 Text(
                     """
-                    The watch receives a one-time pairing code and stores its own device token. \
+                    The watch receives a one-time pairing code and its own device credentials. \
+                    Voice is included with read and Talk access, without admin access. \
+                    The microphone starts only when you tap Start on the watch. \
                     A reachable secure Gateway URL is required away from the iPhone.
                     """)
                     .font(OpenClawType.footnote)

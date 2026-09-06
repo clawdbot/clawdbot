@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -15,6 +16,8 @@ import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
+
+export { formatAgentRuntimeLabel };
 
 type AgentRosterEntry = {
   id: string;
@@ -201,7 +204,7 @@ export function buildAgentContext(
     resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agent.model));
   const modelLabel = primary ? resolveModelLabel({ primary, fallbacks }) : "-";
-  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
+  const runtime = formatAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||
     normalizeOptionalString(agent.name) ||
@@ -224,14 +227,6 @@ export function buildAgentContext(
       : t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
-}
-
-export function resolveAgentRuntimeLabel(
-  agentRuntime?: AgentsListResult["agents"][number]["agentRuntime"],
-): string {
-  const id = normalizeOptionalString(agentRuntime?.id) ?? "pi";
-  const fallback = normalizeOptionalString(agentRuntime?.fallback);
-  return fallback ? `${id} (fallback ${fallback})` : id;
 }
 
 export function resolveModelLabel(model?: unknown): string {

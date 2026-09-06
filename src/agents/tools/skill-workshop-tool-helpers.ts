@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
 import {
   readProposalFrontmatter,
@@ -49,19 +50,13 @@ export function skillWorkshopAgentEventActor(agentId?: string) {
   return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };
 }
 
-export function proposalReviewPhase(
-  completion: SkillWorkshopProposalReviewCompletion,
-): "open" | "completing" | "completed" {
-  return completion.phase ?? (completion.completed ? "completed" : "open");
-}
-
 export function beginProposalReviewMutation(
   completion: SkillWorkshopProposalReviewCompletion | undefined,
 ): (() => void) | undefined {
   if (!completion) {
     return undefined;
   }
-  if (proposalReviewPhase(completion) !== "open") {
+  if (completion.phase !== "open") {
     throw new ToolInputError("this Skill Workshop review is already completing or complete");
   }
   let release!: () => void;
@@ -78,7 +73,7 @@ export function beginProposalReviewMutation(
 }
 
 export async function completeProposalReview(completion: SkillWorkshopProposalReviewCompletion) {
-  const phase = proposalReviewPhase(completion);
+  const { phase } = completion;
   if (phase === "completed") {
     return completionResult();
   }
@@ -89,7 +84,6 @@ export async function completeProposalReview(completion: SkillWorkshopProposalRe
   try {
     await Promise.all(Array.from(completion.activeMutations ?? []));
     await completion.complete();
-    completion.completed = true;
     completion.phase = "completed";
     return completionResult();
   } catch (error) {
@@ -166,32 +160,25 @@ export function readLifecycleProposalIdParam(params: Record<string, unknown>): s
 export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
-  env?: NodeJS.ProcessEnv,
-  agentId?: string,
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string,
 ): Promise<SkillProposalReadResult> {
   const proposalId = readToolStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {
-    const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir, env });
+    const proposal = await inspectSkillProposal(proposalId, { agentId, config, env });
     if (!proposal) {
       throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
     }
     return proposal;
   }
-  const resolved = await resolvePendingSkillProposal({
+  return await resolvePendingSkillProposal({
     name: readToolStringParam(params, "name", { required: true }),
     workspaceDir,
+    config,
     env,
     agentId,
   });
-  const proposal = await inspectSkillProposal(resolved.record.id, {
-    agentId,
-    workspaceDir,
-    env,
-  });
-  if (!proposal) {
-    throw new ToolInputError(`Skill proposal not found: ${resolved.record.id}`);
-  }
-  return proposal;
 }
 
 export function readProposalStatusParam(

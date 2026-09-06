@@ -19,7 +19,11 @@ export function shouldUpdateMattermostDraftToolProgress(
 ): boolean {
   return (
     account.streamingMode !== "off" &&
-    resolveChannelStreamingPreviewToolProgress(account.config, true, account.streamingMode)
+    resolveChannelStreamingPreviewToolProgress(
+      account.config,
+      account.streamingMode !== "progress",
+      account.streamingMode,
+    )
   );
 }
 
