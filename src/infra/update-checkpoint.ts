@@ -1,0 +1,332 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { z } from "zod";
+import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
+import type { BackupAsset } from "../commands/backup-shared.js";
+import { sha256Hex } from "./crypto-digest.js";
+import {
+  ensureDurableDirectory,
+  requireDirectorySync,
+  syncDirectory,
+} from "./directory-durability.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import type { UpdateStateSchemaVersion } from "./update-candidate-state.js";
+import {
+  checkpointContentMatches,
+  copyCheckpointFile,
+  inspectCheckpointFile,
+  syncCheckpointTree,
+} from "./update-checkpoint-files.js";
+import { createUpdateCheckpointSqliteSnapshot } from "./update-checkpoint-sqlite.js";
+
+const absolutePath = z
+  .string()
+  .refine((value) => path.isAbsolute(value) && path.normalize(value) === value);
+const digest = z.string().regex(/^[a-f0-9]{64}$/u);
+export const CheckpointFileStateSchema = z
+  .object({
+    kind: z.enum(["file", "directory"]),
+    sha256: digest,
+    mode: z.number().int(),
+    identity: z
+      .object({
+        dev: z.number(),
+        ino: z.number(),
+        size: z.number(),
+        mtimeMs: z.number(),
+        ctimeMs: z.number(),
+      })
+      .strict(),
+  })
+  .strict();
+const bindingSchema = z
+  .object({
+    runId: z.string().min(1),
+    stateDir: absolutePath,
+    configPath: absolutePath,
+    fromRuntime: z
+      .object({ root: absolutePath, version: z.string().min(1), nodePath: absolutePath })
+      .strict(),
+  })
+  .strict();
+const resourceSchema = z
+  .object({
+    sourcePath: absolutePath,
+    kind: z.enum(["config", "state", "sqlite", "plugin", "service"]),
+    restore: z.enum(["replace", "preserve"]),
+  })
+  .strict();
+const manifestSchema = z
+  .object({
+    checkpointId: z.string().uuid(),
+    binding: bindingSchema,
+    createdAtMs: z.number().int(),
+    exclusions: z.array(z.string()),
+    resources: z.array(
+      resourceSchema
+        .extend({
+          artifact: z
+            .string()
+            .regex(/^resource-[0-9]+$/u)
+            .nullable(),
+          captured: CheckpointFileStateSchema.nullable(),
+          userVersion: z.number().int().nullable(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type UpdateCheckpointBinding = z.infer<typeof bindingSchema>;
+export type UpdateCheckpointResource = z.infer<typeof resourceSchema>;
+export type UpdateCheckpointManifest = z.infer<typeof manifestSchema>;
+/** A locator, never serialized authority. Reopen against a fresh binding and artifact root. */
+export const UpdateCheckpointRefSchema = z
+  .object({
+    checkpointId: z.string().uuid(),
+    manifestPath: absolutePath,
+    manifestSha256: digest,
+  })
+  .strict();
+export type UpdateCheckpointRef = z.infer<typeof UpdateCheckpointRefSchema>;
+export type ReopenedUpdateCheckpoint = {
+  ref: UpdateCheckpointRef;
+  manifest: UpdateCheckpointManifest;
+};
+export type UpdateCheckpointReadAccess = {
+  artifactRoot: string;
+  binding: UpdateCheckpointBinding;
+};
+export type UpdateCheckpointAccess = UpdateCheckpointReadAccess & {
+  /** Current owner-held exclusion/claim. Throws if any state writer can still run. */
+  assertQuiescent: () => void;
+};
+
+/** Expand the existing frozen backup inventory; non-update files are retained during restoration. */
+export async function collectUpdateCheckpointResources(params: {
+  inventory: BackupResourceInventory;
+  assets: readonly BackupAsset[];
+  databases: readonly UpdateStateSchemaVersion[];
+  configFiles: readonly string[];
+  serviceFiles: readonly string[];
+  pluginRoots: readonly string[];
+}): Promise<UpdateCheckpointResource[]> {
+  const resources = new Map<string, UpdateCheckpointResource>();
+  const databasePaths = new Set(params.databases.map((entry) => entry.path));
+  const configFiles = new Set(params.configFiles);
+  const reserved = [...params.pluginRoots, ...params.serviceFiles];
+  const visit = async (file: string): Promise<void> => {
+    if (reserved.some((root) => file === root || isPathInside(root, file))) {
+      return;
+    }
+    if (
+      !params.inventory.isTraversable(file) ||
+      params.inventory.isVolatile(file) ||
+      params.inventory.isPackageContent(file)
+    ) {
+      return;
+    }
+    const stat = await fs.lstat(file);
+    if (stat.isDirectory()) {
+      for (const name of (await fs.readdir(file)).toSorted()) {
+        await visit(path.join(file, name));
+      }
+    } else if (stat.isFile() && params.inventory.isIncluded(file)) {
+      if (databasePaths.has(file) || /\.(?:sqlite|db)(?:-wal|-shm|-journal)?$/u.test(file)) {
+        return;
+      }
+      resources.set(file, {
+        sourcePath: file,
+        kind: configFiles.has(file) ? "config" : "state",
+        restore: configFiles.has(file) ? "replace" : "preserve",
+      });
+    } else if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Checkpoint inventory needs an explicit canonical owner for symlink: ${file}`,
+      );
+    }
+  };
+  for (const asset of params.assets) {
+    if (asset.kind !== "workspace") {
+      await visit(asset.sourcePath);
+    }
+  }
+  for (const sourcePath of configFiles) {
+    resources.set(sourcePath, { sourcePath, kind: "config", restore: "replace" });
+  }
+  for (const sourcePath of databasePaths) {
+    resources.set(sourcePath, { sourcePath, kind: "sqlite", restore: "replace" });
+  }
+  for (const sourcePath of params.serviceFiles) {
+    resources.set(sourcePath, { sourcePath, kind: "service", restore: "replace" });
+  }
+  for (const sourcePath of params.pluginRoots) {
+    resources.set(sourcePath, { sourcePath, kind: "plugin", restore: "replace" });
+  }
+  return [...resources.values()].toSorted((a, b) => a.sourcePath.localeCompare(b.sourcePath));
+}
+
+function assertResourceBoundaries(
+  resources: readonly UpdateCheckpointResource[],
+  artifactRoot: string,
+): void {
+  for (const resource of resources) {
+    resourceSchema.parse({
+      sourcePath: resource.sourcePath,
+      kind: resource.kind,
+      restore: resource.restore,
+    });
+    if (
+      resource.sourcePath === artifactRoot ||
+      isPathInside(resource.sourcePath, artifactRoot) ||
+      isPathInside(artifactRoot, resource.sourcePath)
+    ) {
+      throw new Error("Checkpoint artifacts must be outside captured resources");
+    }
+    if (
+      resources.some(
+        (other) =>
+          other !== resource &&
+          (other.sourcePath === resource.sourcePath ||
+            isPathInside(resource.sourcePath, other.sourcePath)),
+      )
+    ) {
+      throw new Error(`Overlapping checkpoint resource: ${resource.sourcePath}`);
+    }
+  }
+}
+
+/** Capture under exclusion, after service preimages are known and before update mutation. */
+export async function captureUpdateCheckpoint(
+  params: UpdateCheckpointAccess & {
+    resources: readonly UpdateCheckpointResource[];
+    exclusions: readonly string[];
+  },
+): Promise<UpdateCheckpointRef> {
+  const binding = bindingSchema.parse(params.binding);
+  absolutePath.parse(params.artifactRoot);
+  assertResourceBoundaries(params.resources, params.artifactRoot);
+  params.assertQuiescent();
+  const checkpointId = randomUUID();
+  const root = await ensureDurableDirectory({ directoryPath: params.artifactRoot, mode: 0o700 });
+  requireDirectorySync(root.parentSync, "Checkpoint artifact root creation");
+  const directory = path.join(params.artifactRoot, checkpointId);
+  await fs.mkdir(directory, { mode: 0o700 });
+  const manifest: UpdateCheckpointManifest = {
+    checkpointId,
+    binding,
+    createdAtMs: Date.now(),
+    exclusions: [...params.exclusions],
+    resources: [],
+  };
+  for (const [index, resource] of params.resources.entries()) {
+    params.assertQuiescent();
+    const before = await inspectCheckpointFile(resource.sourcePath);
+    const artifact = before ? `resource-${index}` : null;
+    let captured = before;
+    let userVersion: number | null = null;
+    if (artifact && before) {
+      const targetPath = path.join(directory, artifact);
+      if (resource.kind === "sqlite") {
+        if (before.kind !== "file") {
+          throw new Error("SQLite checkpoint resource is not a file");
+        }
+        userVersion = (
+          await createUpdateCheckpointSqliteSnapshot({
+            sourcePath: resource.sourcePath,
+            targetPath,
+            assertQuiescent: params.assertQuiescent,
+          })
+        ).userVersion;
+        captured = await inspectCheckpointFile(targetPath);
+      } else {
+        captured = await copyCheckpointFile(resource.sourcePath, targetPath, before);
+      }
+    }
+    manifest.resources.push({ ...resource, artifact, captured, userVersion });
+  }
+  params.assertQuiescent();
+  const bytes = JSON.stringify(manifest);
+  const manifestPath = path.join(directory, "manifest.json");
+  await fs.writeFile(manifestPath, bytes, { flag: "wx", mode: 0o600 });
+  await syncCheckpointTree(directory);
+  requireDirectorySync(await syncDirectory(params.artifactRoot), "Checkpoint artifact root");
+  const ref = { checkpointId, manifestPath, manifestSha256: sha256Hex(bytes) };
+  await reopenUpdateCheckpoint(ref, params);
+  return ref;
+}
+
+/** Every artifact is rechecked, not only the manifest. This grants no publication authority. */
+export async function reopenUpdateCheckpoint(
+  ref: UpdateCheckpointRef,
+  access: UpdateCheckpointReadAccess,
+): Promise<ReopenedUpdateCheckpoint> {
+  UpdateCheckpointRefSchema.parse(ref);
+  absolutePath.parse(access.artifactRoot);
+  const expected = path.join(access.artifactRoot, ref.checkpointId, "manifest.json");
+  if (ref.manifestPath !== expected || (await fs.realpath(ref.manifestPath)) !== expected) {
+    throw new Error("Checkpoint manifest is outside its bound artifact root");
+  }
+  const stat = await fs.lstat(expected);
+  if (!stat.isFile() || stat.size > 16 * 1024 * 1024) {
+    throw new Error("Invalid checkpoint manifest file");
+  }
+  const bytes = await fs.readFile(expected, "utf8");
+  if (sha256Hex(bytes) !== ref.manifestSha256) {
+    throw new Error("Checkpoint manifest digest mismatch");
+  }
+  const manifest = manifestSchema.parse(JSON.parse(bytes));
+  if (
+    manifest.checkpointId !== ref.checkpointId ||
+    JSON.stringify(manifest.binding) !== JSON.stringify(bindingSchema.parse(access.binding))
+  ) {
+    throw new Error("Checkpoint binding mismatch");
+  }
+  assertResourceBoundaries(manifest.resources, access.artifactRoot);
+  for (const resource of manifest.resources) {
+    if ((resource.artifact === null) !== (resource.captured === null)) {
+      throw new Error("Checkpoint artifact presence mismatch");
+    }
+    if (!resource.artifact) {
+      continue;
+    }
+    const file = path.join(path.dirname(expected), resource.artifact);
+    if (!checkpointContentMatches(await inspectCheckpointFile(file), resource.captured)) {
+      throw new Error(`Checkpoint artifact changed: ${resource.artifact}`);
+    }
+    if (resource.kind === "sqlite") {
+      const db = openNodeSqliteDatabase(file, { readOnly: true });
+      try {
+        if (readSqliteUserVersion(db) !== resource.userVersion) {
+          throw new Error("Checkpoint schema identity mismatch");
+        }
+      } finally {
+        db.close();
+      }
+    }
+  }
+  return { ref, manifest };
+}
+
+/** Retention owner must supply current supersession authority; this never chooses what to retire. */
+export async function retireUpdateCheckpoint(
+  ref: UpdateCheckpointRef,
+  access: UpdateCheckpointAccess & { assertSuperseded: () => void },
+): Promise<void> {
+  try {
+    await fs.lstat(ref.manifestPath);
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
+  }
+  await reopenUpdateCheckpoint(ref, access);
+  access.assertSuperseded();
+  access.assertQuiescent();
+  await fs.rm(path.dirname(ref.manifestPath), { recursive: true });
+  requireDirectorySync(await syncDirectory(access.artifactRoot), "Checkpoint retirement");
+}

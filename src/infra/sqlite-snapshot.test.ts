@@ -273,6 +273,32 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
+  it.each([undefined, false, true])(
+    "preserves implicit row IDs only when requested (%s), including committed WAL data",
+    async (preserveRowIds) => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      try {
+        source.exec(
+          "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'online turn')",
+        );
+        await createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds });
+        withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+          expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
+            { rowid: preserveRowIds ? 71 : 1, value: "online turn" },
+          ]);
+          expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+          expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+        });
+        await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        source.close();
+      }
+    },
+  );
+
   it("captures committed WAL state and removes deleted page contents", async () => {
     const deletedValue = `deleted-secret-${"x".repeat(256)}`;
     const source = new sqlite.DatabaseSync(sourcePath);
