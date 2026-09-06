@@ -122,8 +122,7 @@ export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExpo
       latest.set(key, record);
     }
   }
-  // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private array.
-  const records = [...latest.values()].sort((left, right) => {
+  const records = [...latest.values()].toSorted((left, right) => {
     const sourceOrder = left.source.localeCompare(right.source);
     if (sourceOrder !== 0) {
       return sourceOrder;
