@@ -215,7 +215,9 @@ describe("write-cli-startup-metadata", () => {
       });
 
       await rootHelpStarted;
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(startedCommands).toEqual([]);
 
       releaseRootHelp();
@@ -338,7 +340,9 @@ describe("write-cli-startup-metadata", () => {
       });
       const deadline = Date.now() + 1_000;
       while (children.length < COMMAND_HELP_RENDER_CONCURRENCY && Date.now() < deadline) {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
       }
       expect(children.map((child) => child.commandName)).toEqual(
         DEFAULT_COMMAND_HELP_NAMES.slice(0, COMMAND_HELP_RENDER_CONCURRENCY),
@@ -426,7 +430,9 @@ describe("write-cli-startup-metadata", () => {
             tasks: "Usage: openclaw tasks\n",
           }),
         });
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         child.stderr.write("primary browser failure\n");
         child.emit("close", 7, null);
 
@@ -1035,7 +1041,9 @@ describe("write-cli-startup-metadata", () => {
         for (const suffix of ["", "-shm", "-wal"]) {
           writeFileSync(path.join(sqliteDir, `openclaw.sqlite${suffix}`), "fixture", "utf8");
         }
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         if (failRender) {
           throw new Error("browser help failed");
         }
