@@ -258,16 +258,18 @@ export async function admitMSTeamsMessage(params: {
   });
   const isControlCommand =
     allowTextCommands && core.channel.commands.isControlCommandMessage(params.text, params.cfg);
-  const shouldComputeAuth =
-    allowTextCommands &&
-    core.channel.commands.shouldComputeCommandAuthorized(params.text, params.cfg);
+  // Keep the narrow predicate for hasControlCommand — the broad
+  // shouldComputeCommandAuthorized probe matches ordinary text such as
+  // "hello /status" and would hard-drop admitted DM senders who lack
+  // command authorization. Authorization is still computed for actual
+  // control commands via isControlCommand below.
   const convType = normalizeOptionalLowercaseString(params.activity.conversation?.conversationType);
   const messageIsDirectMessage =
     convType === "personal" || (!convType && !params.activity.conversation?.isGroup);
   const access = await resolveMSTeamsSenderAccess({
     cfg: params.cfg,
     activity: params.activity,
-    hasControlCommand: messageIsDirectMessage ? shouldComputeAuth : isControlCommand,
+    hasControlCommand: isControlCommand,
   });
   const {
     dmPolicy,
