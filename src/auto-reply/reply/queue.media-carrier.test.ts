@@ -16,6 +16,7 @@ import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type { FollowupRun, InternalFollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupDeliveryContextKey,
@@ -119,12 +120,18 @@ describe("followup prompt metadata carrier", () => {
       sessionId: run.run.sessionId,
       resetTriggered: false,
     });
-    operation.bindToolAuthorityFingerprint("steer-authority");
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+    // The fingerprint is derived from the bound route, so the backend and the
+    // steer below have to carry the value the operation actually minted.
+    const steerAuthority = operation.bindToolAuthorityRoute({
+      provider: run.run.provider,
+      model: run.run.model,
+    });
     const injected: string[] = [];
     operation.attachBackend({
       kind: "embedded",
       supportsQueueMessageImages: true,
-      toolAuthorityFingerprint: "steer-authority",
+      toolAuthorityFingerprint: steerAuthority,
       cancel: vi.fn(),
       messageInjection: {
         isAvailable: () => true,
@@ -152,7 +159,7 @@ describe("followup prompt metadata carrier", () => {
           touchActiveSessionEntry: async () => {},
           typing,
           typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-          toolAuthorityFingerprint: "steer-authority",
+          toolAuthorityFingerprint: steerAuthority,
         }),
       ).resolves.toBe("handled");
 
