@@ -372,6 +372,7 @@ async function resolveProvisionedSandboxContext(
     containerWorkdir: backend.workdir,
     docker: resolvedCfg.docker,
     tools: resolvedCfg.tools,
+    environmentCapabilityRoots: resolvedCfg.environment.capabilityRoots,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,
     browser: browser ?? undefined,
     backend,

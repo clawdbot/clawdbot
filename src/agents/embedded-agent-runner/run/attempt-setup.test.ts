@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { readCodeModeSkill } from "../../code-mode-skills.js";
 import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
+import { createRemoteShellSandboxFsBridge } from "../../sandbox/remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "../../sandbox/remote-fs-bridge.test-helpers.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -359,7 +363,7 @@ describe("prepareEmbeddedAttemptSkills", () => {
     await writeSkill(executionWorkspace, "execution-workspace-skill");
 
     try {
-      const prepared = prepareEmbeddedAttemptSkills({
+      const prepared = await prepareEmbeddedAttemptSkills({
         attempt: {
           bootstrapWorkspaceDir: agentWorkspace,
           config: {},
@@ -390,4 +394,88 @@ describe("prepareEmbeddedAttemptSkills", () => {
       await fs.rm(executionWorkspace, { recursive: true, force: true });
     }
   });
+});
+
+describe.runIf(process.platform !== "win32")("environment-owned native attempt skills", () => {
+  it.each([undefined, 1024])(
+    "advertises remote skills and bounds full remote reads with configured limit %s",
+    async (maxSkillFileBytes) => {
+      const host = await fs.realpath(tempDirs.make("native-skill-host-"));
+      const remote = await fs.realpath(tempDirs.make("native-skill-remote-"));
+      const filePath = path.join(remote, "catalog/demo/SKILL.md");
+      const contents =
+        "---\nname: remote-demo\ndescription: Remote demo\n---\nRun the remote example.";
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, contents);
+      const nativeContents =
+        "---\nname: native-demo\ndescription: Native demo\n---\nNative instructions.";
+      for (const workspace of [host, remote]) {
+        await fs.mkdir(path.join(workspace, "skills/native-demo"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "skills/native-demo/SKILL.md"), nativeContents);
+      }
+      const runShellCommand = createLocalRemoteShellScriptRunner();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          workspaceDir: host,
+          agentWorkspaceDir: host,
+          containerWorkdir: remote,
+          backend: {
+            id: "test-remote",
+            runtimeId: "native-skills",
+            runtimeLabel: "test",
+            workdir: remote,
+            capabilities: {
+              environment: {
+                protocolVersion: 1,
+                process: true,
+                filesystem: true,
+                capabilityRootDiscovery: true,
+              },
+            },
+            runShellCommand,
+            buildExecSpec: async () => {
+              throw new Error("not used");
+            },
+          },
+        },
+      });
+      sandbox.fsBridge = createRemoteShellSandboxFsBridge({
+        sandbox,
+        runtime: {
+          remoteWorkspaceDir: remote,
+          remoteAgentWorkspaceDir: remote,
+          runRemoteShellScript: runShellCommand,
+        },
+      });
+      const prepared = await prepareEmbeddedAttemptSkills({
+        attempt: {
+          config: { skills: { limits: { maxSkillFileBytes } } },
+        } as EmbeddedRunAttemptParams,
+        effectiveWorkspace: host,
+        sandbox,
+        sessionAgentId: "main",
+        environmentCapabilities: [
+          {
+            id: "workspace",
+            path: remote,
+            skills: [{ instructions: { path: filePath, contents } }],
+          },
+        ],
+      });
+      try {
+        expect(prepared.skillsPrompt).toContain("remote-demo");
+        expect(prepared.skillsPrompt).not.toContain("Run the remote example.");
+        expect(prepared.codeModeSkills).toHaveLength(2);
+        const remoteSkill = prepared.codeModeSkills.find((skill) => skill.name === "remote-demo")!;
+        const nativeSkill = prepared.codeModeSkills.find((skill) => skill.name === "native-demo")!;
+        expect(nativeSkill.source.filePath).toBe(path.join(remote, "skills/native-demo/SKILL.md"));
+        await expect(readCodeModeSkill(nativeSkill)).resolves.toBe(nativeContents);
+        await expect(readCodeModeSkill(remoteSkill)).resolves.toBe(contents);
+        await fs.writeFile(filePath, "x".repeat((maxSkillFileBytes ?? 65536) + 1));
+        await expect(readCodeModeSkill(remoteSkill)).rejects.toThrow();
+      } finally {
+        prepared.restoreSkillEnv();
+      }
+    },
+  );
 });

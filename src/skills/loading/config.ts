@@ -140,20 +140,24 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, bundledAllowlist)) {
     return false;
   }
+  const environment = entry.environment;
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
-    remotePlatforms: eligibility?.remote?.platforms,
+    platform: environment?.platform,
+    remotePlatforms: environment ? undefined : eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasBin: hasBinary,
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
+    hasBin: environment ? (bin) => environment.bins.includes(bin) : hasBinary,
+    hasRemoteBin: environment ? undefined : eligibility?.remote?.hasBin,
+    hasAnyRemoteBin: environment ? undefined : eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
-      isSkillEnvRequirementSatisfied({
-        envName,
-        skillConfig,
-        primaryEnv: entry.metadata?.primaryEnv,
-      }),
+      environment
+        ? environment.env.includes(envName)
+        : isSkillEnvRequirementSatisfied({
+            envName,
+            skillConfig,
+            primaryEnv: entry.metadata?.primaryEnv,
+          }),
     isConfigPathTruthy: (configPath) => isSkillConfigPathTruthy(config, configPath),
   });
 }

@@ -3,15 +3,12 @@
  * access through the active OpenClaw sandbox backend.
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { prepareSandboxRemoteProcess } from "openclaw/plugin-sdk/sandbox";
 import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
-import {
-  prepareSandboxChildExec,
-  spawnSandboxChild,
-  type SandboxChildOwner,
-} from "./sandbox-child.js";
+import { spawnSandboxChild, type SandboxChildOwner } from "./sandbox-child.js";
 import type {
   CodexSandboxExecSessionNotifications,
   HttpHeader,
@@ -121,7 +118,7 @@ async function runStreamingSandboxHttpRequest(
   params: SandboxHttpRequest,
 ): Promise<JsonObject> {
   const backend = execServer.backend;
-  const remoteExec = prepareSandboxChildExec(backend, {});
+  const remoteExec = prepareSandboxRemoteProcess(backend, {});
   const execSpec = await backend.buildExecSpec({
     command: SANDBOX_HTTP_REQUEST_SCRIPT,
     workdir: execServer.sandbox.containerWorkdir,

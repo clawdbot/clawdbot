@@ -103,6 +103,8 @@ type SkillExposure = {
 
 export type SkillEntry = {
   skill: Skill;
+  /** Executor-owned facts: host binaries and secrets cannot satisfy these requirements. */
+  environment?: { platform: string; bins: readonly string[]; env: readonly string[] };
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;

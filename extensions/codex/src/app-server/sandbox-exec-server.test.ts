@@ -233,7 +233,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       expect.objectContaining({
         command: "'/bin/sh' '-lc' 'printf ok'",
         env: expect.objectContaining({
-          CODEX_SANDBOX_EXEC_ID: expect.any(String),
+          OPENCLAW_SANDBOX_EXEC_ID: expect.any(String),
           POLICY_ONLY: "1",
           POLICY_SET: "env-wins",
           TEST_FLAG: "1",
@@ -683,7 +683,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
         const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
           { env: Record<string, string> },
         ];
-        expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
+        expect(execEnv).toEqual({ OPENCLAW_SANDBOX_EXEC_ID: expect.any(String) });
         socket.close();
       },
     );

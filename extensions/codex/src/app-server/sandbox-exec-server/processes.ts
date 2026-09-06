@@ -4,12 +4,16 @@
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { buildRemoteCommand, sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
+import {
+  buildRemoteCommand,
+  prepareSandboxRemoteProcess,
+  sanitizeEnvVars,
+} from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { resolveFsSandboxPolicy } from "./fs-policy.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
 import { resolveExecServerPath } from "./path-uri.js";
-import { prepareSandboxChildExec, spawnSandboxChild } from "./sandbox-child.js";
+import { spawnSandboxChild } from "./sandbox-child.js";
 import type { ManagedProcess, OpenClawExecServer, ProcessChunk } from "./types.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -121,7 +125,7 @@ async function runProcess(
 ): Promise<void> {
   const backend = execServer.backend;
   throwIfProcessStartCancelled(managed);
-  const remoteExec = prepareSandboxChildExec(backend, params.env);
+  const remoteExec = prepareSandboxRemoteProcess(backend, params.env);
   const execSpec = await backend.buildExecSpec({
     command: buildRemoteCommand(params.argv),
     workdir: params.cwd,

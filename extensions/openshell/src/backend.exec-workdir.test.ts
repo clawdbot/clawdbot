@@ -52,6 +52,7 @@ async function createOpenShellBackendFixture(params: {
   workspaceDir: string;
   scopeKey: string;
   command?: string;
+  mode?: "remote" | "mirror";
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
   workspaceAccess?: "rw" | "ro" | "none";
@@ -61,7 +62,7 @@ async function createOpenShellBackendFixture(params: {
   const factory = createOpenShellSandboxBackendFactory({
     pluginConfig: resolveOpenShellPluginConfig({
       command: params.command ?? "openshell",
-      mode: "mirror",
+      mode: params.mode ?? "mirror",
       remoteWorkspaceDir: params.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir,
     }),
@@ -95,6 +96,20 @@ async function finalize(backend: SandboxBackendHandle, token: unknown) {
 }
 
 describe("openshell backend exec workdir validation", () => {
+  it.each(["mirror", "remote"] as const)(
+    "advertises environment-owned long-lived services only in remote mode: %s",
+    async (mode) => {
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir: await createWorkspace(),
+        scopeKey: "environment-" + mode,
+        mode,
+      });
+      expect(backend.capabilities?.environment?.capabilityRootDiscovery === true).toBe(
+        mode === "remote",
+      );
+      expect(typeof backend.discoverCapabilityRoots === "function").toBe(mode === "remote");
+    },
+  );
   beforeEach(() => {
     vi.clearAllMocks();
     cliMocks.createOpenShellSshSession.mockResolvedValue({
