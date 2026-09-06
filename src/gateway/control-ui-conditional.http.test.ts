@@ -79,6 +79,11 @@ const conditionalCases: {
   },
   { name: "stale If-None-Match alone", headers: { "If-None-Match": '"stale"' }, status: 200 },
   {
+    name: "quoted comma/star is not a wildcard and supersedes the date",
+    headers: { "If-None-Match": '"client,*,tag"', "If-Modified-Since": lastModified },
+    status: 200,
+  },
+  {
     name: "stale If-None-Match overrides equal If-Modified-Since",
     headers: { "If-None-Match": '"stale"', "If-Modified-Since": lastModified },
     status: 200,
