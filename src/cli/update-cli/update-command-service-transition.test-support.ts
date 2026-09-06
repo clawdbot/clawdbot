@@ -346,14 +346,23 @@ export function registerRestartOutcomeTests(
     "truncated",
     "killed",
     "wrong exit",
+    "forced",
+    "uncertain",
+    "forced success",
+    "uncertain success",
     "install",
   ])("classifies only the complete owned restart health response (%s)", async (scenario) => {
     const { root, mocks } = getFixture();
+    const success = scenario.endsWith("success");
     const payload = {
       action: scenario === "wrong action" ? "install" : "restart",
-      ok: scenario === "wrong ok",
-      result: scenario === "wrong result" ? "unknown" : "restart-health-failed",
-      ...(scenario !== "missing error" && { error: "Gateway is unhealthy" }),
+      ok: success || scenario === "wrong ok",
+      result: success
+        ? "restarted"
+        : scenario === "wrong result"
+          ? "unknown"
+          : "restart-health-failed",
+      ...(!success && scenario !== "missing error" && { error: "Gateway is unhealthy" }),
     };
     const json = JSON.stringify(payload);
     const stdout =
@@ -367,12 +376,17 @@ export function registerRestartOutcomeTests(
               ? `${json}\n${json}`
               : json;
     mocks.child.mockResolvedValueOnce({
-      code: scenario === "wrong exit" ? 2 : 1,
+      code: success ? 0 : scenario === "wrong exit" ? 2 : 1,
       stdout,
       stderr: "",
       signal: scenario === "signal" ? "SIGTERM" : null,
       killed: scenario === "killed",
       termination: scenario === "signal" ? "signal" : scenario === "timeout" ? "timeout" : "exit",
+      cleanup: scenario.startsWith("forced")
+        ? "forced"
+        : scenario.startsWith("uncertain")
+          ? "uncertain"
+          : "normal",
       ...(scenario === "truncated" && { stdoutTruncatedBytes: 1 }),
     });
     await expect(

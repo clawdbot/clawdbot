@@ -89,7 +89,12 @@ export async function runUpdatedInstallGatewayCommand(
     ...(params.signal ? { signal: params.signal, killProcessTree: true } : {}),
   });
   params.signal?.throwIfAborted();
-  const exited = res.termination === "exit" && res.signal === null && !res.killed;
+  const exited =
+    res.termination === "exit" &&
+    res.signal === null &&
+    !res.killed &&
+    res.cleanup !== "forced" &&
+    res.cleanup !== "uncertain";
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
   if (exited && res.code === 0) {
