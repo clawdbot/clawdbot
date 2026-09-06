@@ -1138,12 +1138,17 @@ describe("modelsAuthLoginCommand", () => {
     expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(existingModels);
   });
 
-  it("keeps an existing primary when login omits --set-default and the patch recommends another", async () => {
+  it.each([
+    { name: "an absent model", model: undefined },
+    { name: "a model string", model: "openai/gpt-5.4" },
+    { name: "a primary and fallbacks", model: { primary: "openai/gpt-5.4", fallbacks: [] } },
+    { name: "fallbacks without a primary", model: { fallbacks: ["openai/gpt-5.4"] } },
+  ])("preserves $name when login omits --set-default", async ({ model }) => {
     const runtime = createRuntime();
     currentConfig = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.4", fallbacks: [] },
+          ...(model === undefined ? {} : { model }),
           models: {
             "openai/gpt-5.4": {},
             "anthropic/claude-sonnet-4-6": {},
@@ -1178,10 +1183,10 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai" }, runtime);
 
-    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.4",
-      fallbacks: [],
-    });
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual(model);
+    if (model === undefined) {
+      expect(lastUpdatedConfig?.agents?.defaults).not.toHaveProperty("model");
+    }
     expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
       "openai/gpt-5.4": {},
       "anthropic/claude-sonnet-4-6": {},

@@ -1,5 +1,6 @@
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { resolveMatrixThreadRootId } from "../relations.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAllowBotsMode } from "./handler-helpers.js";
 import { loadMatrixReactionEvents, loadMatrixSendModule } from "./handler-runtime.js";
@@ -9,7 +10,7 @@ import type { MatrixLocationPayload } from "./location.js";
 import type { ReservedHistorySlot } from "./room-history.js";
 import { createRoomHistoryTracker } from "./room-history.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
-import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
+import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 export type MatrixIngressAccessParams = {
@@ -76,7 +77,7 @@ export async function resolveMatrixIngressAccess(config: {
   const isRoom = !isDirectMessage;
   const { audioPreflightMode, locationPayload, reservedHistorySlot, selfUserId } = paramsLocal;
   const messageId = event.event_id ?? "";
-  const threadRootId = resolveMatrixThreadRootId({ event, content });
+  const threadRootId = resolveMatrixThreadRootId(content);
   const thread = resolveMatrixThreadRouting({
     isDirectMessage,
     threadReplies,

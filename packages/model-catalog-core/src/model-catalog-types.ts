@@ -286,6 +286,8 @@ export type ModelCatalogSuppression = {
   provider: string;
   model: string;
   reason?: string;
+  /** Explicit retirement and optional provider-local successor; otherwise doctor clears overrides. */
+  retirement?: { replacedBy?: string };
   when?: {
     baseUrlHosts?: string[];
     providerConfigApiIn?: string[];

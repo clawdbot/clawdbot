@@ -138,17 +138,17 @@ function resolveCanonicalParentId<T>(
   parentId: string | null,
   byId: Pick<ReadonlyMap<string, SessionTranscriptTreeNode<T>>, "get">,
 ): string | null {
-  const seen = new Set<string>();
+  let seen: Set<string> | undefined;
   let currentId = parentId;
   while (currentId !== null) {
-    if (seen.has(currentId)) {
+    if (seen?.has(currentId)) {
       return currentId;
     }
-    seen.add(currentId);
     const parent = byId.get(currentId);
     if (!parent || !isSessionTranscriptLeafControl(parent.entry)) {
       return currentId;
     }
+    (seen ??= new Set()).add(currentId);
     // Leaf controls are omitted from selected paths, so descendants must point
     // through the marker to its normalized visible parent.
     currentId = parent.parentId;

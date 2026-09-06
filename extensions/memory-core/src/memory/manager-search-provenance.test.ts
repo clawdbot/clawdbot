@@ -29,7 +29,7 @@ describe("memory search provenance enrichment", () => {
       ),
     );
     const manager = await fixture.getPersistentManager(
-      fixture.createConfig({ vectorEnabled: entry.vector, minScore: 0, onSearch: false }),
+      fixture.createConfig({ vectorEnabled: entry.vector, minScore: 0 }),
     );
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as { db: DatabaseSync; provider: EmbeddingProvider };

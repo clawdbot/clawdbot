@@ -373,9 +373,8 @@ Supported surfaces:
 `partial`, `block`, and `progress` previews where plan updates are enabled.
 Visible steps follow the channel's line limits. Clearing a card removes its
 checklist and status while preserving other activity; an otherwise empty draft
-is deleted. Failed or blocked writes leave the previous plan in place. Error
-visibility follows each channel's display policy; Discord omits failed tool
-results from previews.
+is deleted. Failed or blocked writes leave the previous plan in place. Active previews
+retain a safe failure notice.
 
 Progress-mode drafts (`streaming.progress.*`) have these per-channel settings:
 

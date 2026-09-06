@@ -354,8 +354,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
       // +1: retained runtime config reader preserves channel owner and scoped config identity.
       // +1: shared session-catalog host publication with completion ownership.
+      // +1: provider-owned local-service reconciliation context.
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
-      4442,
+      4443,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

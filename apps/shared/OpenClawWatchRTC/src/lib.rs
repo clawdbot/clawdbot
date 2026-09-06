@@ -61,6 +61,7 @@ impl From<SocketAddr> for OpenClawRTCAddress {
 }
 
 #[repr(C)]
+#[derive(Default)]
 pub struct OpenClawRTCOutput {
     kind: u32,
     bytes: *const u8,
@@ -76,6 +77,7 @@ struct RemoteAddress {
     resolved: Vec<SocketAddr>,
 }
 
+#[derive(Default)]
 pub struct OpenClawRTC {
     rtc: Option<Rtc>,
     pending: Option<SdpPendingOffer>,
@@ -123,8 +125,14 @@ pub extern "C" fn openclaw_rtc_create() -> *mut OpenClawRTC {
             return ptr::null_mut();
         }
         let credentials = IceCreds {
-            ufrag: entropy[..8].iter().map(|byte| format!("{byte:02x}")).collect(),
-            pass: entropy[8..].iter().map(|byte| format!("{byte:02x}")).collect(),
+            ufrag: entropy[..8]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            pass: entropy[8..]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
         };
         let rtc = Rtc::builder()
             .set_local_ice_credentials(credentials)
@@ -136,11 +144,7 @@ pub extern "C" fn openclaw_rtc_create() -> *mut OpenClawRTC {
             .build(Instant::now());
         Box::into_raw(Box::new(OpenClawRTC {
             rtc: Some(rtc),
-            pending: None,
-            mid: None,
-            description: Vec::new(),
-            remote_addresses: Vec::new(),
-            output_bytes: Vec::new(),
+            ..OpenClawRTC::default()
         }))
     })
     .unwrap_or(ptr::null_mut())
@@ -195,7 +199,12 @@ pub unsafe extern "C" fn openclaw_rtc_remove_candidate(
             let candidate = Candidate::host(address.socket()?, Protocol::Udp).map_err(|_| -2)?;
             // Only retire ICE state after our one SDP exchange; no later SDP offer
             // is generated from direct-API mutations.
-            state.rtc.as_mut().ok_or(-1)?.direct_api().invalidate_candidate(&candidate);
+            state
+                .rtc
+                .as_mut()
+                .ok_or(-1)?
+                .direct_api()
+                .invalidate_candidate(&candidate);
             Ok(())
         })
     }
@@ -209,9 +218,15 @@ pub unsafe extern "C" fn openclaw_rtc_remote_address(
     address: *mut OpenClawRTCAddress,
 ) -> i32 {
     let (Some(state), Some(address)) = (unsafe { pointer.as_ref() }, unsafe { address.as_mut() })
-    else { return -1; };
-    if state.rtc.is_none() { return -1; }
-    let Some(value) = state.remote_addresses.get(index) else { return 1; };
+    else {
+        return -1;
+    };
+    if state.rtc.is_none() {
+        return -1;
+    }
+    let Some(value) = state.remote_addresses.get(index) else {
+        return 1;
+    };
     *address = value.address.into();
     0
 }
@@ -237,20 +252,34 @@ pub unsafe extern "C" fn openclaw_rtc_resolve_remote_address(
         operate(pointer, |state| {
             let address = address.socket()?;
             let remote = state.remote_addresses.get(index).ok_or(-2)?;
-            if !remote.address.is_ipv4() || !address.is_ipv6()
-                || remote.address.port() != address.port() {
+            if !remote.address.is_ipv4()
+                || !address.is_ipv6()
+                || remote.address.port() != address.port()
+            {
                 return Err(-2);
             }
-            if remote.resolved.contains(&address) { return Ok(()); }
-            let endpoints: HashSet<_> = state.remote_addresses.iter()
-                .flat_map(|remote| std::iter::once(remote.address).chain(remote.resolved.iter().copied()))
+            if remote.resolved.contains(&address) {
+                return Ok(());
+            }
+            let endpoints: HashSet<_> = state
+                .remote_addresses
+                .iter()
+                .flat_map(|remote| {
+                    std::iter::once(remote.address).chain(remote.resolved.iter().copied())
+                })
                 .collect();
-            if endpoints.len() >= CANDIDATE_BUDGET && !endpoints.contains(&address) { return Err(-4); }
-            let candidates = remote.candidates.iter()
+            if endpoints.len() >= CANDIDATE_BUDGET && !endpoints.contains(&address) {
+                return Err(-4);
+            }
+            let candidates = remote
+                .candidates
+                .iter()
                 .map(|candidate| resolved_candidate(candidate, address))
                 .collect::<Result<Vec<_>, _>>()?;
             let rtc = state.rtc.as_mut().ok_or(-1)?;
-            for candidate in candidates { rtc.add_remote_candidate(candidate); }
+            for candidate in candidates {
+                rtc.add_remote_candidate(candidate);
+            }
             state.remote_addresses[index].resolved.push(address);
             Ok(())
         })
@@ -282,21 +311,42 @@ pub unsafe extern "C" fn openclaw_rtc_answer(
             let answer = SdpAnswer::from_sdp_string(text).map_err(|_| -2)?;
             // RFC 8838 Appendix B permits discovering our candidates through checks only
             // for an ICE-lite peer. This single-exchange client has no trickle channel.
-            if !answer.session.ice_lite() { return Err(-3); }
-            let credentials = answer.session.ice_creds()
-                .or_else(|| answer.media_lines.iter().find_map(|media| media.ice_creds()))
+            if !answer.session.ice_lite() {
+                return Err(-3);
+            }
+            let credentials = answer
+                .session
+                .ice_creds()
+                .or_else(|| {
+                    answer
+                        .media_lines
+                        .iter()
+                        .find_map(|media| media.ice_creds())
+                })
                 .ok_or(-2)?;
             let mut remote_addresses: Vec<RemoteAddress> = Vec::new();
-            for candidate in answer.session.ice_candidates()
-                .chain(answer.media_lines.iter().flat_map(|media| media.ice_candidates())) {
+            for candidate in answer.session.ice_candidates().chain(
+                answer
+                    .media_lines
+                    .iter()
+                    .flat_map(|media| media.ice_candidates()),
+            ) {
                 if candidate.proto() != Protocol::Udp
-                    || candidate.ufrag().is_some_and(|value| value != credentials.ufrag.as_str()) {
+                    || candidate
+                        .ufrag()
+                        .is_some_and(|value| value != credentials.ufrag.as_str())
+                {
                     continue;
                 }
                 let address = candidate.addr();
                 OpenClawRTCAddress::from(address).socket()?;
-                if let Some(remote) = remote_addresses.iter_mut().find(|remote| remote.address == address) {
-                    if !remote.candidates.contains(candidate) { remote.candidates.push(candidate.clone()); }
+                if let Some(remote) = remote_addresses
+                    .iter_mut()
+                    .find(|remote| remote.address == address)
+                {
+                    if !remote.candidates.contains(candidate) {
+                        remote.candidates.push(candidate.clone());
+                    }
                 } else {
                     remote_addresses.push(RemoteAddress {
                         address,
@@ -305,9 +355,13 @@ pub unsafe extern "C" fn openclaw_rtc_answer(
                     });
                 }
             }
-            if remote_addresses.is_empty() { return Err(-3); }
+            if remote_addresses.is_empty() {
+                return Err(-3);
+            }
             // Match the pinned ICE owner's default pair budget; never truncate the answer.
-            if remote_addresses.len() > CANDIDATE_BUDGET { return Err(-4); }
+            if remote_addresses.len() > CANDIDATE_BUDGET {
+                return Err(-4);
+            }
             let pending = state.pending.take().ok_or(-1)?;
             state
                 .rtc
@@ -407,14 +461,7 @@ pub unsafe extern "C" fn openclaw_rtc_poll(
     };
     unsafe {
         operate(pointer, |state| {
-            *output = OpenClawRTCOutput {
-                kind: 0,
-                bytes: ptr::null(),
-                length: 0,
-                source: OpenClawRTCAddress::default(),
-                destination: OpenClawRTCAddress::default(),
-                time: 0,
-            };
+            *output = OpenClawRTCOutput::default();
             loop {
                 match state
                     .rtc

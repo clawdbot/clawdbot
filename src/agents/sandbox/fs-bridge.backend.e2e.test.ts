@@ -130,11 +130,25 @@ describe("sandbox fs bridge local backend e2e", () => {
         });
 
         const bridge = createSandboxFsBridge({ sandbox });
+        if (!bridge.readDirectory) {
+          throw new Error("The mounted bridge must support directory discovery.");
+        }
+        await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
+          { name: mutation === "write" ? "skills" : ".agents", isDirectory: true },
+        ]);
+        await expect(bridge.readDirectory({ filePath: "../" })).rejects.toThrow();
+        await fs.symlink(path.dirname(skillPath), path.join(workspaceDir, "alias"));
+        await expect(bridge.readDirectory({ filePath: "alias" })).resolves.toEqual([
+          { name: "SKILL.md", isDirectory: false },
+        ]);
+        await fs.symlink(stateDir, path.join(workspaceDir, "outside"));
+        await expect(bridge.readDirectory({ filePath: "outside" })).rejects.toThrow();
+        const scriptsBeforeMutation = scripts.length;
         if (workspaceAccess === "ro") {
           await expect(
             bridge.writeFile({ filePath: "nested/hello.txt", data: "blocked" }),
           ).rejects.toThrow("read-only");
-          expect(scripts).toEqual([]);
+          expect(scripts).toHaveLength(scriptsBeforeMutation);
           return;
         }
         await bridge.writeFile({ filePath: "nested/hello.txt", data: "from-backend" });

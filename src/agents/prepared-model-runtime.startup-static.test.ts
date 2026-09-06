@@ -131,7 +131,11 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorker: () => ({
+  createPreparedModelCatalogWorker: ({
+    agentFacts,
+  }: Parameters<
+    typeof import("./prepared-model-catalog-worker.js").createPreparedModelCatalogWorker
+  >[0]) => ({
     loadCatalog: async () => {
       const catalog = await mocks.runPreparedModelCatalogWorker();
       // Real worker replies pair every catalog with its observed auth generation.
@@ -139,7 +143,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         authStore: { version: 1, profiles: {} },
         authModes: {},
       });
-      return catalog;
+      return { modelCatalog: catalog, configuredRuntimeModels: agentFacts.configuredRuntimeModels };
     },
     loadAuth: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
   }),
@@ -628,13 +632,16 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
 
-    await expect(snapshot?.loadFullModelCatalog?.()).resolves.toEqual({
-      entries: [],
-      routeVariants: [],
+    const fullCatalog = await snapshot?.loadFullModelCatalog?.();
+    const configuredModel = { provider: "openai", id: "gpt-5.5", contextWindow: 128_000 };
+    expect(fullCatalog).toMatchObject({
+      entries: [configuredModel],
+      routeVariants: [configuredModel],
+      staticEntries: [configuredModel],
     });
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
-    expect(snapshot?.readFullModelCatalog?.()).toEqual({ entries: [], routeVariants: [] });
+    expect(snapshot?.readFullModelCatalog?.()).toBe(fullCatalog);
     expect(
       getAvailablePreparedModelCatalogSnapshot({
         agentId: "default",
@@ -642,7 +649,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
         agentDir: "/tmp/prepared-static-agent",
         workspaceDir: "/tmp/prepared-static-workspace",
       }),
-    ).toEqual({ entries: [], routeVariants: [] });
+    ).toBe(fullCatalog);
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(catalogPublicationEvents).toEqual(["catalog-published"]);
 
@@ -655,7 +662,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     );
     expect(catalogPublicationEvents).toEqual(["catalog-published", "catalog-published"]);
     unregisterCatalogPublication();
-    expect(snapshot?.readFullModelCatalog?.()).toEqual({ entries: [], routeVariants: [] });
+    expect(snapshot?.readFullModelCatalog?.()).toEqual(fullCatalog);
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();

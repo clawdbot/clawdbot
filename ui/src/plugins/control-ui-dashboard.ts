@@ -9,7 +9,6 @@ import {
   acquireBoardProviderForSession,
   boardExists,
   boardProviderCacheKey,
-  hasLoadedBoardSnapshot,
   type BoardProvider,
   type BoardProviderLease,
   type BoardViewCallbacks,
@@ -127,7 +126,7 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
     if (!snapshot.tabs.some((tab) => tab.tabId === this.activeTabId)) {
       this.activeTabId = firstTabId;
     }
-    if (!this.expansionInitialized && hasLoadedBoardSnapshot(provider)) {
+    if (!this.expansionInitialized && provider.hasLoadedSnapshot) {
       this.expansionInitialized = true;
       this.expanded = boardExists(snapshot);
     }
