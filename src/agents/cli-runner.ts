@@ -22,6 +22,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { redactPiiText } from "../privacy/payload-redact.js";
 import {
   loadAuthProfileStoreForRuntime,
   markAuthProfileFailure,
@@ -161,15 +162,21 @@ async function runCliAgentInternal(
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();
 
-  // Privacy: drop image attachments when media blocking is enabled.
+  // Privacy: redact PII in user messages when enabled.
   if (
     params.config?.privacy?.enabled &&
-    params.config.privacy.media?.blockAttachments &&
-    params.images?.length
+    params.config.privacy.pii?.enabled !== false &&
+    params.config.privacy.pii?.userMessages === true
   ) {
-    if (params.config.privacy.media.warnOnBlock !== false) {
+    params = { ...params, prompt: redactPiiText(params.prompt, params.config.privacy) };
+  }
+
+  // Privacy: drop all media attachments when media blocking is enabled.
+  if (params.config?.privacy?.enabled && params.config.privacy.media?.blockAttachments) {
+    const imageCount = params.images?.length ?? 0;
+    if (imageCount > 0 && params.config.privacy.media.warnOnBlock !== false) {
       process.stderr.write(
-        `[privacy] blocked ${params.images.length} image attachment(s) due to media.blockAttachments policy\n`,
+        `[privacy] blocked ${imageCount} media attachment(s) due to media.blockAttachments policy\n`,
       );
     }
     params = { ...params, images: undefined };

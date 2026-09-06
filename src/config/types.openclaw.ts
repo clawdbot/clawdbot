@@ -237,7 +237,7 @@ export type OpenClawConfig = {
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */
   proxy?: ProxyConfig;
-  /** Privacy controls: PII redaction, media blocking, at-rest encryption, system prompt masking. */
+  /** Privacy controls: PII redaction, media blocking, system prompt masking. */
   privacy?: PrivacyConfig;
 };
 

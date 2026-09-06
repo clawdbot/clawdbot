@@ -186,21 +186,21 @@ export function applyRuntimeLineMasking(runtimeLine: string, config?: PrivacyCon
   let line = runtimeLine;
 
   if (sp.maskHostname) {
-    // Strip the host=<value> field (including surrounding " | " separators)
-    line = line.replace(/\s*\|\s*host=[^|]*/g, "").replace(/^Runtime:\s*\|\s*/, "Runtime: ");
+    // Strip the host=<value> field — handle both leading and mid-line positions
+    line = line.replace(/(?:\s*\|\s*|\s+)host=[^|]*/g, "");
   }
 
   if (sp.maskOs) {
-    line = line.replace(/\s*\|\s*os=[^|]*/g, "");
+    line = line.replace(/(?:\s*\|\s*|\s+)os=[^|]*/g, "");
   }
 
   if (sp.maskShell) {
-    line = line.replace(/\s*\|\s*shell=[^|]*/g, "");
+    line = line.replace(/(?:\s*\|\s*|\s+)shell=[^|]*/g, "");
   }
 
   if (sp.maskRepoPath) {
     // Replace the full path with just the final directory component
-    line = line.replace(/(\|\s*repo=)([^|]+)/g, (_match, prefix, repoPath: string) => {
+    line = line.replace(/((?:\|\s*|\s+)repo=)([^|]+)/g, (_match, prefix, repoPath: string) => {
       const trimmed = repoPath.trimEnd();
       const parts = trimmed.replace(/\\/g, "/").split("/").filter(Boolean);
       const basename = parts[parts.length - 1] ?? trimmed;
