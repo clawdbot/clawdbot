@@ -163,7 +163,15 @@ function buildMessageToolDeliveredRunResult(runId: string, answerText: string) {
     didSendViaMessagingTool: true,
     didDeliverSourceReplyViaMessageTool: true,
     messagingToolSourceReplyPayloads: [{ text: answerText }],
-    messagingToolSentTargets: [{ to: "+15550001111", text: answerText, sourceReplyFinal: true }],
+    messagingToolSentTargets: [
+      {
+        tool: "message",
+        provider: "whatsapp",
+        to: "+15550001111",
+        text: answerText,
+        sourceReplyFinal: true,
+      },
+    ],
     sourceReplyDeliveryMode: "message_tool_only",
     runId,
   });
@@ -172,7 +180,15 @@ function buildMessageToolDeliveredRunResult(runId: string, answerText: string) {
     meta: { agentMeta: {}, finalAssistantVisibleText: answerText },
     didDeliverSourceReplyViaMessageTool: true,
     messagingToolSourceReplyPayloads: [{ text: answerText }],
-    messagingToolSentTargets: [{ to: "+15550001111", text: answerText, sourceReplyFinal: true }],
+    messagingToolSentTargets: [
+      {
+        tool: "message",
+        provider: "whatsapp",
+        to: "+15550001111",
+        text: answerText,
+        sourceReplyFinal: true,
+      },
+    ],
     messagingToolSentTexts: [answerText],
   };
 }
@@ -184,7 +200,15 @@ function buildEvidenceOnlyDeliveredRunResult(answerText: string) {
     meta: { agentMeta: {}, finalAssistantVisibleText: answerText },
     didDeliverSourceReplyViaMessageTool: true,
     messagingToolSourceReplyPayloads: [],
-    messagingToolSentTargets: [{ to: "+15550001111", text: answerText, sourceReplyFinal: true }],
+    messagingToolSentTargets: [
+      {
+        tool: "message",
+        provider: "whatsapp",
+        to: "+15550001111",
+        text: answerText,
+        sourceReplyFinal: true,
+      },
+    ],
     messagingToolSentTexts: [answerText],
   };
 }

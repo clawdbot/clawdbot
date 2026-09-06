@@ -28,11 +28,11 @@
 // mirrors the pattern in queue.drain-restart.test.ts:207-234.
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT_AFTER_DELIVERED_REPLY,
 } from "../../../plugin-sdk/message-tool-delivery-hints.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { acknowledgePrecedingDeliveryInPrompt } from "../prompt-prelude.js";
 import {
   clearSessionQueues,
@@ -101,7 +101,7 @@ describe("collect drain delivery fact propagation (#126813)", () => {
 
     const first = createRun({ prompt: `${MESSAGE_TOOL_ONLY_DELIVERY_HINT}\n\npeer one` });
     first.precedingTurnDeliveredViaSourceReply = true;
-    const second = createRun({ prompt: `peer two` });
+    const second = createRun({ prompt: "peer two" });
     second.precedingTurnDeliveredViaSourceReply = true;
     enqueueFollowupRun(key, first, settings, "message-id", runFollowup, false);
     enqueueFollowupRun(key, second, settings, "message-id", runFollowup, false);
