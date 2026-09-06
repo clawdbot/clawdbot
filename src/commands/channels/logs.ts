@@ -191,18 +191,6 @@ function isSameFileCheckpoint(
   );
 }
 
-function isSameFileGeneration(
-  previous: FileCheckpoint,
-  current: FileCheckpoint | undefined,
-): boolean {
-  return (
-    current?.file === previous.file &&
-    current.identity === previous.identity &&
-    current.prefixLength === previous.prefixLength &&
-    current.prefix === previous.prefix
-  );
-}
-
 async function followChannelLogs(
   filter: ChannelLogFilter,
   channel: string,
@@ -250,24 +238,26 @@ async function followChannelLogs(
         reanchored = true;
       }
 
-      let checkpoint = await readFileCheckpoint(
-        tail.file,
-        tail.cursor,
-        reanchored ? undefined : previousCheckpoint?.prefixLength,
-      );
-      if (
-        !reanchored &&
-        previousGeneration !== undefined &&
-        !isSameFileGeneration(previousGeneration, checkpoint)
-      ) {
-        tail = await readConfiguredParsedLogTail({
-          limit: readLimit,
-          maxBytes: MAX_BYTES,
-          filter: (line) => matchesChannel(line, filter),
-        });
-        reanchored = true;
-        checkpoint = await readFileCheckpoint(tail.file, tail.cursor);
+      if (!reanchored && previousGeneration !== undefined && previousCheckpoint !== undefined) {
+        const postReadGeneration = await readFileCheckpoint(
+          tail.file,
+          previousCheckpoint.cursor,
+          previousCheckpoint.prefixLength,
+        );
+        if (!isSameFileCheckpoint(previousGeneration, postReadGeneration)) {
+          tail = await readConfiguredParsedLogTail({
+            limit: readLimit,
+            maxBytes: MAX_BYTES,
+            filter: (line) => matchesChannel(line, filter),
+          });
+          reanchored = true;
+        }
       }
+
+      const checkpointPrefixLength = reanchored
+        ? undefined
+        : Math.max(previousCheckpoint?.prefixLength ?? 0, Math.min(64, tail.cursor));
+      const checkpoint = await readFileCheckpoint(tail.file, tail.cursor, checkpointPrefixLength);
 
       const fileChanged = previousFile !== undefined && tail.file !== previousFile;
       if (json) {
@@ -307,7 +297,7 @@ async function followChannelLogs(
         writeChannelLogLine(runtime, line, json);
       }
       cursor = checkpoint ? tail.cursor : undefined;
-      previousFile = checkpoint ? tail.file : undefined;
+      previousFile = tail.file;
       previousCheckpoint = checkpoint;
       firstRead = false;
 

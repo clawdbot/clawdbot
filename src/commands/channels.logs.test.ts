@@ -408,6 +408,39 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("grows the prefix fingerprint after starting with an empty file", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(logPath, "");
+      const follow = channelsLogsCommand(
+        { lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(1));
+
+      const firstMessage = `aaaaa${"x".repeat(200)}`;
+      await fs.appendFile(logPath, logLine({ message: firstMessage }));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      const replacementMessage = `bbbbb${"x".repeat(200)}`;
+      await fs.writeFile(logPath, logLine({ message: replacementMessage }));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual([firstMessage, replacementMessage]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-anchors after a same-path replacement without replaying the old cursor", async () => {
     vi.useFakeTimers();
     try {
@@ -482,8 +515,13 @@ describe("channelsLogsCommand", () => {
       await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
 
       armRace = true;
+      await fs.appendFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "pending" }),
+      );
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
+      expect(armedOpenCount).toBeGreaterThanOrEqual(3);
 
       process.emit("SIGINT");
       await follow;
@@ -525,6 +563,71 @@ describe("channelsLogsCommand", () => {
 
       process.emit("SIGINT");
       await expect(follow).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("announces a newly resolved rolling file after a checkpoint disappears", async () => {
+    vi.useFakeTimers();
+    try {
+      const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
+      const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
+      setLoggerOverride({ file: configuredFile });
+      await fs.writeFile(
+        fallbackFile,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+
+      const realOpen = fs.open.bind(fs);
+      let openCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        openCount += 1;
+        if (openCount === 2) {
+          throw Object.assign(new Error("rotated away"), { code: "ENOENT" });
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => {
+        expect(openCount).toBeGreaterThanOrEqual(2);
+        expect(
+          runtime.log.mock.calls.some(([value]) => {
+            const record = JSON.parse(String(value));
+            return record.type === "log" && record.message === "before";
+          }),
+        ).toBe(true);
+      });
+      expect(
+        runtime.log.mock.calls.some(([value]) => {
+          const record = JSON.parse(String(value));
+          return record.type === "meta" && record.file === fallbackFile;
+        }),
+      ).toBe(true);
+      runtime.log.mockClear();
+
+      await fs.rm(fallbackFile);
+      await fs.writeFile(
+        configuredFile,
+        logLine({ module: "gateway/channels/slack/send", message: "after" }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(3));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "meta").map((record) => record.file),
+      ).toEqual([configuredFile]);
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["after"]);
     } finally {
       vi.useRealTimers();
     }
