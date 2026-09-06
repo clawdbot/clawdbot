@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
@@ -362,14 +362,24 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const optionalErrorMessages = new Set([
     "agent event subscription registration requires id and handle",
   ]);
+  const frozenTargetErrorMessages = new Set();
+  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
+    frozenTargetErrorMessages.add(
+      "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
+    );
+  }
   const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
-    if (errorMessages.size > 0) {
-      throw new Error(
-        `unexpected kitchen-sink diagnostic errors: ${[...errorMessages].join(", ")}`,
-      );
+    const unexpected = [...errorMessages].filter(
+      (message) => !frozenTargetErrorMessages.has(message),
+    );
+    if (unexpected.length > 0) {
+      throw new Error(`unexpected kitchen-sink diagnostic errors: ${unexpected.join(", ")}`);
     }
     return;
+  }
+  for (const message of frozenTargetErrorMessages) {
+    allowedErrorMessages.add(message);
   }
   for (const message of errorMessages) {
     if (!allowedErrorMessages.has(message)) {
@@ -669,7 +679,7 @@ function assertRemoved() {
   }
 
   const { config } = readConfig();
-  if (!isExplicitPluginDisableMarker(config, pluginId)) {
+  if (!hasExpectedPluginUninstallConfigState(config, pluginId)) {
     throw new Error(`kitchen-sink exact disabled uninstall marker missing: ${pluginId}`);
   }
   if ((config.plugins?.allow || []).includes(pluginId)) {

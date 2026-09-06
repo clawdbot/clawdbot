@@ -58,6 +58,14 @@ function messageText(content: unknown): string {
     .join("");
 }
 
+async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
+  return (await fs.readFile(filePath, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as TranscriptEntry);
+}
+
 async function verifyRuntimeContextTranscriptShape() {
   const sessionManager = SessionManager.inMemory();
   const effectivePrompt = [
@@ -220,28 +228,37 @@ async function verifyDoctorRepair(root: string) {
     result.status === 0,
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  let migratedSessionId: string | undefined;
-  try {
-    const row = database
-      .prepare("SELECT current_session_id AS session_id FROM session_nodes WHERE session_key = ?")
-      .get("agent:main:qa:docker-runtime-context");
-    if (typeof row?.session_id === "string") {
-      migratedSessionId = row.session_id;
+  const legacyJsonlRepair = process.env.OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE === "jsonl";
+  let entries: TranscriptEntry[];
+  if (legacyJsonlRepair) {
+    entries = await readJsonl(sessionFile);
+  } else {
+    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    let migratedSessionId: string | undefined;
+    try {
+      const row = database
+        .prepare("SELECT current_session_id AS session_id FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:qa:docker-runtime-context");
+      if (typeof row?.session_id === "string") {
+        migratedSessionId = row.session_id;
+      }
+    } finally {
+      database.close();
     }
-  } finally {
-    database.close();
+    assert(migratedSessionId, "doctor did not migrate session");
+    entries = (await readSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: migratedSessionId,
+      sessionKey: "agent:main:qa:docker-runtime-context",
+    })) as TranscriptEntry[];
   }
-  assert(migratedSessionId, "doctor did not migrate session");
-  const entries = (await readSessionTranscriptEvents({
-    agentId: "main",
-    sessionId: migratedSessionId,
-    sessionKey: "agent:main:qa:docker-runtime-context",
-  })) as TranscriptEntry[];
   const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);
+  const expectedIds = legacyJsonlRepair
+    ? ["broken-session", "parent", "plain-user", "plain-assistant"]
+    : ["broken", "parent", "plain-user", "plain-assistant"];
   assert(
-    JSON.stringify(ids) === JSON.stringify(["broken", "parent", "plain-user", "plain-assistant"]),
+    JSON.stringify(ids) === JSON.stringify(expectedIds),
     `doctor kept wrong active branch: ${JSON.stringify(ids)}`,
   );
   assert(
@@ -250,6 +267,13 @@ async function verifyDoctorRepair(root: string) {
     ),
     "doctor repair left runtime context in active transcript",
   );
+  if (legacyJsonlRepair) {
+    const backups = (await fs.readdir(path.dirname(sessionFile))).filter((name) =>
+      name.includes(".pre-doctor-branch-repair-"),
+    );
+    assert(backups.length === 1, `expected one doctor backup, got ${backups.length}`);
+    return;
+  }
   const migrationRunsDir = path.join(stateDir, "session-sqlite-migration-runs");
   const manifests = await Promise.all(
     (await fs.readdir(migrationRunsDir))

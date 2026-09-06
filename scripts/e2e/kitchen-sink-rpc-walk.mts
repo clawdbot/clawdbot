@@ -1324,9 +1324,10 @@ async function delayWithAbort(delayMs: number, signal?: AbortSignal) {
   }
 }
 
-function configureKitchenSink(env: KitchenSinkEnv, port: number) {
+export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const config = asRecord(fs.existsSync(configPath) ? readJson(configPath) : {});
+  const frozenTarget = env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   const gateway = asRecord(config.gateway);
   const plugins = asRecord(config.plugins);
   const pluginEntries = asRecord(plugins.entries);
@@ -1351,7 +1352,11 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   config.plugins = {
     ...plugins,
     enabled: true,
-    allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
+    ...(frozenTarget
+      ? {}
+      : {
+          allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
+        }),
     entries: {
       ...pluginEntries,
       [PLUGIN_ID]: {
@@ -1379,8 +1384,7 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       ...new Set([...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []), ...EXPECTED_TOOLS]),
     ],
   };
-  config.tts = {
-    ...tts,
+  const ttsConfig = {
     provider: tts.provider ?? speechProvider,
     providers: {
       ...ttsProviders,
@@ -1389,6 +1393,12 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       },
     },
   };
+  if (frozenTarget) {
+    const messages = asRecord(config.messages);
+    config.messages = { ...messages, tts: { ...asRecord(messages.tts), ...ttsConfig } };
+  } else {
+    config.tts = { ...tts, ...ttsConfig };
+  }
   writeJson(configPath, config);
 }
 

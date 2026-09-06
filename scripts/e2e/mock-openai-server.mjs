@@ -721,6 +721,10 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
+    const catalogExpression =
+      process.env.OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE === "legacy"
+        ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
+        : "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
       language: "javascript",
       code: [
@@ -734,7 +738,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         "  rootHasFixture: root.content.includes('fixture'),",
         "  headerHasLookup: api.content.includes('function lookupNote'),",
         "  resultText: result.content?.[0]?.text,",
-        "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
+        `  allHasMcp: ${catalogExpression},`,
         "};",
       ].join("\n"),
     });

@@ -25,3 +25,111 @@ openclaw_frozen_target_omissions_authorized() {
     return 2
   fi
 }
+
+openclaw_prepare_frozen_target_context() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+
+  openclaw_frozen_target_omissions_authorized || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 1
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  if [ "$(git -C "$source_root" rev-parse HEAD 2>/dev/null)" != "$OPENCLAW_SELECTED_SHA" ]; then
+    echo "selected source checkout does not match OPENCLAW_SELECTED_SHA" >&2
+    return 2
+  fi
+}
+
+openclaw_frozen_target_source_has_path() {
+  local source_root="${1:?missing selected source root}" relative_path="${2:?missing relative path}"
+  git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null
+}
+
+openclaw_frozen_target_source_contains() {
+  local source_root="${1:?missing selected source root}" relative_path="${2:?missing relative path}" needle="${3:?missing text}"
+  git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null | grep -Fq "$needle"
+}
+
+openclaw_resolve_frozen_plugin_harness_capabilities() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+
+  export OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE="current" \
+    OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT="current"
+
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # The old plugin sweep asserted removal but predated the canonical disabled
+  # marker. Only that selected, packaged assertion dialect may relax the marker.
+  if openclaw_frozen_target_source_contains "$source_root" scripts/e2e/lib/plugins/assertions.mjs 'function assertPluginTgzRemoved()' &&
+    ! openclaw_frozen_target_source_contains "$source_root" scripts/e2e/lib/plugins/assertions.mjs 'function assertPluginUninstallConfigState('; then
+    export OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE="legacy"
+  fi
+
+  if openclaw_frozen_target_source_contains "$source_root" src/config/types.messages.ts 'tts?: TtsConfig;' &&
+    openclaw_frozen_target_source_contains "$source_root" src/config/types.plugins.ts 'bundledDiscovery?: "compat" | "allowlist";' &&
+    openclaw_frozen_target_source_contains "$source_root" src/plugin-sdk/session-store-runtime.ts 'before SQLite migration' &&
+    ! openclaw_frozen_target_source_has_path "$source_root" src/plugins/uninstall-package-plan.ts; then
+    export OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT="legacy"
+  fi
+}
+
+openclaw_append_frozen_plugin_harness_docker_env() {
+  if [[ "${OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE:-current}" == "legacy" ]]; then
+    DOCKER_ENV_ARGS+=( -e "OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE=legacy" )
+  fi
+  if [[ "${OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT:-current}" == "legacy" ]]; then
+    DOCKER_ENV_ARGS+=( -e "OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT=legacy" )
+  fi
+}
+
+openclaw_resolve_frozen_core_harness_capabilities() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+
+  export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="" \
+    OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="required" \
+    OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE="current" \
+    OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="current" \
+    OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="sqlite"
+
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # The pre-consent onboarding flow does not accept the wizard record or the
+  # newer guided case. Run its own established non-interactive coverage.
+  if ! git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/config/zod-schema.ts" 2>/dev/null |
+    grep -Fq 'securityAcknowledgedAt:' &&
+    git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/config/zod-schema.ts" 2>/dev/null |
+      grep -Fq 'lastRunAt:'; then
+    export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="local-basic,remote-non-interactive,reset,channels,skills"
+  fi
+
+  # Before default-hook onboarding, quickstart offered only the hooks it found
+  # in the workspace. A successful old quickstart therefore cannot promise a
+  # session-memory entry when that workspace shipped no hook definition.
+  if git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/commands/onboard-hooks.ts" 2>/dev/null &&
+    git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/commands/onboard-hooks.ts" 2>/dev/null |
+      grep -Fq 'setupInternalHooks' &&
+    ! git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/commands/onboard-hooks.ts" 2>/dev/null |
+      grep -Fq 'enableDefaultOnboardingInternalHooks'; then
+    export OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="interactive"
+  fi
+
+  if git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/agents/memory-search.ts" 2>/dev/null |
+    grep -Fq 'cfg.agents?.defaults?.memorySearch'; then
+    export OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="agent"
+  fi
+
+  export OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE
+  OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="$(openclaw_frozen_target_session_repair_mode "$source_root")"
+
+  # The manager API and MCP App assertions were added after the selected
+  # release. Run its still-packaged bundle-MCP contract instead of importing a
+  # new dist entry the release cannot contain.
+  if ! git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/agents/agent-bundle-mcp-manager-api.ts" 2>/dev/null &&
+    git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/agents/agent-bundle-mcp-runtime.ts" 2>/dev/null &&
+    git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:scripts/e2e/agent-bundle-mcp-tools-docker-client.ts" 2>/dev/null; then
+    export OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE="legacy"
+  fi
+}

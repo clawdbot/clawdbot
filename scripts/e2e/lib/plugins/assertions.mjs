@@ -13,7 +13,7 @@ import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -143,15 +143,20 @@ function readRequiredOpenClawConfig() {
   }
 }
 
+const pluginUninstallMode = process.env.OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE ?? "current";
+if (!new Set(["current", "legacy"]).has(pluginUninstallMode)) {
+  throw new Error(`invalid OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: ${pluginUninstallMode}`);
+}
+
 function assertPluginUninstallConfigState(config, pluginId, label = pluginId) {
   const entry = config.plugins?.entries?.[pluginId];
-  if (process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS === "1") {
+  if (pluginUninstallMode === "legacy") {
     if (entry) {
       throw new Error(`${label} config entry still present after uninstall`);
     }
     return;
   }
-  if (!isExplicitPluginDisableMarker(config, pluginId)) {
+  if (!hasExpectedPluginUninstallConfigState(config, pluginId)) {
     throw new Error(`${label} exact disabled uninstall marker missing`);
   }
 }
@@ -759,7 +764,7 @@ function assertNpmPluginRemoved() {
       `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
     );
   }
-  if (fs.existsSync(projectRoot)) {
+  if (pluginUninstallMode !== "legacy" && fs.existsSync(projectRoot)) {
     throw new Error(`npm managed project still exists after uninstall: ${projectRoot}`);
   }
 }
@@ -782,7 +787,7 @@ function assertNpmPluginRetained() {
 }
 
 function assertNpmPluginReinstalled() {
-  if (process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS === "1") {
+  if (pluginUninstallMode === "legacy") {
     return;
   }
   assertPluginUninstallConfigState(readOpenClawConfig(), "demo-plugin-npm");
