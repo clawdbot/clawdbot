@@ -355,14 +355,14 @@ export async function executeMutableUpdate(params: {
           durationMs: validation.durationMs,
         },
         validate: async (signal, assertCurrent, rehearsal) => {
-          const validation = await validate(signal, rehearsal, assertCurrent);
+          const repairValidation = await validate(signal, rehearsal, assertCurrent);
           return {
-            ok: validation.status === "ok",
-            score: validation.steps.filter((step) => step.exitCode === 0).length,
+            ok: repairValidation.status === "ok",
+            score: repairValidation.steps.filter((step) => step.exitCode === 0).length,
             summary:
-              validation.status === "ok"
+              repairValidation.status === "ok"
                 ? "Candidate validation passed."
-                : validation.logTail.join("\n"),
+                : repairValidation.logTail.join("\n"),
           };
         },
       });
