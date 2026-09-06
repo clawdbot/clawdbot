@@ -229,15 +229,6 @@ async function handleChatSendWithOptions(
       replyContextFieldsPromise,
     } = userTurn;
     preparedMediaRecorder = userTurnRecorder;
-    admitted.value.setPendingInputCleanup(() => {
-      userTurnRecorder.finishPendingInput?.(
-        activeRunAbort.controller.signal.aborted &&
-          activeRunAbort.entry?.abortStopReason !== "restart" &&
-          !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
-          ? "cancelled"
-          : "interrupted",
-      );
-    });
     const preparedUserTurn = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -249,6 +240,23 @@ async function handleChatSendWithOptions(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    admitted.value.setPendingInputCleanup(() => {
+      try {
+        userTurnRecorder.finishPendingInput?.(
+          activeRunAbort.controller.signal.aborted &&
+            activeRunAbort.entry?.abortStopReason !== "restart" &&
+            !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
+            ? "cancelled"
+            : "interrupted",
+        );
+      } finally {
+        void preparedUserTurn
+          .discardUnreferencedMedia(userTurnRecorder.getPendingInputMessage?.())
+          .catch((error: unknown) =>
+            context.logGateway.warn(`Failed to discard unused chat media: ${String(error)}`),
+          );
+      }
+    });
     if (
       entry?.sessionId &&
       isOperatorUiClient(clientInfo) &&

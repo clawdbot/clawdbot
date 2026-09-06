@@ -82,6 +82,21 @@ function createAvatarBrowserOriginPolicy(
   };
 }
 
+describe("invalid Gateway tokens", () => {
+  it.each(["undefined", "null", "  undefined  ", "", "  "])(
+    "rejects %j in the auth validator and request boundary",
+    async (token) => {
+      const auth = { mode: "token" as const, token, allowTailscale: false };
+      expect(() => assertGatewayAuthConfigured(auth)).toThrow(
+        /must not be blank|no token was configured/,
+      );
+      await expect(
+        authorizeHttpGatewayConnect({ auth, connectAuth: { token } }),
+      ).resolves.toMatchObject({ ok: false });
+    },
+  );
+});
+
 describe("gateway auth", () => {
   async function expectTokenMismatchWithLimiter(params: {
     reqHeaders: Record<string, string>;

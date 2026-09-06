@@ -881,38 +881,50 @@ describe("createOllamaStreamFn thinking events", () => {
     });
   });
 
-  it("keeps provider usage authoritative over the CJK fallback", async () => {
-    const events = await streamOllamaEvents(
-      [
-        {
-          model: "qwen3.5",
-          created_at: "2026-01-01T00:00:00Z",
-          message: { role: "assistant", content: "你好世界测试" },
-          done: false,
-        },
-        {
-          model: "qwen3.5",
-          created_at: "2026-01-01T00:00:01Z",
-          message: { role: "assistant", content: "" },
-          done: true,
-          done_reason: "stop",
-          prompt_eval_count: 77,
-          eval_count: 19,
-        },
-      ],
-      {},
-      { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
-    );
+  it.each([
+    [77, 19, 77, 19],
+    [0, 0, 0, 0],
+    [undefined, 19, 12, 19],
+    [77, undefined, 77, 6],
+    [-1, 19, 12, 19],
+    [77, -1, 77, 6],
+  ])(
+    "resolves provider counters %s/%s independently of CJK estimates",
+    async (promptCount, completionCount, expectedInput, expectedOutput) => {
+      const events = await streamOllamaEvents(
+        [
+          {
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:00Z",
+            message: { role: "assistant", content: "你好世界测试" },
+            done: false,
+          },
+          {
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:01Z",
+            message: { role: "assistant", content: "" },
+            done: true,
+            done_reason: "stop",
+            prompt_eval_count: promptCount,
+            eval_count: completionCount,
+          },
+        ],
+        {},
+        { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
+      );
 
-    const done = events.find((event) => event.type === "done") as {
-      message?: { usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } } };
-    };
-    expect(done?.message?.usage).toMatchObject({
-      input: 77,
-      output: 19,
-      cacheTelemetry: { state: "unavailable" },
-    });
-  });
+      const done = events.find((event) => event.type === "done") as {
+        message?: {
+          usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } };
+        };
+      };
+      expect(done?.message?.usage).toMatchObject({
+        input: expectedInput,
+        output: expectedOutput,
+        cacheTelemetry: { state: "unavailable" },
+      });
+    },
+  );
 
   it("keeps the existing fallback estimate for ASCII-only usage", async () => {
     const events = await streamOllamaEvents(

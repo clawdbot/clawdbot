@@ -10,6 +10,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metada
 
 export function readBundledDiscoveryMode(
   options: OpenClawStateDatabaseOptions = {},
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): "compat" | "allowlist" | undefined {
   const resolvedOptions =
     options.path || options.database || !hasActivePluginInstallRoots()
@@ -21,7 +22,11 @@ export function readBundledDiscoveryMode(
             OPENCLAW_STATE_DIR: resolveActivePluginInstallRoots(options.env).stateDir,
           },
         };
-  const value = readConfigMachineState<unknown>("plugins.bundledDiscovery", resolvedOptions);
+  const value = readConfigMachineState<unknown>(
+    "plugins.bundledDiscovery",
+    resolvedOptions,
+    behavior,
+  );
   return value === "compat" || value === "allowlist" ? value : undefined;
 }
 
@@ -52,7 +57,13 @@ function resolveBundledDiscoveryMemoKey(env: NodeJS.ProcessEnv): string {
  */
 export function readBundledDiscoveryModeMemoized(
   env: NodeJS.ProcessEnv = process.env,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): "compat" | "allowlist" | undefined {
+  if (behavior.artifactPreservingReadOnly) {
+    // Copied-state planning binds the observed bytes, not process-stable runtime metadata.
+    // Read a private SQLite snapshot so neither cached state nor source WAL coordination leaks in.
+    return readBundledDiscoveryMode(env === process.env ? {} : { env }, behavior);
+  }
   const key = resolveBundledDiscoveryMemoKey(env);
   if (memoizedBundledDiscoveryMode?.key !== key) {
     memoizedBundledDiscoveryMode = {

@@ -1,6 +1,12 @@
+import path from "node:path";
+import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 // Runner attachment facade keeps media attachment normalization/cache creation
 // available from the public runner module without exposing implementation files.
 import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
+import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { normalizeMediaFacts } from "../media/media-facts.js";
 import {
   MediaAttachmentCache,
   type MediaAttachmentCacheOptions,
@@ -24,4 +30,20 @@ export function createMediaAttachmentCache(
   options?: MediaAttachmentCacheOptions,
 ): MediaAttachmentCache {
   return new MediaAttachmentCache(attachments, options);
+}
+
+export function resolveMediaAttachmentLocalRoots(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  workspaceDir?: string;
+}): readonly string[] {
+  const workspaceDirs = normalizeMediaFacts(params.ctx.media).flatMap((fact) =>
+    fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
+  );
+  return mergeInboundPathRoots(
+    getDefaultMediaLocalRoots(),
+    workspaceDirs,
+    params.workspaceDir ? [path.resolve(params.workspaceDir)] : undefined,
+    resolveChannelInboundAttachmentRoots(params),
+  );
 }

@@ -2,7 +2,12 @@ import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { MigrationLogger, MigrationMessages } from "./state-migrations.types.js";
+import type {
+  LegacyStateMigrationStepPlan,
+  LegacyStateMigrationStepReceipt,
+  MigrationLogger,
+  MigrationMessages,
+} from "./state-migrations.types.js";
 
 type NoticeSource = { notices?: readonly string[] } | undefined;
 
@@ -52,6 +57,55 @@ export function readStartupMigrationWarning(includeSensitive = true): string | u
 
 export function mergeNotices(sources: NoticeSource[]): string[] {
   return [...new Set(sources.flatMap((source) => (source?.notices ? [...source.notices] : [])))];
+}
+
+export function createLegacyStateMigrationStepReceipt(
+  step: Omit<LegacyStateMigrationStepPlan, "outcome">,
+  result: MigrationMessages,
+): LegacyStateMigrationStepReceipt {
+  const refused = result.warnings.length > 0 && result.warningDisposition !== "recoverable";
+  return {
+    ...step,
+    outcome: refused
+      ? "refused"
+      : result.warnings.length > 0
+        ? "warning"
+        : result.changes.length > 0
+          ? "completed"
+          : "skipped",
+    changes: result.changes,
+    warnings: result.warnings,
+    ...(result.notices?.length ? { notices: result.notices } : {}),
+    ...(refused
+      ? {
+          refusal: step.refusal ?? {
+            code: "step-refused",
+            message: result.warnings.join("\n"),
+          },
+        }
+      : {}),
+  };
+}
+
+export class DoctorStateMigrationRefusalError extends Error {
+  readonly stepReceipts: readonly LegacyStateMigrationStepReceipt[];
+
+  constructor(stepReceipts: readonly LegacyStateMigrationStepReceipt[]) {
+    super(
+      "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
+    );
+    this.name = "DoctorStateMigrationRefusalError";
+    this.stepReceipts = [...stepReceipts];
+  }
+}
+
+/** Call after the writer closes its receipts, never from its per-step callback. */
+export function throwIfDoctorStateMigrationRefused(
+  stepReceipts: readonly LegacyStateMigrationStepReceipt[] = [],
+): void {
+  if (stepReceipts.some((receipt) => receipt.outcome === "refused")) {
+    throw new DoctorStateMigrationRefusalError(stepReceipts);
+  }
 }
 
 export function logStateMigrationResult(

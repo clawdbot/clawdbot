@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
@@ -12,10 +11,14 @@ const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
 export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
 type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
-type TestSelection = {
+export type VitestRuntimeTestSelection = {
   configs?: readonly string[];
   includePatterns?: readonly string[] | null;
-  cli?: { args: string[]; dir: string; env: NodeJS.ProcessEnv };
+  matchesFile?: (
+    file: string,
+    included: boolean,
+    includePatterns: readonly string[] | null | undefined,
+  ) => boolean;
 };
 
 // These tests consume built runtime artifacts. Prepare their strongest
@@ -34,16 +37,28 @@ const runtimeConsumers = [
     mode: "private-qa",
     dir: "extensions",
   },
-  ...["src/cli/acp-cli-exit.process.test.ts", "src/cli/update-dry-run-state.process.test.ts"].map(
-    (file) => ({
-      file,
-      configs: ["test/vitest/vitest.cli-process.config.ts"],
-      mode: "runtime" as const,
-      dir: "",
-    }),
-  ),
+  ...[
+    "src/cli/acp-cli-exit.process.test.ts",
+    "src/cli/update-dry-run-state.process.test.ts",
+    "src/cli/update-cli/update-command-migrated.test.ts",
+    "src/cli/update-cli/update-command-rollback.test.ts",
+    "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-service.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.cli-process.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  {
+    file: "src/infra/update-candidate-canary.integration.test.ts",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
   ...[
     "src/commands/doctor-config-preflight.process.test.ts",
+    "src/commands/doctor-config-preflight.refusal.process.test.ts",
     "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
     "src/commands/doctor-plugin-install-config.process.test.ts",
   ].map((file) => ({
@@ -95,16 +110,12 @@ function includesRuntimeConfig(configs: readonly string[] | undefined, config: s
   );
 }
 
-export function resolveVitestRuntimeCliSelections(
-  config: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-): TestSelection[] {
+export function resolveVitestRuntimeConfigScopes(config: string) {
   return runtimeConsumers.flatMap(({ configs, dir }) => {
     // Preserve the matched project scope; broad roots must not apply another
     // consumer's directory to scoped exclusions.
     const selected = configs.filter((candidate) => includesRuntimeConfig([config], candidate));
-    return selected.length ? [{ configs: selected, cli: { args, dir, env } }] : [];
+    return selected.length ? [{ configs: selected, dir }] : [];
   });
 }
 
@@ -129,27 +140,18 @@ export function mergeVitestPretestBuildModes(
 }
 
 export function resolveVitestPretestBuildMode(
-  selections: readonly TestSelection[],
+  selections: readonly VitestRuntimeTestSelection[],
 ): VitestPretestBuildMode | undefined {
   return mergeVitestPretestBuildModes(
     runtimeConsumers
       .filter(({ file, configs: consumerConfigs }) =>
-        selections.some(({ configs, includePatterns, cli }) => {
+        selections.some(({ configs, includePatterns, matchesFile }) => {
           const included = includePatterns
             ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
             : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
           // Only project the canonical consumers; config loading and test discovery
           // stay with Vitest. Include-file overrides still intersect emitted filters.
-          return cli
-            ? matchesVitestCliSelection(
-                file,
-                included ? [file] : [],
-                cli.args,
-                cli.dir,
-                cli.env,
-                includePatterns,
-              )
-            : included;
+          return matchesFile ? matchesFile(file, included, includePatterns) : included;
         }),
       )
       .map(({ mode }) => mode),
@@ -157,7 +159,7 @@ export function resolveVitestPretestBuildMode(
 }
 
 export async function prepareVitestRuntime(
-  selections: readonly TestSelection[],
+  selections: readonly VitestRuntimeTestSelection[],
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const mode = resolveVitestPretestBuildMode(selections);

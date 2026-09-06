@@ -170,11 +170,6 @@ function normalizeContextFilePath(pathValue: string): string {
   return pathValue.trim().replace(/\\/g, "/");
 }
 
-function getContextFileBasename(pathValue: string): string {
-  const normalizedPath = normalizeContextFilePath(pathValue);
-  return normalizeLowercaseStringOrEmpty(normalizedPath.split("/").pop() ?? normalizedPath);
-}
-
 function isBootstrapContextFile(pathValue: string): boolean {
   return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
 }
@@ -185,37 +180,40 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
-function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
-  return contextFiles
-    .map((file) => {
-      const basename = getContextFileBasename(file.path);
-      return {
-        file,
-        path: normalizeContextFilePath(file.path),
-        basename,
-        order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
-      };
-    })
-    .toSorted((a, b) => {
-      if (a.order !== b.order) {
-        return a.order - b.order;
-      }
-      if (a.basename !== b.basename) {
-        return a.basename.localeCompare(b.basename);
-      }
-      return a.path.localeCompare(b.path);
-    })
-    .map(({ file }) => file);
+function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]) {
+  return (
+    contextFiles
+      .map((file) => {
+        const path = normalizeContextFilePath(file.path);
+        const basename = normalizeLowercaseStringOrEmpty(path.slice(path.lastIndexOf("/") + 1));
+        return {
+          file,
+          path,
+          basename,
+          order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
+        };
+      })
+      // oxlint-disable-next-line unicorn/no-array-sort -- map creates an owned descriptor array.
+      .sort((a, b) => {
+        if (a.order !== b.order) {
+          return a.order - b.order;
+        }
+        if (a.basename !== b.basename) {
+          return a.basename.localeCompare(b.basename);
+        }
+        return a.path.localeCompare(b.path);
+      })
+  );
 }
 
-function buildProjectContextSection(files: EmbeddedContextFile[]) {
+function buildProjectContextSection(files: ReturnType<typeof prepareContextFilesForPrompt>) {
   if (files.length === 0) {
     return [];
   }
   const lines = ["# Project Context", ""];
-  const hasSoulFile = files.some((file) => getContextFileBasename(file.path) === "soul.md");
-  const hasMemoryFile = files.some((file) => getContextFileBasename(file.path) === "memory.md");
-  const hasUserFile = files.some((file) => getContextFileBasename(file.path) === "user.md");
+  const hasSoulFile = files.some((file) => file.basename === "soul.md");
+  const hasMemoryFile = files.some((file) => file.basename === "memory.md");
+  const hasUserFile = files.some((file) => file.basename === "user.md");
   lines.push("Loaded project context:");
   if (hasSoulFile) {
     lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
@@ -231,7 +229,7 @@ function buildProjectContextSection(files: EmbeddedContextFile[]) {
     );
   }
   lines.push("");
-  for (const file of files) {
+  for (const { file } of files) {
     lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
@@ -1148,12 +1146,14 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
-  const contextFiles = sortContextFilesForPrompt(
+  const preparedContextFiles = prepareContextFilesForPrompt(
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
     }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
   );
+  // Cache keys and bootstrap checks retain the original ordered file objects.
+  const contextFiles = preparedContextFiles.map(({ file }) => file);
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -1428,7 +1428,7 @@ export function buildAgentSystemPrompt(params: {
       lines.push("## Reasoning Format", reasoningHint, "");
     }
 
-    lines.push(...buildProjectContextSection(contextFiles));
+    lines.push(...buildProjectContextSection(preparedContextFiles));
 
     if (!isMinimal && silentReplyPromptMode !== "none") {
       lines.push(

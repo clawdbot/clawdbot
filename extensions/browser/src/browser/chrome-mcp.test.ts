@@ -1213,7 +1213,7 @@ describe("chrome MCP page parsing", () => {
       profileName: "chrome-live",
       targetId,
       uid: refA,
-      filePath: "/tmp/input.txt",
+      filePaths: ["/tmp/input.txt", "/tmp/attachment.txt"],
     });
     await evaluateChromeMcpScript({
       profileName: "chrome-live",
@@ -1240,7 +1240,7 @@ describe("chrome MCP page parsing", () => {
     expect(argsFor("upload_file")).toMatchObject({
       pageId: 1,
       uid: "uid-a",
-      filePath: "/tmp/input.txt",
+      filePaths: ["/tmp/input.txt", "/tmp/attachment.txt"],
     });
     expect(argsFor("evaluate_script")).toMatchObject({
       pageId: 1,

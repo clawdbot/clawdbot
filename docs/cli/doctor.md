@@ -666,9 +666,18 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - After state-directory migrations, doctor warns when enabled default Telegram or Discord accounts depend on env fallback and `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` is unavailable to the doctor process.
 - Telegram `allowFrom` username auto-resolution (`doctor --fix`) requires a resolvable Telegram token in the current command path. If token inspection is unavailable, doctor reports a warning and skips auto-resolution for that pass.
 
+## Invalid Gateway tokens
+
+Doctor flags active Gateway tokens that are blank or contain the literal string
+`undefined` or `null`. The Gateway rejects these values at startup. To replace an
+inline token, run `openclaw doctor --fix --generate-gateway-token`, then restart
+the Gateway. For a SecretRef, rotate the external secret source instead; doctor
+preserves its reference and leaves password, `none`, and trusted-proxy auth modes
+unchanged. An absent token still uses the normal startup token generation flow.
+
 ## macOS: `launchctl` env overrides
 
-If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent "unauthorized" errors.
+If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value supplies fallback credentials when local configuration does not supply one. A configured inline credential or active SecretRef takes precedence over its matching environment fallback. A stale fallback can cause persistent "unauthorized" errors when it is selected.
 
 ```bash
 launchctl getenv OPENCLAW_GATEWAY_TOKEN
