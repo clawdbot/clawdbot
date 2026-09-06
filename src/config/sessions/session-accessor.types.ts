@@ -308,6 +308,8 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   cwd?: string;
   /** How duplicate message idempotency keys are detected before append. */
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
+  /** Reject the append when the transcript changed since the caller loaded it. */
+  expectedMutationAt?: number | null;
   /** Provider/channel message payload to persist. */
   message: TMessage;
   /** Testable timestamp override for the generated transcript entry. */

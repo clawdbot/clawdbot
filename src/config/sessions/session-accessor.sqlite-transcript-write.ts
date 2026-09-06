@@ -405,6 +405,13 @@ export function appendTranscriptEventSync(
       result = err(refusal);
       return;
     }
+    if (
+      options.expectedMutationAt !== undefined &&
+      readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt !==
+        options.expectedMutationAt
+    ) {
+      throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+    }
     const appended = appendTranscriptEventInTransaction(
       database,
       resolved,
@@ -539,6 +546,13 @@ export function appendTranscriptMessageSync<TMessage>(
     if (refusal) {
       result = err(refusal);
       return;
+    }
+    if (
+      options.expectedMutationAt !== undefined &&
+      readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt !==
+        options.expectedMutationAt
+    ) {
+      throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
     }
     const appendResult = appendTranscriptMessageInTransaction(database, resolved, options);
     result = ok(

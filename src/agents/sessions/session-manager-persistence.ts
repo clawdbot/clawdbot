@@ -358,6 +358,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
       let committedMutationAt: number | null | undefined;
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, header, {
+          ...(this.transcriptMutationAt !== undefined
+            ? { expectedMutationAt: this.transcriptMutationAt }
+            : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
           },
@@ -372,6 +375,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
       let committedMutationAt: number | null | undefined;
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, entry, {
+          ...(this.transcriptMutationAt !== undefined
+            ? { expectedMutationAt: this.transcriptMutationAt }
+            : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
           },
@@ -391,6 +397,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
           ...(options?.appendIntent === "active-branch"
             ? { appendIntent: options.appendIntent }
             : {}),
+          ...(this.transcriptMutationAt !== undefined
+            ? { expectedMutationAt: this.transcriptMutationAt }
+            : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
           },
@@ -405,6 +414,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
       eventId: entry.id,
       ...(options?.config ? { config: options.config } : {}),
       ...(options?.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
+      ...(this.transcriptMutationAt !== undefined
+        ? { expectedMutationAt: this.transcriptMutationAt }
+        : {}),
       message: entry.message,
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,

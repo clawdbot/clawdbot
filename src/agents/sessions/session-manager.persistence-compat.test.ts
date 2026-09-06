@@ -349,6 +349,74 @@ describe("SessionManager persistence compatibility", () => {
     ).toEqual([scope.sessionId, "base", "temporary", "concurrent"]);
   });
 
+  it("rejects an append after another writer advances the transcript fence", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-stale-append-fence-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-stale-append-fence-session",
+      sessionKey: "agent:main:dashboard:sqlite-stale-append-fence",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base",
+      message: { role: "user", content: "question" },
+    });
+    const manager = SessionManager.open(scope, dir);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "concurrent",
+      message: { role: "user", content: "concurrent" },
+    });
+
+    expect(() => manager.appendMessage(buildAssistantMessage("temporary"))).toThrow(
+      "SQLite transcript changed while preparing rewrite",
+    );
+    expect(manager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "question" },
+    ]);
+    expect(
+      (await loadTranscriptEvents(scope)).map((event) =>
+        event && typeof event === "object" && "id" in event ? event.id : undefined,
+      ),
+    ).toEqual([scope.sessionId, "base", "concurrent"]);
+  });
+
+  it("rejects a raw-event append after another writer advances the transcript fence", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-stale-event-fence-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-stale-event-fence-session",
+      sessionKey: "agent:main:dashboard:sqlite-stale-event-fence",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base",
+      message: { role: "user", content: "question" },
+    });
+    const manager = SessionManager.open(scope, dir);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "concurrent",
+      message: { role: "user", content: "concurrent" },
+    });
+
+    expect(() => manager.appendCustomEntry("stale-metadata", { stale: true })).toThrow(
+      "SQLite transcript changed while preparing rewrite",
+    );
+    expect(manager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "question" },
+    ]);
+    expect(
+      (await loadTranscriptEvents(scope)).map((event) =>
+        event && typeof event === "object" && "id" in event ? event.id : undefined,
+      ),
+    ).toEqual([scope.sessionId, "base", "concurrent"]);
+  });
+
   it("retains the append transaction fence when another write starts after commit", async () => {
     const dir = tempDirs.make("openclaw-session-manager-append-fence-");
     const scope = {
