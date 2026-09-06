@@ -25,6 +25,12 @@ type PublicSurfaceLocation = {
   boundaryRoot: string;
 };
 
+type PluginPublicArtifactParams = {
+  pluginRoot: string;
+  artifactBasename: string;
+  origin?: "bundled" | "global";
+};
+
 function createResolutionKey(params: {
   dirName: string;
   artifactBasename: string;
@@ -137,11 +143,23 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
-export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
-  pluginRoot: string;
-  artifactBasename: string;
-  origin?: "bundled" | "global";
-}): T {
+export function loadPluginPublicArtifactModuleSync<T extends object>(
+  params: PluginPublicArtifactParams,
+): T {
+  const mod = loadOptionalPluginPublicArtifactModuleSync<T>(params);
+  if (!mod) {
+    throw new MissingPublicSurfaceError(
+      `Unable to resolve plugin public surface ${params.pluginRoot}/${params.artifactBasename}`,
+    );
+  }
+  return mod;
+}
+
+/** Absence is optional; errors from an existing artifact must still propagate. */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
+export function loadOptionalPluginPublicArtifactModuleSync<T extends object>(
+  params: PluginPublicArtifactParams,
+): T | null {
   const root = getPluginCacheRoot(params.pluginRoot);
   const key = `public:${params.artifactBasename}`;
   let location = root.artifacts.get(key);
@@ -151,9 +169,7 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
     root.artifacts.set(key, location);
   }
   if (!location) {
-    throw new MissingPublicSurfaceError(
-      `Unable to resolve plugin public surface ${params.pluginRoot}/${params.artifactBasename}`,
-    );
+    return null;
   }
   return loadValidatedPublicSurfaceModule({
     ...location,

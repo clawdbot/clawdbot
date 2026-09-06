@@ -1,6 +1,14 @@
 // Moonshot policy module exposes model-specific thinking controls before runtime registration.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
-import { isNativeMoonshotBaseUrl } from "./provider-catalog.js";
+
+export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
+
+export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+  return [MOONSHOT_BASE_URL, MOONSHOT_CN_BASE_URL].some(
+    (official) => baseUrl === official || baseUrl === `${official}/`,
+  );
+}
 
 export const KIMI_K2_7_CODE_MODEL_ID = "kimi-k2.7-code";
 export const KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID = "kimi-k2.7-code-highspeed";

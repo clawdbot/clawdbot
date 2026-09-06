@@ -19,11 +19,11 @@ import type {
   ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
 import {
-  loadBundledPluginPublicArtifactModuleSync,
-  loadPluginPublicArtifactModuleSync,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+  loadOptionalPluginPublicArtifactModuleSync,
 } from "./public-surface-loader.js";
 
-const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
+const PROVIDER_POLICY_ARTIFACT = "provider-policy-api.js";
 
 type ProviderProjectConfiguredModelRowContext = {
   config?: OpenClawConfig;
@@ -120,28 +120,6 @@ function extractBundledProviderPolicySurface(
   return Object.keys(surface).length > 0 ? surface : null;
 }
 
-function resolveProviderPolicySurface<T extends ProviderPolicySurface>(params: {
-  loadModule: (artifactBasename: string) => Record<string, unknown>;
-  missingSurfacePrefix: string;
-  extractSurface: (mod: Record<string, unknown>) => T | null;
-}): T | null {
-  for (const artifactBasename of PROVIDER_POLICY_ARTIFACT_CANDIDATES) {
-    try {
-      const mod = params.loadModule(artifactBasename);
-      const surface = params.extractSurface(mod);
-      if (surface) {
-        return surface;
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith(params.missingSurfacePrefix)) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return null;
-}
-
 /** Loads policy hooks directly by canonical bundled plugin id. */
 export function resolveDirectBundledProviderPolicySurface(
   pluginId: string,
@@ -157,15 +135,11 @@ export function resolveDirectBundledProviderPolicySurface(
   ) {
     return null;
   }
-  return resolveProviderPolicySurface({
-    loadModule: (artifactBasename) =>
-      loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: pluginId,
-        artifactBasename,
-      }),
-    missingSurfacePrefix: "Unable to resolve bundled plugin public surface ",
-    extractSurface: extractBundledProviderPolicySurface,
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    dirName: pluginId,
+    artifactCandidates: [PROVIDER_POLICY_ARTIFACT],
   });
+  return mod ? extractBundledProviderPolicySurface(mod) : null;
 }
 
 /** Loads policy hooks from a host-verified official external plugin install. */
@@ -177,13 +151,9 @@ export function resolveTrustedExternalProviderPolicySurface(params: {
   if (params.trustedOfficialInstall !== true) {
     return null;
   }
-  return resolveProviderPolicySurface({
-    loadModule: (artifactBasename) =>
-      loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        pluginRoot: params.pluginRoot,
-        artifactBasename,
-      }),
-    missingSurfacePrefix: "Unable to resolve plugin public surface ",
-    extractSurface: extractProviderPolicySurface,
+  const mod = loadOptionalPluginPublicArtifactModuleSync<Record<string, unknown>>({
+    pluginRoot: params.pluginRoot,
+    artifactBasename: PROVIDER_POLICY_ARTIFACT,
   });
+  return mod ? extractProviderPolicySurface(mod) : null;
 }
