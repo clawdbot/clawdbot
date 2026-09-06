@@ -215,6 +215,10 @@ The bundled `google` image-generation provider defaults to
 `google/gemini-3.1-flash-image`.
 
 - Also supports `google/gemini-3-pro-image`
+- Also supports `google/gemini-3.1-flash-lite-image`, the fastest and cheapest
+  tier. Lite is a fixed 1K-only model: explicit `2K`/`4K` resolutions and
+  size-derived larger tiers clamp down to `1K` instead of being forwarded to
+  Google
 - Generate: up to 4 images per request
 - Edit mode: enabled, up to 5 input images
 - Geometry controls: `size`, `aspectRatio`, and `resolution`
@@ -234,6 +238,9 @@ To use Google as the default image provider:
   },
 }
 ```
+
+To default to the cheapest 1K tier instead, set the primary to
+`google/gemini-3.1-flash-lite-image`.
 
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.

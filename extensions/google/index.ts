@@ -74,7 +74,7 @@ function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
     id: "google",
     label: "Google",
     defaultModel: "gemini-3.1-flash-image",
-    models: ["gemini-3.1-flash-image", "gemini-3-pro-image"],
+    models: ["gemini-3.1-flash-lite-image", "gemini-3.1-flash-image", "gemini-3-pro-image"],
     capabilities: {
       generate: {
         maxCount: 4,
@@ -94,6 +94,9 @@ function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
         sizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
         aspectRatios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
         resolutions: ["1K", "2K", "4K"],
+        // Lite is a fixed 1K tier; clamp explicit/inferred 2K/4K to 1K so the
+        // runtime never forwards an unsupported imageSize to Google's API.
+        resolutionsByModel: { "gemini-3.1-flash-lite-image": ["1K"] },
       },
     },
     generateImage: async (req) => (await loadGoogleImageGenerationProvider()).generateImage(req),

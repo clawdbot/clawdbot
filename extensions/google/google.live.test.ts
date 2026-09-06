@@ -17,6 +17,7 @@ import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-c
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -541,5 +542,22 @@ describeLive("google plugin live", () => {
       expect(Array.isArray(result?.citations)).toBe(true);
       expect((result!.citations as unknown[]).length).toBeGreaterThan(0);
     });
+  }, 120_000);
+
+  it("generates an image through the 1K-only Lite model", async () => {
+    const provider = buildGoogleImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-lite-image",
+      prompt: "a simple red circle on a white background",
+      cfg: {},
+    });
+
+    expect(result.images.length).toBeGreaterThan(0);
+    expect(result.model).toBe("gemini-3.1-flash-lite-image");
+    const image = result.images[0];
+    expect(image).toBeDefined();
+    expect(image!.buffer.length).toBeGreaterThan(0);
+    expect(image!.mimeType).toMatch(/^image\//u);
   }, 120_000);
 });
