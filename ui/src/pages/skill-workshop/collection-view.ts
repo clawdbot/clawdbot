@@ -1,16 +1,17 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
 
-// Skills and drafts are untrusted preview material. Show complete documents,
+// Skills and drafts are untrusted preview material. Show complete instructions,
 // but keep remote images as links to avoid fetching them during review.
 export function renderSkillDocument(body: string) {
   return html`<article class="sidebar-markdown">
     ${unsafeHTML(
-      toSanitizedMarkdownHtml(body, {
+      toSanitizedMarkdownHtml(stripFrontmatterBlock(body), {
         mode: "document",
         codeBlockChrome: "none",
         remoteImages: false,

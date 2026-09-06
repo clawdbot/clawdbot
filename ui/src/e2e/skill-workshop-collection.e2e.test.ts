@@ -50,6 +50,9 @@ describe("Workshop current collection", () => {
         await page
           .getByText("Current instructions after collection review.", { exact: true })
           .waitFor();
+        expect(await page.getByRole("heading", { name: /^name:/ }).count()).toBe(0);
+        expect(await page.getByRole("cell", { name: "Stop", exact: true }).count()).toBe(1);
+        await page.getByText("End of current instructions.", { exact: true }).waitFor();
         expect(await gateway.getRequests("skills.proposals.inspect")).toHaveLength(0);
         await page
           .getByRole("searchbox", { name: "Search installed skills" })
@@ -71,6 +74,7 @@ describe("Workshop current collection", () => {
         await page.locator(".sw-row").click();
         await page.getByText("Improve release review", { exact: true }).first().waitFor();
         await page.getByText("Pending instructions waiting for review.", { exact: true }).waitFor();
+        expect(await page.getByRole("heading", { name: /^name:/ }).count()).toBe(0);
         if (width === 390) {
           await page
             .locator(".content--skill-workshop")
@@ -94,6 +98,7 @@ describe("Workshop current collection", () => {
         }
         await page.locator("#skill-workshop-mode-tab-history").click();
         await expect.poll(() => page.locator(".sw-row").count()).toBe(31);
+        expect(await page.getByRole("heading", { name: /^name:/ }).count()).toBe(0);
         expect(await page.locator("#skill-workshop-mode-tab-history").textContent()).toContain(
           "31",
         );

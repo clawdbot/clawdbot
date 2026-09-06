@@ -80,7 +80,7 @@ export function createSkillWorkshopCollectionFixture() {
           match: { name: skill.name },
           response: {
             ...skill,
-            content: `# ${skill.name}\n\nCurrent instructions after collection review.\n\n## Verify\n\n1. Check the current result.\n2. Report what changed.\n\n| Outcome | Action |\n| --- | --- |\n| Ready | Continue |\n| Failed | Stop |\n`,
+            content: `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\n# ${skill.name}\n\nCurrent instructions after collection review.\n\n## Verify\n\n1. Check the current result.\n2. Report what changed.\n\n| Outcome | Action |\n| --- | --- |\n| Ready | Continue |\n| Failed | Stop |\n\nEnd of current instructions.\n`,
           },
         })),
       },
@@ -95,7 +95,7 @@ export function createSkillWorkshopCollectionFixture() {
               target: { skillKey: proposal.skillKey, skillName: proposal.skillName },
             },
             revisionHash: "b".repeat(64),
-            content: `# ${proposal.title}\n\n${proposal.status === "pending" ? "Pending instructions waiting for review." : "Historical draft instructions."}\n`,
+            content: `---\nname: ${proposal.skillName}\ndescription: ${proposal.description}\n---\n\n# ${proposal.title}\n\n${proposal.status === "pending" ? "Pending instructions waiting for review." : "Historical draft instructions."}\n`,
             supportFiles: [
               { path: "references/procedure.md", content: "Retained supporting evidence." },
             ],
