@@ -8,7 +8,8 @@ import {
   restoreRegisteredEmbeddingProviders,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createEmbeddingProvider } from "./embeddings.js";
+import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
+import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 
 type CapturedRequest = {
   method: string | undefined;
@@ -34,7 +35,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
-async function startEmbeddingServer(): Promise<TestServer> {
+async function startEmbeddingServer(options?: { itemLimit?: number }): Promise<TestServer> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -48,13 +49,32 @@ async function startEmbeddingServer(): Promise<TestServer> {
         });
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
+        if (options?.itemLimit && texts.length > options.itemLimit) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: {
+                message: `batch size is invalid, it should not be larger than ${options.itemLimit}`,
+                type: "InvalidParameter",
+                code: "InvalidParameter",
+              },
+            }),
+          );
+          return;
+        }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
             object: "list",
             data: texts.map((text, index) => ({
               object: "embedding",
-              embedding: [String(text).length, index + 0.5, 3],
+              embedding: [
+                String(text).startsWith("item-")
+                  ? Number.parseInt(String(text).slice(5), 10)
+                  : String(text).length,
+                index + 0.5,
+                3,
+              ],
               index,
             })),
             model: body.model,
@@ -215,6 +235,34 @@ describe("memory-core generic embedding provider contract", () => {
       dimensions: 3,
       input_type: "document",
     });
+  });
+
+  it("honors a transported provider item cap through the production manager retry path", async () => {
+    const server = await startEmbeddingServer({ itemLimit: 10 });
+    const result = await createEmbeddingProvider(
+      createMemoryEmbeddingOptions({ baseUrl: server.baseUrl }),
+    );
+    const provider = result.provider;
+    expect(provider).not.toBeNull();
+
+    const manager = Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
+      provider,
+      resolveEmbeddingTimeout: () => 60_000,
+      waitForEmbeddingRetry: async () => {},
+      markLocalEmbeddingProviderDegraded: () => {},
+      withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) =>
+        await run(),
+    }) as {
+      embedBatchWithRetry: (inputs: string[]) => Promise<number[][]>;
+    };
+    const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
+
+    await expect(manager.embedBatchWithRetry(items)).resolves.toEqual(
+      items.map((_, index) => [index, (index % 10) + 0.5, 3]),
+    );
+    expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual([
+      33, 10, 10, 10, 3,
+    ]);
   });
 
   it("does not make generic embedding providers memory auto-selection candidates", async () => {
