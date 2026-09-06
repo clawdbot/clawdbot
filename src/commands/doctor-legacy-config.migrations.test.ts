@@ -537,6 +537,60 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("restricts promotion to named-account keys when named accounts exist", () => {
+    // Mirrors the googlechat declaration shape: credentials are movable for
+    // single-account promotion but excluded from named-account promotion,
+    // because the channel resolver does not share them from accounts.default.
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "named-restricted-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "named-restricted-demo",
+              label: "Named Restricted Demo",
+            }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+              singleAccountKeysToMove: ["credential", "endpoint"],
+              namedAccountPromotionKeys: ["endpoint", "dmPolicy"],
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "named-restricted-demo": {
+          enabled: true,
+          credential: "root-cred",
+          endpoint: "https://example.com/hook",
+          dmPolicy: "allowlist",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["named-restricted-demo"] as
+      | {
+          credential?: string;
+          endpoint?: string;
+          dmPolicy?: string;
+          accounts?: Record<string, Record<string, unknown>>;
+        }
+      | undefined;
+    expect(channel?.credential).toBe("root-cred");
+    expect(channel?.endpoint).toBeUndefined();
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      endpoint: "https://example.com/hook",
+      dmPolicy: "allowlist",
+    });
+    expect(channel?.accounts?.work?.credential).toBeUndefined();
+  });
+
   it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
     const config = legacyConfig({
       channels: {
