@@ -497,6 +497,7 @@ struct OnboardingAISetupView: View {
                 }
                 Text("Connect an AI provider")
                     .font(.headline)
+                // Localization: the sign-in/API-key flow belongs to the selected provider, not OpenClaw.
                 Text(
                     "Choose any supported provider. OpenClaw asks before installing a provider plugin, " +
                         "then continues into its own sign-in or API-key flow and verifies a real reply.")
