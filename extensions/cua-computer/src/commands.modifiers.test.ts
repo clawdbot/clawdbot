@@ -4,6 +4,7 @@ import {
   CUA_DRIVER_CONTRACT_FIXTURES,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
+import { ClickButton } from "./driver-client.js";
 
 const platforms = [
   { platform: "darwin", command: "cmd" },
@@ -132,7 +133,6 @@ describe("cua-computer platform modifiers", () => {
   it.each(
     platforms.flatMap(({ platform }) =>
       [
-        { action: "left_click", scope: "desktop" },
         { action: "scroll", scope: "desktop" },
         { action: "scroll", scope: "window" },
       ].map((input) => Object.assign({ platform }, input)),
@@ -289,6 +289,72 @@ describe("cua-computer platform modifiers", () => {
         { fromX: 10, fromY: 15, toX: 20, toY: 30 },
         undefined,
       );
+    } finally {
+      await computer.close("completion");
+    }
+  });
+
+  it.each(platforms)(
+    "routes a modifier-held desktop click through the raw click tool on $platform",
+    async ({ platform, command }) => {
+      const native = driver();
+      const computer = await execution(native.session, platform);
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+          displayFrameId: string;
+          width: number;
+        };
+        await computer.act(
+          JSON.stringify({
+            action: "left_click",
+            displayFrameId: screen.displayFrameId,
+            refWidth: screen.width,
+            x: 20,
+            y: 30,
+            modifiers: "Command+Shift",
+          }),
+        );
+        expect(native.callTool).toHaveBeenLastCalledWith(
+          "click",
+          {
+            x: 20,
+            y: 30,
+            button: "left",
+            count: 1,
+            modifier: [command, "shift"],
+            target: { kind: "desktop", display_id: "primary" },
+          },
+          undefined,
+        );
+        expect(native.click).not.toHaveBeenCalled();
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
+  it("omits the raw click tool for an unmodified desktop click", async () => {
+    const native = driver();
+    const computer = await execution(native.session, "linux");
+    try {
+      const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+        displayFrameId: string;
+        width: number;
+      };
+      await computer.act(
+        JSON.stringify({
+          action: "left_click",
+          displayFrameId: screen.displayFrameId,
+          refWidth: screen.width,
+          x: 20,
+          y: 30,
+        }),
+      );
+      expect(native.click).toHaveBeenLastCalledWith(
+        { x: 20, y: 30, button: ClickButton.Left, count: 1 },
+        undefined,
+      );
+      expect(native.callTool).not.toHaveBeenCalled();
     } finally {
       await computer.close("completion");
     }

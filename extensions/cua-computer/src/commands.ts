@@ -223,19 +223,12 @@ function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
 }
 
 function clickArgs(
-  platform: NodeJS.Platform,
   frame: CuaLastFrame,
   params: CuaComputerActParams,
   button: ClickButton,
   count: 1 | 2 | 3,
 ) {
   const point = scalePoint(frame, params.x, params.y, params.action);
-  const modifiers = normalizeModifiers(params.modifiers, platform);
-  if (modifiers.length > 0) {
-    throw new Error(
-      "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
-    );
-  }
   return {
     ...point,
     button,
@@ -356,8 +349,32 @@ async function handleDesktopAct(
               : desktopParams.action === "triple_click"
                 ? 3
                 : 1;
+          const modifier = normalizeModifiers(desktopParams.modifiers, platform);
+          if (modifier.length > 0) {
+            // The typed ClickInput has no modifier field (SDK 0.22.0). The raw
+            // `click` tool accepts desktop target + modifier and, on X11, holds
+            // the modifier via XTest for the duration of the click. Unsupported
+            // environments (native Wayland) return a structured refusal.
+            const point = scalePoint(frame, desktopParams.x, desktopParams.y, desktopParams.action);
+            assertToolSuccess(
+              await driver.callTool(
+                "click",
+                {
+                  x: point.x,
+                  y: point.y,
+                  button: ["left", "right", "middle"][button],
+                  count,
+                  modifier,
+                  target: { kind: "desktop", display_id: "primary" },
+                },
+                signal,
+              ),
+              "click",
+            );
+            break;
+          }
           assertToolSuccess(
-            await driver.click(clickArgs(platform, frame, desktopParams, button, count), signal),
+            await driver.click(clickArgs(frame, desktopParams, button, count), signal),
             "click",
           );
           break;
