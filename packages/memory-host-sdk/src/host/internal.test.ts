@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSkippedExtraMemoryPathRoots } from "./extra-path-diagnostics.js";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -648,5 +649,76 @@ describe("memory host SDK package internals", () => {
     expect(
       expectDefined(chunks[chunks.length - 1], "chunks[chunks.length - 1] test invariant").endLine,
     ).toBe(13);
+  });
+});
+
+describe("resolveSkippedExtraMemoryPathRoots", () => {
+  const getTmpDir = setupTempDirLifecycle("symlink-roots-");
+
+  it.skipIf(process.platform === "win32").each([
+    { label: "dir", type: undefined as const },
+    { label: "file root", type: "file" as const },
+  ])("surfaces a symlink $label configured as an extra path root", async ({ type }) => {
+    const tmpDir = getTmpDir();
+    const vaultDir = path.join(tmpDir, "vault");
+    const linkDir = path.join(tmpDir, "obsidian");
+    fsSync.mkdirSync(vaultDir, { recursive: true });
+    fsSync.writeFileSync(path.join(vaultDir, "note.md"), "# Vault note");
+    if (type === "file") {
+      const targetFile = path.join(vaultDir, "note.md");
+      fsSync.symlinkSync(targetFile, linkDir);
+    } else {
+      fsSync.symlinkSync(vaultDir, linkDir, "dir");
+    }
+
+    const skipped = await resolveSkippedExtraMemoryPathRoots(tmpDir, [{ path: "obsidian" }]);
+
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({ path: linkDir });
+  });
+
+  it("does not surface a regular directory configured as an extra path root", async () => {
+    const tmpDir = getTmpDir();
+    const extraDir = path.join(tmpDir, "extra");
+    fsSync.mkdirSync(extraDir, { recursive: true });
+    fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Extra note");
+
+    const skipped = await resolveSkippedExtraMemoryPathRoots(tmpDir, [{ path: "extra" }]);
+
+    expect(skipped).toEqual([]);
+  });
+
+  it("does not surface a missing extra path root", async () => {
+    const tmpDir = getTmpDir();
+
+    const skipped = await resolveSkippedExtraMemoryPathRoots(tmpDir, [{ path: "does-not-exist" }]);
+
+    expect(skipped).toEqual([]);
+  });
+
+  it("surfaces only the symlink roots among a mixed batch", async () => {
+    const tmpDir = getTmpDir();
+    const realDir = path.join(tmpDir, "real");
+    const symlinkDir = path.join(tmpDir, "symlinked");
+    const targetDir = path.join(tmpDir, "target");
+    fsSync.mkdirSync(realDir, { recursive: true });
+    fsSync.mkdirSync(targetDir, { recursive: true });
+    fsSync.writeFileSync(path.join(realDir, "a.md"), "a");
+    fsSync.writeFileSync(path.join(targetDir, "b.md"), "b");
+    if (process.platform !== "win32") {
+      fsSync.symlinkSync(targetDir, symlinkDir, "dir");
+    }
+
+    const skipped = await resolveSkippedExtraMemoryPathRoots(tmpDir, [
+      { path: "real" },
+      { path: "symlinked" },
+    ]);
+
+    if (process.platform === "win32") {
+      expect(skipped).toEqual([]);
+    } else {
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]).toMatchObject({ path: symlinkDir });
+    }
   });
 });

@@ -1,8 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 // Memory Core tests cover manager source state plugin behavior.
 import { DatabaseSync } from "node:sqlite";
 import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  inspectMemorySourceState,
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
@@ -71,10 +75,73 @@ describe("memory source state", () => {
   );
 
   it.each([
-    { source: "memory" as const, path: "memory/one.md", expected: "hash-1" },
-    { source: "sessions" as const, path: "memory/one.md", expected: "session-hash" },
-    { source: "sessions" as const, path: "memory/missing.md", expected: undefined },
-  ])("reads the current $source row for $path without a snapshot", ({ source, path, expected }) => {
-    expect(resolveMemorySourceExistingHash({ db, source, path })).toBe(expected);
+    { source: "memory" as const, filePath: "memory/one.md", expected: "hash-1" },
+    { source: "sessions" as const, filePath: "memory/one.md", expected: "session-hash" },
+    { source: "sessions" as const, filePath: "memory/missing.md", expected: undefined },
+  ])(
+    "reads the current $source row for $filePath without a snapshot",
+    ({ source, filePath, expected }) => {
+      expect(resolveMemorySourceExistingHash({ db, source, path: filePath })).toBe(expected);
+    },
+  );
+});
+
+describe("inspectMemorySourceState symlink diagnostics", () => {
+  let tmpRoot: string;
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "memory-source-symlink-"));
+    db = new DatabaseSync(":memory:");
+    ensureMemoryIndexSchema({
+      db,
+      cacheEnabled: false,
+      ftsEnabled: false,
+      ftsTokenizer: "unicode61",
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reports a symlink extra-path root as a skipped symlink root issue",
+    async () => {
+      const vaultDir = path.join(tmpRoot, "vault");
+      const linkDir = path.join(tmpRoot, "obsidian");
+      fs.mkdirSync(vaultDir, { recursive: true });
+      fs.writeFileSync(path.join(vaultDir, "note.md"), "# Vault note");
+      fs.symlinkSync(vaultDir, linkDir, "dir");
+
+      const result = await inspectMemorySourceState({
+        db,
+        workspaceDir: tmpRoot,
+        settings: { extraPaths: [{ path: "obsidian" }], multimodal: undefined },
+        concurrency: 1,
+      });
+
+      expect(result.issues).toEqual(
+        expect.arrayContaining([expect.stringContaining(`symlink root: ${linkDir}`)]),
+      );
+      expect(result.eligible).toBe(0);
+    },
+  );
+
+  it("does not report a symlink issue for a regular directory extra-path root", async () => {
+    const extraDir = path.join(tmpRoot, "extra");
+    fs.mkdirSync(extraDir, { recursive: true });
+    fs.writeFileSync(path.join(extraDir, "note.md"), "# Extra note");
+
+    const result = await inspectMemorySourceState({
+      db,
+      workspaceDir: tmpRoot,
+      settings: { extraPaths: [{ path: "extra" }], multimodal: undefined },
+      concurrency: 1,
+    });
+
+    expect(result.issues).not.toContain(expect.stringContaining("symlink root"));
+    expect(result.eligible).toBe(1);
   });
 });

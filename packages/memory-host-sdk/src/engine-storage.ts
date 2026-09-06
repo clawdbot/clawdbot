@@ -27,6 +27,7 @@ export {
   type NormalizedExtraMemoryPath,
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
+export { resolveSkippedExtraMemoryPathRoots } from "./host/extra-path-diagnostics.js";
 export { isTransientMemoryReadError, retryTransientMemoryRead } from "./host/read-retry.js";
 export {
   buildMemoryReadResult,

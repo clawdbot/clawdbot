@@ -4,6 +4,7 @@ import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core
 import {
   buildFileEntry,
   listMemoryFiles,
+  resolveSkippedExtraMemoryPathRoots,
   runWithConcurrency,
   type MemoryFileEntry,
   type MemorySource,
@@ -75,11 +76,24 @@ export async function inspectMemorySourceState(params: {
 }): Promise<MemorySourceInspection> {
   const entries = await resolveMemorySourceFileEntries(params);
   const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
+  const skippedSymlinkRoots = await resolveSkippedExtraMemoryPathRoots(
+    params.workspaceDir,
+    params.settings.extraPaths,
+  );
+  const issues: string[] = [];
+  if (entries.length === 0) {
+    issues.push("no eligible memory files found");
+  }
+  for (const root of skippedSymlinkRoots) {
+    issues.push(
+      `symlink root: ${root.path} — configure the canonical absolute directory instead; symlink roots are skipped to preserve the filesystem trust boundary`,
+    );
+  }
   return {
     source: "memory",
     dirty: hasMemorySourceDrift({ entries, indexedRows }),
     eligible: entries.length,
-    issues: entries.length === 0 ? ["no eligible memory files found"] : [],
+    issues,
   };
 }
 
