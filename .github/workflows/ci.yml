@@ -4770,6 +4770,14 @@ jobs:
           fi
           swift test "${openclawkit_test_args[@]}"
 
+      - name: Swabble tests
+        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
+          trap 'rm -rf "$swabble_scratch"' EXIT
+          swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --no-parallel
+
       - name: Swift test
         id: swift-test
         if: matrix.phase == 'tests'
