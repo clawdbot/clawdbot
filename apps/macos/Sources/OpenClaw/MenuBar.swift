@@ -130,7 +130,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
             }
-            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
+            DashboardGatewayCommands()
         }
     }
 
@@ -352,6 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
+            GatewaysMainMenu.shared.install()
             BackgroundSessionNotifications.shared.start()
             NodePairingApprovalPrompter.shared.start()
             DevicePairingApprovalPrompter.shared.start()

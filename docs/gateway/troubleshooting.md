@@ -45,6 +45,20 @@ Look for:
 - `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` under Channels: the channel config still exists, but plugin registration failed before the channel could load.
 - Provider 401s after re-auth: `openclaw doctor --fix` checks for stale per-agent OAuth auth shadows and removes old copies so all agents resolve the current shared profile.
 
+## Prepared model runtime publication timeout
+
+If startup reports `prepared model runtime publication (...) timed out`, the
+parenthesized detail identifies the pending stage and, during workspace
+preparation, its agent. Collect that error together with
+`openclaw gateway status --deep` and the startup logs.
+
+An `ambient credentials` stage can be waiting for a plugin's external login
+check even when the Gateway process uses little CPU. For Claude CLI, run
+`claude auth status --json` as the Gateway user with the same environment.
+Startup shares this check across workspaces; a large roster should not launch
+one native-login subprocess per agent. A successful `/health` response alone
+does not establish that model runtime publication completed.
+
 ## Split brain installs and newer config guard
 
 Use when a gateway service unexpectedly stops after an update, or logs show one `openclaw` binary is older than the version that last wrote `openclaw.json`.

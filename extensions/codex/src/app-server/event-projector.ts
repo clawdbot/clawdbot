@@ -1,7 +1,7 @@
-// Codex plugin module implements event projector behavior.
 import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
+  projectProgressCardChannelUpdate,
   type AgentMessage,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -270,9 +270,11 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   /** Projects a successful OpenClaw progress_card call through the native plan stream. */
   async recordDynamicProgressCardUpdate(params: unknown): Promise<void> {
-    if (isJsonObject(params)) {
+    const update = projectProgressCardChannelUpdate(params);
+    if (update) {
       const projected: JsonObject = {
-        plan: Array.isArray(params.plan) ? params.plan : [],
+        plan: update.steps,
+        ...(update.explanation ? { explanation: update.explanation } : {}),
       };
       await this.reasoningProjection.handleTurnPlanUpdated(projected, "openclaw");
     }

@@ -16,6 +16,7 @@ import {
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
@@ -2256,14 +2257,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "stop",
             timestamp: 1,
           },
@@ -2341,14 +2335,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           api: model.api,
           provider: model.provider,
           model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "error",
           errorMessage: "Cannot convert undefined or null to object",
           timestamp: 1,

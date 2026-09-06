@@ -329,42 +329,114 @@ describe("managed llama-server", () => {
     expect(reloads).toBe(0);
   });
 
-  it("writes a 2048-token physical batch in the combined preset", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-preset-"));
-    const presetPath = path.join(tempRoot, "models.ini");
-    const asset = selectLlamaServerAsset("darwin", "arm64");
-    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
-      command: path.join(tempRoot, "llama-server"),
-      asset,
-    });
-    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
-      installDir: tempRoot,
-      command: path.join(tempRoot, "llama-server"),
-      presetPath,
-    });
+  it.each([
+    { route: "args", mode: "preserve", newline: "\n" },
+    { route: "env", mode: "preserve", newline: "\r\n" },
+    { route: "args", mode: "configure", newline: "\r\n" },
+    { route: "env", mode: "configure", newline: "\n" },
+  ] as const)(
+    "preserves configured preset settings for $route/$mode",
+    async ({ route, mode, newline }) => {
+      const root = tempDirs.make("llama-server-owned-settings-");
+      const presetPath = path.join(root, "custom.ini");
+      const global = `version = 1${newline}; operator defaults${newline}[*]${newline}ctx-size = 16384${newline}${newline}`;
+      const sibling = `[sibling] ; another model${newline}model = /models/sibling.gguf${newline}n-gpu-layers = 7${newline}${newline}`;
+      const chat = `[chat]${newline}model = /models/chat.gguf${newline}c = 4096 ; selected context${newline}n-gpu-layers = 12${newline}${newline}`;
+      await fs.writeFile(
+        presetPath,
+        global +
+          "[stale\nmultiline]\nmodel = /models/stale.gguf\n\n".replaceAll("\n", newline) +
+          sibling +
+          chat +
+          `[embeddinggemma-300m-qat-q8_0]${newline}; keep\u2028model = /models/comment.gguf${newline}model = /models/old.gguf ; embedding path${newline}pooling = mean${newline}ubatch-size = 256${newline}`,
+      );
 
-    try {
       await prepareManagedLlamaServer({
+        localService: {
+          command: path.join(root, "custom-server"),
+          cwd: root,
+          ...(route === "args"
+            ? { args: ["--models-preset", "custom.ini"] }
+            : { env: { LLAMA_ARG_MODELS_PRESET: "custom.ini" } }),
+        },
+        port: 19436,
+        configuredChatModelIds: ["chat", "sibling"],
+        chatModel:
+          mode === "preserve"
+            ? { mode }
+            : { mode, id: "chat", path: "/models/chat.gguf", contextSize: 8192 },
+        embeddingModelPath: "/models/new.gguf",
+      });
+
+      const updated = await fs.readFile(presetPath, "utf8");
+      expect(updated.startsWith(global)).toBe(true);
+      expect(updated).toContain(sibling.trimEnd());
+      expect(updated).not.toContain("[stale");
+      expect(updated.indexOf("[chat]")).toBeLessThan(updated.indexOf("[sibling]"));
+      expect(updated).toContain(`n-gpu-layers = 12${newline}`);
+      expect(updated).toContain(`model = /models/new.gguf ; embedding path${newline}`);
+      expect(updated).toContain(`pooling = mean${newline}`);
+      expect(updated).toContain(`; keep\u2028model = /models/comment.gguf${newline}`);
+      expect(updated).toContain(`ubatch-size = 256${newline}`);
+      if (mode === "preserve") {
+        expect(updated).toContain(chat);
+      } else {
+        expect(updated).toContain(`ctx-size = 8192 ; selected context${newline}`);
+        expect(updated).not.toContain("c = 4096");
+      }
+      expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["q4_k_m", "release-Q4_K_M"])(
+    "updates the native model's effective %s preset alias",
+    async (tag) => {
+      const root = tempDirs.make("llama-server-preset-alias-");
+      const presetPath = path.join(root, "custom.ini");
+      const active = `[chat:${tag}]\nmodel = /models/chat.gguf\nc = 4096\nn-gpu-layers = 12\n`;
+      const inactive = "[chat:Q4_K_M]\nmodel = /models/inactive.gguf\n";
+      await fs.writeFile(presetPath, `version = 1\n${active}${inactive}`);
+      await prepareManagedLlamaServer({
+        localService: {
+          command: path.join(root, "custom-server"),
+          args: ["--models-preset", presetPath],
+        },
+        port: 19436,
+        configuredChatModelIds: ["chat:Q4_K_M"],
         chatModel: {
           mode: "configure",
-          id: "chat-model",
+          id: "chat:Q4_K_M",
           path: "/models/chat.gguf",
           contextSize: 8192,
-          maxTokens: 2048,
         },
-        embeddingModelIsDefault: true,
         embeddingModelPath: "/models/embedding.gguf",
-        port: 19_432,
       });
-      const preset = await fs.readFile(presetPath, "utf8");
-      expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
-      expect(preset).toContain(
-        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
-      );
-      expect(preset).not.toMatch(/mmproj|draft/iu);
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+      const updated = await fs.readFile(presetPath, "utf8");
+      expect(updated).toContain(active.replace("c = 4096", "ctx-size = 8192"));
+      expect(updated).toContain(inactive);
+    },
+  );
+
+  it("writes a 2048-token physical batch in the combined preset", async () => {
+    const { presetPath } = await createPresetFixture("combined-preset");
+    await prepareManagedLlamaServer({
+      chatModel: {
+        mode: "configure",
+        id: "chat-model",
+        path: "/models/chat.gguf",
+        contextSize: 8192,
+        maxTokens: 2048,
+      },
+      embeddingModelIsDefault: true,
+      embeddingModelPath: "/models/embedding.gguf",
+      port: 19_432,
+    });
+    const preset = await fs.readFile(presetPath, "utf8");
+    expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
+    expect(preset).toContain(
+      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
+    );
+    expect(preset).not.toMatch(/mmproj|draft/iu);
   });
 
   it("preserves the llama.cpp physical batch default for a custom embedding model", async () => {
@@ -384,7 +456,7 @@ describe("managed llama-server", () => {
     try {
       await fs.writeFile(
         presetPath,
-        "version = 1\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
+        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
           "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old-embedding.gguf\nembedding = true\n",
       );
       await prepareManagedLlamaServer({
@@ -394,7 +466,7 @@ describe("managed llama-server", () => {
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toBe(
-        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
       );
       expect(preset).not.toContain("jinja");
     } finally {
@@ -521,7 +593,11 @@ describe("managed llama-server", () => {
     await fs.writeFile(
       presetPath,
       [
+        "; operator header",
         "version = 1",
+        "",
+        "[*]",
+        "n-gpu-layers = 12",
         "",
         "[stale]",
         "model = /models/stale.gguf",
@@ -545,7 +621,11 @@ describe("managed llama-server", () => {
     await reconcileManagedLlamaServer({ baseUrl });
     expect(await fs.readFile(presetPath, "utf8")).toBe(
       [
+        "; operator header",
         "version = 1",
+        "",
+        "[*]",
+        "n-gpu-layers = 12",
         "",
         "[alpha]",
         "model = /models/alpha.gguf",

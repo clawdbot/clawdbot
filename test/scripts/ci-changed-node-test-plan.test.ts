@@ -876,8 +876,11 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
-  it("prepares runtime artifacts for the changed Gateway sidecar lifecycle fixture", () => {
-    const target = "src/gateway/server-sidecar-retention.test.ts";
+  it.each([
+    "src/gateway/server-sidecar-retention.test.ts",
+    "src/infra/update-candidate-canary.integration.test.ts",
+    "src/cli/update-cli/update-command-migrated.test.ts",
+  ])("prepares runtime artifacts for changed fixture %s", (target) => {
     const shards = createChangedNodeTestShards([target]);
     expect(shards).not.toBeNull();
     const owners = shards?.filter((shard) => shard.targets?.includes(target));

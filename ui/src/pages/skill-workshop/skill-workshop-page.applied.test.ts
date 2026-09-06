@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
 import type { SkillWorkshopRouteData, SkillWorkshopState } from "./proposals.ts";
 import "./skill-workshop-page.ts";
+import { createContext } from "./skill-workshop-page.test-support.ts";
 
 type SkillWorkshopPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -14,50 +13,6 @@ type SkillWorkshopPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
 };
-
-function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
-  // SAFETY: this test client implements the only Gateway method exercised by the page.
-  const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods([]),
-    assistantAgentId: "research",
-    sessionKey: "global",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const subscribe = () => () => undefined;
-  // SAFETY: the page reads only the ApplicationContext fields supplied by this fixture.
-  return {
-    basePath: "",
-    gateway: { snapshot, subscribe },
-    config: {
-      current: { assistantIdentity: { name: "OpenClaw" } },
-      subscribe,
-    },
-    agents: { state: { agentsList: null } },
-    agentSelection: {
-      state: { selectedId: "research" },
-      subscribe,
-    },
-    agentIdentity: {
-      get: () => ({ agentId: "research", name: "Research" }),
-      subscribe,
-    },
-    sessions: { state: { result: null, loading: false } },
-    runtimeConfig: {
-      state: { configSnapshot: null, configLoading: false, lastError: null },
-      ensureLoaded: vi.fn(async () => undefined),
-      refresh: vi.fn(async () => undefined),
-      patch: vi.fn(async () => true),
-      subscribe,
-    },
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-}
 
 function appliedProposals(): SkillWorkshopProposal[] {
   return [1, 2, 3, 4].map((updatedAt) => ({
@@ -76,14 +31,18 @@ function appliedProposals(): SkillWorkshopProposal[] {
     ageLabel: `${updatedAt}h`,
     supportFiles: [],
     bodyLoaded: updatedAt !== 1,
-    isNew: false,
   }));
 }
 
 function inspectRequest() {
   return vi.fn(async (method: string, params?: unknown) => {
     if (method !== "skills.proposals.inspect") {
-      return {};
+      return {
+        schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        updatedAt: new Date(4).toISOString(),
+        proposals: [],
+        installedSkills: [],
+      };
     }
     expect(params).toEqual({ agentId: "research", proposalId: "proposal-1" });
     return {
@@ -126,7 +85,7 @@ async function mountAppliedPage(
   if (!page.state) {
     throw new Error("Expected Skill Workshop state");
   }
-  page.state.skillWorkshopMode = "board";
+  page.state.skillWorkshopMode = "history";
   page.state.skillWorkshopStatusFilter = "applied";
   page.requestUpdate();
   await page.updateComplete;
@@ -148,17 +107,49 @@ afterEach(() => {
 });
 
 describe("Skill Workshop applied history", () => {
+  it("renders skill documents as sanitized Markdown", async () => {
+    const proposals = appliedProposals();
+    proposals[3]!.body = [
+      "## Verification",
+      "",
+      "- Check the result.",
+      "- Read the [runbook](https://example.org/runbook).",
+      "",
+      "| Check | Result |",
+      "| --- | --- |",
+      "| Export | Passed |",
+      "",
+      "![Diagram](https://example.org/diagram.png)",
+      "",
+      "[Unsafe](javascript:alert(1))",
+      '<img src="invalid" onerror="alert(1)">',
+    ].join("\n");
+    const page = await mountAppliedPage(inspectRequest(), proposals);
+    modeButton(page, "Full body")?.click();
+    await page.updateComplete;
+
+    const body = page.querySelector(".sw-body-card");
+    expect(body?.querySelectorAll("ul > li")).toHaveLength(2);
+    expect(body?.querySelector('a[href="https://example.org/runbook"]')?.textContent).toBe(
+      "runbook",
+    );
+    expect(body?.querySelector("table tbody td")?.textContent).toBe("Export");
+    expect(body?.querySelector('img[src="https://example.org/diagram.png"]')).toBeNull();
+    expect(body?.querySelector('a[href="https://example.org/diagram.png"]')).not.toBeNull();
+    expect(body?.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
+  });
+
   it("renders one skill row and inspects a selected revision", async () => {
     const request = inspectRequest();
     const page = await mountAppliedPage(request, appliedProposals());
 
     expect(page.querySelectorAll(".sw-row")).toHaveLength(1);
     expect(page.querySelector(".sw-row")?.textContent).toContain("4 revisions");
-    // The Applied tab counts grouped skills, matching the one-row-per-skill list.
+    // The historical filter counts records even when the list groups their revisions.
     const appliedFilter = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Applied"),
     );
-    expect(appliedFilter?.querySelector(".settings-count")?.textContent).toBe("1");
+    expect(appliedFilter?.querySelector(".settings-count")?.textContent).toBe("4");
     await vi.waitFor(() => expect(historyItems(page)).toHaveLength(4), { interval: 1 });
     const history = historyItems(page);
     expect(history[0]?.textContent).toContain("Update");

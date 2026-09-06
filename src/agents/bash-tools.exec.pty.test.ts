@@ -43,7 +43,7 @@ async function startPtySession(command: string) {
     timeoutSec: 5,
   });
   markBackgrounded(run.session);
-  return { processTool, sessionId: run.session.id };
+  return { processTool, sessionId: run.session.id, run };
 }
 
 async function expectSessionCompletion(params: {
@@ -115,3 +115,45 @@ test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async ()
     expectedText: ["submitted", "ok", "exec"],
   });
 });
+
+test.skipIf(process.platform === "win32")(
+  "process send-keys delivers Unicode, raw hex, and control bytes through a real PTY",
+  async () => {
+    const { processTool, sessionId, run } = await startPtySession(
+      currentNodeEvalCommand(`
+        process.stdin.setRawMode(true);
+        const received = [];
+        process.stdin.on("data", chunk => {
+          received.push(chunk);
+          if (chunk.includes(13)) {
+            console.log("RECEIVED=" + Buffer.concat(received).toString("hex"));
+            process.exit(0);
+          }
+        });
+        console.log("READY");
+      `),
+    );
+    try {
+      await expect.poll(() => run.session.aggregated, { timeout: 5_000 }).toContain("READY");
+      const result = await processTool.execute("send-mixed-bytes", {
+        action: "send-keys",
+        sessionId,
+        literal: "你好😀",
+        hex: ["c3", "a9", "00", "ff"],
+        keys: ["C-c", "Enter"],
+      });
+      const outcome = await run.promise;
+      expect(outcome).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(outcome.aggregated).toContain("RECEIVED=e4bda0e5a5bdf09f9880c3a900ff030d");
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: `Sent 16 bytes to session ${sessionId}.`,
+      });
+    } finally {
+      if (!run.session.exited) {
+        run.kill();
+      }
+      await run.promise;
+    }
+  },
+);

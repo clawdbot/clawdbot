@@ -215,7 +215,12 @@ function hasEventScope(
   return required.some((scope) => scopes.includes(scope));
 }
 
-type FrameBase = { eventJSON: string; payloadFragment: string; stateVersionFragment: string };
+type FrameBase = {
+  eventJSON: string;
+  payloadFragment: string;
+  stateVersionFragment: string;
+  reservedBytes?: number;
+};
 // ws bufferedAmount includes the unmasked server frame's 2/4/10-byte header.
 const MAX_SERVER_FRAME_HEADER_BYTES = 10;
 
@@ -507,11 +512,11 @@ export function createGatewayBroadcaster(params: {
         try {
           const nextPayload = previous ? live.coalesce.merge(previous.payload, payload) : payload;
           const base = previous ? frameBaseFor(nextPayload) : getFrameBase();
-          // Reserve the complete frame and maximum sequence width; unrelated sends
-          // can advance the sequence while this entry is waiting to drain.
-          const bytes =
+          // Reserve the complete frame and maximum sequence width once per serialized base;
+          // unrelated sends can advance the sequence while this entry is waiting to drain.
+          const bytes = (base.reservedBytes ??=
             Buffer.byteLength(frameWithSequence(base, Number.MAX_SAFE_INTEGER)) +
-            MAX_SERVER_FRAME_HEADER_BYTES;
+            MAX_SERVER_FRAME_HEADER_BYTES);
           if (bufferedBytes(state) - (previous?.bytes ?? 0) + bytes <= MAX_BUFFERED_BYTES) {
             if (previous) {
               takePending(state, previous);

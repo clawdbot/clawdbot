@@ -8,6 +8,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
+import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
@@ -256,15 +257,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       },
     };
   } catch (error) {
-    try {
-      await bundleMcpRuntime?.dispose();
-    } catch {
-      // Preserve the preparation error; cleanup is best-effort.
-    }
-    try {
-      await bundleLspRuntime?.dispose();
-    } catch {
-      // Preserve the preparation error; cleanup is best-effort.
+    const cleanup = await Promise.allSettled(
+      [bundleMcpRuntime, bundleLspRuntime].map(async (runtime) => await runtime?.dispose()),
+    );
+    if (cleanup.some((result) => result.status === "rejected")) {
+      recordAgentCleanupFailure();
     }
     throw error;
   }

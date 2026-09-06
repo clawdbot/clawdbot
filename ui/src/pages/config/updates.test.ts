@@ -39,7 +39,11 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
     canUpdate: true,
     canCheckStatus: true,
     canHoldUpdate: true,
+    canReport: true,
     updateBusy: false,
+    reportableUpdateFailureId: null,
+    updateFailureReportBusy: false,
+    updateFailureReportNotice: null,
     nowMs: 1_000,
     onChannelChange: vi.fn(),
     onUpdateChecksChange: vi.fn(),
@@ -47,6 +51,7 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
     onUpdateNow: vi.fn(),
     onHoldUpdate: vi.fn(async () => true),
     onCheckStatus: vi.fn(async () => undefined),
+    onReportFailure: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -580,6 +585,122 @@ describe("renderUpdates", () => {
       }
     },
   );
+
+  it("keeps retry and report as separate actions for one final failure", () => {
+    const onReportFailure = vi.fn(async () => undefined);
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          onReportFailure,
+        }),
+      ),
+      container,
+    );
+
+    const actions = [...row("Recovery").querySelectorAll<HTMLButtonElement>("button")];
+    expect(actions.map((button) => button.textContent?.trim())).toEqual([
+      "Check status",
+      "Retry update",
+      "Report update failure",
+    ]);
+    actions[2]?.click();
+    expect(onReportFailure).toHaveBeenCalledExactlyOnceWith(run.runId);
+  });
+
+  it("renders a prefilled issue without exposing a server-local path", () => {
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result: {
+              status: "fallback",
+              fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
+              message: "gh is not authenticated",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const report = row("Failure report");
+    expect(report.textContent).toContain("GitHub CLI submission was unavailable");
+    expect(report.textContent).not.toContain("/private/report.md");
+    expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
+  });
+
+  it("renders an ambiguous submission as pending without a replay link", () => {
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result: {
+              status: "pending",
+              message: "GitHub issue submission may have completed.",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const report = row("Failure report");
+    expect(report.textContent).toContain("may have completed");
+    expect(report.querySelector("a")).toBeNull();
+  });
+
+  it("renders a definitely unstarted report as retryable rather than ambiguous", () => {
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result: {
+              status: "retryable",
+              message: "No issue submission was started; retry this action later.",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const report = row("Failure report");
+    expect(report.textContent).toContain("No GitHub issue submission was started");
+    expect(report.textContent).toContain("retry this action later");
+    expect(report.textContent).not.toContain("may have completed");
+    expect(report.querySelector("a")).toBeNull();
+  });
 
   it("keeps read-only facts visible while locking controls for non-admins", () => {
     render(

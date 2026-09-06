@@ -8,6 +8,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -53,11 +54,7 @@ suite.define(() => {
         "structured" in options
           ? `FILE:${path.join(mediaTempDirs.make("control-ui-audio-"), fixtureSource)}`
           : fixtureSource;
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
       const expectedSource = "structured" in options ? new URL(source).pathname : source;
@@ -231,11 +228,7 @@ suite.define(() => {
       source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
     },
   ] as const)("keeps server-rejected $code media blocked", async ({ code, reason, source }) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const requestedMediaUrls: URL[] = [];
 

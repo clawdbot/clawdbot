@@ -137,6 +137,61 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps a dirty status manager read-only while searching published results", async () => {
+    const cfg = createCfg({ provider: "none", minScore: 0 });
+    const writer = await getFreshManager(cfg, "cli");
+    await writer.sync({ reason: "baseline", force: true });
+    const manager = await getFreshManager(cfg, "status");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "pending.md"),
+      "unpublished maintenance marker",
+    );
+    Reflect.set(manager, "dirty", true);
+
+    const results = await manager.search("zebra", { minScore: 0 });
+    expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    expect(manager.status().dirty).toBe(true);
+    expect(await manager.search("unpublished maintenance marker")).toEqual([]);
+  });
+
+  it("invalidates keyword snapshots before changing the fallback provider", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ fallback: "fallback-provider", minScore: 0 }),
+    );
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as { provider: EmbeddingProvider };
+    const fallbackGate = createDeferred<void>();
+    const queryEntered = createDeferred<void>();
+    const failQuery = createDeferred<void>();
+    providerFixture.providerInitGate = fallbackGate.promise;
+    const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
+      queryEntered.resolve();
+      await failQuery.promise;
+      throw new Error("embedding provider failed");
+    });
+    const snapshots: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+    const search = manager.search("zebra", {
+      maxResults: 1,
+      minScore: 0,
+      onPartialResults: (results) => snapshots.push(results),
+    });
+    try {
+      await queryEntered.promise;
+      expect(snapshots).toEqual([[expect.objectContaining({ path: "memory/2026-01-12.md" })]]);
+      failQuery.resolve();
+      await vi.waitFor(() => {
+        expect(providerFixture.providerCalls.at(-1)?.provider).toBe("fallback-provider");
+      });
+      expect(snapshots.at(-1)).toBeNull();
+    } finally {
+      failQuery.resolve();
+      fallbackGate.resolve();
+      await search.catch(() => undefined);
+      querySpy.mockRestore();
+      providerFixture.providerInitGate = null;
+    }
+  });
+
   it("retries transient query embedding transport failures during search", async () => {
     const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);

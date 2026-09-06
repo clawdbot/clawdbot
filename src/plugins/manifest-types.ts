@@ -237,7 +237,18 @@ export type PluginManifestDoctorContract = {
    * Removal plan: remove the module fallback in OpenClaw 2027.1 after external plugins migrate.
    */
   sessionRouteStateOwners?: boolean;
-  stateMigrations?: boolean;
+  /**
+   * Ordered migration identities that a candidate-bundled manifest exposes to read-only
+   * planning without importing the Doctor contract. External installed artifacts remain
+   * deferred until candidate staging binds their content identity.
+   */
+  stateMigrations?:
+    | boolean
+    | Array<{
+        id: string;
+        doctorOnly?: true;
+        phase?: "after-session-repair";
+      }>;
 };
 
 export type PluginManifestQaRunner = {

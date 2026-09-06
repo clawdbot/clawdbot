@@ -194,6 +194,7 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
   phase?: ChatRunStartupPhase;
+  retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
   replace?: boolean;

@@ -1,10 +1,11 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
+import { Value } from "typebox/value";
 import {
+  ChatStatusEventSchema,
   projectChatErrorDetail,
   type ChatEvent,
-  type ChatRunStartupPhase,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
@@ -30,7 +31,8 @@ import {
 import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
-import { logError } from "../logger.js";
+import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { logError, logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAcpSessionKey,
@@ -40,6 +42,11 @@ import {
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { mergeAssistantText, resolveAssistantTextInput } from "./agent-event-assistant-text.js";
+import {
+  appendChatCanvasBlocks,
+  appendChatCanvasBlocksToMessage,
+  extractChatToolResultCanvasPreview,
+} from "./chat-display-projection.canvas.js";
 import {
   capLiveAssistantText,
   projectLiveAssistantBufferedText,
@@ -98,21 +105,10 @@ const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
   failure: "error",
 } as const;
 const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
-
-function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
-  switch (value) {
-    case "preparing_workspace":
-    case "naming_worktree":
-    case "creating_worktree":
-    case "running_setup":
-    case "provisioning_environment":
-    case "preparing_context":
-    case "starting_model":
-      return value;
-    default:
-      return undefined;
-  }
-}
+// Canvas document retention and native Quick Chat both keep at most 32 widgets.
+// Keep the newest handles, independently of tool-progress verbosity and eviction.
+const MAX_LIVE_CANVAS_BLOCKS = 32;
+const MAX_LIVE_CANVAS_BYTES = 64 * 1024;
 
 function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
   const data = payload.data;
@@ -964,11 +960,10 @@ export function createAgentEventHandler({
       state: "delta" as const,
       deltaText: broadcastDelta.deltaText,
       ...(broadcastDelta.replace ? { replace: true as const } : {}),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        timestamp: now,
-      },
+      message: appendChatCanvasBlocksToMessage(
+        { role: "assistant", content: [{ type: "text", text }], timestamp: now },
+        run.canvasBlocks ?? [],
+      ),
     };
     emitFirstAssistantChatSendTiming(
       opts?.firstAssistantTimingEntry ?? chatRunState.registry.peek(sourceRunId),
@@ -1194,6 +1189,14 @@ export function createAgentEventHandler({
     });
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState !== "error") {
+      const run = chatRunState.runs.get(clientRunId);
+      const canvasBlocks = run?.canvasBlocks ?? [];
+      // Empty tool-only turns can render widgets; explicit silent/control replies
+      // still suppress their message, even when an earlier tool hosted a widget.
+      const canvasOnly =
+        jobState === "done" &&
+        canvasBlocks.length > 0 &&
+        !(run?.rawBuffer ?? run?.buffer ?? "").trim();
       const payload = {
         runId: clientRunId,
         sessionKey,
@@ -1207,14 +1210,20 @@ export function createAgentEventHandler({
         ...(stopReason && { stopReason }),
         ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
-          text && !shouldSuppressSilent
-            ? {
-                role: "assistant",
-                content: [{ type: "text", text }],
-                timestamp: Date.now(),
-              }
+          (text && !shouldSuppressSilent) || canvasOnly
+            ? appendChatCanvasBlocksToMessage(
+                {
+                  role: "assistant",
+                  content: text ? [{ type: "text", text }] : [],
+                  timestamp: Date.now(),
+                },
+                canvasBlocks,
+              )
             : undefined,
       };
+      if (payload.message) {
+        emitFirstAssistantChatSendTiming(opts?.firstAssistantTimingEntry);
+      }
       sendLivePayload("chat", sessionKey, payload, opts);
       chatRunState.clearRun(clientRunId);
       return;
@@ -1537,18 +1546,30 @@ export function createAgentEventHandler({
         recordsEmbeddedProgress ? "summary" : "full",
       );
     }
-    if (evt.stream === "run_status") {
-      const phase = readChatRunStartupPhase(evt.data?.phase);
-      if (phase && chatLink && isControlUiVisible && sessionKey && !isAborted) {
-        const payload = {
-          runId: clientRunId,
-          sessionKey,
-          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-          ...(spawnedBy && { spawnedBy }),
-          seq: evt.seq,
-          state: "status" as const,
-          phase,
-        } satisfies ChatEvent;
+    if (evt.stream === "run_status" && chatLink && isControlUiVisible && sessionKey && !isAborted) {
+      const payload = {
+        runId: clientRunId,
+        sessionKey,
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+        ...(spawnedBy && { spawnedBy }),
+        seq: evt.seq,
+        state: "status" as const,
+        ...(evt.data.phase === "retrying"
+          ? {
+              phase: "starting_model",
+              ...(evt.data.reason === "rate_limit"
+                ? {
+                    retry: {
+                      attempt: evt.data.attempt,
+                      maxAttempts: evt.data.maxAttempts,
+                      reason: evt.data.reason,
+                    },
+                  }
+                : {}),
+            }
+          : { phase: evt.data.phase }),
+      };
+      if (Value.Check(ChatStatusEventSchema, payload)) {
         sendLivePayload("chat", sessionKey, payload, {
           agentId: sessionAgentId,
           controlUiVisible: true,
@@ -1653,8 +1674,10 @@ export function createAgentEventHandler({
       }
     } else {
       const itemPhase = isItemEvent && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      // The runtime error frame drains this text before retry cleanup retires its group.
       if (
-        itemPhase === "start" &&
+        (itemPhase === "start" ||
+          (lifecyclePhase === "error" && evt.data.completionSource !== "reply-dispatch")) &&
         (isControlUiVisible || hasSessionMessageSubscribers) &&
         !isAborted
       ) {
@@ -1701,6 +1724,38 @@ export function createAgentEventHandler({
     }
 
     if ((isControlUiVisible || hasSessionMessageSubscribers) && sessionKey) {
+      if (
+        isToolEvent &&
+        evt.data.phase === "result" &&
+        !evt.data.isError &&
+        !isAborted &&
+        !suppressHeartbeatToolEvents
+      ) {
+        const result = extractChatToolResultCanvasPreview(evt.data.result);
+        if (result?.preview.surface === "assistant_message") {
+          const blocks = appendChatCanvasBlocks(
+            chatRunState.runs.get(clientRunId)?.canvasBlocks ?? [],
+            [{ preview: result.preview, rawText: null }],
+          ).slice(-MAX_LIVE_CANVAS_BLOCKS);
+          if (!boundedJsonUtf8Bytes(blocks, MAX_LIVE_CANVAS_BYTES).complete) {
+            do {
+              blocks.shift();
+            } while (
+              blocks.length > 0 &&
+              !boundedJsonUtf8Bytes(blocks, MAX_LIVE_CANVAS_BYTES).complete
+            );
+            logWarn(
+              "Live chat canvas preview omitted: display descriptors exceed the 64 KiB limit.",
+            );
+          }
+          const run = chatRunState.getOrCreate(clientRunId);
+          // Commit even an empty suffix: newer documents already consumed retention
+          // slots, so keeping old handles could resurrect documents Canvas pruned.
+          run.canvasBlocks = blocks;
+          // Tool-only turns need the same claim retirement as buffered text.
+          run.bufferIsCurrent = isCurrent;
+        }
+      }
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
       if (
@@ -1760,18 +1815,6 @@ export function createAgentEventHandler({
         if (evt.data.completionSource !== "reply-dispatch") {
           // Runtime retries isolate failed text; reply-dispatch retains its
           // post-hook payloads and abort state until its own completion settles.
-          if (sessionKey) {
-            flushBufferedChatDeltaIfNeeded(
-              sessionKey,
-              sessionAgentId,
-              clientRunId,
-              evt.runId,
-              evt.seq,
-              {
-                controlUiVisible: isControlUiVisible,
-              },
-            );
-          }
           chatRunState.clearRun(clientRunId);
         }
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { bindAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
@@ -136,28 +137,55 @@ describe("bounded agent exec", () => {
         baseConfig,
         maxToolCalls: 1,
         runAgent: async (opts) => {
+          const ready = createDeferred();
+          let output = "";
           child = await getProcessSupervisor().spawn({
             mode: "child",
-            argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+            argv: [
+              process.execPath,
+              "-e",
+              `process.once("SIGTERM", () => setTimeout(() => process.exit(0), 250));
+               process.stdout.write("ready");
+               setInterval(() => {}, 1000);`,
+            ],
             sessionId: String(opts.sessionId),
             scopeKey: String(opts.sessionKey),
             backendId: "budget-test",
             timeoutMs: 30_000,
+            onStdout: (chunk) => {
+              output += chunk;
+              if (output.includes("ready")) {
+                ready.resolve();
+              }
+            },
           });
+          await Promise.race([
+            ready.promise,
+            child.wait().then(() => {
+              throw new Error("The background process exited before readiness");
+            }),
+          ]);
           return success();
         },
       });
 
-      expect(result.exitCode).toBe(0);
-      expect(await child?.wait()).toMatchObject({ reason: "manual-cancel" });
+      expect(result.exitCode).toBe(process.platform === "win32" ? 1 : 0);
+      if (process.platform === "win32") {
+        expect(result.envelope.error?.message).toContain(
+          "cannot confirm owned execution-tree settlement",
+        );
+      }
       const pid = child?.pid;
       expect(pid).toBeTypeOf("number");
       if (pid === undefined) {
         throw new Error("The background process did not start");
       }
+      // No post-return wait may supply the cleanup that the command must own.
       expect(() => process.kill(pid, 0)).toThrow();
+      expect(await child?.wait()).toMatchObject({ reason: "manual-cancel" });
     } finally {
       child?.cancel();
+      await child?.wait();
       await child?.waitForExtinction?.();
     }
   });

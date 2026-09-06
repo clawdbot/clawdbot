@@ -4974,7 +4974,6 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     deps: {} as never,
     startChannels: vi.fn(async () => {}),
     recoveryRuntime: {
-      abortAgent: vi.fn(),
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),

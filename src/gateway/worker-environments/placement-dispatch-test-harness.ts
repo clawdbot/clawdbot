@@ -22,7 +22,11 @@ import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
-import type { WorkerWorkspaceRecoveryFailureReport } from "./workspace-conflicts.js";
+import {
+  projectWorkspaceResultConflict,
+  type WorkerWorkspaceRecoveryFailureReport,
+  type WorkspaceResultConflictLookup,
+} from "./workspace-conflicts.js";
 import {
   createWorkerWorkspaceOperationCoordinator,
   type WorkerWorkspaceOperationCoordinator,
@@ -57,6 +61,7 @@ export function createHarness(
     resumeFails?: boolean;
     workspacePath?: string;
     priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
+    priorWorkspaceResultConflictLookup?: WorkspaceResultConflictLookup;
     reconcileConflictPaths?: string[];
     workspaceOperations?: WorkerWorkspaceOperationCoordinator;
     destroyFailureState?: "draining" | "destroying";
@@ -500,7 +505,18 @@ export function createHarness(
     },
     reportWorkspaceResultConflict,
     reportWorkspaceResultRecoveryFailure,
-    resolveWorkspaceResultConflict: vi.fn(async () => options.priorWorkspaceResultConflict),
+    resolveWorkspaceResultConflict: vi.fn(async (): Promise<WorkspaceResultConflictLookup> => {
+      const conflict = options.priorWorkspaceResultConflict;
+      return (
+        options.priorWorkspaceResultConflictLookup ??
+        (conflict
+          ? {
+              kind: "conflict",
+              conflict: projectWorkspaceResultConflict(conflict.paths, conflict.stagedResultRef),
+            }
+          : { kind: "absent" })
+      );
+    }),
     ...(options.prepareAcceptedWorkspacePublication
       ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
       : {}),
@@ -593,5 +609,5 @@ export const createRecoveryService = (
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     resolveWorkspacePath: async () => "/gateway/workspace",
     reportWorkspaceResultConflict: async () => {},
-    resolveWorkspaceResultConflict: async () => undefined,
+    resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
   });

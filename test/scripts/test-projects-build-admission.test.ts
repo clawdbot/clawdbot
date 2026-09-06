@@ -2,7 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  listVitestRuntimeConsumerFiles,
+  resolveVitestCliEntry,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { createPatternFileHelper } from "../helpers/pattern-file.js";
 import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
@@ -77,18 +80,21 @@ afterEach(() => {
 
 describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
-  posixIt.each([
+  posixIt.each<[name: string, args: string[]]>([
     ["ordinary target", [ordinaryQa]],
     ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
     [
-      "CLI process exclusion",
+      "ordinary CLI selection",
+      ["--config", "test/vitest/vitest.cli.config.ts", "command-path-policy.test.ts"],
+    ],
+    [
+      "CLI process runtime exclusions",
       [
         "--config",
         "test/vitest/vitest.cli-process.config.ts",
-        "--exclude",
-        "src/cli/update-dry-run-state.process.test.ts",
-        "--exclude",
-        "src/cli/acp-cli-exit.process.test.ts",
+        ...listVitestRuntimeConsumerFiles(["test/vitest/vitest.cli-process.config.ts"]).flatMap(
+          (file) => ["--exclude", file],
+        ),
       ],
     ],
     [

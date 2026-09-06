@@ -85,8 +85,6 @@ describe("maybeInstallDaemon", () => {
     serviceRestart.mockResolvedValue({ outcome: "completed" });
     loadConfig.mockReturnValue({});
     resolveGatewayInstallToken.mockResolvedValue({
-      token: undefined,
-      tokenRefConfigured: true,
       warnings: [],
     });
     buildGatewayInstallPlan.mockResolvedValue({
@@ -120,8 +118,6 @@ describe("maybeInstallDaemon", () => {
       select.mockResolvedValueOnce("reinstall");
     }
     resolveGatewayInstallToken.mockResolvedValue({
-      token: undefined,
-      tokenRefConfigured: true,
       unavailableReason: "gateway.auth.token SecretRef is configured but unresolved (boom).",
       warnings: [],
     });
