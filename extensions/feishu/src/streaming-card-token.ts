@@ -35,7 +35,7 @@ const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
-export function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
+function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
   const now = resolveDateTimestampMs(nowMs);
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
     return now;
