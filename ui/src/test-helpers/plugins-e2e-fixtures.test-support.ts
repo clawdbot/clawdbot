@@ -289,6 +289,26 @@ const telegramDiscoveryPlugin = {
   },
 } satisfies PluginDiscoveryEntry;
 
+export const localOnlyDiscoveryPlugin = {
+  id: "local_QG9wZW5jbGF3L2xvY2FsLWNhbGVuZGFy",
+  catalog: {
+    name: "Local Calendar",
+    summary: "Coordinate work using the included calendar plugin.",
+    official: false,
+    categories: ["tools"],
+    latestVersion: "1.0.0",
+    publishedToClawHub: false,
+  },
+  local: {
+    present: true,
+    installed: false,
+    enabled: false,
+    state: "not-installed",
+    pluginId: "local-calendar",
+    action: "install",
+  },
+} satisfies PluginDiscoveryEntry;
+
 function availableDiscoveryPlugin(index: number, prefix: string): PluginDiscoveryEntry {
   return {
     ...matrixDiscoveryPlugin,
@@ -319,6 +339,7 @@ export const finalDiscoveryPageItems = [
 
 export const discoveryResult = {
   items: [
+    localOnlyDiscoveryPlugin,
     memoryDiscoveryPlugin,
     matrixDiscoveryPlugin,
     telegramDiscoveryPlugin,
@@ -456,6 +477,19 @@ export const matrixDetail = {
       guidance: "Review the access token before enabling.",
       checkedAt: 1_780_000_000_000,
     },
+  },
+} satisfies PluginDiscoveryDetailResult;
+
+export const localOnlyDetail = {
+  plugin: localOnlyDiscoveryPlugin,
+  detail: {
+    origin: "local",
+    packageName: "@openclaw/local-calendar",
+    topics: [],
+    configuration: [],
+    mcpServers: [],
+    skills: [{ name: "Calendar planning" }],
+    versions: [],
   },
 } satisfies PluginDiscoveryDetailResult;
 

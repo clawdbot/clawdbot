@@ -19,6 +19,7 @@ type CatalogPageLoad = {
   overflow: PluginDiscoveryEntry[];
   nextCursor?: string;
   observed: PluginDiscoveryEntry[];
+  remoteError?: string;
 };
 
 type PluginDiscoveryGateway = {
@@ -31,6 +32,7 @@ type PluginDiscoveryGateway = {
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
   error: string | null = null;
+  remoteError: string | null = null;
   categories: PluginDiscoveryCategory[] = [];
   categoriesError: string | null = null;
   featured: PluginDiscoveryEntry[] = [];
@@ -75,6 +77,7 @@ export class PluginDiscoveryController {
         this.overflow = page.overflow;
         this.nextCursor = page.nextCursor;
         this.result = { items: page.items };
+        this.remoteError = page.remoteError ?? null;
         this.rememberEntries(page.observed);
       },
       onError: (error) => {
@@ -177,6 +180,7 @@ export class PluginDiscoveryController {
     const available = [...(params.overflow ?? [])];
     const observed: PluginDiscoveryEntry[] = [];
     let cursor = params.cursor;
+    let remoteError: string | undefined;
     let shouldFetch = true;
 
     while (available.length < CATALOG_PAGE_SIZE && shouldFetch) {
@@ -192,6 +196,7 @@ export class PluginDiscoveryController {
         params.signal ? { signal: params.signal } : undefined,
       );
       observed.push(...page.items);
+      remoteError = page.remoteError;
       available.push(...page.items.filter((plugin) => !plugin.local.installed));
       cursor = page.nextCursor;
       shouldFetch = !params.query && Boolean(cursor);
@@ -202,6 +207,7 @@ export class PluginDiscoveryController {
       overflow: available.slice(CATALOG_PAGE_SIZE),
       ...(cursor ? { nextCursor: cursor } : {}),
       observed,
+      ...(remoteError ? { remoteError } : {}),
     };
   }
 
@@ -234,6 +240,7 @@ export class PluginDiscoveryController {
     void this.featuredTask.run([null]);
     this.result = null;
     this.error = null;
+    this.remoteError = null;
     this.categories = [];
     this.categoriesError = null;
     this.featured = [];
@@ -255,6 +262,7 @@ export class PluginDiscoveryController {
       return;
     }
     this.error = null;
+    this.remoteError = null;
     this.resetPagination();
     await this.browseTask.run([client, this.intent, this.category, this.committedQuery]);
   }
@@ -361,6 +369,7 @@ export class PluginDiscoveryController {
       }
       this.overflow = page.overflow;
       this.nextCursor = page.nextCursor;
+      this.remoteError = page.remoteError ?? null;
       this.rememberEntries(page.observed);
       if (page.items.length === 0) {
         return;

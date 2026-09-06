@@ -3060,6 +3060,8 @@ export const en: TranslationMap & {
     downloadCount: "{count} downloads",
     catalogPluginColumn: "Plugin",
     catalogDownloadsColumn: "Downloads",
+    localPopularityUnavailable:
+      "This plugin has not been published to ClawHub and does not have download metrics.",
     detailBack: "Back to Explore plugins",
     detailLoading: "Loading plugin details…",
     detailSections: "Plugin details",

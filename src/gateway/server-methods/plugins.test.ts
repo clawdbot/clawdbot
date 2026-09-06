@@ -399,6 +399,7 @@ describe("plugin management Gateway handlers", () => {
               categories: ["memory"],
               latestVersion: "1.2.3",
               downloads: 42,
+              publishedToClawHub: true,
             },
             local: {
               present: true,
@@ -482,7 +483,7 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("projects ClawHub browse failure into a retryable discovery-only error", async () => {
+  it("keeps local-only discovery available when ClawHub browse fails", async () => {
     catalogMocks.browse.mockRejectedValue(new Error("service unavailable"));
     managementMocks.list.mockResolvedValue({
       plugins: [workboard],
@@ -492,10 +493,72 @@ describe("plugin management Gateway handlers", () => {
 
     const result = await callHandler("plugins.catalog.browse", {});
 
-    expect(result.error).toMatchObject({
-      code: "UNAVAILABLE",
-      message:
-        "Plugin discovery is unavailable: service unavailable. Retry to reconnect to ClawHub.",
+    expect(result).toMatchObject({
+      ok: true,
+      error: undefined,
+      response: {
+        items: [{ catalog: { name: "Workboard" }, local: { pluginId: "workboard" } }],
+        remoteError: "ClawHub is unavailable: service unavailable. Local plugins remain available.",
+      },
+    });
+  });
+
+  it("resolves local-only discovery details without contacting ClawHub", async () => {
+    const localOnly = {
+      id: "workboard",
+      name: "Workboard",
+      packageName: "@openclaw/workboard",
+      description: "Local work coordination.",
+      installed: true,
+      enabled: false,
+      state: "needs-setup" as const,
+      category: "tool",
+    };
+    managementMocks.list.mockResolvedValue({
+      plugins: [localOnly],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    managementMocks.inspect.mockResolvedValue({
+      ok: true,
+      plugin: localOnly,
+      source: { kind: "bundled" },
+      declared: {
+        channels: [],
+        providers: [],
+        tools: ["workboard_read"],
+        contracts: [],
+        hooks: [],
+        mcpServers: ["workboard"],
+        cliCommands: [],
+        cliBackends: [],
+        skills: ["Workboard planning"],
+        dangerousConfigFlags: [],
+      },
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: false },
+          allowConversationAccess: { effective: false },
+        },
+      },
+    });
+
+    const result = await callHandler("plugins.catalog.get", {
+      id: "local_QG9wZW5jbGF3L3dvcmtib2FyZA",
+    });
+
+    expect(catalogMocks.detail).not.toHaveBeenCalled();
+    expect(result.response).toMatchObject({
+      plugin: {
+        catalog: { name: "Workboard", categories: ["tools"] },
+        local: { state: "needs-setup", action: "manage" },
+      },
+      detail: {
+        origin: "local",
+        packageName: "@openclaw/workboard",
+        mcpServers: ["workboard"],
+        skills: [{ name: "Workboard planning" }],
+      },
     });
   });
 

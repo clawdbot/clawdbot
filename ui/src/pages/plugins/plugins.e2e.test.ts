@@ -25,6 +25,8 @@ import {
   initialInventory,
   installResult,
   installedPluginsInventory,
+  localOnlyDetail,
+  localOnlyDiscoveryPlugin,
   lobsterInspection,
   lobsterPlugin,
   matrixDetail,
@@ -155,7 +157,10 @@ function pluginMethodResponses() {
     },
     "plugins.catalog.categories": discoveryCategories,
     "plugins.catalog.get": {
-      cases: [{ match: { id: matrixDiscoveryPlugin.id }, response: matrixDetail }],
+      cases: [
+        { match: { id: matrixDiscoveryPlugin.id }, response: matrixDetail },
+        { match: { id: localOnlyDiscoveryPlugin.id }, response: localOnlyDetail },
+      ],
     },
     "plugins.install": {
       cases: [
@@ -474,6 +479,54 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await detailTabs.getByRole("tab", { name: "Versions" }).click();
       expect(await page.getByText("2.1.0", { exact: true }).count()).toBe(1);
       expect(await page.getByText("Current release", { exact: true }).count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders local-only discovery without inventing ClawHub popularity or provenance", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: pluginMethodResponses(),
+    });
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      const row = page.locator(`[data-plugin-id="${localOnlyDiscoveryPlugin.id}"]`);
+      await row.waitFor();
+      expect(await row.getByText("Local Calendar", { exact: true }).count()).toBe(1);
+      expect(await row.getByText(/downloads/u).count()).toBe(0);
+      expect(await row.getByText(/not been published to ClawHub/u).count()).toBe(1);
+      await row.getByRole("link", { name: "Local Calendar", exact: true }).click();
+      await page.getByRole("heading", { level: 1, name: "Local Calendar", exact: true }).waitFor();
+      expect(
+        (await gateway.getRequests("plugins.catalog.get")).map((request) => request.params),
+      ).toContainEqual({ id: localOnlyDiscoveryPlugin.id });
+      expect(await page.getByText("@openclaw", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Security", { exact: true }).count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps local-only rows visible beside an isolated ClawHub outage", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.catalog.browse": {
+          items: [localOnlyDiscoveryPlugin],
+          remoteError: "ClawHub is unavailable. Local plugins remain available.",
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      await page.getByText("Local Calendar", { exact: true }).waitFor();
+      expect(await page.getByText(/ClawHub is unavailable/u).count()).toBe(1);
     } finally {
       await context.close();
     }

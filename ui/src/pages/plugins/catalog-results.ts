@@ -29,6 +29,7 @@ export type PluginCatalogResultsProps = {
   canGoNext: boolean;
   result: PluginDiscoveryResult | null;
   error: string | null;
+  remoteError: string | null;
   categories: readonly PluginDiscoveryCategory[];
   categoriesError: string | null;
   featured: readonly PluginDiscoveryEntry[];
@@ -95,6 +96,20 @@ function renderDownloadCount(
     <span aria-hidden="true">${icons.download}</span>
     ${options.compact ? count : t("pluginsPage.downloadCount", { count })}
   </span>`;
+}
+
+function renderPopularity(plugin: PluginDiscoveryEntry): TemplateResult | typeof nothing {
+  if (plugin.catalog.publishedToClawHub === false && plugin.catalog.downloads === undefined) {
+    const label = t("pluginsPage.localPopularityUnavailable");
+    return html`<span
+      class="plugin-download-count plugin-download-count--unavailable"
+      title=${label}
+    >
+      <span aria-hidden="true">${icons.info}</span>
+      <span class="sr-only">${label}</span>
+    </span>`;
+  }
+  return renderDownloadCount(plugin.catalog.downloads, { compact: true });
 }
 
 function renderFeaturedCard(
@@ -275,7 +290,7 @@ function renderResultRow(
       </div>
       <p>${plugin.catalog.summary || t("pluginsPage.optionalCapability")}</p>
     </div>
-    ${renderDownloadCount(plugin.catalog.downloads, { compact: true })}
+    ${renderPopularity(plugin)}
   </article>`;
 }
 
@@ -338,6 +353,13 @@ function renderExplorer(props: PluginCatalogResultsProps): TemplateResult {
         >
           ${renderCategorySelect(props)} ${renderCategories(props)}
           <div class="plugin-catalog-layout__results">
+            ${
+              props.remoteError
+                ? html`<div class="callout warning oc-banner" role="status">
+                    ${formatUiExternalText(props.remoteError)}
+                  </div>`
+                : nothing
+            }
             ${
               props.loading
                 ? renderSettingsLoadingSkeleton({

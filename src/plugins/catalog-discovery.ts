@@ -4,6 +4,7 @@ import type {
   PluginDiscoveryDetail,
   PluginDiscoveryEntry,
   PluginDiscoveryLocalFacts,
+  PluginsInspectResult,
   PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type {
@@ -12,10 +13,11 @@ import type {
 } from "../infra/clawhub-plugin-catalog.js";
 
 const DISCOVERY_ID_PREFIX = "ch_";
+const LOCAL_DISCOVERY_ID_PREFIX = "local_";
 const DISCOVERY_ID_PAYLOAD = /^[A-Za-z0-9_-]+$/u;
 
 function normalizedAlias(value: string | null | undefined): string | undefined {
-  const normalized = value?.trim().toLocaleLowerCase();
+  const normalized = value?.trim().toLowerCase();
   return normalized || undefined;
 }
 
@@ -59,6 +61,7 @@ function findLocalPlugin(
 function projectLocalFacts(
   plugin: PluginCatalogEntry | undefined,
   mutationAllowed: boolean,
+  remoteInstallable = true,
 ): PluginDiscoveryLocalFacts {
   if (!plugin) {
     return {
@@ -75,30 +78,56 @@ function projectLocalFacts(
     enabled: plugin.enabled,
     state: plugin.state,
     pluginId: plugin.id,
-    action: plugin.installed ? "manage" : mutationAllowed ? "install" : "unavailable",
+    action: plugin.installed
+      ? "manage"
+      : mutationAllowed && (remoteInstallable || plugin.install)
+        ? "install"
+        : "unavailable",
   };
 }
 
 /** URL-safe route identity. Package aliases remain private to the Gateway join. */
+function encodeDiscoveryId(prefix: string, identity: string): string {
+  const normalized = identity.trim();
+  if (!normalized) {
+    throw new Error("Cannot encode an empty plugin discovery identity.");
+  }
+  return `${prefix}${Buffer.from(normalized, "utf8").toString("base64url")}`;
+}
+
 function encodePluginDiscoveryId(packageName: string): string {
   const normalized = packageName.trim();
   if (!normalized) {
     throw new Error("Cannot encode an empty ClawHub package identity.");
   }
-  return `${DISCOVERY_ID_PREFIX}${Buffer.from(normalized, "utf8").toString("base64url")}`;
+  return encodeDiscoveryId(DISCOVERY_ID_PREFIX, normalized);
 }
 
-export function decodePluginDiscoveryId(id: string): string | undefined {
-  if (!id.startsWith(DISCOVERY_ID_PREFIX)) {
+function encodeLocalPluginDiscoveryId(identity: string): string {
+  return encodeDiscoveryId(LOCAL_DISCOVERY_ID_PREFIX, identity);
+}
+
+export function resolvePluginDiscoveryIdentity(
+  id: string,
+): { origin: "clawhub" | "local"; identity: string } | undefined {
+  const prefix = id.startsWith(DISCOVERY_ID_PREFIX)
+    ? DISCOVERY_ID_PREFIX
+    : id.startsWith(LOCAL_DISCOVERY_ID_PREFIX)
+      ? LOCAL_DISCOVERY_ID_PREFIX
+      : undefined;
+  if (!prefix) {
     return undefined;
   }
-  const payload = id.slice(DISCOVERY_ID_PREFIX.length);
+  const payload = id.slice(prefix.length);
   if (!payload || !DISCOVERY_ID_PAYLOAD.test(payload)) {
     return undefined;
   }
   try {
-    const packageName = Buffer.from(payload, "base64url").toString("utf8");
-    return encodePluginDiscoveryId(packageName) === id ? packageName : undefined;
+    const identity = Buffer.from(payload, "base64url").toString("utf8");
+    const encoded = encodeDiscoveryId(prefix, identity);
+    return encoded === id
+      ? { origin: prefix === DISCOVERY_ID_PREFIX ? "clawhub" : "local", identity }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -107,10 +136,19 @@ export function decodePluginDiscoveryId(id: string): string | undefined {
 export function joinClawHubPluginCatalog(params: {
   remote: readonly ClawHubPluginCatalogEntry[];
   local: PluginsListResult;
+  includeLocalOnly?: boolean;
+  intent?: "all" | "trending" | "official" | "updated" | "featured";
+  category?: string;
+  query?: string;
+  cursor?: string;
 }): PluginDiscoveryEntry[] {
   const localIndex = indexLocalPlugins(params.local.plugins);
-  return params.remote.map((plugin) => {
+  const matchedLocalPlugins = new Set<PluginCatalogEntry>();
+  const remote = params.remote.map((plugin) => {
     const localPlugin = findLocalPlugin(plugin, localIndex);
+    if (localPlugin) {
+      matchedLocalPlugins.add(localPlugin);
+    }
     return {
       id: encodePluginDiscoveryId(plugin.packageName),
       catalog: {
@@ -124,10 +162,98 @@ export function joinClawHubPluginCatalog(params: {
         ...(plugin.downloads !== undefined ? { downloads: plugin.downloads } : {}),
         ...(plugin.installs !== undefined ? { installs: plugin.installs } : {}),
         ...(plugin.verificationTier ? { verificationTier: plugin.verificationTier } : {}),
+        publishedToClawHub: true,
       },
       local: projectLocalFacts(localPlugin, params.local.mutationAllowed),
     };
   });
+  if (!params.includeLocalOnly || params.cursor || (params.intent && params.intent !== "all")) {
+    return remote;
+  }
+  const query = normalizedAlias(params.query);
+  const localOnly = params.local.plugins
+    .filter((plugin) => !matchedLocalPlugins.has(plugin))
+    .filter((plugin) => {
+      const category = localDiscoveryCategory(plugin.category);
+      if (params.category && category !== params.category) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return [plugin.id, plugin.packageName, plugin.name, plugin.description]
+        .flatMap((value) => (value ? [value.toLowerCase()] : []))
+        .some((value) => value.includes(query));
+    })
+    .toSorted((left, right) => left.name.localeCompare(right.name))
+    .map((plugin) => projectLocalDiscoveryEntry(plugin, params.local.mutationAllowed));
+  return [...localOnly, ...remote];
+}
+
+function localDiscoveryCategory(category: string | undefined): string {
+  if (category === "channel") {
+    return "channels";
+  }
+  if (category === "provider") {
+    return "models";
+  }
+  if (category === "context-engine") {
+    return "context";
+  }
+  if (category === "tool") {
+    return "tools";
+  }
+  return category || "other";
+}
+
+function localDiscoveryIdentity(plugin: PluginCatalogEntry): string {
+  return plugin.packageName ?? plugin.id;
+}
+
+function projectLocalDiscoveryEntry(
+  plugin: PluginCatalogEntry,
+  mutationAllowed: boolean,
+): PluginDiscoveryEntry {
+  return {
+    id: encodeLocalPluginDiscoveryId(localDiscoveryIdentity(plugin)),
+    catalog: {
+      name: plugin.name,
+      ...(plugin.description ? { summary: plugin.description } : {}),
+      official: false,
+      categories: [localDiscoveryCategory(plugin.category)],
+      publishedToClawHub: false,
+      ...(plugin.version ? { latestVersion: plugin.version } : {}),
+    },
+    local: projectLocalFacts(plugin, mutationAllowed, false),
+  };
+}
+
+export function findLocalPluginByIdentity(
+  local: PluginsListResult,
+  identity: string,
+): PluginCatalogEntry | undefined {
+  return indexLocalPlugins(local.plugins).get(normalizedAlias(identity) ?? "");
+}
+
+export function joinLocalPluginDetail(params: {
+  plugin: PluginCatalogEntry;
+  local: PluginsListResult;
+  inspection?: PluginsInspectResult;
+}): { plugin: PluginDiscoveryEntry; detail: PluginDiscoveryDetail } {
+  const plugin = projectLocalDiscoveryEntry(params.plugin, params.local.mutationAllowed);
+  const inspection = params.inspection;
+  return {
+    plugin,
+    detail: {
+      origin: "local",
+      ...(params.plugin.packageName ? { packageName: params.plugin.packageName } : {}),
+      topics: [],
+      configuration: [],
+      mcpServers: inspection?.declared.mcpServers ?? [],
+      skills: (inspection?.declared.skills ?? []).map((name) => ({ name })),
+      versions: [],
+    },
+  };
 }
 
 export function joinClawHubPluginDetail(params: {

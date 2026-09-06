@@ -186,6 +186,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                       canGoNext: discovery.canGoNext,
                       result: discovery.result,
                       error: discovery.error,
+                      remoteError: discovery.remoteError,
                       categories: discovery.categories,
                       categoriesError: discovery.categoriesError,
                       featured: discovery.featured,
