@@ -609,6 +609,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     // The host loop settles all completed counts, including default/SDK runs.
     compactionCountOwner: "caller",
     onContextAccountingEvent: params.onContextAccountingEvent,
+    onCompactionRequestBudget: params.onCompactionRequestBudget,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     oneShotCliRun: params.oneShotCliRun,

@@ -170,11 +170,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionTarget,
           });
       compactionSessionManager = sessionManager;
-      const recordUsage = accountingRecorder
+      const recordUsage = accountingRecorder?.recordUsage
         ? (usage: UsageLike) => {
             const normalized = normalizeUsage(usage);
             if (normalized) {
-              accountingRecorder.recordUsage(normalized);
+              accountingRecorder.recordUsage?.(normalized);
             }
           }
         : undefined;
@@ -495,7 +495,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 enabled: compactionReplayEnabled,
               },
             });
-            accountingRecorder?.recordCompaction(serverTokensAfter);
+            accountingRecorder?.recordCompaction?.(serverTokensAfter);
           };
           const serverResult = params.transcriptBytePreflightAuthority
             ? undefined
@@ -539,6 +539,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     resolveEffectiveCompactionMode(params.config) === "default"
                       ? undefined
                       : "none",
+                    accountingRecorder?.requestBudget,
                   );
                 },
                 compactionTimeoutMs,
@@ -562,6 +563,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 observedTokenCount,
                 fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
                 estimateTokensFn: estimateTokens,
+                requestBudget: accountingRecorder?.requestBudget,
               });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);

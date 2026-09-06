@@ -28,6 +28,7 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   deriveContextPromptTokens,
@@ -100,6 +101,7 @@ const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
 const MAX_FLUSH_ERROR_LENGTH = 200;
 const preflightCompactionLog = createSubsystemLogger("auto-reply/preflight-compaction");
+const memoryFlushLog = createSubsystemLogger("auto-reply/memory-flush");
 
 const embeddedAgentRuntimeLoader = createLazyImportLoader<EmbeddedAgentRuntime>(
   () => import("../../agents/embedded-agent.js"),
@@ -678,6 +680,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
+  compactionRequestBudget?: CompactionRequestBudget;
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   promptForEstimate?: string;
@@ -692,6 +695,7 @@ export async function runSessionCompactionIfNeeded(params: {
   agentHarnessId?: string;
   abortSignal?: AbortSignal;
   authorize?: () => boolean;
+  beforeCompaction?: (entry: SessionEntry) => Promise<SessionEntry | undefined>;
   onCompactionStart?: () => void;
   onCompactionCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
   onSessionIdChanged?: (sessionId: string) => void;
@@ -926,6 +930,18 @@ export async function runSessionCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  if (params.beforeCompaction) {
+    const refreshed = await params.beforeCompaction(entry);
+    assertActive();
+    // Checkpointing can compact or rotate the session itself. Replan once from its
+    // accepted successor, without repeating the once-per-cycle memory checkpoint.
+    return runSessionCompactionIfNeeded({
+      ...params,
+      sessionEntry: refreshed,
+      beforeCompaction: undefined,
+    });
+  }
+
   const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
   logVerbose(
     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
@@ -1063,6 +1079,7 @@ export async function runSessionCompactionIfNeeded(params: {
       },
       {
         assertActive,
+        requestBudget: params.compactionRequestBudget,
         ...(compactionTrigger === "transcript_bytes" && isCodexRuntime
           ? {
               transcriptBytePreflightHarness: "codex" as const,
@@ -1232,6 +1249,7 @@ export async function runMemoryFlushIfNeeded(params: {
   abortSignal?: AbortSignal;
   onSessionIdChanged?: (sessionId: string) => void;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
+  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
 }): Promise<MemoryFlushResult> {
   const abortSignal = params.replyOperation?.abortSignal ?? params.abortSignal;
   const updateSessionId = (sessionId: string) => {
@@ -1544,6 +1562,12 @@ export async function runMemoryFlushIfNeeded(params: {
       flushRunRegistered = true;
     }
     try {
+      memoryFlushLog.debug("memory flush dispatched", {
+        event: "memory_flush_dispatched",
+        runId: flushRunId,
+        sessionKey: params.sessionKey,
+        sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
+      });
       await runEmbeddedAgentEntry({
         selection: {
           cfg: selection.cfg,
@@ -1640,6 +1664,7 @@ export async function runMemoryFlushIfNeeded(params: {
             onCompactionAccounting: (fact) => {
               if (fact) {
                 recordTurnCompaction(compaction, fact);
+                params.onCompactionAccounting?.(fact);
                 if (fact.kind === "durable" && !deferredLifecycle.signal.aborted) {
                   // Acceptance already published this target; only carry it into the next candidate.
                   params.followupRun.run.sessionId = fact.target.sessionId;

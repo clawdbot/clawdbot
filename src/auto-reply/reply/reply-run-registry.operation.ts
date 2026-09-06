@@ -45,7 +45,6 @@ import {
   startReplyOperationSuccessorBarriers,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
-  waitForReplyBarrierSettlement,
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
@@ -93,7 +92,6 @@ export function createReplyOperation(params: {
   let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
-  let clearBarrierSettlement: Promise<void> | undefined;
   let pendingClearBarrier: ReplyRunAdmissionBarrier | undefined;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
@@ -102,7 +100,17 @@ export function createReplyOperation(params: {
   let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
-  const settleOwner = () => ownerSettlement.resolve(undefined);
+  let ownerCompletionBarrier: Promise<void> | undefined;
+  const settleOwner = (): void => {
+    const pending = ownerCompletionBarrier;
+    if (!pending) {
+      ownerSettlement.resolve(undefined);
+      return;
+    }
+    void pending.then(() =>
+      pending === ownerCompletionBarrier ? ownerSettlement.resolve(undefined) : settleOwner(),
+    );
+  };
   const startedAtMs = Date.now();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   let lastActivityAtMs = startedAtMs;
@@ -167,7 +175,6 @@ export function createReplyOperation(params: {
     void registeredBarrier.settled.then(() =>
       flushReplyOperationAfterClear(operation, registeredBarrier.sessionId),
     );
-    clearBarrierSettlement = registeredBarrier.settled;
   };
 
   const abortInternally = (reason?: unknown) => {
@@ -494,26 +501,24 @@ export function createReplyOperation(params: {
       operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
+      // Admission may time out to free a slot; the old writer settles only when
+      // its actual delivery/persistence barrier finishes, including repeated complete().
+      const completed = Promise.resolve(barrier).then(
+        () => {},
+        () => {},
+      );
+      ownerCompletionBarrier = ownerCompletionBarrier
+        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
+        : completed;
       if (!result) {
         setResult({ kind: "completed" });
         phase = "completed";
       }
-      const wasAlreadyCleared = stateCleared;
-      const ownerCompletionSettlement = pendingClearBarrier
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : undefined;
       clearState(barrier, timeoutMs);
       // This barrier owns dispatch delivery and terminal persistence. Stale
       // expiry may have already cleared the slot, but recovery must still wait
       // for that old owner's durable work before admitting a queued turn.
-      const completionSettlement = wasAlreadyCleared
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : (ownerCompletionSettlement ?? clearBarrierSettlement);
-      if (completionSettlement) {
-        void completionSettlement.then(settleOwner);
-      } else {
-        settleOwner();
-      }
+      settleOwner();
     },
     fail(code, cause) {
       abortFrozenOperations.add(operation);

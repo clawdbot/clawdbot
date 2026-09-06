@@ -723,6 +723,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("accounts accepted memory compaction once after a model-only fallback refreshes context", async () => {
+    const onCompactionAccounting = vi.fn();
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = createFlushSessionEntry({ lifecycleRevision: "memory-generation" });
@@ -793,6 +794,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
+      onCompactionAccounting,
       followupRun: createTestFollowupRun({
         thinkingCatalog: [
           { provider: "anthropic", id: "claude", input: ["text"] },
@@ -805,6 +807,12 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(result.outcome).toBe("completed");
+    expect(
+      onCompactionAccounting.mock.calls.map(([fact]) => [fact.count, fact.target.sessionId]),
+    ).toEqual([
+      [1, "session-rotated"],
+      [0, "session-rotated"],
+    ]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(incrementCompactionCountMock).toHaveBeenCalledOnce();
     expect(loadMainSessionEntry(storePath)).toMatchObject({
@@ -2354,6 +2362,107 @@ describe("runMemoryFlushIfNeeded", () => {
       }
     },
   );
+
+  it("skips the pre-compaction checkpoint when there is no hard pressure", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 10_000 });
+    const beforeCompaction = vi.fn(async (entry: SessionEntry) => entry);
+
+    await runDefaultPreflight(sessionEntry, { beforeCompaction });
+
+    expect(beforeCompaction).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("awaits one pre-compaction checkpoint and compacts the refreshed session", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 90_000 });
+    const refreshedEntry = { ...sessionEntry, sessionId: "checkpoint-successor" };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const events: string[] = [];
+    const beforeCompaction = vi.fn(async (entry: SessionEntry) => {
+      expect(entry.sessionId).toBe("session");
+      events.push("checkpoint started");
+      entered.resolve();
+      await release.promise;
+      events.push("checkpoint completed");
+      return refreshedEntry;
+    });
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+      events.push("compactor started");
+      return { ok: true, compacted: true, result: { tokensAfter: 42 } };
+    });
+    const pending = runDefaultPreflight(sessionEntry, { beforeCompaction });
+    try {
+      await expect(
+        Promise.race([
+          entered.promise.then(() => "checkpoint"),
+          pending.then(() => "returned before checkpoint"),
+        ]),
+      ).resolves.toBe("checkpoint");
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      release.resolve();
+      await pending;
+
+      expect(beforeCompaction).toHaveBeenCalledOnce();
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+      expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+        sessionId: "checkpoint-successor",
+        preflightRequired: true,
+      });
+      expect(events).toEqual(["checkpoint started", "checkpoint completed", "compactor started"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  });
+
+  it("skips compaction when the checkpoint returns a session below hard pressure", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 90_000 });
+    const refreshedEntry = { ...sessionEntry, totalTokens: 10_000 };
+    const beforeCompaction = vi.fn(async () => refreshedEntry);
+
+    const result = await runDefaultPreflight(sessionEntry, { beforeCompaction });
+
+    expect(beforeCompaction).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ sessionId: "session", totalTokens: 10_000 });
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("does not compact after cancellation during the pre-compaction checkpoint", async () => {
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 90_000 });
+    const controller = new AbortController();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const beforeCompaction = vi.fn(async (entry: SessionEntry) => {
+      entered.resolve();
+      await release.promise;
+      return entry;
+    });
+    const pending = runDefaultPreflight(sessionEntry, {
+      beforeCompaction,
+      abortSignal: controller.signal,
+    });
+    try {
+      await expect(
+        Promise.race([
+          entered.promise.then(() => "checkpoint"),
+          pending.then(() => "returned before checkpoint"),
+        ]),
+      ).resolves.toBe("checkpoint");
+      controller.abort(new Error("cancelled during checkpoint"));
+      const rejection = expect(pending).rejects.toThrow("cancelled during checkpoint");
+      release.resolve();
+      await rejection;
+
+      expect(beforeCompaction).toHaveBeenCalledOnce();
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  });
 
   it.each([
     { stage: "before start", invalidation: "authorization" },
