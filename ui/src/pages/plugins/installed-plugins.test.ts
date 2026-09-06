@@ -5,7 +5,7 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { renderInstalledPlugins, type InstalledPluginsProps } from "./installed-plugins.ts";
-import { createPlugin, createResult } from "./view.test-support.ts";
+import { createPlugin, createResult } from "./plugins-page.test-support.ts";
 
 function baseProps(overrides: Partial<InstalledPluginsProps> = {}): InstalledPluginsProps {
   return {

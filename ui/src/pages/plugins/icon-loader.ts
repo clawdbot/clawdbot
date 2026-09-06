@@ -317,6 +317,8 @@ type FetchProxiedIconParams = {
   signal: AbortSignal;
 };
 
+export type PluginIconFetchContext = Omit<FetchProxiedIconParams, "signal">;
+
 function cancelUnreadResponseBody(response: Response): void {
   if (!response.bodyUsed) {
     // Cancellation is best-effort cleanup; a stalled stream must not block

@@ -20,7 +20,6 @@ import {
   renderPluginConsentDialog,
   type PluginConsentState,
 } from "./consent-dialog.ts";
-
 const INSTALLED_PLUGINS_INITIAL_LIMIT = 12;
 
 function existingCatalogOrder(left: PluginCatalogItem, right: PluginCatalogItem): number {

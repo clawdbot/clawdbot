@@ -4016,7 +4016,6 @@ ui/src/pages/new-session/place-facts.ts	1
 ui/src/pages/new-session/preferences.ts	1
 ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
-ui/src/pages/plugins/view.ts	2
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5

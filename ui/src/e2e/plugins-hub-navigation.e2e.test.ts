@@ -119,7 +119,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills") {
     active === "plugins"
       ? {
           title: "Plugins",
-          subtitle: "Manage plugins and add capabilities from ClawHub.",
+          subtitle: "Browse installed plugins and open their settings.",
           docs: "https://docs.openclaw.ai/plugins/manage-plugins",
         }
       : {
@@ -204,6 +204,7 @@ suite.define(() => {
           content:
             "*, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }",
         });
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
         await page.getByRole("heading", { name: "Installed plugins" }).waitFor();
         const pluginsHeader = await headerGeometry(page);

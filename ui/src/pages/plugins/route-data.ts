@@ -26,11 +26,14 @@ export function canonicalPluginsRouteLocation(
   basePath = "",
 ): RouteLocation | null {
   const searchParams = new URLSearchParams(location.search);
-  const legacyTab = searchParams.get("tab");
-  const hadLegacyTab = searchParams.has("tab");
-  searchParams.delete("tab");
-  const search = searchParams.toString();
   const settingsPath = pathForRoute("plugin-settings", basePath);
+  const legacyTab = searchParams.get("tab");
+  const supportedAdvancedTab = location.pathname === settingsPath && legacyTab === "advanced";
+  const hadLegacyTab = searchParams.has("tab") && !supportedAdvancedTab;
+  if (hadLegacyTab) {
+    searchParams.delete("tab");
+  }
+  const search = searchParams.toString();
   const isLegacyDiscoverPath = location.pathname === `${settingsPath}/discover`;
   const legacyDiscover = isLegacyDiscoverPath || legacyTab === "discover";
   const canonical: RouteLocation = {

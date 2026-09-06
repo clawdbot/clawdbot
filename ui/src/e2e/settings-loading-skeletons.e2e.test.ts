@@ -189,11 +189,11 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/plugins`);
       await gateway.waitForRequest("plugins.list");
-      await captureLoadingState(page.locator(".plugins-panel"), "plugins-panel");
+      await captureLoadingState(page.locator("#plugin-settings-panel"), "plugins-panel");
     });
   });
 
-  it("renders the Plugins MCP config load as a skeleton", async () => {
+  it("renders the advanced Plugins config load as a skeleton", async () => {
     await withPage(async (page) => {
       await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "plugins.list"],
@@ -206,9 +206,16 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/plugins`);
-      const mcpSection = page.locator(".settings-section", { hasText: "MCP servers" }).first();
-      await captureLoadingState(mcpSection, "plugins-mcp");
+      await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/plugins",
+        routeId: "plugin-settings",
+        search: "?tab=advanced",
+      });
+      await captureLoadingState(
+        page.locator("#plugin-settings-advanced .settings-section"),
+        "plugins-advanced",
+      );
     });
   });
 

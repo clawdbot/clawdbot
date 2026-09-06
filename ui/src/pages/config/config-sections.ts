@@ -26,7 +26,7 @@ const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
 // sections render here, below the curated status rows (security.ts).
 const SECURITY_SECTION_KEYS = ["security", "approvals"] as const;
 
-const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron", "plugins"] as const;
+const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron"] as const;
 
 const INFRASTRUCTURE_SECTION_KEYS = ["gateway", "browser", "nodeHost", "discovery", "acp"] as const;
 
@@ -66,13 +66,24 @@ const CONFIG_PAGE_BY_SECTION = new Map<string, ConfigPageId>(
   ),
 );
 
-export const SCOPED_CONFIG_SECTION_KEYS = new Set(CONFIG_PAGE_BY_SECTION.keys());
+const EXTERNAL_SECTION_ROUTE_IDS = new Map<string, "plugin-settings">([
+  ["plugins", "plugin-settings"],
+]);
+
+export const SCOPED_CONFIG_SECTION_KEYS = new Set([
+  ...CONFIG_PAGE_BY_SECTION.keys(),
+  ...EXTERNAL_SECTION_ROUTE_IDS.keys(),
+]);
 
 export function configSectionKeysForPage(pageId: ConfigPageId): readonly string[] | undefined {
   return CONFIG_SECTION_KEYS_BY_PAGE[pageId];
 }
 
-export function configPageForSection(sectionKey: string): ConfigPageId {
+export function configPageForSection(sectionKey: string): ConfigPageId | "plugin-settings" {
   // Sections without a curated home render on the Advanced page.
-  return CONFIG_PAGE_BY_SECTION.get(sectionKey) ?? "advanced";
+  return (
+    EXTERNAL_SECTION_ROUTE_IDS.get(sectionKey) ??
+    CONFIG_PAGE_BY_SECTION.get(sectionKey) ??
+    "advanced"
+  );
 }

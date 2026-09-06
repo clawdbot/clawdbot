@@ -89,11 +89,7 @@ export function renderArtTile(
   </span>`;
 }
 
-export function renderPluginMetaRow(
-  label: string,
-  value: TemplateResult | string,
-  warning = false,
-) {
+function renderPluginMetaRow(label: string, value: TemplateResult | string, warning = false) {
   return html`
     <div class="plugins-detail__meta-row ${warning ? "plugins-consent__row--warning" : ""}">
       <span class="plugins-detail__meta-label">${label}</span>
@@ -303,10 +299,6 @@ export function pluginOriginLabel(origin: string | undefined, official?: boolean
       ? PLUGIN_ORIGIN_LABELS[origin]
       : undefined;
   return label ? t(label) : (origin ?? (official === false ? t("pluginConsent.community") : null));
-}
-
-export function pluginVerificationLabel(tier: string): string {
-  return tier === "source-linked" ? t("pluginsPage.verifiedSource") : tier;
 }
 
 function renderProvenance(source: PluginInspectSource | undefined) {
