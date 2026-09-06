@@ -8,9 +8,17 @@ import { LINE_RETRY_KEY_TTL_MS } from "./send-retry.js";
 
 const PLAN_VERSION = 1;
 const PLAN_NAMESPACE = "outbound-send-plans";
+// The plan's clock starts when the push is recorded; the window that consumes it
+// is measured from the dispatch marker written immediately afterwards. Expiring
+// on the bare retry-key TTL therefore retires the record a moment before the last
+// replay it has to serve, and reconciliation reads that gap as "this delivery
+// never carried a recorder" and gives up on a send LINE would still deduplicate.
+// The margin only has to cover the write that separates the two.
+const PLAN_TTL_DISPATCH_MARGIN_MS = 60_000;
 // A replay can only deduplicate while LINE still remembers the retry keys, so a
-// plan is worthless past that point and must not outlive it.
-const PLAN_TTL_MS = LINE_RETRY_KEY_TTL_MS;
+// plan is worthless past that point and must not outlive it by more than the
+// margin above.
+const PLAN_TTL_MS = LINE_RETRY_KEY_TTL_MS + PLAN_TTL_DISPATCH_MARGIN_MS;
 
 /** One recorded platform send: the request LINE saw, under the key that deduplicates it. */
 type LineDurablePush = {

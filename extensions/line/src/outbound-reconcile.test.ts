@@ -307,6 +307,24 @@ describe("LINE unknown-send reconciliation", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // The plan is written just before the dispatch marker the window is measured
+  // from, so a plan expiring on the bare retry-key TTL is already gone for the
+  // last stretch of the window it exists to serve. Reconciliation reads a missing
+  // plan as "this delivery carried no recorder" and retires a reply LINE would
+  // still have deduplicated.
+  it("still holds the recorded plan at the far edge of the reconciliation window", async () => {
+    await sendDurableFlexPart();
+    fetchMock.mockClear();
+    // One millisecond is all it takes: the marker cannot precede the record.
+    const dispatchedAt = NOW + 1;
+    vi.setSystemTime(dispatchedAt + LINE_RETRY_KEY_TTL_MS - 1);
+
+    const result = await reconcile({ platformSendStartedAt: dispatchedAt });
+
+    expect(result).not.toMatchObject({ status: "unresolved", retryable: false });
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
   it("refuses to replay once LINE has forgotten the retry keys", async () => {
     await sendDurablePart({ partIndex: 0, partCount: 1, text: "hello" });
     fetchMock.mockClear();

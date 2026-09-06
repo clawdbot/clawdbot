@@ -19,9 +19,41 @@ export function createLineBlobStoreState(): {
 }
 
 function createBlobStoreOpener(namespaces: Map<string, LineBlobStoreFake>) {
-  return (options: { namespace: string }) => {
+  // Expiries live beside the bytes, per namespace, because production opens a new
+  // store handle for every operation: holding them on the handle would drop each
+  // entry's deadline the moment the store that recorded it went out of scope.
+  const namespaceExpiries = new Map<string, Map<string, number>>();
+  return (options: { namespace: string; defaultTtlMs?: number }) => {
     const blobs = namespaces.get(options.namespace) ?? new Map<string, Uint8Array>();
     namespaces.set(options.namespace, blobs);
+    // The store this stands in for drops an entry once its TTL passes. Keeping
+    // entries forever here would make every expiry-dependent assertion pass by
+    // construction, including the window a recorded plan has to survive.
+    const expiries = namespaceExpiries.get(options.namespace) ?? new Map<string, number>();
+    namespaceExpiries.set(options.namespace, expiries);
+    const isExpired = (key: string) => {
+      const expiresAt = expiries.get(key);
+      return expiresAt !== undefined && Date.now() >= expiresAt;
+    };
+    const drop = (key: string) => {
+      blobs.delete(key);
+      expiries.delete(key);
+    };
+    const live = (key: string) => {
+      if (isExpired(key)) {
+        drop(key);
+      }
+      return blobs.has(key);
+    };
+    const put = (key: string, bytes: Uint8Array, ttlMs?: number) => {
+      blobs.set(key, bytes);
+      const effectiveTtlMs = ttlMs ?? options.defaultTtlMs;
+      if (effectiveTtlMs === undefined) {
+        expiries.delete(key);
+        return;
+      }
+      expiries.set(key, Date.now() + effectiveTtlMs);
+    };
     const info = (key: string) => ({
       key,
       metadata: {},
@@ -29,26 +61,56 @@ function createBlobStoreOpener(namespaces: Map<string, LineBlobStoreFake>) {
       createdAt: 0,
     });
     return {
-      register: async (key: string, bytes: Uint8Array) => {
-        blobs.set(key, bytes);
+      register: async (
+        key: string,
+        bytes: Uint8Array,
+        _metadata?: unknown,
+        entryOptions?: { ttlMs?: number },
+      ) => {
+        put(key, bytes, entryOptions?.ttlMs);
       },
-      registerIfAbsent: async (key: string, bytes: Uint8Array) => {
-        if (blobs.has(key)) {
+      registerIfAbsent: async (
+        key: string,
+        bytes: Uint8Array,
+        _metadata?: unknown,
+        entryOptions?: { ttlMs?: number },
+      ) => {
+        if (live(key)) {
           return false;
         }
-        blobs.set(key, bytes);
+        put(key, bytes, entryOptions?.ttlMs);
         return true;
       },
       lookup: async (key: string) => {
+        if (!live(key)) {
+          return undefined;
+        }
         const bytes = blobs.get(key);
         return bytes ? { ...info(key), bytes } : undefined;
       },
-      entries: async () => Array.from(blobs.keys(), info),
-      delete: async (key: string) => blobs.delete(key),
-      deleteExpiredKey: async () => undefined,
-      deleteExpired: async () => [],
+      entries: async () => Array.from(blobs.keys(), info).filter((entry) => live(entry.key)),
+      delete: async (key: string) => {
+        const existed = blobs.has(key);
+        drop(key);
+        return existed;
+      },
+      deleteExpiredKey: async (key: string) => {
+        if (!isExpired(key)) {
+          return undefined;
+        }
+        drop(key);
+        return key;
+      },
+      deleteExpired: async () => {
+        const expired = Array.from(blobs.keys()).filter(isExpired);
+        for (const key of expired) {
+          drop(key);
+        }
+        return expired;
+      },
       clear: async () => {
         blobs.clear();
+        expiries.clear();
       },
     };
   };
