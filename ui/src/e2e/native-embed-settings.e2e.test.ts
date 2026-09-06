@@ -53,6 +53,67 @@ const viewports = [
 ] as const;
 
 suite.define(() => {
+  for (const destination of [
+    { from: "memory", route: "memory-import", title: "Import Memory", tab: "Settings" },
+    { from: "skills", route: "plugins", title: "Plugins", tab: "Installed" },
+    { from: "skills", route: "skill-workshop", title: "Skill Workshop", tab: "Workshop" },
+  ] as const) {
+    it(`returns from embedded ${destination.route} through its page link and direct entry`, async () => {
+      await suite.withPage(
+        { viewport: { width: 375, height: 812 }, hasTouch: true, serviceWorkers: "block" },
+        async ({ page }) => {
+          await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+          await installMockGateway(page, {
+            operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+            methodResponses: {
+              "doctor.memory.status": {
+                agentId: "main",
+                provider: "none",
+                embedding: { ok: false, checked: false },
+              },
+              "migrations.memory.plan": {
+                agentId: "main",
+                workspace: "/tmp/synthetic-workspace",
+                providers: [],
+              },
+            },
+          });
+          await page.goto(new URL(pathForRoute(destination.from), suite.server.baseUrl).toString());
+          await waitForControlUiRoute(page, { routeId: destination.from });
+          if (destination.from === "memory") {
+            await page.getByRole("tab", { name: destination.tab, exact: true }).click();
+            await page.locator('a[href="/memory-import"]').click();
+          } else {
+            await page.getByRole("tab", { name: destination.tab, exact: true }).click();
+          }
+          await waitForControlUiRoute(page, { routeId: destination.route });
+          const header = page.locator(".native-embed-header");
+          await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+          expect(await page.locator(".shell-nav, openclaw-app-topbar").count()).toBe(0);
+          await header.getByRole("button", { name: "Back", exact: true }).click();
+          // Memory's document link uses the parent fallback; hub tabs use app history.
+          await waitForControlUiRoute(page, {
+            routeId: destination.from,
+            pathname: pathForRoute(destination.from),
+          });
+
+          await page.goto(
+            new URL(pathForRoute(destination.route), suite.server.baseUrl).toString(),
+          );
+          await waitForControlUiRoute(page, { routeId: destination.route });
+          await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+          await header.getByRole("button", { name: "Back", exact: true }).click();
+          const parent = destination.from === "memory" ? "memory" : "settings";
+          await waitForControlUiRoute(page, { routeId: parent, pathname: pathForRoute(parent) });
+          if (parent === "memory") {
+            await header.getByRole("button", { name: "Back", exact: true }).click();
+            await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
+          }
+        },
+      );
+    });
+  }
+
   it("keeps embedded Back and settings navigation usable while offline", async () => {
     await suite.withPage(
       { viewport: { width: 375, height: 812 }, hasTouch: true, serviceWorkers: "block" },

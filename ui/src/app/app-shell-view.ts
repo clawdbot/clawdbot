@@ -294,13 +294,9 @@ export function renderApplicationShell(host: ShellViewHost) {
     });
   }
   const navigationContent =
-    settingsTakeover || embedSettings
+    settingsTakeover || nativeEmbed
       ? renderLazySettingsSidebar(host, {
-          presentation: embedSettings
-            ? embedSettingsRoot
-              ? "embed-list"
-              : "embed-page"
-            : "sidebar",
+          presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
           basePath: context.basePath,
           activeRouteId: activeRoute,
           activePathname: host.routeState.location?.pathname ?? "",
@@ -341,6 +337,8 @@ export function renderApplicationShell(host: ShellViewHost) {
               host.exitSettings();
             } else if (canGoBackInNativeEmbed()) {
               window.history.back();
+            } else if (activeRoute === "memory-import") {
+              context.replace("memory");
             } else {
               host.navigate("settings");
             }
@@ -587,7 +585,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onNavigate: (routeId) => host.navigate(routeId),
           onOpenApprovals: () => host.openApprovals(),
         })}
-        ${embedSettings ? navigationContent : nothing}
+        ${nativeEmbed ? navigationContent : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked || reloadRequired}
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
