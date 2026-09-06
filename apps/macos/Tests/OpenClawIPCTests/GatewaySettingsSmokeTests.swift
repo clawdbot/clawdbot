@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -15,7 +14,7 @@ struct GatewaySettingsSmokeTests {
                 url: #require(URL(string: "wss://gateway.example.test:8443/control/")))
             try await withHostedSettings(GatewaySettings(profiles: [profile])) { hosting, window in
                 for (action, reconnecting) in [("Reconnect", true), ("Add Gateway", false)] {
-                    let buttons = try await settingsAccessibilityElements(hosting)
+                    let buttons = try await AppKitTestSupport.accessibilityElements(in: hosting)
                     let button = try #require(buttons.first {
                         $0.accessibilityRole?() == .button &&
                             [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains(action)
@@ -30,7 +29,7 @@ struct GatewaySettingsSmokeTests {
                     var connectEnabled: Bool?
                     repeat {
                         sheet.layoutSubtreeIfNeeded()
-                        let elements = try await settingsAccessibilityElements(sheet)
+                        let elements = try await AppKitTestSupport.accessibilityElements(in: sheet)
                         values = elements.filter { $0.accessibilityRole?() == .textField }.map {
                             let value: Any? = $0.accessibilityValue?()
                             return value as? String ?? ""
@@ -53,7 +52,7 @@ struct GatewaySettingsSmokeTests {
                         let hasOnlyEmptyFields = values.allSatisfy(\.isEmpty)
                         #expect(hasOnlyEmptyFields)
                     }
-                    let cancel = try #require(try await settingsAccessibilityElements(sheet).first {
+                    let cancel = try #require(try await AppKitTestSupport.accessibilityElements(in: sheet).first {
                         $0.accessibilityRole?() == .button &&
                             [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Cancel")
                     })
@@ -89,26 +88,4 @@ private func withHostedSettings<Content: View>(
     window.orderFront(nil)
     hosting.layoutSubtreeIfNeeded()
     try await body(hosting, window)
-}
-
-@MainActor
-private func settingsAccessibilityElements(_ root: NSView) async throws -> [AnyObject] {
-    // SwiftUI materializes its virtual accessibility children after a real client request.
-    let result = await Task.detached {
-        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-        var windows: CFTypeRef?
-        return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
-    }.value
-    try #require(result == .success)
-    var elements: [AnyObject] = []
-    var visited = Set<ObjectIdentifier>()
-    func visit(_ element: AnyObject) {
-        guard visited.insert(ObjectIdentifier(element)).inserted else { return }
-        elements.append(element)
-        for child in element.accessibilityChildren?() ?? [] {
-            visit(child as AnyObject)
-        }
-    }
-    visit(root)
-    return elements
 }
