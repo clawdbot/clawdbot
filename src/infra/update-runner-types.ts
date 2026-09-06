@@ -43,8 +43,6 @@ export type UpdateRunResult = {
   recovery?: UpdateRecovery;
   postUpdate?: {
     plugins?: {
-      /** A declined or unavailable capability acknowledgment must stay operator-owned. */
-      capabilityConsentRequired?: true;
       status: "ok" | "warning" | "skipped" | "error";
       reason?: string;
       changed: boolean;

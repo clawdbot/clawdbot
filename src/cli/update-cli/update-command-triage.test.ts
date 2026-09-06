@@ -78,7 +78,6 @@ it.each<{
     result: {
       postUpdate: {
         plugins: {
-          capabilityConsentRequired: true,
           status: "error",
           changed: false,
           sync: {
@@ -88,7 +87,17 @@ it.each<{
             warnings: [],
             errors: [],
           },
-          npm: { changed: false, outcomes: [] },
+          npm: {
+            changed: false,
+            outcomes: [
+              {
+                pluginId: "approval-required",
+                status: "error",
+                code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+                message: "Operator capability approval is required.",
+              },
+            ],
+          },
           integrityDrifts: [],
         },
       },

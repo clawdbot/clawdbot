@@ -81,7 +81,6 @@ export function resolveAutomaticUpdateTriage(
       result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "rollback-checkout-dirty"
     ) &&
-    !result.postUpdate?.plugins?.capabilityConsentRequired &&
     !result.postUpdate?.plugins?.npm.outcomes.some(
       (outcome) => outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
     ) &&
