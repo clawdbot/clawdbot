@@ -158,7 +158,7 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
     }
     INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex = start;
     const match = INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.exec(text);
-    searchFrom = match ? INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex : marker + 2;
+    searchFrom = match ? INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex : marker + 1;
     if (!match) {
       continue;
     }

@@ -63,6 +63,13 @@ describe("stripInlineDirectiveTagsForDelivery", () => {
     expect(result.text).toBe("hello world");
   });
 
+  test.each([
+    ["reply", "[[[reply_to_current]]hello"],
+    ["audio", "[[[audio_as_voice]]hello"],
+  ])("removes overlapping %s directive openers", (_name, input) => {
+    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: "[ hello", changed: true });
+  });
+
   test("preserves intentional multi-space formatting away from directives", () => {
     const input = "a  b [[reply_to:123]] c   d";
     const result = stripInlineDirectiveTagsForDelivery(input);
