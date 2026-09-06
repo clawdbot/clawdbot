@@ -14,6 +14,48 @@ export type AssistantTextSnapshot = {
   scope?: { itemId: string; prefix: string };
 };
 
+/** A text-bearing empty result clears output; a missing text payload does not. */
+export function resolveAssistantResultText(result: unknown): string | undefined {
+  const payloads = asOptionalObjectRecord(result)?.payloads;
+  const texts = Array.isArray(payloads)
+    ? payloads.flatMap((payload) => {
+        const text = asOptionalObjectRecord(payload)?.text;
+        return typeof text === "string" ? [text] : [];
+      })
+    : [];
+  return texts.length > 0 ? texts.filter(Boolean).join("\n\n") : undefined;
+}
+
+/** Settled provisional output is run-wide; ordinary item streams keep their wire projection. */
+export function resolveAssistantTextCompletion(params: {
+  assistantText: AssistantTextSnapshot;
+  pending?: AssistantTextSnapshot;
+  resultText?: string;
+  streamedText: string;
+  fallbackText: string;
+}): string {
+  if (params.pending) {
+    return (
+      params.resultText ?? (params.pending.text || (params.streamedText ? "" : params.fallbackText))
+    );
+  }
+  return params.streamedText
+    ? params.assistantText.text
+    : (params.resultText ?? params.assistantText.text) || params.fallbackText;
+}
+
+/** Unkeyed held snapshots, including terminal echoes, describe the whole pending run. */
+export function mergePendingAssistantText(
+  previous: AssistantTextSnapshot,
+  input: AssistantTextInput,
+): AssistantTextSnapshot {
+  return mergeAssistantText(
+    previous,
+    !input.itemId && input.text !== undefined ? { ...input, replace: true } : input,
+    "append-only",
+  );
+}
+
 /** Preserve snapshot presence: an absent snapshot is not an empty item. */
 export function resolveAssistantTextInput(data: unknown): AssistantTextInput | undefined {
   const record = asOptionalObjectRecord(data);

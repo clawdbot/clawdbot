@@ -42,6 +42,9 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-w
 import { defaultRuntime } from "../runtime.js";
 import {
   mergeAssistantText,
+  mergePendingAssistantText,
+  resolveAssistantResultText,
+  resolveAssistantTextCompletion,
   resolveAssistantTextInput,
   type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
@@ -254,17 +257,6 @@ export const testing = {
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
-}
-
-function resolveResponsePayloadText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-  return Array.isArray(payloads)
-    ? payloads
-        .flatMap((payload) =>
-          typeof payload.text === "string" && payload.text ? [payload.text] : [],
-        )
-        .join("\n\n")
-    : "";
 }
 
 type ResolvedResponsesLimits = {
@@ -757,7 +749,7 @@ export async function handleOpenResponsesHttpRequest(
       if (readAgentRunTerminalOutcome(result) === "failed") {
         throw new Error("agent run failed");
       }
-      const assistantText = resolveResponsePayloadText(result);
+      const assistantText = resolveAssistantResultText(result);
       const usage = extractUsageFromResult(result);
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -876,17 +868,17 @@ export async function handleOpenResponsesHttpRequest(
 
   let assistantText: AssistantTextSnapshot = { text: "" };
   let streamedAssistantText = "";
-  let bufferedReplaceableAssistantContent = "";
-  let sawAssistantDelta = false;
+  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  let finalResultText: string | undefined;
+  let finalToolCalls: PendingToolCall[] | undefined;
   let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
-  let finalizeStatus: ResponseResource["status"] | null = null;
-  let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let finalizeRequested: { status: ResponseResource["status"]; errorMessage?: string } | null =
+    null;
   let finalizeScheduled = false;
-  let finalizeErrorMessage: string | undefined;
   let terminalLifecyclePhase: "end" | "error" = "end";
 
   const maybeFinalize = () => {
@@ -911,9 +903,28 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
       const usage = finalUsage;
-      const finalText =
-        assistantText.text || bufferedReplaceableAssistantContent || finalizeRequested.text;
-
+      const finalText = resolveAssistantTextCompletion({
+        assistantText,
+        pending: pendingAssistantText,
+        resultText: finalResultText,
+        streamedText: streamedAssistantText,
+        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
+      });
+      if (!finalText.startsWith(streamedAssistantText)) {
+        finalizeUnrepresentableAssistantReplacement();
+        return;
+      }
+      const delta = finalText.slice(streamedAssistantText.length);
+      if (delta) {
+        writeSseEvent(res, {
+          type: "response.output_text.delta",
+          item_id: outputItemId,
+          output_index: 0,
+          content_index: 0,
+          delta,
+        });
+      }
+      streamedAssistantText = finalText;
       closed = true;
       stopWatchingDisconnect();
       unsubscribe();
@@ -937,7 +948,10 @@ export async function handleOpenResponsesHttpRequest(
       const completedItem = createAssistantOutputItem({
         id: outputItemId,
         text: finalText,
-        phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
+        phase:
+          finalizeRequested.status === "completed" && !finalToolCalls
+            ? "final_answer"
+            : "commentary",
         status: "completed",
       });
 
@@ -947,17 +961,39 @@ export async function handleOpenResponsesHttpRequest(
         item: completedItem,
       });
 
+      const output: OutputItem[] = [completedItem];
+      for (const functionCall of finalToolCalls ?? []) {
+        const item = createFunctionCallOutputItem({
+          id: `call_${randomUUID()}`,
+          callId: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+        });
+        const outputIndex = output.length;
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item,
+        });
+        const completedCall: OutputItem = { ...item, status: "completed" };
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: outputIndex,
+          item: completedCall,
+        });
+        output.push(completedCall);
+      }
       const finalResponse = createResponseResource({
         ...responseIdentity,
         model,
         status: finalizeRequested.status,
-        output: [completedItem],
+        output,
         usage,
         ...(finalizeRequested.status === "failed"
           ? {
               error: {
                 code: "server_error",
-                message: finalizeErrorMessage || "Agent run failed",
+                message: finalizeRequested.errorMessage || "Agent run failed",
               },
             }
           : {}),
@@ -973,17 +1009,11 @@ export async function handleOpenResponsesHttpRequest(
     });
   };
 
-  const requestFinalize = (
-    status: ResponseResource["status"],
-    text: string,
-    errorMessage?: string,
-  ) => {
+  const requestFinalize = (status: ResponseResource["status"], errorMessage?: string) => {
     if (finalizeRequested) {
       return;
     }
-    finalizeStatus = status;
-    finalizeErrorMessage = errorMessage;
-    finalizeRequested = { status, text };
+    finalizeRequested = { status, errorMessage };
     maybeFinalize();
   };
 
@@ -1063,10 +1093,20 @@ export async function handleOpenResponsesHttpRequest(
       if (!input) {
         return;
       }
-      if (input.replaceable) {
-        const snapshot = input.text ?? (input.delta || undefined);
-        if (snapshot !== undefined) {
-          bufferedReplaceableAssistantContent = snapshot;
+      // Once a provisional replacement begins, even its terminal text echo
+      // stays held until the run result selects the authoritative output.
+      if (input.replaceable || pendingAssistantText) {
+        pendingAssistantText = mergePendingAssistantText(
+          pendingAssistantText ?? assistantText,
+          input,
+        );
+        if (
+          !input.replaceable &&
+          input.replace &&
+          input.text !== undefined &&
+          pendingAssistantText.text.startsWith(streamedAssistantText)
+        ) {
+          unrepresentableAssistantReplacement = false;
         }
         return;
       }
@@ -1089,7 +1129,6 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
       streamedAssistantText = assistantText.text;
-      sawAssistantDelta = true;
       writeSseEvent(res, {
         type: "response.output_text.delta",
         item_id: outputItemId,
@@ -1103,14 +1142,12 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText =
-          assistantText.text || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         const errorMessage =
           phase === "error" && typeof evt.data?.error === "string"
             ? evt.data.error.trim()
             : undefined;
-        requestFinalize(finalStatus, finalText, errorMessage);
+        requestFinalize(finalStatus, errorMessage);
       }
     }
   });
@@ -1169,15 +1206,10 @@ export async function handleOpenResponsesHttpRequest(
 
       finalUsage = extractUsageFromResult(result);
 
-      if (unrepresentableAssistantReplacement) {
-        finalizeUnrepresentableAssistantReplacement();
-        return;
-      }
-
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
       const resultAny = result as { meta?: unknown };
-      const resultPayloadText = resolveResponsePayloadText(result);
+      const resultPayloadText = resolveAssistantResultText(result);
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1201,128 +1233,9 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      if (
-        !closed &&
-        stopReason === "tool_calls" &&
-        pendingToolCalls &&
-        pendingToolCalls.length > 0
-      ) {
-        const usage = finalUsage ?? createEmptyUsage();
-        const finalText =
-          assistantText.text || resultPayloadText || bufferedReplaceableAssistantContent;
-
-        if (finalText && !sawAssistantDelta) {
-          sawAssistantDelta = true;
-          writeSseEvent(res, {
-            type: "response.output_text.delta",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            delta: finalText,
-          });
-        }
-        writeSseEvent(res, {
-          type: "response.output_text.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          text: finalText,
-        });
-        writeSseEvent(res, {
-          type: "response.content_part.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: finalText },
-        });
-
-        const completedItem = createAssistantOutputItem({
-          id: outputItemId,
-          text: finalText,
-          phase: "commentary",
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: completedItem,
-        });
-
-        // Emit one `function_call` output item per pending call, preserving
-        // arrival order. `output_index` continues past the assistant
-        // message at index 0 so the SSE stream keeps a single, monotonic
-        // index per response. Pre-#52288 the streaming path read only
-        // `pendingToolCalls[0]` and hard-coded `output_index: 1`, so a turn
-        // with multiple client tool calls dropped every call past the
-        // first.
-        const functionCallItems: OutputItem[] = [];
-        let nextStreamOutputIndex = 1;
-        for (const functionCall of pendingToolCalls) {
-          const functionCallItemId = `call_${randomUUID()}`;
-          const functionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.added",
-            output_index: nextStreamOutputIndex,
-            item: functionCallItem,
-          });
-          const completedFunctionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-            status: "completed",
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.done",
-            output_index: nextStreamOutputIndex,
-            item: completedFunctionCallItem,
-          });
-          functionCallItems.push(completedFunctionCallItem);
-          nextStreamOutputIndex += 1;
-        }
-
-        const completedResponse = createResponseResource({
-          ...responseIdentity,
-          model,
-          status: "completed",
-          output: [completedItem, ...functionCallItems],
-          usage,
-        });
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        rememberResponseSession();
-        writeSseEvent(res, { type: "response.completed", response: completedResponse });
-        writeDone(res);
-        res.end();
-        return;
-      }
-
-      // Fallback: if no streaming deltas were received, send the full response as text
-      if (!sawAssistantDelta) {
-        const content =
-          resultPayloadText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
-
-        assistantText.text = content;
-        sawAssistantDelta = true;
-        if (finalizeStatus !== null) {
-          finalizeRequested = { status: finalizeStatus, text: content };
-        }
-
-        writeSseEvent(res, {
-          type: "response.output_text.delta",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          delta: content,
-        });
-      }
-
+      finalResultText = resultPayloadText;
+      finalToolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       maybeFinalize();
     } catch (err) {
       if (closed || abortController.signal.aborted) {
@@ -1361,7 +1274,7 @@ export async function handleOpenResponsesHttpRequest(
     } finally {
       releaseAgentRootWork?.();
       // Existing provider terminals must not be replaced or emitted twice.
-      if (finalizeStatus === null && (terminalLifecyclePhase === "error" || !closed)) {
+      if (finalizeRequested === null && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",

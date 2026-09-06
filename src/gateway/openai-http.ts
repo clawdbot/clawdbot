@@ -39,6 +39,9 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-w
 import { defaultRuntime } from "../runtime.js";
 import {
   mergeAssistantText,
+  mergePendingAssistantText,
+  resolveAssistantResultText,
+  resolveAssistantTextCompletion,
   resolveAssistantTextInput,
   type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
@@ -707,17 +710,6 @@ function buildAgentPrompt(
   };
 }
 
-function resolveAgentResponseText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-  if (!Array.isArray(payloads) || payloads.length === 0) {
-    return "";
-  }
-  return payloads
-    .map((p) => (typeof p.text === "string" ? p.text : ""))
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 type PendingToolCall = {
   id?: unknown;
   name?: unknown;
@@ -1081,7 +1073,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const commentary = resolveAgentResponseText(result);
+        const commentary = resolveAssistantResultText(result) ?? "";
         sendJson(res, 200, {
           id: runId,
           object: "chat.completion",
@@ -1106,7 +1098,7 @@ export async function handleOpenAiHttpRequest(
         });
         return true;
       }
-      const content = resolveAgentResponseText(result) || "No response from OpenClaw.";
+      const content = resolveAssistantResultText(result) || "No response from OpenClaw.";
 
       sendJson(res, 200, {
         id: runId,
@@ -1148,14 +1140,14 @@ export async function handleOpenAiHttpRequest(
   setSseHeaders(res);
 
   let wroteStopChunk = false;
-  let sawAssistantDelta = false;
   let streamedAssistantText = "";
   let assistantText: AssistantTextSnapshot = { text: "" };
-  let bufferedReplaceableAssistantContent = "";
+  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  let finalResultText: string | undefined;
+  let finalToolCalls: ReturnType<typeof resolveStopReasonAndPendingToolCalls>["pendingToolCalls"];
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeScheduled = false;
-  let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
   let observedTerminalLifecycle = false;
@@ -1184,11 +1176,39 @@ export async function handleOpenAiHttpRequest(
         finishStreamWithError(terminalStreamError);
         return;
       }
+      const text = resolveAssistantTextCompletion({
+        assistantText,
+        pending: pendingAssistantText,
+        resultText: finalResultText,
+        streamedText: streamedAssistantText,
+        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
+      });
+      if (!text.startsWith(streamedAssistantText)) {
+        finishStreamWithError({
+          message: "Assistant output cannot be represented as an append-only response stream.",
+          type: "api_error",
+        });
+        return;
+      }
+      const content = text.slice(streamedAssistantText.length);
+      if (content) {
+        writeAssistantContentChunk(res, { ...streamIdentity, content });
+      }
+      streamedAssistantText = text;
+      if (finalToolCalls) {
+        writeAssistantToolCallsIncrementalChunks(res, {
+          ...streamIdentity,
+          toolCalls: finalToolCalls,
+        });
+      }
       closed = true;
       stopWatchingDisconnect();
       unsubscribe();
       if (!wroteStopChunk) {
-        writeAssistantFinishChunk(res, { ...streamIdentity, finishReason: finalizeFinishReason });
+        writeAssistantFinishChunk(res, {
+          ...streamIdentity,
+          finishReason: finalToolCalls ? "tool_calls" : "stop",
+        });
         wroteStopChunk = true;
       }
       if (streamIncludeUsage && finalUsage) {
@@ -1199,10 +1219,7 @@ export async function handleOpenAiHttpRequest(
     });
   };
 
-  const requestFinalize = (finishReason: "stop" | "tool_calls" = "stop") => {
-    if (!finalizeRequested || finishReason === "tool_calls") {
-      finalizeFinishReason = finishReason;
-    }
+  const requestFinalize = () => {
     finalizeRequested = true;
     maybeFinalize();
   };
@@ -1220,14 +1237,13 @@ export async function handleOpenAiHttpRequest(
       if (!input) {
         return;
       }
-      if (input.replace && input.text !== undefined) {
-        bufferedReplaceableAssistantContent = input.text;
-      }
-      if (input.replaceable) {
-        const snapshot = input.text ?? (input.delta || undefined);
-        if (snapshot !== undefined) {
-          bufferedReplaceableAssistantContent = snapshot;
-        }
+      // Once a provisional replacement begins, even its terminal text echo
+      // stays held until the run result selects the authoritative output.
+      if (input.replaceable || pendingAssistantText) {
+        pendingAssistantText = mergePendingAssistantText(
+          pendingAssistantText ?? assistantText,
+          input,
+        );
         return;
       }
 
@@ -1249,7 +1265,6 @@ export async function handleOpenAiHttpRequest(
         return;
       }
       streamedAssistantText = assistantText.text;
-      sawAssistantDelta = true;
       writeAssistantContentChunk(res, { ...streamIdentity, content });
       return;
     }
@@ -1350,41 +1365,9 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        if (!sawAssistantDelta) {
-          // Final payloads own held prose; snapshots may replace provisional deltas.
-          const commentary =
-            resolveAgentResponseText(result) ||
-            assistantText.text ||
-            bufferedReplaceableAssistantContent;
-          if (commentary) {
-            sawAssistantDelta = true;
-            writeAssistantContentChunk(res, {
-              ...streamIdentity,
-              content: commentary,
-            });
-          }
-        }
-        writeAssistantToolCallsIncrementalChunks(res, {
-          ...streamIdentity,
-          toolCalls: pendingToolCalls,
-        });
-        requestFinalize("tool_calls");
-        return;
-      }
-
-      if (!sawAssistantDelta) {
-        const content =
-          resolveAgentResponseText(result) ||
-          bufferedReplaceableAssistantContent ||
-          "No response from OpenClaw.";
-
-        sawAssistantDelta = true;
-        writeAssistantContentChunk(res, {
-          ...streamIdentity,
-          content,
-        });
-      }
+      finalResultText = resolveAssistantResultText(result);
+      finalToolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       requestFinalize();
     } catch (err) {
       resultResolved = true;
