@@ -337,6 +337,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   }
 
+  function makeTableText(count: number): string {
+    return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
+      "\n\n",
+    );
+  }
+
   function setupNonStreamingAutoDispatcher() {
     useNonStreamingAutoAccount();
 
@@ -2169,6 +2175,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("keeps an over-limit block in its active streaming card", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: { mode: "partial", block: { enabled: true } },
+      },
+    });
+    const text = makeTableText(6);
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text });
+    const delivery = await options.deliver({ text }, { kind: "block" });
+    await options.onIdle?.();
+    const finalized = await delivery?.finalization;
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(requireStreamingInstance(0).start).toHaveBeenCalledTimes(1);
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledOnce();
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(text, {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(finalized).toMatchObject({
+      visibleReplySent: true,
+      content: text,
+      messageIds: ["om_stream"],
+    });
+  });
+
   it("preserves previous generation blocks when partial snapshots reset after tools", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -2842,6 +2885,39 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({ text: "second" }),
     );
+  });
+
+  it("uses post fallback for an over-limit final arriving during an unrelated close", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-post" });
+    const { options } = createDispatcherHarness();
+    const firstDelivery = await options.deliver({ text: "first" }, { kind: "final" });
+    const instance = requireStreamingInstance(0);
+    let resolveClose!: (result: StreamingCloseResult) => void;
+    const closePromise = new Promise<StreamingCloseResult>((resolve) => {
+      resolveClose = resolve;
+    });
+    instance.closeWithResult.mockReturnValueOnce(closePromise);
+    const firstIdle = Promise.resolve(options.onIdle?.());
+    await vi.waitFor(() => expect(instance.closeWithResult).toHaveBeenCalledOnce());
+
+    const text = makeTableText(6);
+    const nextDelivery = await options.deliver({ text }, { kind: "final" });
+    instance.active = false;
+    resolveClose({ visibleReplySent: true, content: "first", messageId: "om-stream" });
+
+    await firstIdle;
+    await expect(firstDelivery?.finalization).resolves.toMatchObject({
+      content: "first",
+      messageIds: ["om-stream"],
+      visibleReplySent: true,
+    });
+    expect(nextDelivery).toMatchObject({
+      content: text,
+      messageIds: ["om-post"],
+      visibleReplySent: true,
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("reuses a closing card for an identical concurrent final", async () => {
@@ -4422,54 +4498,65 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
   });
 
-  it("falls back to post mode when streaming start fails for 6 tables", async () => {
-    const errorMock = vi.fn();
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-post" });
-    const origPush = streamingInstances.push.bind(streamingInstances);
-    streamingInstances.push = (...args: StreamingSessionStub[]) => {
-      const instance = args[0];
-      if (instance) {
-        instance.start = vi
-          .fn()
-          .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
+  it.each([
+    { kind: "final", blockStreamingEnabled: false },
+    { kind: "block", blockStreamingEnabled: true },
+  ] as const)(
+    "falls back to post mode when $kind streaming start fails for 6 tables",
+    async ({ kind, blockStreamingEnabled }) => {
+      if (blockStreamingEnabled) {
+        resolveFeishuAccountMock.mockReturnValue({
+          accountId: "main",
+          appId: "app_id",
+          appSecret: "app_secret",
+          domain: "feishu",
+          config: {
+            renderMode: "auto",
+            streaming: { mode: "partial", block: { enabled: true } },
+          },
+        });
       }
-      return origPush(...args);
-    };
+      const errorMock = vi.fn();
+      sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-post" });
+      const origPush = streamingInstances.push.bind(streamingInstances);
+      streamingInstances.push = (...args: StreamingSessionStub[]) => {
+        const instance = args[0];
+        if (instance) {
+          instance.start = vi
+            .fn()
+            .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
+        }
+        return origPush(...args);
+      };
 
-    try {
-      const result = createFeishuReplyDispatcher({
-        cfg: {} as never,
-        agentId: "agent",
-        runtime: { log: vi.fn(), error: errorMock } as never,
-        chatId: "oc_chat",
-        sendTarget: "oc_chat",
-      });
-      const options = toTypingDispatcherOptions(result);
-      const text = Array.from(
-        { length: 6 },
-        (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
-      ).join("\n\n");
+      try {
+        const result = createFeishuReplyDispatcher({
+          cfg: {} as never,
+          agentId: "agent",
+          runtime: { log: vi.fn(), error: errorMock } as never,
+          chatId: "oc_chat",
+          sendTarget: "oc_chat",
+        });
+        const options = toTypingDispatcherOptions(result);
+        const text = Array.from(
+          { length: 6 },
+          (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+        ).join("\n\n");
 
-      await options.deliver({ text }, { kind: "final" });
+        await options.deliver({ text }, { kind });
 
-      expect(errorMock.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-        "streaming start failed",
-      );
-      expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
-      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    } finally {
-      streamingInstances.push = origPush;
-    }
-  });
+        expect(errorMock.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+          "streaming start failed",
+        );
+        expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      } finally {
+        streamingInstances.push = origPush;
+      }
+    },
+  );
 
   describe("table-limit routing", () => {
-    function makeTableText(count: number): string {
-      return Array.from(
-        { length: count },
-        (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
-      ).join("\n\n");
-    }
-
     function setupDispatcher() {
       const result = createFeishuReplyDispatcher({
         cfg: {} as never,

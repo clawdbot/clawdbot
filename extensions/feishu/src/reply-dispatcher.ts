@@ -1395,17 +1395,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       const finalTextExceedsStreamingLimit =
         info?.kind === "final" && hasText && text.length > textChunkLimit;
-      const useStaticCard =
-        hasText &&
-        (renderMode === "card" ||
-          (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-          (renderMode === "auto" && shouldUseCard(text))) &&
-        withinCardTableLimit(text);
+      // Feishu's table ceiling applies to static card elements, not CardKit's streamed markdown.
+      // Keep the intents separate so an active preview cannot fork into an independent post.
+      const cardRenderingRequested =
+        renderMode === "card" ||
+        (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
+        (renderMode === "auto" && shouldUseCard(text));
+      const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
       const useStreamingCard =
         hasText &&
         streamingEnabled &&
         !finalTextExceedsStreamingLimit &&
-        (info?.kind === "final" || useStaticCard);
+        (info?.kind === "final" || cardRenderingRequested);
       const skipTextForDuplicateFinal =
         !hasIndependentPresentation &&
         info?.kind === "final" &&
@@ -1573,8 +1574,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           );
         }
 
+        // Streaming eligibility can still fall back to a static card, so the provider ceiling
+        // also applies when startup is unavailable or another generation is closing.
         const useFallbackCard =
-          useStaticCard || (useStreamingCard && !isStreamingStartBackedOff(account.accountId));
+          useStaticCard ||
+          (useStreamingCard &&
+            !isStreamingStartBackedOff(account.accountId) &&
+            withinCardTableLimit(text));
         if (useFallbackCard) {
           const cardHeader = resolveCardHeader(agentId, identity);
           const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
