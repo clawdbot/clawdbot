@@ -170,7 +170,9 @@ chat, the Control UI, the CLI, and automatic update campaigns. Dry-run previews
 and updates refused after admission keep a skipped or failed record with their
 reason. CLI invocations rejected before admission leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
-the outcome.
+the outcome. Post-core finalization children report back to their parent without
+creating a separate update run, including when an older updater cannot forward
+a run ID.
 
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.

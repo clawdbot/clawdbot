@@ -92,12 +92,6 @@ function disableImplicitPreferredOverPlugin(params: {
   if (!params.manifestRegistry.plugins.some((plugin) => plugin.id === params.pluginId)) {
     return params.config;
   }
-  if (
-    !normalizeChatChannelId(params.pluginId) &&
-    !isKnownPluginId(params.pluginId, params.manifestRegistry)
-  ) {
-    return params.config;
-  }
   const existingEntry = params.config.plugins?.entries?.[params.pluginId];
   return {
     ...params.config,

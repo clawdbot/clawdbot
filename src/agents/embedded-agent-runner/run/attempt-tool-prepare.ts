@@ -259,6 +259,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             ...toolRunContext,
             ...buildConversationContext(),
             clientCaps: attempt.clientCaps,
+            pinnedWidgetAuthoring: attempt.pinnedWidgetAuthoring,
             toolBindings: attempt.toolBindings,
             exec: {
               ...attempt.execOverrides,

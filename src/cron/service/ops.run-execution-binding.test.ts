@@ -1,8 +1,8 @@
 // Focused proof that manual cron admission binds exact owner-native rows.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
@@ -25,7 +25,6 @@ import {
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { run } from "./ops-run.js";
-import { createCronServiceState } from "./state.js";
 import {
   createCronOwnerExecutionIdentityAdmission,
   tryCreateCronTaskRunHandle,
@@ -78,13 +77,9 @@ describe("cron run execution binding", () => {
             return { status: "ok" as const };
           },
         );
-        const state = createCronServiceState({
-          cronEnabled: true,
+        const state = createCronRegressionState({
           storePath: store.storePath,
-          log: noopLogger,
           nowMs: () => dueAt,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
 
@@ -149,13 +144,9 @@ describe("cron run execution binding", () => {
           agentId: "main",
         };
         await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-        const state = createCronServiceState({
-          cronEnabled: true,
+        const state = createCronRegressionState({
           storePath: store.storePath,
-          log: noopLogger,
           nowMs: () => dueAt,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(),
         });
         const prepared = prepareCronRunReceiptClaim({

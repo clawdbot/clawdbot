@@ -152,14 +152,6 @@ export function buildMatrixReplyArtifact(
   };
 }
 
-export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
-  return {
-    bodyPreview: truncateMatrixQaPreview(event.body?.trim()),
-    eventId: event.eventId,
-    sender: event.sender,
-  };
-}
-
 export function buildMatrixReplyDetails(label: string, artifact: MatrixQaReplyArtifact) {
   return [
     `${label} event: ${artifact.eventId}`,

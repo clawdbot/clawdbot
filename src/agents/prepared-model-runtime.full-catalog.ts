@@ -65,6 +65,7 @@ export async function prepareFullCatalogFacts(
       cfg: input.config,
       env,
       metadataSnapshot: pluginMetadataSnapshot,
+      registeredProviders: pluginGeneration.pluginRegistry?.providers,
       ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     }));
@@ -117,6 +118,14 @@ export function prepareModelCatalogPublication(
   }
   const previous = inventory?.catalog;
   const previousAuth = previous && getPreparedModelFullCatalogAuth(previous);
+  const starterProviders = new Set(
+    failed
+      .map(({ provider }) => normalizeProvider(provider))
+      .filter((provider) => !discoveryOrigins.some((origin) => origin.provider === provider)),
+  );
+  const starters = (catalog.staticEntries ?? []).filter(
+    (entry) => !entry.nativeRuntime && starterProviders.has(normalizeProvider(entry.provider)),
+  );
   const retainedProviders = new Set(
     failed.flatMap((outcome) => {
       const provider = normalizeProvider(outcome.provider);
@@ -166,7 +175,9 @@ export function prepareModelCatalogPublication(
   ) =>
     dedupeByKey(
       [
-        ...current.filter((entry) => !retainedProviders.has(normalizeProvider(entry.provider))),
+        ...[...current, ...starters].filter(
+          (entry) => !retainedProviders.has(normalizeProvider(entry.provider)),
+        ),
         ...retained.filter(
           (entry) =>
             !entry.nativeRuntime && retainedProviders.has(normalizeProvider(entry.provider)),

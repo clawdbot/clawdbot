@@ -990,24 +990,15 @@ describe("launchd runtime parsing", () => {
     });
   });
 
-  it("does not set pid when pid = 0", () => {
-    const output = ["state = running", "pid = 0"].join("\n");
-    const info = parseLaunchctlPrint(output);
-    expect(info.pid).toBeUndefined();
-    expect(info.state).toBe("running");
-  });
-
-  it("sets pid for positive values", () => {
-    const output = ["state = running", "pid = 1234"].join("\n");
-    const info = parseLaunchctlPrint(output);
-    expect(info.pid).toBe(1234);
-  });
-
-  it("does not set pid for negative values", () => {
-    const output = ["state = waiting", "pid = -1"].join("\n");
-    const info = parseLaunchctlPrint(output);
-    expect(info.pid).toBeUndefined();
-    expect(info.state).toBe("waiting");
+  it.each([
+    { pid: 0, state: "running", expected: undefined },
+    { pid: 1234, state: "running", expected: 1234 },
+    { pid: -1, state: "waiting", expected: undefined },
+  ])("accepts only positive launchctl PIDs ($pid)", ({ pid, state: serviceState, expected }) => {
+    expect(parseLaunchctlPrint(`state = ${serviceState}\npid = ${pid}`)).toEqual({
+      state: serviceState,
+      pid: expected,
+    });
   });
 
   it("rejects pid and exit status values with junk suffixes", () => {
@@ -2688,22 +2679,18 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
-  it("refuses in-band LaunchAgent stop before launchctl bootout", async () => {
-    const env = createDefaultLaunchdEnv();
-
-    await withProcessEnv(
-      {
-        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
-      },
-      async () => {
-        await expect(stopLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+  it.each([undefined, true])(
+    "refuses in-band LaunchAgent stop before any native mutation (disable=%s)",
+    async (disable) => {
+      const env = createDefaultLaunchdEnv();
+      await withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () => {
+        await expect(stopLaunchAgent({ env, stdout: new PassThrough(), disable })).rejects.toThrow(
           "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
         );
-      },
-    );
-
-    expect(state.launchctlCalls).toEqual([]);
-  });
+      });
+      expect(state.launchctlCalls).toEqual([]);
+    },
+  );
 
   it("disables the current LaunchAgent before scheduling maintenance bootout", async () => {
     const env = createDefaultLaunchdEnv();
@@ -2830,17 +2817,18 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
-  it("verifies the configured gateway port is released before reporting stop success", async () => {
-    const env = createLaunchdEnvWithGatewayPort("19003");
+  it.each([
+    { mode: "bootout", port: 19003, disable: undefined },
+    { mode: "disable-stop", port: 19005, disable: true },
+  ])("verifies port release before reporting $mode success", async ({ port, disable }) => {
+    const env = createLaunchdEnvWithGatewayPort(String(port));
     let output = "";
     const stdout = capturePassThroughOutput((text) => (output += text));
 
-    await stopLaunchAgent({ env, stdout });
+    await stopLaunchAgent({ env, stdout, disable });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19003);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19003, {
-      probeHosts: ["127.0.0.1"],
-    });
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port);
+    expect(inspectPortUsage).toHaveBeenCalledWith(port, { probeHosts: ["127.0.0.1"] });
     expect(output).toContain("Stopped LaunchAgent");
   });
 
@@ -2909,31 +2897,39 @@ describe("launchd install", () => {
     });
   });
 
-  it("fails stop when the verified gateway port remains busy after cleanup", async () => {
-    const env = createLaunchdEnvWithGatewayPort("19004");
-    const stdout = capturePassThroughOutput((text) => (output += text));
-    const onMutation = vi.fn();
-    let output = "";
-    inspectPortUsage.mockResolvedValue({
-      port: 19004,
-      status: "busy",
-      listeners: [],
-      hints: [],
-    });
-    probePortUsage.mockResolvedValue("busy");
-    formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
+  it.each([
+    { mode: "bootout", port: 19004, disable: undefined },
+    { mode: "disable-bootout", port: 19008, disable: true },
+  ] as const)(
+    "rejects $mode success while the gateway port stays busy",
+    async ({ mode, port, disable }) => {
+      const env = createLaunchdEnvWithGatewayPort(String(port));
+      let output = "";
+      const stdout = capturePassThroughOutput((text) => (output += text));
+      const onMutation = vi.fn();
+      if (disable) {
+        state.disableError = "Operation not permitted";
+      }
+      inspectPortUsage.mockResolvedValue({ port, status: "busy", listeners: [], hints: [] });
+      probePortUsage.mockResolvedValue("busy");
+      formatPortDiagnostics.mockReturnValue([`Port ${port} is held by pid 4242.`]);
 
-    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, onMutation })).rejects.toThrow(
-      "gateway port 19004 is still busy after LaunchAgent stop\nPort 19004 is held by pid 4242.",
-    );
+      await expect(
+        runStopLaunchAgentWithFakeTimers({ env, stdout, disable, onMutation }),
+      ).rejects.toThrow(
+        `gateway port ${port} is still busy after LaunchAgent stop\nPort ${port} is held by pid 4242.`,
+      );
 
-    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19004);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19004, {
-      probeHosts: ["127.0.0.1"],
-    });
-    expect(output).not.toContain("Stopped LaunchAgent");
-  });
+      expect(onMutation).toHaveBeenCalledWith({ mode });
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port);
+      expect(inspectPortUsage).toHaveBeenCalledWith(port, { probeHosts: ["127.0.0.1"] });
+      expect(launchctlCommandNames()).toContain("bootout");
+      if (disable) {
+        expect(output).toContain("used bootout fallback");
+      }
+      expect(output).not.toContain("Stopped LaunchAgent");
+    },
+  );
 
   it("does not treat a co-located Gateway's own port as busy when stopping a node-host LaunchAgent", async () => {
     const env = {
@@ -2998,39 +2994,6 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
-  it("verifies the configured gateway port is released before reporting disable stop success", async () => {
-    const env = createLaunchdEnvWithGatewayPort("19005");
-    let output = "";
-    const stdout = capturePassThroughOutput((text) => (output += text));
-
-    await stopLaunchAgent({ env, stdout, disable: true });
-
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19005);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19005, {
-      probeHosts: ["127.0.0.1"],
-    });
-    expect(output).toContain("Stopped LaunchAgent");
-  });
-
-  it("refuses in-band LaunchAgent disable-stop before any launchctl call", async () => {
-    const env = createDefaultLaunchdEnv();
-
-    await withProcessEnv(
-      {
-        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
-      },
-      async () => {
-        await expect(
-          stopLaunchAgent({ env, stdout: new PassThrough(), disable: true }),
-        ).rejects.toThrow(
-          "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
-        );
-      },
-    );
-
-    expect(state.launchctlCalls).toEqual([]);
-  });
-
   it("treats already-unloaded services as successfully stopped without bootout fallback (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = capturePassThroughOutput((text) => (output += text));
@@ -3069,101 +3032,58 @@ describe("launchd install", () => {
     expect(output).not.toContain("degraded");
   });
 
-  it("falls back to bootout when disable fails so stop remains authoritative (--disable)", async () => {
-    const env = createDefaultLaunchdEnv();
-    const stdout = capturePassThroughOutput((text) => (output += text));
-    let output = "";
-    state.disableError = "Operation not permitted";
+  it.each([
+    {
+      reason: "disable fails",
+      overrides: { disableError: "Operation not permitted" },
+      run: stopLaunchAgent,
+      warning: "used bootout fallback",
+      stopCalled: false,
+    },
+    {
+      reason: "stop leaves a running process",
+      overrides: { stopLeavesRunning: true },
+      run: runStopLaunchAgentWithFakeTimers,
+      warning: "did not fully stop the service",
+      stopCalled: true,
+    },
+    {
+      reason: "print reports running without a PID",
+      overrides: { stopLeavesRunning: true, printOutput: "state = running\n" },
+      run: runStopLaunchAgentWithFakeTimers,
+      warning: "did not fully stop the service",
+      stopCalled: true,
+    },
+    {
+      reason: "stop errors",
+      overrides: { stopError: "stop failed due to transient launchd error" },
+      run: stopLaunchAgent,
+      warning: "launchctl stop failed; used bootout fallback",
+      stopCalled: true,
+    },
+    {
+      reason: "print cannot confirm stop",
+      overrides: { printError: "launchctl print permission denied", printFailuresRemaining: 11 },
+      run: runStopLaunchAgentWithFakeTimers,
+      warning: "could not confirm stop",
+      stopCalled: true,
+    },
+  ])(
+    "uses bootout fallback when $reason (--disable)",
+    async ({ overrides, run, warning, stopCalled }) => {
+      const env = createDefaultLaunchdEnv();
+      let output = "";
+      const stdout = capturePassThroughOutput((text) => (output += text));
+      Object.assign(state, overrides);
 
-    await stopLaunchAgent({ env, stdout, disable: true });
+      await run({ env, stdout, disable: true });
 
-    expect(launchctlCommandNames()).not.toContain("stop");
-    expect(launchctlCommandNames()).toContain("bootout");
-    expect(output).toContain("Stopped LaunchAgent (degraded)");
-    expect(output).toContain("used bootout fallback");
-  });
-
-  it("does not report degraded stop success when fallback cleanup leaves the port busy", async () => {
-    const env = createLaunchdEnvWithGatewayPort("19008");
-    const stdout = capturePassThroughOutput((text) => (output += text));
-    const onMutation = vi.fn();
-    let output = "";
-    state.disableError = "Operation not permitted";
-    inspectPortUsage.mockResolvedValue({
-      port: 19008,
-      status: "busy",
-      listeners: [],
-      hints: [],
-    });
-    probePortUsage.mockResolvedValue("busy");
-    formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
-
-    await expect(
-      runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true, onMutation }),
-    ).rejects.toThrow(
-      "gateway port 19008 is still busy after LaunchAgent stop\nPort 19008 is held by pid 4242.",
-    );
-
-    expect(onMutation).toHaveBeenCalledWith({ mode: "disable-bootout" });
-    expect(launchctlCommandNames()).toContain("bootout");
-    expect(output).toContain("used bootout fallback");
-    expect(output).not.toContain("Stopped LaunchAgent");
-  });
-
-  it("falls back to bootout when stop does not fully stop the service (--disable)", async () => {
-    const env = createDefaultLaunchdEnv();
-    const stdout = capturePassThroughOutput((text) => (output += text));
-    let output = "";
-    state.stopLeavesRunning = true;
-
-    await runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true });
-
-    expect(launchctlCommandNames()).toContain("stop");
-    expect(launchctlCommandNames()).toContain("bootout");
-    expect(output).toContain("Stopped LaunchAgent (degraded)");
-    expect(output).toContain("did not fully stop the service");
-  });
-
-  it("treats launchctl print state=running as running even when pid is missing (--disable)", async () => {
-    const env = createDefaultLaunchdEnv();
-    const stdout = capturePassThroughOutput((text) => (output += text));
-    let output = "";
-    state.stopLeavesRunning = true;
-    state.printOutput = "state = running\n";
-
-    await runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true });
-
-    expect(launchctlCommandNames()).toContain("bootout");
-    expect(output).toContain("Stopped LaunchAgent (degraded)");
-    expect(output).toContain("did not fully stop the service");
-  });
-
-  it("falls back to bootout when launchctl stop itself errors (--disable)", async () => {
-    const env = createDefaultLaunchdEnv();
-    const stdout = capturePassThroughOutput((text) => (output += text));
-    let output = "";
-    state.stopError = "stop failed due to transient launchd error";
-
-    await stopLaunchAgent({ env, stdout, disable: true });
-
-    expect(launchctlCommandNames()).toContain("bootout");
-    expect(output).toContain("Stopped LaunchAgent (degraded)");
-    expect(output).toContain("launchctl stop failed; used bootout fallback");
-  });
-
-  it("falls back to bootout when launchctl print cannot confirm the stop state (--disable)", async () => {
-    const env = createDefaultLaunchdEnv();
-    const stdout = capturePassThroughOutput((text) => (output += text));
-    let output = "";
-    state.printError = "launchctl print permission denied";
-    state.printFailuresRemaining = 11;
-
-    await runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true });
-
-    expect(launchctlCommandNames()).toContain("bootout");
-    expect(output).toContain("Stopped LaunchAgent (degraded)");
-    expect(output).toContain("could not confirm stop");
-  });
+      expect(launchctlCommandNames().includes("stop")).toBe(stopCalled);
+      expect(launchctlCommandNames()).toContain("bootout");
+      expect(output).toContain("Stopped LaunchAgent (degraded)");
+      expect(output).toContain(warning);
+    },
+  );
 
   it("throws when launchctl print cannot confirm stop and bootout also fails (--disable)", async () => {
     const env = createDefaultLaunchdEnv();

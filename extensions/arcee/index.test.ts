@@ -3,8 +3,10 @@ import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveProviderAuthEnvVarCandidates } from "openclaw/plugin-sdk/provider-env-vars";
-import { describe, expect, it } from "vitest";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import arceePlugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -89,6 +91,25 @@ describe("arcee provider plugin", () => {
   });
 
   it("builds the direct Arcee AI model catalog", async () => {
+    clearLiveCatalogCacheForTests();
+    const release = vi.fn(async () => undefined);
+    const fetchGuard = vi
+      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+      .mockImplementation(async ({ url }) => ({
+        response: Response.json({
+          data: [
+            { id: "trinity-mini", object: "model" },
+            { id: "trinity-large-preview", object: "model" },
+            { id: "trinity-large-thinking", object: "model" },
+          ],
+        }),
+        finalUrl: url,
+        release,
+      }));
+    onTestFinished(() => {
+      fetchGuard.mockRestore();
+      clearLiveCatalogCacheForTests();
+    });
     const provider = await registerSingleProviderPlugin(arceePlugin);
     const catalogProvider = await runSingleProviderCatalog(provider, {
       resolveProviderApiKey: (id?: string) =>
@@ -98,10 +119,15 @@ describe("arcee provider plugin", () => {
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://api.arcee.ai/api/v1");
     expect(catalogProvider.models?.map((model) => model.id)).toEqual([
-      "trinity-mini",
       "trinity-large-preview",
       "trinity-large-thinking",
+      "trinity-mini",
     ]);
+    expect(fetchGuard).toHaveBeenCalledOnce();
+    const request = fetchGuard.mock.calls[0]?.[0];
+    expect(request?.url).toBe("https://api.arcee.ai/api/v1/models");
+    expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer test-key");
+    expect(release).toHaveBeenCalledOnce();
     const thinkingCompat = catalogProvider.models?.find(
       (model) => model.id === "trinity-large-thinking",
     )?.compat;
