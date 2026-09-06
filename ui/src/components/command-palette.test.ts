@@ -25,6 +25,8 @@ type CustodianPanelToggleDetail = { open?: boolean };
 type GatewayHarness = {
   gateway: ApplicationGateway;
   setConnected: (connected: boolean) => void;
+  setAgent: (agentId: string) => void;
+  emit: (event: string) => void;
 };
 
 function createGateway(
@@ -44,6 +46,7 @@ function createGateway(
     lastErrorCode: null,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const events = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const gateway = {
     get snapshot() {
       return snapshot;
@@ -60,10 +63,24 @@ function createGateway(
       return () => listeners.delete(listener);
     },
     subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
+    subscribeEvents(listener) {
+      events.add(listener);
+      return () => events.delete(listener);
+    },
   } satisfies ApplicationGateway;
   return {
     gateway,
+    setAgent(agentId) {
+      snapshot = { ...snapshot, assistantAgentId: agentId };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+    emit(event) {
+      for (const listener of events) {
+        listener({ type: "event", event, payload: {} });
+      }
+    },
     setConnected(nextConnected) {
       snapshot = {
         ...snapshot,
@@ -438,6 +455,96 @@ describe("CommandPalette lifecycle", () => {
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
   });
+
+  it("retains model results during a failed publication read and retries on input", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
+      .mockRejectedValueOnce(new Error("catalog unavailable"))
+      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "new", name: "Needle new" }] });
+    const harness = createGateway(true, { methods: ["models.list"], request });
+    const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+
+    harness.emit("chat.metadata.changed");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(palette.querySelector('[role="status"]')?.textContent).toContain(
+      "Model search unavailable",
+    );
+    expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle new")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
+    expect(palette.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it.each(["agent", "source", "connection", "detach", "publication", "closed"])(
+    "fences retained and pending catalog rows on %s replacement",
+    async (replacement) => {
+      const stale = createDeferred<{ models: { provider: string; id: string; name: string }[] }>();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
+        .mockReturnValueOnce(stale.promise)
+        .mockResolvedValue({ models: [{ provider: "fixture", id: "new", name: "Needle new" }] });
+      const harness = createGateway(true, { methods: ["models.list"], request });
+      const context = createContext(harness.gateway, async () => null);
+      const { palette, provider } = await mountPalette(context);
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+      harness.emit("config.changed");
+      await vi.advanceTimersByTimeAsync(50);
+      if (replacement === "agent") {
+        harness.setAgent("reviewer");
+      } else if (replacement === "source") {
+        const next = createGateway(true, { methods: ["models.list"], request });
+        provider.setContext(createContext(next.gateway, async () => null));
+      } else if (replacement === "connection") {
+        harness.setConnected(false);
+      } else if (replacement === "detach") {
+        palette.remove();
+      } else if (replacement === "closed") {
+        palette.togglePalette();
+        harness.emit("chat.metadata.changed");
+      } else {
+        harness.emit("chat.metadata.changed");
+      }
+      await palette.updateComplete;
+      if (replacement !== "publication") {
+        expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
+      }
+      if (replacement === "connection") {
+        harness.setConnected(true);
+      } else if (replacement === "detach") {
+        provider.append(palette);
+        await enterQuery(palette, "needle");
+      } else if (replacement === "closed") {
+        await enterQuery(palette, "needle");
+      }
+      await vi.advanceTimersByTimeAsync(50);
+      stale.resolve({ models: [{ provider: "fixture", id: "stale", name: "Needle stale" }] });
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Needle new")).toBeDefined();
+      expect(findPaletteOption(palette, "Needle stale")).toBeUndefined();
+      if (replacement === "agent") {
+        expect(request).toHaveBeenLastCalledWith("models.list", {
+          view: "configured",
+          agentId: "reviewer",
+          preparedOnly: true,
+        });
+      }
+    },
+  );
 
   it("waits for two characters before searching sessions", async () => {
     const { gateway } = createGateway(true, { methods: ["sessions.search"] });
