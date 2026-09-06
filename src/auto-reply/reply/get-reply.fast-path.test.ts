@@ -36,6 +36,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import "./get-reply.test-runtime-mocks.js";
 
 registerGetReplyBaselineBypass();
@@ -337,6 +338,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE),
     );
 
+    const runState: import("./reply-operation-run-state.js").ReplyOperationRunState = {};
     const result = await getReplyFromConfig(
       buildGetReplyCtx({
         Body: "/reset openai/gpt-5.5 continue",
@@ -345,11 +347,12 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         CommandAuthorized: true,
         SessionKey: sessionKey,
       }),
-      undefined,
+      { [REPLY_OPERATION_RUN_STATE]: runState },
       {} as OpenClawConfig,
     );
 
     expect(result).toEqual({ text: MODEL_SELECTION_LOCKED_RESET_MESSAGE });
+    expect(runState.preRunRejection).toBe("model-selection-locked");
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });
