@@ -215,13 +215,13 @@ export class SidebarAttentionStoreController implements StoreController {
       this.reconcileDismissals(scope);
       this.onChange();
     };
-    if (document.visibilityState === "hidden") {
-      this.cronRefreshNeeded = true;
-    } else if (this.cronRefresh?.generation === generation) {
-      this.cronRefreshNeeded = false;
+    // Deferring dispatch still invalidates the pending inventory: its stale
+    // response must not retire dismissals saved since the request began.
+    if (this.cronRefresh?.generation === generation) {
       this.cronRefresh.requested = true;
-    } else {
-      this.cronRefreshNeeded = false;
+    }
+    this.cronRefreshNeeded = document.visibilityState === "hidden";
+    if (!this.cronRefreshNeeded && this.cronRefresh?.generation !== generation) {
       const refresh = { generation, requested: true };
       this.cronRefresh = refresh;
       void (async () => {

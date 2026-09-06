@@ -102,6 +102,41 @@ suite.define(() => {
       }
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
       await captureSidebarUiProof(suite, page, "inbox-after-hidden-events.png");
+
+      await gateway.deferNext("cron.list");
+      await gateway.emitGatewayEvent("cron", { action: "finished" });
+      await gateway.waitForRequest("cron.list", { after: 2 });
+      await page.getByRole("button", { name: "Dismiss Failure while away", exact: true }).click();
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      // The first event invalidating this pending inventory arrives while hidden.
+      await gateway.emitGatewayEvent("cron", { action: "finished" });
+      await gateway.resolveDeferred("cron.list", { ...FAILED_CRON_RESPONSE, jobs: [], total: 0 });
+      expect(await gateway.getRequests("cron.list")).toHaveLength(3);
+      await gateway.deferNext("cron.list");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await gateway.waitForRequest("cron.list", { after: 3 });
+      await gateway.resolveDeferred("cron.list", {
+        ...FAILED_CRON_RESPONSE,
+        jobs: [
+          FAILED_CRON_RESPONSE.jobs[0],
+          { ...FAILED_CRON_RESPONSE.jobs[0], id: "fresh-job", name: "Fresh visible warning" },
+        ],
+        total: 2,
+      });
+      await page.getByText("Fresh visible warning", { exact: true }).waitFor();
+      expect(await page.locator('[data-attention-kind="cronFailed"]').count()).toBe(1);
+      expect(await badge.textContent()).toBe("2");
+      expect(await gateway.getRequests("cron.list")).toHaveLength(4);
+      await captureSidebarUiProof(suite, page, "inbox-dismissal-preserved-on-return.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

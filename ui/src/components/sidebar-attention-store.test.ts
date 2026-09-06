@@ -16,7 +16,7 @@ import {
 import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { loadDismissals } from "./sidebar-attention-dismissals.ts";
+import { dismissSidebarAttention, loadDismissals } from "./sidebar-attention-dismissals.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 
 function cronPage(id?: string): CronJobsListResult {
@@ -193,6 +193,48 @@ describe("sidebar attention source publication", () => {
       );
     },
   );
+
+  it("preserves another tab's dismissal when a hidden event invalidates a pending inventory", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    vi.spyOn(Date, "now").mockReturnValue(120_000);
+    const pendingList = deferred<CronJobsListResult>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return ++listCalls === 1 ? pendingList.promise : cronPage("newer-job");
+      }
+      return method === "cron.status"
+        ? { enabled: true, triggersEnabled: true, jobs: 1 }
+        : { ts: 120_000, providers: [] };
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    store = createStore(harness.gateway);
+    store.activate(SidebarAttentionStoreController);
+    dismissSidebarAttention(harness.gateway.connection.gatewayUrl, {
+      kind: "cronFailed",
+      signature: "newer-job",
+    });
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    // The first invalidation arrives only after hiding, with no visible queued refresh.
+    harness.emitEvent("cron", {});
+    pendingList.resolve(cronPage("previous"));
+    await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "previous" }]));
+    expect(listCalls).toBe(1);
+    expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({
+      cronFailed: ["newer-job"],
+    });
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForFast(() => expect(store?.entries).toEqual([]));
+    expect(listCalls).toBe(2);
+    expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({
+      cronFailed: ["newer-job"],
+    });
+  });
 
   it("publishes progress but retires dismissals only after a fresh complete inventory", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
