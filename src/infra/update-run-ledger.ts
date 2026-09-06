@@ -225,32 +225,38 @@ function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateD
   return result;
 }
 
+function mutateRunInTransaction(
+  db: DatabaseSync,
+  runId: string,
+  update: (record: UpdateRunRecord) => void,
+  options: LedgerOptions,
+): UpdateRunRecord {
+  const record = readRun(db, runId);
+  if (!record) {
+    throw new Error(`Unknown update run: ${runId}`);
+  }
+  const before = JSON.stringify(record);
+  update(record);
+  if (before === JSON.stringify(record)) {
+    return record;
+  }
+  record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+  const row = encodeRun(record, options);
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<LedgerDatabase>(db)
+      .updateTable("update_runs")
+      .set(row)
+      .where("run_id", "=", runId),
+  );
+  return decodeRun(row);
+}
 function mutateRun(
   runId: string,
   update: (record: UpdateRunRecord) => void,
   options: LedgerOptions,
 ): UpdateRunRecord {
-  return writeRun((db) => {
-    const record = readRun(db, runId);
-    if (!record) {
-      throw new Error(`Unknown update run: ${runId}`);
-    }
-    const before = JSON.stringify(record);
-    update(record);
-    if (before === JSON.stringify(record)) {
-      return record;
-    }
-    record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
-    const row = encodeRun(record, options);
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<LedgerDatabase>(db)
-        .updateTable("update_runs")
-        .set(row)
-        .where("run_id", "=", runId),
-    );
-    return decodeRun(row);
-  }, options);
+  return writeRun((db) => mutateRunInTransaction(db, runId, update, options), options);
 }
 
 export function createUpdateRun(
@@ -511,4 +517,54 @@ export function findActiveUpdateRun(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
   return listUpdateRuns({ limit: 1, active: true }, options)[0];
+}
+
+/** Recovery owns the enclosing transaction: outcome, history and pair selection commit together. */
+export function finishVerifiedUpdateRunInTransaction(
+  db: DatabaseSync,
+  runId: string,
+  result: {
+    status: "succeeded" | "rolled-back";
+    version: string;
+    buildId: string | null;
+    reason?: string;
+  },
+  options: LedgerOptions = {},
+): void {
+  if (!db.isTransaction) {
+    throw new Error("Verified history requires the recovery transaction");
+  }
+  mutateRunInTransaction(
+    db,
+    runId,
+    (record) => {
+      if (record.status !== "running") {
+        throw new Error("Update history already has a terminal outcome");
+      }
+      const now = Date.now();
+      for (const step of record.steps) {
+        if (step.status === "in_progress") {
+          step.status = "completed";
+          step.endedAtMs = now;
+        }
+      }
+      record.status = result.status;
+      record.phase = "finished";
+      record.reason = result.reason ?? null;
+      record.finishedAtMs = now;
+      record.confirmedAtMs = now;
+      record.after = { ...record.after, version: result.version };
+      record.verification = {
+        ...record.verification,
+        runningVersion: result.version,
+        runningBuildId: result.buildId ?? undefined,
+        booted: true,
+        serviceRunning: true,
+        versionMatch: true,
+        settled: true,
+        inferenceProbe: "passed",
+      };
+    },
+    options,
+  );
 }

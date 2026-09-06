@@ -187,7 +187,23 @@ export function completeUpdateCommandRun(
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
-  if (loadUpdateRecovery(run.runId, { env: run.env })) {
+  const recovery = loadUpdateRecovery(run.runId, { env: run.env });
+  if (
+    recovery?.terminal &&
+    getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
+  ) {
+    // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
+    return {
+      ...result,
+      status: recovery.terminal.status === "succeeded" ? "ok" : "error",
+      reason:
+        recovery.terminal.status === "succeeded"
+          ? undefined
+          : (recovery.primaryFailure?.code ?? "update-rolled-back"),
+      runId: run.runId,
+    };
+  }
+  if (recovery) {
     return {
       ...result,
       status: "error",

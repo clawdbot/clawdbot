@@ -5,7 +5,6 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -33,6 +32,13 @@ import {
   assertSeparateUpdateRecoveryDatabases,
   digestUpdateRecoveryDatabase,
 } from "./update-run-recovery-snapshot.js";
+import {
+  readRecoveries,
+  writeRecovery,
+  requireRevision,
+  mutateRecovery,
+  assertExecutingClaim,
+} from "./update-run-recovery-store.js";
 
 export {
   UpdateRecoveryConflictError,
@@ -56,22 +62,6 @@ export type UpdateRecoveryRevision = Pick<
 /** Correlation only. The receiving runtime must independently reacquire authority. */
 export type UpdateRecoveryHandoff = UpdateRecoveryRevision & { handoffId: string };
 
-function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
-  if (!tableExists(db, "config_machine_state")) {
-    return [];
-  }
-  return executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<RecoveryDatabase>(db)
-      .selectFrom("config_machine_state")
-      .select(["state_key", "value_json"])
-      .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
-      .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
-      .orderBy("state_key", "asc"),
-  ).rows.map((row) =>
-    decodeUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
-  );
-}
 /** Must run before general database open, admission writes, or runtime migration. */
 export function loadUpdateRecoveries(
   options: OpenClawStateDatabaseOptions = {},
@@ -91,84 +81,12 @@ export function loadUpdateRecovery(
 }
 /** Detection only; finalization owns reconciliation and matching-runtime replay. */
 export function assertNoPendingUpdateRecovery(options: OpenClawStateDatabaseOptions = {}): void {
-  const pending = loadUpdateRecoveries(options)[0];
+  const pending = loadUpdateRecoveries(options).find(
+    (record) => !record.terminal || record.effects.some((effect) => effect.state === "intent"),
+  );
   if (pending) {
     throw new UpdateRecoveryRequiredError(pending);
   }
-}
-function writeRecovery<T>(
-  fence: UpdateRecoveryFence,
-  operation: (db: DatabaseSync) => T,
-  options: OpenClawStateDatabaseOptions,
-): T {
-  fence.assertCurrent();
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      fence.assertCurrent();
-      const result = operation(db);
-      fence.assertCurrent();
-      return result;
-    },
-    options,
-    { operationLabel: "update.recovery" },
-  );
-}
-function requireRevision(
-  db: DatabaseSync,
-  expected: UpdateRecoveryRevision,
-): { record: UpdateRecoveryRecord; raw: string } {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<RecoveryDatabase>(db)
-      .selectFrom("config_machine_state")
-      .select("value_json")
-      .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + expected.runId),
-  );
-  if (!row?.value_json) {
-    throw new UpdateRecoveryConflictError();
-  }
-  const record = decodeUpdateRecovery(row.value_json, expected.runId);
-  if (
-    record.transactionId !== expected.transactionId ||
-    record.revision !== expected.revision ||
-    record.claimId !== expected.claimId
-  ) {
-    throw new UpdateRecoveryConflictError();
-  }
-  return { record, raw: row.value_json };
-}
-function mutateRecovery(
-  expected: UpdateRecoveryRevision,
-  fence: UpdateRecoveryFence,
-  mutate: (record: UpdateRecoveryRecord) => void,
-  options: OpenClawStateDatabaseOptions,
-  claimTransition = false,
-): UpdateRecoveryRecord {
-  return writeRecovery(
-    fence,
-    (db) => {
-      const { record, raw } = requireRevision(db, expected);
-      if (!claimTransition) {
-        assertExecutingClaim(record);
-      }
-      mutate(record);
-      record.revision++;
-      record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
-      const result = executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<RecoveryDatabase>(db)
-          .updateTable("config_machine_state")
-          .set({ value_json: encodeUpdateRecovery(record), updated_at_ms: record.updatedAtMs })
-          .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + record.runId)
-          .where("value_json", "=", raw),
-      );
-      if (result.numAffectedRows !== 1n) {
-        throw new UpdateRecoveryConflictError();
-      }
-      return record;
-    },
-    options,
-  );
 }
 export function beginUpdateRecovery(
   input: Pick<UpdateRecoveryRecord, "runId" | "from" | "to">,
@@ -178,7 +96,9 @@ export function beginUpdateRecovery(
   return writeRecovery(
     fence,
     (db) => {
-      const pending = readRecoveries(db)[0];
+      const pending = readRecoveries(db).find(
+        (record) => !record.terminal || record.effects.some((effect) => effect.state === "intent"),
+      );
       if (pending) {
         throw new UpdateRecoveryRequiredError(pending);
       }
@@ -287,13 +207,8 @@ export function claimUpdateRecovery(
     },
     options,
     true,
+    true,
   );
-}
-
-function assertExecutingClaim(record: UpdateRecoveryRecord): void {
-  if (record.handoff?.state === "prepared") {
-    throw new UpdateRecoveryConflictError();
-  }
 }
 
 /** Recheck this together with live exclusion immediately before an external effect. */
@@ -399,6 +314,13 @@ export function recordUpdateRecoveryIntent(
           "Reconcile the outstanding recovery effect before recording another intent",
         );
       }
+      if (
+        effect.package ||
+        (record.package &&
+          ["package-activation", "package-restore", "retirement"].includes(effect.kind))
+      ) {
+        throw new UpdateRecoveryConflictError();
+      }
       if (effect.kind === "package-activation" && !record.checkpoint) {
         throw new Error("Package activation requires a durable checkpoint binding");
       }
@@ -422,6 +344,9 @@ export function recordUpdateRecoveryObservation(
     fence,
     (record) => {
       const effect = record.effects.at(-1);
+      if (effect?.package) {
+        throw new UpdateRecoveryConflictError();
+      }
       if (!effect || effect.effectId !== observation.effectId || effect.state !== "intent") {
         throw new UpdateRecoveryConflictError();
       }
@@ -770,4 +695,23 @@ export function prepareUpdateRecoveryCarryForward(params: {
     throw error;
   }
   return { record: decodeUpdateRecovery(raw, record.runId), sourceBinding, stagedBinding };
+}
+
+/** Exact current row and timestamp for a package effect immediately after awaited observation. */
+export function assertExactUpdateRecoveryClaim(
+  expected: UpdateRecoveryRecord,
+  fence: UpdateRecoveryFence,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  assertUpdateRecoveryClaim(expected, fence, options);
+  const found = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+    assertExactRecovery(db, expected);
+    return true;
+  }, options);
+  if (!found) {
+    throw new UpdateRecoveryConflictError();
+  }
+  if (fence.assertCurrent() !== undefined) {
+    throw new Error("Recovery exclusion must complete synchronously");
+  }
 }

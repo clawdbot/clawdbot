@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import {
+  RecoveryPackageStateSchema,
+  RecoveryPackageEffectSchema,
+} from "./update-run-recovery-package-schema.js";
 import { UpdateServingReceiptSchema } from "./update-serving-verification-receipt.js";
 
 const exactText = z.string().min(1).max(32_768);
@@ -27,6 +31,7 @@ const UpdateRecoveryEffectSchema = z
     resourceId: exactText,
     runtime: z.enum(["candidate", "previous"]),
     state: z.enum(["intent", "observed"]),
+    package: RecoveryPackageEffectSchema.optional(),
     // Revalidated resource/lifecycle identity from its owner, never phase alone.
     observedIdentity: exactText.nullable(),
   })
@@ -115,9 +120,69 @@ export const UpdateRecoveryRecordSchema = z
         receipt: UpdateServingReceiptSchema,
       })
       .nullable(),
+    package: RecoveryPackageStateSchema.optional(),
+    terminal: z
+      .strictObject({
+        status: z.enum(["succeeded", "rolled-back"]),
+        committedAtMs: counter,
+        commitRevision: counter,
+        receipt: UpdateServingReceiptSchema,
+        pairId: z.uuid().nullable(),
+      })
+      .optional(),
+    retainedPair: z
+      .strictObject({
+        pairId: z.uuid(),
+        state: z.enum(["selected", "superseded"]),
+        replacementRunId: z.uuid().optional(),
+      })
+      .optional(),
     primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
   })
   .superRefine((record, ctx) => {
+    if (record.package && record.package.descriptor.transactionId !== record.transactionId) {
+      ctx.addIssue({ code: "custom", message: "Package transaction differs from recovery" });
+    }
+    for (const effect of record.effects) {
+      if (
+        effect.package &&
+        (effect.package.intent.effectId !== effect.effectId ||
+          effect.package.intent.descriptor.transactionId !== record.transactionId ||
+          (effect.state === "observed") !==
+            Boolean(effect.package.observed && effect.package.outcome) ||
+          (effect.package.observed &&
+            effect.observedIdentity !== effect.package.observed.observedIdentity))
+      ) {
+        ctx.addIssue({ code: "custom", message: "Invalid typed package effect" });
+      }
+    }
+    if (
+      record.terminal &&
+      (record.terminal.commitRevision > record.revision ||
+        record.terminal.receipt.runId !== record.runId ||
+        record.terminal.pairId !== (record.retainedPair?.pairId ?? null))
+    ) {
+      ctx.addIssue({ code: "custom", message: "Terminal outcome and selected pair differ" });
+    }
+    const pair = record.retainedPair;
+    const retention = record.package?.descriptor.retention;
+    if (
+      (pair &&
+        (!record.terminal ||
+          record.terminal.status !== "succeeded" ||
+          !retention ||
+          retention.state === "unselected" ||
+          retention.state !== pair.state ||
+          retention.pairId !== pair.pairId ||
+          (pair.state === "superseded") !== Boolean(pair.replacementRunId))) ||
+      (record.terminal?.status === "succeeded" && !pair) ||
+      (record.terminal?.status === "rolled-back" && (pair || retention?.state !== "unselected"))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Recovery selection does not match committed package roles",
+      });
+    }
     let cursor = 0;
     let revision = -1;
     const refs = record.checkpoint ? [record.checkpoint.ref] : [];
@@ -136,6 +201,7 @@ export const UpdateRecoveryRecordSchema = z
         effects.some(
           (effect) =>
             effect.state !== "observed" ||
+            effect.package?.outcome === "interrupted" ||
             effect.runtime !== "candidate" ||
             effect.kind === "checkpoint-restore" ||
             effect.kind === "package-restore" ||
