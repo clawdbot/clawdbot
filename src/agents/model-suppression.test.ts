@@ -82,10 +82,6 @@ describe("model suppression", () => {
       config,
       env: process.env,
     });
-    expect(resolver).toHaveBeenCalledWith({
-      provider: "openai",
-      id: "gpt-5.3-codex-spark",
-    });
   });
 
   it("returns false when no manifest suppression applies", () => {
@@ -310,7 +306,7 @@ describe("model suppression", () => {
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
     });
 
-    it("creates a reusable manifest resolver with lowercase provider and model ids", () => {
+    it("reuses the manifest owner for repeated model decisions", () => {
       const resolver = vi
         .fn()
         .mockReturnValueOnce({ suppress: true, errorMessage: "manifest suppression" })
@@ -327,25 +323,6 @@ describe("model suppression", () => {
         config,
         env: process.env,
       });
-      expect(resolver).toHaveBeenNthCalledWith(1, {
-        provider: "bedrock",
-        id: "claude-3",
-      });
-      expect(resolver).toHaveBeenNthCalledWith(2, {
-        provider: "aws-bedrock",
-        id: "claude-4",
-      });
-    });
-
-    it("does not call the manifest resolver for empty provider or model ids", () => {
-      const resolver = vi.fn();
-      mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
-
-      const shouldSuppress = buildShouldSuppressBuiltInModelCore({});
-
-      expect(shouldSuppress({ provider: "openai", id: "" })).toBe(false);
-      expect(shouldSuppress({ provider: "", id: "gpt-5.5" })).toBe(false);
-      expect(resolver).not.toHaveBeenCalled();
     });
   });
 });

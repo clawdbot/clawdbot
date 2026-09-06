@@ -103,6 +103,10 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     signal,
     onTestFinished,
   }) => {
+    // Keep Linux process-group verification real while this case runs native children.
+    const { spawnSync } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnSyncMock.mockImplementation(spawnSync);
     const lifetime = createFixtureLifetime();
     onTestFinished(() => lifetime.cleanup());
     await lifetime.run(async () => {
