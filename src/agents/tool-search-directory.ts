@@ -203,7 +203,11 @@ function formatToolSearchCatalogDirectory(
   for (const entry of entries) {
     nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
   }
-  // Count collisions before excluding native tools: their lookalikes remain ambiguous.
+  // Native core tools are omitted from entries. Count them too so a plugin
+  // lookalike is not listed as a unique deferred name.
+  for (const name of directCoreToolNames) {
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
   const listedEntries = deferredEntries
     .filter((entry) => nameCounts.get(entry.name) === 1)
     .toSorted(
