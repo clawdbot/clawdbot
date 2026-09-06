@@ -1,12 +1,9 @@
 // Defines gateway-host desktop config parsing and generated field metadata.
 import path from "node:path";
 import { z } from "zod";
+import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import type { DesktopConfig } from "./types.desktop.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
-
-type ConfigSchemaShape<T extends object> = {
-  [Key in keyof T]-?: z.ZodType<T[Key]>;
-};
 
 type DesktopHostConfig = NonNullable<DesktopConfig["host"]>;
 
@@ -52,22 +49,5 @@ const DesktopConfigShape = {
 
 export const DesktopConfigSchema = z.object(DesktopConfigShape).strict().optional();
 
-const DESKTOP_FIELD_SCHEMAS = {
-  "desktop.host": DesktopConfigShape.host,
-  "desktop.host.enabled": DesktopHostConfigShape.enabled,
-  "desktop.host.managed": DesktopHostConfigShape.managed,
-  "desktop.host.port": DesktopHostConfigShape.port,
-  "desktop.host.passwordFile": DesktopHostConfigShape.passwordFile,
-};
-
-function projectDesktopFieldMetadata(field: "label" | "help"): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(DESKTOP_FIELD_SCHEMAS).flatMap(([fieldPath, schema]) => {
-      const value = configUiMetadata.get(schema)?.[field];
-      return typeof value === "string" ? [[fieldPath, value]] : [];
-    }),
-  );
-}
-
-export const DESKTOP_FIELD_LABELS = projectDesktopFieldMetadata("label");
-export const DESKTOP_FIELD_HELP = projectDesktopFieldMetadata("help");
+export const { labels: DESKTOP_FIELD_LABELS, help: DESKTOP_FIELD_HELP } =
+  projectConfigFieldMetadata(DesktopConfigSchema, "desktop");
